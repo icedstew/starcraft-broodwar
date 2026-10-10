@@ -81,7 +81,7 @@ pub struct Sai {
 }
 
 impl Sai {
-    fn new() -> Sai {
+    pub fn new() -> Sai {
         Sai {
             region_count: 0,
             neighbor_cursor: 0,

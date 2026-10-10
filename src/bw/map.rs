@@ -286,3 +286,22 @@ fn minitile_rows(ts: &TilesetData) -> Vec<[u8; 4]> {
         .map(|r| core::array::from_fn(|i| if ts.vf4(r / 4, (r % 4) * 4 + i) & 1 == 0 { 0x80 } else { 0 }))
         .collect()
 }
+
+impl super::State {
+    /// Map terrain and pathing regions (MTXM handler 0x4cd0b0 through 0x484290).
+    pub fn load_terrain(&mut self, ts: &TilesetData, width: u16, height: u16, mtxm: &[u8]) -> bool {
+        let mut m = GameMap::new(width, height, ts);
+        m.load_mtxm(ts, mtxm);
+        let sai = super::sai::create(&mut m, ts);
+        self.map_px = (width * 32, height * 32);
+        self.map_tiles = (width as usize, height as usize);
+        self.terrain = m;
+        match sai {
+            Some(s) => {
+                self.sai = s;
+                true
+            }
+            None => false,
+        }
+    }
+}

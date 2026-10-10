@@ -219,12 +219,9 @@ impl State {
         self.visible_units = l;
     }
 
-    /// 0x4e42a0: release the unit's path to the path free list.
+    /// 0x4e42a0: release the unit's path (same as 0x42f740).
     fn path_free(&mut self, u: u32) {
-        if self.units[u as usize].path != NIL {
-            todo_port!("0x4e42a0", "path pool free list (0x6bee84)");
-            self.units[u as usize].path = NIL;
-        }
+        self.path_delete(u);
     }
 
     /// 0x488d50: completed unit counts, supply provided, and (with `score`) build/unit scores.

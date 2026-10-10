@@ -12,24 +12,6 @@ use super::{Data, State};
 use crate::game::flingy::{direction_to, mflags};
 use crate::todo_port;
 
-/// CPath (unit +0x100). Only the fields the movement states touch.
-#[derive(Clone, Copy, Default, Debug)]
-pub struct Path {
-    /// +0x4: next waypoint.
-    pub next_waypoint: (i16, i16),
-    /// +0xc: frame the path was created.
-    pub creation_frame: u32,
-    /// +0x10: handle of the unit being avoided.
-    pub collision_unit: u32,
-    /// +0x14: speed saved while avoiding.
-    pub speed: i32,
-    /// +0x18: flags (1 = repath requested).
-    pub flags: u8,
-    /// +0x19: wait countdown.
-    pub wait: u8,
-    /// +0x1a: avoidance direction.
-    pub direction: u8,
-}
 
 impl State {
     /// 0x46c480: run the movement state machine for one unit.
@@ -67,19 +49,19 @@ impl State {
                     return;
                 }
                 0x10 => self.mv_retry_path(d, u),
-                0x11 => self.mv_request_path(u),
+                0x11 => self.mv_request_path(d, u),
                 0x12 => self.mv_wait_random(u),
-                0x13 => self.mv_get_path_again(u),
+                0x13 => self.mv_get_path_again(d, u),
                 0x14 => self.mv_path_check(d, u),
                 0x15 => self.mv_clear_repath(u),
                 0x16 => {
                     let t = self.units[u as usize].fl.move_target;
-                    let ok = self.stub_path_request(u, t);
+                    let ok = self.path_request(d, u, t);
                     self.units[u as usize].movement_state = if ok { 0x19 } else { 0xf };
                     return;
                 }
-                0x17 => self.mv_repath_after_collision(u),
-                0x18 => self.mv_repath_ignoring_units(u),
+                0x17 => self.mv_repath_after_collision(d, u),
+                0x18 => self.mv_repath_ignoring_units(d, u),
                 0x19 => self.mv_follow_path(d, u),
                 0x1a => self.mv_check_blockers(u),
                 0x1b => {
@@ -580,7 +562,7 @@ impl State {
 
     /// 0x46a640: path finished.
     fn mv_path_done(&mut self, u: u32) -> bool {
-        self.stub_path_delete(u);
+        self.path_delete(u);
         let un = &mut self.units[u as usize];
         un.fl.next_waypoint = un.fl.move_target;
         let ns = if un.status & status::IS_NORMAL != 0 && un.fl.flags & mflags::BRAKING == 0 { 0xc } else { 9 };
@@ -613,7 +595,7 @@ impl State {
             let un = &mut self.units[u as usize];
             un.pathing_flags &= 0xfb;
             un.status |= status::IGNORE_TILE_COLLISION;
-            self.stub_path_delete(u);
+            self.path_delete(u);
             self.state(u, 9);
             return true;
         }
@@ -625,7 +607,7 @@ impl State {
             return false;
         }
         if self.units[u as usize].path != NIL {
-            self.stub_path_delete(u);
+            self.path_delete(u);
         }
         todo_port!("0x42d9a0", "terrain escape finished");
         self.units[u as usize].status |= status::IGNORE_TILE_COLLISION;
@@ -700,7 +682,7 @@ impl State {
             return false;
         }
         let t = un.fl.move_target;
-        if !self.stub_path_request(u, t) {
+        if !self.path_request(d, u, t) {
             self.unit_stop_moving(d, u);
             self.state(u, 0xb);
             return false;
@@ -717,7 +699,7 @@ impl State {
         }
         let st = self.units[u as usize].status;
         if st & status::IGNORE_TILE_COLLISION != 0 && st & status::IS_NORMAL != 0 {
-            self.stub_path_delete(u);
+            self.path_delete(u);
             self.state(u, 0xc);
             return true;
         }
@@ -738,9 +720,9 @@ impl State {
     }
 
     /// 0x46bd90: request a path.
-    fn mv_request_path(&mut self, u: u32) -> bool {
+    fn mv_request_path(&mut self, d: &Data, u: u32) -> bool {
         let t = self.units[u as usize].fl.move_target;
-        if !self.stub_path_request(u, t) {
+        if !self.path_request(d, u, t) {
             self.state(u, 0xf);
             return false;
         }
@@ -792,15 +774,15 @@ impl State {
     }
 
     /// 0x46bcc0.
-    fn mv_get_path_again(&mut self, u: u32) -> bool {
+    fn mv_get_path_again(&mut self, d: &Data, u: u32) -> bool {
         let p = self.units[u as usize].path;
         if p != NIL {
             let _avoid = self.unit_from_handle(self.paths[p as usize].collision_unit);
-            self.stub_path_delete(u);
+            self.path_delete(u);
         }
         if self.needs_move(u) {
             let t = self.units[u as usize].fl.move_target;
-            let ok = self.stub_path_request(u, t);
+            let ok = self.path_request(d, u, t);
             if !ok {
                 self.state(u, 0xf);
                 return true;
@@ -837,28 +819,28 @@ impl State {
         let p = self.units[u as usize].path;
         self.paths[p as usize].flags &= 0xfe;
         if !self.mv_check_path_state(u, true) {
-            self.stub_path_delete(u);
+            self.path_delete(u);
             self.state(u, 0x17);
         }
         true
     }
 
     /// 0x46bc30.
-    fn mv_repath_after_collision(&mut self, u: u32) -> bool {
+    fn mv_repath_after_collision(&mut self, d: &Data, u: u32) -> bool {
         if self.units[u as usize].path != NIL {
-            self.stub_path_delete(u);
+            self.path_delete(u);
         }
         let t = self.units[u as usize].fl.move_target;
-        let ok = self.stub_path_request(u, t);
+        let ok = self.path_request(d, u, t);
         self.state(u, if ok { 0x19 } else { 0xf });
         true
     }
 
     /// 0x46bbc0: repath ignoring units (0x6bee80 = 1).
-    fn mv_repath_ignoring_units(&mut self, u: u32) -> bool {
-        self.stub_path_delete(u);
+    fn mv_repath_ignoring_units(&mut self, d: &Data, u: u32) -> bool {
+        self.path_delete(u);
         let (t, tu) = (self.units[u as usize].fl.move_target, self.units[u as usize].move_target_unit);
-        let ok = self.stub_path_request(u, t);
+        let ok = self.path_request(d, u, t);
         if ok && self.units[u as usize].status & status::UNMOVABLE == 0 {
             self.state(u, 0x14);
             return true;
@@ -876,7 +858,7 @@ impl State {
             return true;
         }
         let t = self.units[u as usize].fl.move_target;
-        if !self.stub_path_request(u, t) {
+        if !self.path_request(d, u, t) {
             self.state(u, 0x16);
             return true;
         }
@@ -1002,7 +984,7 @@ impl State {
             self.unit_turn_in_place(d, u);
             return false;
         }
-        self.stub_path_delete(u);
+        self.path_delete(u);
         let dir = self.stub_4f2a70(u);
         if dir < 0 {
             self.state(u, 0x18);
@@ -1064,7 +1046,7 @@ impl State {
         }
         if self.needs_move(u) {
             set_speeds(&mut self.units[u as usize].fl, 0);
-            self.stub_path_delete(u);
+            self.path_delete(u);
             self.state(u, 0x13);
             return true;
         }
@@ -1118,25 +1100,7 @@ impl State {
 
     // ---- Unported callees. Each returns the "no obstruction / no work" value. ----
 
-    /// 0x42fe00: request a path to `t`. Without the pathfinder, use a straight line.
-    fn stub_path_request(&mut self, u: u32, t: (i16, i16)) -> bool {
-        todo_port!("0x42fe00", "pathfinder request");
-        let un = &mut self.units[u as usize];
-        un.fl.next_waypoint = t;
-        if un.path == NIL {
-            un.path = 0;
-            if self.paths.is_empty() {
-                self.paths.push(Path::default());
-            }
-        }
-        true
-    }
 
-    /// 0x42f740: delete the unit's path.
-    fn stub_path_delete(&mut self, u: u32) {
-        todo_port!("0x42f740", "delete path");
-        let _ = u;
-    }
 
     /// 0x4f20d0: predicted position collides with terrain.
     fn stub_collides_terrain(&mut self, _u: u32) -> bool {

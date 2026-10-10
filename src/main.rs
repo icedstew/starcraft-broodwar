@@ -83,8 +83,21 @@ fn main() -> std::io::Result<()> {
             let l = bw::load::Loaded::load(&casc)?;
             let g = |i: u16| l.grp_size(i);
             let d = bw::load::data(&l, &g);
-            let mut st = bw::State::new((64, 64), 0, 1700);
+            let chk = std::env::var("SCBW_MAP").ok().map(|p| load_chk(&p)).transpose()?;
+            let dims = chk.as_ref().map_or((64, 64), |c| c.dims());
+            let mut st = bw::State::new(dims, 0, 1700);
             st.player_types = [2; 12];
+            if let Some(chk) = &chk {
+                let name = map::TILESETS[chk.tileset()];
+                let vf4 = casc.read(&format!("tileset/{name}.vf4"))?;
+                let ts = bw::map::TilesetData {
+                    vf4: vf4.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect(),
+                    cv5: casc.read(&format!("tileset/{name}.cv5"))?,
+                };
+                let (w, h) = chk.dims();
+                let ok = st.load_terrain(&ts, w as u16, h as u16, chk.section(b"MTXM").unwrap_or(&[]));
+                println!("map {w}x{h}: {} regions (ok {ok})", st.sai.region_count);
+            }
             let mut made = Vec::new();
             for e in std::env::var("SCBW_UNITS").unwrap_or("0,320,320,0".into()).split(';').filter(|e| !e.is_empty()) {
                 let v: Vec<i32> = e.split(',').filter_map(|n| n.trim().parse().ok()).collect();

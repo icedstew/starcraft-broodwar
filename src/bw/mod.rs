@@ -15,6 +15,7 @@ pub mod movement;
 pub mod order_exec;
 pub mod orders;
 pub mod path;
+pub mod path_req;
 pub mod players;
 pub mod list;
 pub mod map;
@@ -145,8 +146,15 @@ pub struct State {
     pub var_6957d0: u32,
     /// 0x66ff70: unit moved to a new tile this frame (vision refresh).
     pub moved_flag: bool,
-    /// CPath pool (unit +0x100).
-    pub paths: Vec<movement::Path>,
+    /// CPath pool (0x6bee8c, unit +0x100) and free list head (0x6bee84, index + 1).
+    pub paths: Vec<path_req::Path>,
+    pub free_path: u32,
+    /// Pathing regions (0x6d5bfc).
+    pub sai: sai::Sai,
+    /// Map tiles and tile flags (Gamemap.cpp).
+    pub terrain: map::GameMap,
+    /// Waypoint search context (0x6c1038).
+    pub walker: short_path::Walker,
     /// Unit finder (0x66ff74..).
     pub finder: finder::Finder,
     /// 0x6d5cd8: air repulse grid, 48px cells, 0xab per row.
@@ -200,7 +208,7 @@ impl State {
         let (units, free_units) = pool(max_units as usize);
         let (orders, free_orders) = pool_after_head::<orders::Order>(orders::MAX_ORDERS);
         debug_assert!(free_images.head == 0 && images[0].link.next == MAX_IMAGES as u32 - 1);
-        State {
+        let mut st = State {
             images,
             free_images,
             sprites,
@@ -251,9 +259,15 @@ impl State {
             free_orders,
             order_count: 0,
             paths: Vec::new(),
+            free_path: 0,
+            sai: sai::Sai::new(),
+            terrain: map::GameMap::new(map_tiles.0 as u16, map_tiles.1 as u16, &map::TilesetData { vf4: Vec::new(), cv5: Vec::new() }),
+            walker: short_path::Walker::default(),
             mv: flingy::MoveScratch::default(),
             sounds: Vec::new(),
-        }
+        };
+        st.path_pool_init();
+        st
     }
 
     pub fn host_is_hallucination(&self, u: u32) -> bool {
