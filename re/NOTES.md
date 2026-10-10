@@ -36,3 +36,9 @@ Tools: `re/xref.py` (RIP-relative xrefs, numpy), `re/datlayout.py` (dat layouts)
 Notes:
 - Game-state globals are often pointer-obfuscated: `ptr = [global] ^ 0x3703db00831bdfe2`.
 - Junk-byte opaque predicates (`and dh,0xff; jno ...`) also appear inside decrypted functions.
+| 0x1401e7650 | `update_unit(u)`: disable checks, sprite flash timer, timers (0x1401e6f30), main order (0x1401e5c60), secondary order switch, subunit recursion (u+0xa0), tail 0x1401a1d60 |
+| 0x1401e5c60 | `execute_main_order`: every-frame switch (order-4, 180 cases) then every-9th-frame switch (order-1, 187 cases) gated by u+0xc9 timer; see re/data/*_orders.txt |
+| 0x140dd9e80 | button sets: 250 x {u64 count, Button* buttons, u64 linked(0xffff)}; Button = 32 B {u16 pos, u16 icon, pad, cond*, act*, u16 cond_var, u16 act_var, u16 enabled_str, u16 disabled_str}; re/buttons.py |
+| 0x140ad4528 | remap table names (images.dat remapping 1..7): ofire gfire bfire bexpl trans50 red green |
+
+CUnit (x64) fields seen: +0x18 sprite*, +0x68 player, +0x69 order, +0x6a order_state, +0xa0 subunit*, +0xc9 order_process_timer, +0xd6 ?, +0xea secondary_order.
