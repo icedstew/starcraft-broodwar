@@ -18,6 +18,7 @@ pub mod anim {
     pub const AIR_ATTK_TO_IDLE: usize = 9;
     pub const WALKING: usize = 11;
     pub const WALKING_TO_IDLE: usize = 12;
+    pub const ALMOST_BUILT: usize = 15;
 }
 
 /// Number of animation entry points per script header type.

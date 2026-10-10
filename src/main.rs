@@ -106,10 +106,19 @@ fn main() -> std::io::Result<()> {
                     }
                 }
             }
+            if let Some(k) = std::env::var("SCBW_TRAIN").ok().and_then(|v| v.parse::<usize>().ok()) {
+                let depot = (0..scene.game.units.len()).find(|&u| scene.game.units[u].owner == 0 && a.dat.units.flags[scene.game.units[u].kind] & 0x1000 != 0);
+                if let Some(b) = depot {
+                    let frames = |_: u16| 0;
+                    let w = scene.world(&frames);
+                    eprintln!("train: {:?}", game::economy::train(&mut scene.game, &w, b, k));
+                }
+            }
             for _ in 0..frames {
                 scene.step();
             }
             if std::env::var("SCBW_DEBUG").is_ok() {
+                eprintln!("player0 {:?} frame {}", scene.game.players[0], scene.game.frame);
                 for (i, u) in scene.game.units.iter().enumerate().filter(|(_, u)| u.owner < 8) {
                     eprintln!("unit {i} kind {} owner {} order {} state {} pos {:?} target {:?} path {:?} hp {} dead {}",
                         u.kind, u.owner, u.order, u.order_state, u.flingy.pos, u.flingy.move_target, u.path, u.hp, u.dead);
@@ -129,6 +138,14 @@ fn main() -> std::io::Result<()> {
             let n: Vec<i32> = args[2..6].iter().map(|v| v.parse().unwrap_or(0)).collect();
             let t = std::time::Instant::now();
             println!("{:?} in {:?}", g.find((n[0], n[1]), (n[2], n[3])), t.elapsed());
+        }
+        Some("units") => {
+            let chk = load_chk(&args[1])?;
+            for r in chk.section(b"UNIT").unwrap_or(&[]).chunks_exact(36) {
+                let r16 = |o: usize| u16::from_le_bytes([r[o], r[o + 1]]);
+                let res = u32::from_le_bytes(r[20..24].try_into().unwrap());
+                println!("kind {:3} owner {:2} at ({:4},{:4}) resources {res}", r16(8), r[16], r16(4), r16(6));
+            }
         }
         Some("walk") => {
             let chk = load_chk(&args[1])?;

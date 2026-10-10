@@ -14,6 +14,10 @@ pub mod id {
     pub const ATTACK_UNIT: u8 = 10;
     pub const ATTACK_MOVE: u8 = 14;
     pub const NOTHING: u8 = 23;
+    pub const MOVE_TO_MINERALS: u8 = 85;
+    pub const WAIT_FOR_MINERALS: u8 = 86;
+    pub const MINING_MINERALS: u8 = 87;
+    pub const RETURN_MINERALS: u8 = 90;
     pub const HOLD_POSITION: u8 = 107;
     pub const PATROL: u8 = 152;
     pub const COMPUTER_AI: u8 = 156;
@@ -57,6 +61,10 @@ fn execute_main_order(g: &mut Game, w: &World, u: UnitId) {
         id::STOP => order_stop(g, w, u),
         id::ATTACK_UNIT => super::combat::order_attack_unit(g, w, u),
         id::ATTACK_MOVE | id::PATROL => order_attack_move(g, w, u),
+        id::MOVE_TO_MINERALS => super::economy::order_move_to_minerals(g, w, u),
+        id::WAIT_FOR_MINERALS => super::economy::order_wait_for_minerals(g, w, u),
+        id::MINING_MINERALS => super::economy::order_mining_minerals(g, w, u),
+        id::RETURN_MINERALS => super::economy::order_return_minerals(g, w, u),
         id::GUARD | id::PLAYER_GUARD | id::TURRET_GUARD | id::HOLD_POSITION => order_guard(g, w, u),
         _ => {}
     }

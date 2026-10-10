@@ -6,6 +6,7 @@
 
 pub mod buttons;
 pub mod combat;
+pub mod economy;
 pub mod flingy;
 pub mod orders;
 pub mod path;
@@ -43,6 +44,15 @@ pub struct Unit {
     pub air_cooldown: u8,    // +0x72
     /// In an attack cycle (next attack uses the Rpt anim instead of Init).
     pub attacking: bool,
+    /// Resource units: amount left. Workers: cargo carried.
+    pub resources: u32,
+    pub carry: u8,
+    /// Worker: mineral field it harvests. Mineral field: worker currently mining it.
+    pub gather_field: Option<UnitId>,
+    pub miner: Option<UnitId>,
+    /// Production queue (unit types) and frames left on the front item.
+    pub build_queue: VecDeque<usize>,
+    pub build_timer: u16,
     /// Frames spent blocked by another unit (collision).
     pub blocked: u8,
     /// Where a Patrol order started (it walks back here, then out again).
@@ -58,6 +68,7 @@ pub struct Game {
     pub units: Vec<Unit>,
     pub sprites: Vec<Option<Sprite>>,
     pub bullets: Vec<combat::Bullet>,
+    pub players: [economy::Player; 12],
     /// Effects raised outside the sprite pass (anims started by orders), handled with the frame's effects.
     pub pending_fx: Vec<Effect>,
     pub tileset: u16,
@@ -66,7 +77,7 @@ pub struct Game {
 
 impl Game {
     pub fn new(w: &World, chk: &Chk, walk: path::WalkGrid) -> Game {
-        let mut g = Game { frame: 0, rng: Rng { seed: 0 }, units: Vec::new(), sprites: Vec::new(), bullets: Vec::new(), pending_fx: Vec::new(), tileset: chk.tileset() as u16, walk };
+        let mut g = Game { frame: 0, rng: Rng { seed: 0 }, units: Vec::new(), sprites: Vec::new(), bullets: Vec::new(), players: [economy::Player { minerals: 50, gas: 0 }; 12], pending_fx: Vec::new(), tileset: chk.tileset() as u16, walk };
         g.place_map_objects(w, chk);
         g
     }
@@ -108,6 +119,12 @@ impl Game {
             ground_cooldown: 0,
             air_cooldown: 0,
             attacking: false,
+            resources: 0,
+            carry: 0,
+            gather_field: None,
+            miner: None,
+            build_queue: VecDeque::new(),
+            build_timer: 0,
             blocked: 0,
             patrol_origin: (x as i16, y as i16),
             path: VecDeque::new(),
@@ -134,7 +151,9 @@ impl Game {
                 }
                 // UNIT record: hp% at offset 0x11.
                 let pct = if r[17] == 0 { 100 } else { r[17] as u32 };
-                self.create_unit(w, kind, owner, x, y, pct);
+                let id = self.create_unit(w, kind, owner, x, y, pct);
+                // UNIT record: resource amount at offset 20.
+                self.units[id].resources = u32::from_le_bytes(r[20..24].try_into().unwrap());
             }
         }
         if let Some(thg2) = chk.section(b"THG2") {
@@ -202,6 +221,7 @@ impl Game {
                 continue;
             }
             orders::update_unit(self, w, id);
+            economy::update_production(self, w, id);
             self.update_unit_movement(w, id, &mut fx);
         }
         combat::update_bullets(self, w);

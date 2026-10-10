@@ -7,14 +7,14 @@
 use crate::casc::Casc;
 use std::io;
 
-fn read_col(d: &[u8], pos: &mut usize, size: usize, count: usize, first: usize, total: usize) -> io::Result<Vec<u32>> {
+fn read_col(d: &[u8], pos: &mut usize, size: usize, count: usize, first: usize, total: usize) -> io::Result<Vec<u64>> {
     let bytes = d
         .get(*pos..*pos + size * count)
         .ok_or_else(|| io::Error::new(io::ErrorKind::UnexpectedEof, "dat too short"))?;
     *pos += size * count;
-    let mut v = vec![0u32; total.max(first + count)];
+    let mut v = vec![0u64; total.max(first + count)];
     for (i, c) in bytes.chunks_exact(size).enumerate() {
-        v[first + i] = c.iter().rev().fold(0, |a, &b| (a << 8) | b as u32);
+        v[first + i] = c.iter().rev().fold(0, |a, &b| (a << 8) | b as u64);
     }
     Ok(v)
 }

@@ -101,7 +101,7 @@ impl<'a> Scene<'a> {
         Ok(Scene { game, selected: Vec::new(), drag_box: None, a, chk, ts, terrain, player_colors, shadow, remaps })
     }
 
-    fn world(&self, frames: &'a dyn Fn(u16) -> u16) -> World<'a> {
+    pub fn world(&self, frames: &'a dyn Fn(u16) -> u16) -> World<'a> {
         World { dat: &self.a.dat, iscript: &self.a.iscript, grp_frames: frames, tileset: self.chk.tileset() as u16 }
     }
 
@@ -134,15 +134,11 @@ impl<'a> Scene<'a> {
     }
 
     /// (used, max) supply for `player` and race, from units.dat values (stored doubled).
+    /// (used, max) supply in whole units, for the HUD.
     pub fn supply(&self, player: u8, race: usize) -> (u32, u32) {
-        let u = &self.a.dat.units;
-        let race_flag = [1u8, 2, 4][race];
-        let (mut used, mut max) = (0u32, 0u32);
-        for mu in self.game.units.iter().filter(|m| !m.dead && m.owner == player && u.staredit_group_flags[m.kind] & race_flag != 0) {
-            used += u.supply_required[mu.kind] as u32;
-            max += u.supply_provided[mu.kind] as u32;
-        }
-        (used.div_ceil(2), (max / 2).min(200))
+        let frames = |_: u16| 0;
+        let (used, max) = crate::game::economy::supply(&self.game, &self.world(&frames), player, race);
+        (used.div_ceil(2), max / 2)
     }
 
     /// (x, y, unit index) for every unit, from its sprite.
@@ -318,10 +314,11 @@ pub fn compose_with_cursor(
     let col = ui.text_color(2);
     let race = scene.local_race();
     let (used, max) = scene.supply(scene.local_player(), race);
+    let pl = scene.game.players[scene.local_player() as usize];
     // icons.grp race order is z/t/p, same as SIDE race ids.
-    let supply = format!("{}/{}", used, max);
+    let (supply, minerals, gas) = (format!("{}/{}", used, max), pl.minerals.to_string(), pl.gas.to_string());
     let mut x = 440;
-    for (icon, text) in [(0, "50"), (1 + race, "0"), (4 + race, supply.as_str())] {
+    for (icon, text) in [(0, minerals.as_str()), (1 + race, gas.as_str()), (4 + race, supply.as_str())] {
         ui.draw_icon(icon, x, 2, pal, out, w, h);
         ui.font.draw(text, x + 16, 4, col, pal, out, w, h);
         x += 66;
@@ -415,12 +412,12 @@ pub fn run(a: &Assets, chk: Chk) -> io::Result<()> {
         let clicked = down && !lmb_was_down;
         lmb_was_down = down;
         // Command card: click a button or press its hotkey.
-        let mut pressed: Option<Act> = None;
+        let mut pressed: Option<crate::game::buttons::Button> = None;
         if clicked {
             pressed = card_buttons(&scene).iter().find(|b| {
                 let (bx, by) = card_slot(b.pos);
                 (bx..bx + 40).contains(&cx) && (by..by + 36).contains(&cy)
-            }).map(|b| b.act);
+            }).copied();
         }
         for k in win.get_keys_pressed(minifb::KeyRepeat::No) {
             let want = match k {
@@ -431,15 +428,26 @@ pub fn run(a: &Assets, chk: Chk) -> io::Result<()> {
                 Key::H => Some(Act::HoldPosition),
                 _ => None,
             };
-            if let Some(a) = want.filter(|a| card_buttons(&scene).iter().any(|b| b.act == *a)) {
-                pressed = Some(a);
+            if let Some(b) = want.and_then(|a| card_buttons(&scene).iter().find(|b| b.act == a)) {
+                pressed = Some(*b);
             }
         }
-        if let Some(act) = pressed {
+        if let Some(btn) = pressed {
+            let act = btn.act;
             match act {
                 Act::Stop => issue_to_selection(&mut scene, crate::game::orders::id::STOP, None),
                 Act::HoldPosition => issue_to_selection(&mut scene, crate::game::orders::id::HOLD_POSITION, None),
-                Act::Move | Act::Attack | Act::Patrol => targeting = Some(act),
+                Act::Move | Act::Attack | Act::Patrol | Act::Gather => targeting = Some(act),
+                Act::ReturnCargo => issue_to_selection(&mut scene, crate::game::orders::id::RETURN_MINERALS, None),
+                Act::Train => {
+                    // The card belongs to the first selected unit; train there.
+                    if let Some(&b) = scene.selected.first() {
+                        let frames = |id: u16| a.grp(id).map_or(0, |g| g.frame_count() as u16);
+                        let w = scene.world(&frames);
+                        // ponytail: errors (not enough minerals/supply) should show the BW error text + sound.
+                        let _ = crate::game::economy::train(&mut scene.game, &w, b, btn.act_var as usize);
+                    }
+                }
                 _ => {}
             }
         }
@@ -453,6 +461,7 @@ pub fn run(a: &Assets, chk: Chk) -> io::Result<()> {
                     _ => crate::game::orders::id::ATTACK_MOVE,
                 },
                 Act::Patrol => crate::game::orders::id::PATROL,
+                Act::Gather => crate::game::orders::id::MOVE_TO_MINERALS,
                 _ => crate::game::orders::id::MOVE,
             };
             issue_to_selection(&mut scene, order, Some(crate::game::Target { pos: (tx, ty), unit: hit }));
@@ -495,12 +504,17 @@ pub fn run(a: &Assets, chk: Chk) -> io::Result<()> {
             let me = scene.local_player();
             // Right-click on a unit: attack if hostile, else move to it.
             let hit = scene.units_in_rect(tx as i32, ty as i32, tx as i32, ty as i32).into_iter().next();
+            use crate::game::{economy, orders::id};
+            let flags = &a.dat.units.flags;
             for &u in &scene.selected.clone() {
                 if scene.game.units[u].owner == me {
                     let t = crate::game::Target { pos: (tx, ty), unit: hit };
-                    let order = match hit {
-                        Some(h) if scene.game.units[h].owner != me && scene.game.units[h].owner < 8 => crate::game::orders::id::ATTACK_UNIT,
-                        _ => crate::game::orders::id::MOVE,
+                    let worker = flags[scene.game.units[u].kind] & economy::flag::WORKER != 0;
+                    let order = match hit.map(|h| (h, &scene.game.units[h])) {
+                        Some((_, h)) if worker && economy::is_mineral_field(h.kind) => id::MOVE_TO_MINERALS,
+                        Some((_, h)) if worker && h.owner == me && flags[h.kind] & economy::flag::RESOURCE_DEPOT != 0 && scene.game.units[u].carry > 0 => id::RETURN_MINERALS,
+                        Some((_, h)) if h.owner != me && h.owner < 8 => id::ATTACK_UNIT,
+                        _ => id::MOVE,
                     };
                     scene.game.issue_order(u, order, t, false);
                 }
