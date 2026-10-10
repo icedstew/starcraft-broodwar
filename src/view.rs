@@ -66,6 +66,7 @@ pub struct Scene<'a> {
     pub rng: Rng,
     pub player_colors: [[u8; 8]; 12],
     shadow: [u8; 256],
+    remaps: [Vec<u8>; 7],
 }
 
 impl<'a> Scene<'a> {
@@ -81,18 +82,17 @@ impl<'a> Scene<'a> {
                 pc[k] = tunit.get((c * 8 + k) % tw.max(1)).copied().unwrap_or(0);
             }
         }
-        // ponytail: shadow = nearest palette color at ~half brightness; BW uses a tileset light table.
+        let tsname = map::TILESETS[chk.tileset()];
+        let tbl = |n: &str| a.casc.read(&format!("tileset/{tsname}/{n}.pcx")).map(|d| pcx(&d).2).unwrap_or_default();
+        // ponytail: shadow row 17 (~50% light) picked by brightness; confirm against the draw-func table in the decomp.
+        let dark = tbl("dark");
         let mut shadow = [0u8; 256];
         for (i, s) in shadow.iter_mut().enumerate() {
-            let [r, g, b] = ts.palette[i].map(|c| c as i32 / 2);
-            *s = (1..256)
-                .min_by_key(|&j| {
-                    let [r2, g2, b2] = ts.palette[j].map(|c| c as i32);
-                    (r - r2).pow(2) + (g - g2).pow(2) + (b - b2).pow(2)
-                })
-                .unwrap_or(0) as u8;
+            *s = dark.get(17 * 256 + i).copied().unwrap_or(i as u8);
         }
-        let mut s = Scene { a, chk, ts, terrain, sprites: Vec::new(), rng: Rng { seed: 0 }, player_colors, shadow };
+        // images.dat remapping ids 1..=7
+        let remaps = ["ofire", "gfire", "bfire", "bexpl", "trans50", "red", "green"].map(tbl);
+        let mut s = Scene { a, chk, ts, terrain, sprites: Vec::new(), rng: Rng { seed: 0 }, player_colors, shadow, remaps };
         s.place_map_objects();
         Ok(s)
     }
@@ -189,6 +189,10 @@ impl<'a> Scene<'a> {
                 let y = s.y + img.y as i32 - g.h / 2 - vy;
                 let blend = match img.draw_fn {
                     10 => Blend::Remap(&self.shadow),
+                    9 => match self.a.dat.images.remapping[img.id as usize] {
+                        r @ 1..=7 => Blend::Table(&self.remaps[r as usize - 1]),
+                        _ => Blend::Normal,
+                    },
                     _ => Blend::Player(&self.player_colors[(s.owner as usize).min(11)]),
                 };
                 g.draw(img.frame as usize, img.flipped(), x, y, out, vw, vh, blend);
