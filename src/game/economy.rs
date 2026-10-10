@@ -260,7 +260,7 @@ pub fn update_production(g: &mut Game, w: &World, b: UnitId) {
 
 /// Free spot for a new unit: start just below the building and spiral out.
 /// ponytail: BW searches with its own placement routine; this just avoids overlaps.
-fn spawn_point(g: &Game, w: &World, b: UnitId, kind: usize) -> (i32, i32) {
+pub fn spawn_point(g: &Game, w: &World, b: UnitId, kind: usize) -> (i32, i32) {
     let (bx, by) = g.unit_pos(b);
     let dim = |k: usize| {
         let d = w.dat.units.dimensions[k];

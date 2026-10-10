@@ -204,6 +204,38 @@ impl Game {
         u.flingy.set_move_target(first.0, first.1);
     }
 
+    /// Melee start: resource depot + 4 workers (+ overlord for zerg) at each player's start location.
+    /// `races[slot]`: 0 zerg, 1 terran, 2 protoss; slots without a race get nothing.
+    pub fn setup_melee(&mut self, w: &World, chk: &Chk, races: &[Option<u8>; 8]) {
+        for r in chk.section(b"UNIT").unwrap_or(&[]).chunks_exact(36) {
+            let r16 = |o: usize| u16::from_le_bytes([r[o], r[o + 1]]);
+            if r16(8) != 214 || r[16] >= 8 {
+                continue;
+            }
+            let owner = r[16];
+            let Some(race) = races[owner as usize] else { continue };
+            let (depot, worker) = match race {
+                0 => (131, 41),
+                2 => (154, 64),
+                _ => (106, 7),
+            };
+            let d = self.create_unit(w, depot, owner, r16(4) as i32, r16(6) as i32, 100);
+            for _ in 0..4 {
+                let (x, y) = economy::spawn_point(self, w, d, worker);
+                self.create_unit(w, worker, owner, x, y, 100);
+            }
+            if race == 0 {
+                let (x, y) = economy::spawn_point(self, w, d, 42);
+                self.create_unit(w, 42, owner, x, y, 100);
+            }
+        }
+    }
+
+    /// Melee maps place no player units, only start locations.
+    pub fn is_melee_map(chk: &Chk) -> bool {
+        chk.section(b"UNIT").unwrap_or(&[]).chunks_exact(36).all(|r| r[16] >= 8 || u16::from_le_bytes([r[8], r[9]]) == 214)
+    }
+
     pub fn unit_pos(&self, id: UnitId) -> (i32, i32) {
         let p = self.units[id].flingy.pos;
         (p.0 as i32, p.1 as i32)

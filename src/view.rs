@@ -101,7 +101,21 @@ impl<'a> Scene<'a> {
         let frames = |id: u16| a.grp(id).map_or(0, |g| g.frame_count() as u16);
         let w = World { dat: &a.dat, iscript: &a.iscript, grp_frames: &frames, tileset: chk.tileset() as u16 };
         let (gw, gh, walk) = map::walk_grid(&chk, &ts);
-        let game = crate::game::Game::new(&w, &chk, crate::game::path::WalkGrid { w: gw, h: gh, walk }, map::build_grid(&chk, &ts));
+        let mut game = crate::game::Game::new(&w, &chk, crate::game::path::WalkGrid { w: gw, h: gh, walk }, map::build_grid(&chk, &ts));
+        if crate::game::Game::is_melee_map(&chk) {
+            // ponytail: local player slot 0 plays SCBW_RACE (default terran); other start
+            // locations get computer slots cycling through the races until there's an AI.
+            let mine = match std::env::var("SCBW_RACE").as_deref() {
+                Ok("zerg") => 0,
+                Ok("protoss") => 2,
+                _ => 1,
+            };
+            let mut races = [None; 8];
+            for (i, r) in races.iter_mut().enumerate() {
+                *r = Some(if i == 0 { mine } else { (i % 3) as u8 });
+            }
+            game.setup_melee(&w, &chk, &races);
+        }
         Ok(Scene { game, selected: Vec::new(), card_menu: None, placing: None, drag_box: None, a, chk, ts, terrain, player_colors, shadow, remaps })
     }
 
@@ -124,14 +138,21 @@ impl<'a> Scene<'a> {
         self.game.create_unit(&w, kind, owner, x, y, 100)
     }
 
-    /// Local player: first human (OWNR 6) slot.
+    /// Local player: first human (OWNR 6) slot; slot 0 on melee maps.
     pub fn local_player(&self) -> u8 {
+        if crate::game::Game::is_melee_map(&self.chk) {
+            return 0;
+        }
         self.chk.owners().iter().position(|&o| o == 6).unwrap_or(0) as u8
     }
 
     /// Local player's race (SIDE: 0 zerg, 1 terran, 2 protoss); random/other -> terran.
     pub fn local_race(&self) -> usize {
-        match self.chk.races()[self.local_player() as usize] {
+        let p = self.local_player() as usize;
+        if let Some(u) = self.game.units.iter().find(|u| u.owner as usize == p && self.a.dat.units.flags[u.kind] & 0x1000 != 0) {
+            return crate::game::economy::race_of(&self.world(&|_| 0), u.kind);
+        }
+        match self.chk.races()[p] {
             r @ 0..=2 => r as usize,
             _ => 1,
         }
