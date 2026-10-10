@@ -4,6 +4,7 @@
 //! translated from the decompiled routines (addresses noted). Unported
 //! callees are explicit `todo_port!` markers, never approximations.
 
+pub mod flingy;
 pub mod frame;
 pub mod iscript;
 pub mod list;
@@ -130,6 +131,8 @@ pub struct State {
     pub finder_rows: [[u32; 0x20]; 0x20],
     pub finder_64dea8: u32,
     pub var_6957d0: u32,
+    /// Flingy predict globals (0x63fec0..0x63ff40).
+    pub mv: flingy::MoveScratch,
     /// Sounds requested this frame (sfx id, x, y) for the front end to play.
     pub sounds: Vec<(u16, i16, i16)>,
 }
@@ -192,6 +195,7 @@ impl State {
             finder_rows: [[0; 0x20]; 0x20],
             finder_64dea8: 0,
             var_6957d0: 0,
+            mv: flingy::MoveScratch::default(),
             sounds: Vec::new(),
         }
     }
