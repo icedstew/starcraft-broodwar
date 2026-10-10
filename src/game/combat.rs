@@ -237,33 +237,46 @@ pub fn melee_hit(g: &mut Game, w: &World, u: UnitId) {
     }
 }
 
-/// Shields first, then hp with armor and the damage-type x unit-size multiplier.
-/// ponytail: upgrades and exact rounding still to verify against the decomp.
+/// 0x1401b2d30 weapon damage (with 0x140185470 for the base amount).
+/// ponytail: upgrades, acid spores, defensive matrix and hallucinations not modelled yet.
 pub fn deal_damage(g: &mut Game, w: &World, t: UnitId, wpn: u8, src: Option<UnitId>) {
     let wd = &w.dat.weapons;
     let wi = wpn as usize;
-    let mut dmg = (wd.damage[wi] as i32 * wd.damage_factor[wi].max(1) as i32) << 8;
-    let unit = &mut g.units[t];
-    if unit.dead {
+    let unit = &g.units[t];
+    if unit.dead || unit.hp == 0 {
         return;
     }
     let kind = unit.kind;
-    if unit.shields > 0 {
-        let absorbed = dmg.min(unit.shields);
-        unit.shields -= absorbed;
-        dmg -= absorbed;
-        if dmg <= 0 {
-            return;
-        }
-    }
+    let units = &w.dat.units;
+    // Base: explosion type 5 deals max(500, 2/3 of current hp+shields); otherwise damage + level*bonus.
+    let base = if wd.explosion_type[wi] == 5 {
+        let hp = unit.hp >> 8;
+        let total = if units.shield_enable[kind] != 0 { hp + units.shields[kind] as i32 } else { hp };
+        (total * 2 / 3).max(500)
+    } else {
+        wd.damage[wi] as i32
+    };
+    let divisor = 1;
+    let mut dmg = ((base << 8) / divisor).max(0x80);
     let dtype = (wd.damage_type[wi] as usize).min(4);
-    if dtype != 4 {
-        dmg -= (w.dat.units.armor[kind] as i32) << 8;
+    let mut absorbed = 0;
+    if units.shield_enable[kind] != 0 && unit.shields > 0xFF {
+        // Shield armor upgrade level would be subtracted here (unless ignore-armor).
+        absorbed = dmg.min(unit.shields);
+        dmg -= absorbed;
     }
-    dmg = dmg.max(128);
-    let size = (w.dat.units.size[kind] as usize).min(3);
-    dmg = (dmg * DAMAGE_MULT[dtype][size] / 256).max(128);
-    unit.hp -= dmg;
+    if dtype != 4 {
+        let armor = (units.armor[kind] as i32) << 8;
+        dmg -= armor.min(dmg);
+    }
+    let size = (units.size[kind] as usize).min(3);
+    let mut hp_dmg = ((dmg as u32 * DAMAGE_MULT[dtype][size] as u32) >> 8) as i32;
+    if absorbed == 0 && hp_dmg < 0x80 {
+        hp_dmg = 0x80;
+    }
+    let unit = &mut g.units[t];
+    unit.shields -= absorbed;
+    unit.hp -= hp_dmg;
     if unit.hp <= 0 {
         kill_unit(g, w, t);
     } else if let Some(s) = src {
