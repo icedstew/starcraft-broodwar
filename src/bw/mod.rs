@@ -14,6 +14,7 @@ pub mod iscript;
 pub mod movement;
 pub mod order_exec;
 pub mod orders;
+pub mod path;
 pub mod players;
 pub mod list;
 pub mod map;

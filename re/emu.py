@@ -50,6 +50,9 @@ class Emu:
         uc.hook_add(UC_HOOK_MEM_INVALID, self._bad)
         self.snaps = {}
 
+    def stop(self):
+        self.uc.emu_stop()
+
     def at(self, addr, fn):
         """Run fn(emu) every time execution reaches addr."""
         self.uc.hook_add(UC_HOOK_CODE, lambda uc, a, size, _: fn(self), begin=addr, end=addr)

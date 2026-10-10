@@ -262,7 +262,26 @@ fn main() -> std::io::Result<()> {
             std::fs::write(dir.join("tile_flags"), le32(&m.tile_flags[..w * h]))?;
             std::fs::write(dir.join("megatiles"), le16(&m.megatiles[..w * h]))?;
             std::fs::write(dir.join("minitiles"), &m.minitiles)?;
-            if let Some(sai) = bw::sai::create(&mut m, &ts) {
+            if let Some(mut sai) = bw::sai::create(&mut m, &ts) {
+                // Region path searches between pseudo-random points.
+                let mut seed = 12345u32;
+                let mut rnd = |n: u32| {
+                    seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
+                    (seed >> 8) % n
+                };
+                let (pw, ph) = (w as u32 * 32, h as u32 * 32);
+                let mut tests = Vec::new();
+                let mut out = Vec::new();
+                for _ in 0..200 {
+                    let mut ctx = bw::path::PathCtx::default();
+                    ctx.start = (rnd(pw) as i16, rnd(ph) as i16);
+                    ctx.target = (rnd(pw) as i16, rnd(ph) as i16);
+                    tests.extend_from_slice(&le16(&[ctx.start.0 as u16, ctx.start.1 as u16, ctx.target.0 as u16, ctx.target.1 as u16]));
+                    bw::path::find_path_regions(&mut sai, &mut ctx, [0; 4]);
+                    out.extend_from_slice(&ctx.layout());
+                }
+                std::fs::write(dir.join("path_tests"), tests)?;
+                std::fs::write(dir.join("path_regions"), out)?;
                 std::fs::write(dir.join("sai"), bw::sai::layout(&sai))?;
                 std::fs::write(dir.join("contours"), bw::sai::contours_layout(sai.contours.as_ref().unwrap()))?;
             }
