@@ -49,9 +49,21 @@ class Emu:
         uc.hook_add(UC_HOOK_CODE, self._stub, begin=STUBS, end=STUBS + 0xffff)
         uc.hook_add(UC_HOOK_MEM_INVALID, self._bad)
         self.snaps = {}
+        # Extra import handlers: lower-case symbol -> fn(emu, args) -> (eax, stdcall arg count).
+        self.handlers = {}
 
     def stop(self):
         self.uc.emu_stop()
+
+    def skip(self, addr, ret=0, nargs=0):
+        """Make the function at addr return `ret` immediately (stdcall `nargs`)."""
+        def h(e):
+            e.uc.reg_write(UC_X86_REG_EAX, ret)
+            esp = e.uc.reg_read(UC_X86_REG_ESP)
+            ra = e.r32(esp)
+            e.uc.reg_write(UC_X86_REG_ESP, esp + 4 + 4 * nargs)
+            e.uc.reg_write(UC_X86_REG_EIP, ra)
+        self.at(addr, h)
 
     def at(self, addr, fn):
         """Run fn(emu) every time execution reaches addr."""
@@ -87,7 +99,8 @@ class Emu:
 
     def _bad(self, uc, access, addr, size, value, _):
         eip = uc.reg_read(UC_X86_REG_EIP)
-        raise RuntimeError(f"invalid mem access {access} at {addr:#x} (eip {eip:#x})")
+        self.fault = f"invalid mem access {access} at {addr:#x} (eip {eip:#x})"
+        return False
 
     def _stub(self, uc, addr, size, _):
         if addr == RET:
@@ -96,6 +109,12 @@ class Emu:
         sym = self.imports.get(addr)
         esp = uc.reg_read(UC_X86_REG_ESP)
         arg = lambda i: self.r32(esp + 4 + 4 * i)
+        h = self.handlers.get(sym.lower() if sym else None)
+        if h:
+            r, nargs = h(self, [arg(i) for i in range(8)])
+            uc.reg_write(UC_X86_REG_EAX, r & 0xffffffff)
+            self._ret(nargs)
+            return
         if sym and sym.lower().startswith("storm.dll#401"):
             size, flags = arg(0), arg(3)
             p = self.alloc(size)
@@ -105,7 +124,7 @@ class Emu:
             uc.reg_write(UC_X86_REG_EAX, 1)
             self._ret(4)
         else:
-            raise RuntimeError(f"unhandled import {sym} at {addr:#x}")
+            raise RuntimeError(f"unhandled import {sym} at {addr:#x}, called from {self.r32(esp):#x}")
 
     def _ret(self, nargs):
         esp = self.uc.reg_read(UC_X86_REG_ESP)
@@ -140,5 +159,9 @@ class Emu:
         self.uc.reg_write(UC_X86_REG_ESP, esp)
         for k, v in (regs or {}).items():
             self.uc.reg_write(REGS[k], v)
-        self.uc.emu_start(addr, RET)
+        self.fault = None
+        try:
+            self.uc.emu_start(addr, RET)
+        except Exception as ex:
+            raise RuntimeError(f"{ex}: {self.fault}") from None
         return self.uc.reg_read(UC_X86_REG_EAX)

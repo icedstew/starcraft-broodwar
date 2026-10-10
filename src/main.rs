@@ -61,6 +61,17 @@ fn main() -> std::io::Result<()> {
             let data = casc.read(&args[1])?;
             std::fs::write(&args[2], data)?;
         }
+        Some("export") => {
+            // export <dir> <prefix>...: copy matching CASC files (for the emulator harness).
+            let dir = std::path::Path::new(&args[1]);
+            let files: Vec<String> = casc.files().filter(|f| args[2..].iter().any(|p| f.starts_with(p.as_str()))).map(|f| f.to_string()).collect();
+            for f in &files {
+                let out = dir.join(f);
+                std::fs::create_dir_all(out.parent().unwrap())?;
+                std::fs::write(out, casc.read(f)?)?;
+            }
+            println!("{} files", files.len());
+        }
         Some("dat") => {
             let dat = dat::Dat::load(&casc)?;
             let names = dat::parse_tbl(&casc.read("rez/stat_txt.tbl")?);
@@ -122,8 +133,16 @@ fn main() -> std::io::Result<()> {
                 }
             }
             let frames: u32 = args.get(1).and_then(|f| f.parse().ok()).unwrap_or(48);
+            let trace = std::env::var("SCBW_TRACE").ok().map(std::fs::File::create).transpose()?;
+            let mut trace = trace.map(std::io::BufWriter::new);
             for f in 0..frames {
                 st.game_step(&d);
+                if let Some(t) = trace.as_mut() {
+                    use std::io::Write;
+                    for &u in &made {
+                        writeln!(t, "{}", unit_trace(&st, f, u))?;
+                    }
+                }
                 if f % 8 == 0 || f + 1 == frames {
                     for &u in &made {
                         let un = &st.units[u as usize];
@@ -270,6 +289,8 @@ fn main() -> std::io::Result<()> {
             let le32 = |v: &[u32]| v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>();
             std::fs::write(dir.join("dims"), le16(&[w as u16, h as u16]))?;
             std::fs::write(dir.join("mtxm"), &mtxm)?;
+            std::fs::write(dir.join("chk"), load_chk_raw(&args[1])?)?;
+            std::fs::write(dir.join("tileset"), [chk.tileset() as u8])?;
             std::fs::write(dir.join("vf4"), &vf4)?;
             std::fs::write(dir.join("cv5"), &cv5)?;
             std::fs::write(dir.join("tile_flags"), le32(&m.tile_flags[..w * h]))?;
@@ -331,14 +352,32 @@ fn main() -> std::io::Result<()> {
     Ok(())
 }
 
+/// One line of unit state, matching re/emu_game.py's trace of 1.16.1 memory.
+fn unit_trace(st: &bw::State, f: u32, u: u32) -> String {
+    let un = &st.units[u as usize];
+    let s = &st.sprites[un.sprite as usize];
+    let fl = &un.fl;
+    format!(
+        "f{f} u{u} pos {},{} order {:#x} ost {} mv {:#x} mt {},{} nw {},{} ntw {},{} fl {:#x} dir {} vdir {} ddir {} spd {} nspd {} top {} exact {},{} vel {},{} status {:#x} path {}",
+        s.x, s.y, un.order, un.order_state, un.movement_state, fl.move_target.0, fl.move_target.1,
+        fl.next_waypoint.0, fl.next_waypoint.1, fl.next_target_waypoint.0, fl.next_target_waypoint.1,
+        fl.flags, fl.heading, fl.velocity_dir_prev, fl.desired_dir, fl.speed, fl.next_speed, fl.top_speed,
+        fl.exact.0, fl.exact.1, fl.velocity.0, fl.velocity.1, un.status, (un.path != bw::list::NIL) as u8
+    )
+}
+
 fn load_chk(path: &str) -> std::io::Result<map::Chk> {
+    Ok(map::Chk::parse(&load_chk_raw(path)?))
+}
+
+fn load_chk_raw(path: &str) -> std::io::Result<Vec<u8>> {
     if path.to_ascii_lowercase().ends_with(".rep") {
-        return Ok(map::Chk::parse(&replay::Replay::parse(&std::fs::read(path)?)?.chk));
+        return Ok(replay::Replay::parse(&std::fs::read(path)?)?.chk);
     }
     if path.to_ascii_lowercase().ends_with(".chk") {
-        return Ok(map::Chk::parse(&std::fs::read(path)?));
+        return std::fs::read(path);
     }
-    Ok(map::Chk::parse(&mpq::Mpq::open(path.as_ref())?.read("staredit\\scenario.chk")?))
+    mpq::Mpq::open(path.as_ref())?.read("staredit\\scenario.chk")
 }
 
 fn write_png(path: &str, w: usize, h: usize, idx: &[u8], pal: &[[u8; 3]; 256]) -> std::io::Result<()> {
