@@ -17,7 +17,18 @@ public class DumpAll extends GhidraScript {
         String out = args[0];
         FunctionManager fm = currentProgram.getFunctionManager();
         Set<Function> funcs = new LinkedHashSet<>();
-        if (args.length > 1) {
+        if (args.length > 1 && args[1].startsWith("except:")) {
+            // Every Ghidra function except entries listed in the file, sharded i/n by entry order.
+            Set<Long> skip = new HashSet<>();
+            for (String line : Files.readAllLines(Paths.get(args[1].substring(7)))) {
+                if (!line.trim().isEmpty()) skip.add(Long.parseUnsignedLong(line.trim().replace("0x", ""), 16));
+            }
+            int shard = Integer.parseInt(args[2]), nshards = Integer.parseInt(args[3]), k = 0;
+            for (Function f : fm.getFunctions(true)) {
+                if (skip.contains(f.getEntryPoint().getOffset())) continue;
+                if (k++ % nshards == shard) funcs.add(f);
+            }
+        } else if (args.length > 1) {
             for (String line : Files.readAllLines(Paths.get(args[1]))) {
                 line = line.trim();
                 if (line.isEmpty()) continue;
@@ -49,7 +60,8 @@ public class DumpAll extends GhidraScript {
                 return "// ==== " + f.getEntryPoint() + " " + f.getName() + "\n" + body;
             }
         };
-        cb.setTimeout(30);
+        String to = System.getenv("DUMP_TIMEOUT");
+        cb.setTimeout(to == null ? 30 : Integer.parseInt(to));
         int batch = 500, done = 0;
         try (PrintWriter w = new PrintWriter(new BufferedWriter(new FileWriter(out, true)))) {
             List<Function> all = new ArrayList<>(funcs);

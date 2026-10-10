@@ -87,7 +87,8 @@ fn main() -> std::io::Result<()> {
                 Some((a.parse::<i16>().ok()?, b.parse::<i16>().ok()?))
             }) {
                 for &u in &scene.selected.clone() {
-                    scene.units[u].flingy.set_move_target(mx, my);
+                    let t = game::Target { pos: (mx, my), unit: None };
+                    scene.game.issue_order(u, game::orders::id::MOVE, t, false);
                 }
             }
             for _ in 0..frames {

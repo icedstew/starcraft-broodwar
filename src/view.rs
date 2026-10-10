@@ -3,7 +3,7 @@
 use crate::casc::Casc;
 use crate::dat::{self, Dat};
 use crate::grp::{Blend, Grp};
-use crate::iscript::{Effect, Iscript, Rng, Sprite, World};
+use crate::iscript::{Iscript, Sprite, World};
 use crate::map::{self, Chk, Tileset};
 use std::cell::RefCell;
 use std::io;
@@ -57,17 +57,8 @@ impl Assets {
     }
 }
 
-/// A map-placed unit (game logic proper comes later; this backs selection/UI).
-pub struct MapUnit {
-    pub id: usize,
-    pub owner: u8,
-    /// Hit points, 24.8 fixed point like BW.
-    pub hp: u32,
-    pub flingy: crate::game::flingy::Flingy,
-}
-
 pub struct Scene<'a> {
-    pub units: Vec<MapUnit>,
+    pub game: crate::game::Game,
     pub selected: Vec<usize>,
     /// Screen-space drag rectangle while box-selecting.
     pub drag_box: Option<(i32, i32, i32, i32)>,
@@ -75,8 +66,6 @@ pub struct Scene<'a> {
     pub chk: Chk,
     pub ts: Tileset,
     pub terrain: (usize, usize, Vec<u8>),
-    pub sprites: Vec<Sprite>,
-    pub rng: Rng,
     pub player_colors: [[u8; 8]; 12],
     shadow: [u8; 256],
     remaps: [Vec<u8>; 7],
@@ -105,62 +94,14 @@ impl<'a> Scene<'a> {
         }
         // images.dat remapping ids 1..=7
         let remaps = ["ofire", "gfire", "bfire", "bexpl", "trans50", "red", "green"].map(tbl);
-        let mut s = Scene { units: Vec::new(), selected: Vec::new(), drag_box: None, a, chk, ts, terrain, sprites: Vec::new(), rng: Rng { seed: 0 }, player_colors, shadow, remaps };
-        s.place_map_objects();
-        Ok(s)
+        let frames = |id: u16| a.grp(id).map_or(0, |g| g.frame_count() as u16);
+        let w = World { dat: &a.dat, iscript: &a.iscript, grp_frames: &frames, tileset: chk.tileset() as u16 };
+        let game = crate::game::Game::new(&w, &chk);
+        Ok(Scene { game, selected: Vec::new(), drag_box: None, a, chk, ts, terrain, player_colors, shadow, remaps })
     }
 
     fn world(&self, frames: &'a dyn Fn(u16) -> u16) -> World<'a> {
         World { dat: &self.a.dat, iscript: &self.a.iscript, grp_frames: frames, tileset: self.chk.tileset() as u16 }
-    }
-
-    fn place_map_objects(&mut self) {
-        let a = self.a;
-        let frames = |id: u16| a.grp(id).map_or(0, |g| g.frame_count() as u16);
-        let w = self.world(&frames);
-        let u = &a.dat.units;
-        let mut new = Vec::new();
-        if let Some(units) = self.chk.section(b"UNIT") {
-            for r in units.chunks_exact(36) {
-                let r16 = |o: usize| u16::from_le_bytes([r[o], r[o + 1]]);
-                let (x, y, id, owner) = (r16(4) as i32, r16(6) as i32, r16(8) as usize, r[16]);
-                if id >= dat::Units::COUNT || id == 214 {
-                    continue; // 214 = start location, never drawn
-                }
-                let sprite = a.dat.flingy.sprite[u.flingy[id] as usize];
-                let mut s = Sprite::new(&w, &mut self.rng, sprite, owner, x, y);
-                s.elevation = u.elevation[id];
-                // UNIT record: hp% at offset 0x11 (percentage of max).
-                let pct = if r[17] == 0 { 100 } else { r[17] as u32 };
-                s.unit = Some(self.units.len());
-                let fl = crate::game::flingy::Flingy::new(&a.dat.flingy, u.flingy[id] as u16, x as i16, y as i16, s.direction);
-                self.units.push(MapUnit { id, owner, hp: u.hit_points[id] / 100 * pct, flingy: fl });
-                new.push(s);
-                if u.subunit1[id] as usize != 228 {
-                    let sub = u.subunit1[id] as usize;
-                    let sp = a.dat.flingy.sprite[u.flingy[sub] as usize];
-                    let mut t = Sprite::new(&w, &mut self.rng, sp, owner, x, y);
-                    t.elevation = u.elevation[id] + 1;
-                    new.push(t);
-                }
-            }
-        }
-        if let Some(thg2) = self.chk.section(b"THG2") {
-            for r in thg2.chunks_exact(10) {
-                let r16 = |o: usize| u16::from_le_bytes([r[o], r[o + 1]]);
-                let (id, x, y, owner, flags) = (r16(0), r16(2) as i32, r16(4) as i32, r[6], r16(8));
-                // Flag 0x1000: pure sprite; otherwise id is a unit type (doodad unit).
-                let sprite = if flags & 0x1000 != 0 {
-                    id
-                } else if (id as usize) < dat::Units::COUNT {
-                    a.dat.flingy.sprite[u.flingy[id as usize] as usize]
-                } else {
-                    continue;
-                };
-                new.push(Sprite::new(&w, &mut self.rng, sprite, owner, x, y));
-            }
-        }
-        self.sprites = new;
     }
 
     /// Advance one frame; returns sounds (sfx id, x, y) requested this frame.
@@ -168,38 +109,7 @@ impl<'a> Scene<'a> {
         let a = self.a;
         let frames = |id: u16| a.grp(id).map_or(0, |g| g.frame_count() as u16);
         let w = self.world(&frames);
-        let mut fx = Vec::new();
-        // Movement first (BW moves units, then runs their iscripts).
-        for s in self.sprites.iter_mut() {
-            let Some(ui) = s.unit else { continue };
-            let mu = &mut self.units[ui];
-            if a.dat.units.flags[mu.id] & 0x1 != 0 {
-                continue; // buildings don't move
-            }
-            let r = mu.flingy.step(&a.dat.flingy);
-            s.x = r.new_pos.0 as i32;
-            s.y = r.new_pos.1 as i32;
-            s.set_direction(&w, mu.flingy.heading);
-            if r.starting {
-                s.set_anim(&w, &mut self.rng, crate::iscript::anim::WALKING, &mut fx);
-            } else if r.stopping {
-                s.set_anim(&w, &mut self.rng, crate::iscript::anim::WALKING_TO_IDLE, &mut fx);
-            }
-        }
-        let rng = &mut self.rng;
-        self.sprites.retain_mut(|s| s.step(&w, rng, &mut fx));
-        let mut sounds = Vec::new();
-        for e in fx {
-            match e {
-                Effect::SpawnSprite { sprite, x, y, elevation_delta } => {
-                    let mut s = Sprite::new(&w, &mut self.rng, sprite, 11, x, y);
-                    s.elevation = s.elevation.saturating_add_signed(elevation_delta);
-                    self.sprites.push(s);
-                }
-                Effect::Sound { id, x, y } => sounds.push((id, x, y)),
-            }
-        }
-        sounds
+        self.game.step(&w)
     }
 
     /// Local player: first human (OWNR 6) slot.
@@ -220,16 +130,24 @@ impl<'a> Scene<'a> {
         let u = &self.a.dat.units;
         let race_flag = [1u8, 2, 4][race];
         let (mut used, mut max) = (0u32, 0u32);
-        for mu in self.units.iter().filter(|m| m.owner == player && u.staredit_group_flags[m.id] & race_flag != 0) {
-            used += u.supply_required[mu.id] as u32;
-            max += u.supply_provided[mu.id] as u32;
+        for mu in self.game.units.iter().filter(|m| !m.dead && m.owner == player && u.staredit_group_flags[m.kind] & race_flag != 0) {
+            used += u.supply_required[mu.kind] as u32;
+            max += u.supply_provided[mu.kind] as u32;
         }
         (used.div_ceil(2), (max / 2).min(200))
     }
 
     /// (x, y, unit index) for every unit, from its sprite.
     pub fn unit_positions(&self) -> Vec<(i32, i32, usize)> {
-        self.sprites.iter().filter_map(|s| s.unit.map(|u| (s.x, s.y, u))).collect()
+        // Subunits (turrets, units.dat flag 0x10) are not selectable on their own.
+        let flags = &self.a.dat.units.flags;
+        (0..self.game.units.len())
+            .filter(|&i| !self.game.units[i].dead && flags[self.game.units[i].kind] & 0x10 == 0)
+            .map(|i| {
+                let (x, y) = self.game.unit_pos(i);
+                (x, y, i)
+            })
+            .collect()
     }
 
     /// Units whose units.dat bounds intersect the map-space rectangle.
@@ -238,7 +156,7 @@ impl<'a> Scene<'a> {
         self.unit_positions()
             .into_iter()
             .filter(|&(x, y, u)| {
-                let dm = d[self.units[u].id];
+                let dm = d[self.game.units[u].kind];
                 let (l, t, r, b) = ((dm & 0xFFFF) as i32, (dm >> 16 & 0xFFFF) as i32, (dm >> 32 & 0xFFFF) as i32, (dm >> 48) as i32);
                 x - l <= x1.max(x0) && x + r >= x0.min(x1) && y - t <= y1.max(y0) && y + b >= y0.min(y1)
             })
@@ -256,7 +174,7 @@ impl<'a> Scene<'a> {
                 out[(y * vw + x) as usize] = row[(vx + x).clamp(0, *tw as i32 - 1) as usize];
             }
         }
-        let mut order: Vec<&Sprite> = self.sprites.iter().filter(|s| (s.x - vx).abs() < vw + 256 && (s.y - vy).abs() < vh + 256).collect();
+        let mut order: Vec<&Sprite> = self.game.sprites.iter().flatten().filter(|s| (s.x - vx).abs() < vw + 256 && (s.y - vy).abs() < vh + 256).collect();
         order.sort_by_key(|s| (s.elevation, s.y));
         for s in &order {
             let Some(u) = s.unit.filter(|u| self.selected.contains(u)) else { continue };
@@ -346,7 +264,7 @@ pub fn compose_with_cursor(
             out[((oy + y) * w + ox + x) as usize] = rgb(t);
         }
     }
-    for s in &scene.sprites {
+    for s in scene.game.sprites.iter().flatten() {
         if s.owner < 8 {
             let (px, py) = (ox + s.x / scale, oy + s.y / scale);
             if (0..w).contains(&px) && (0..h).contains(&py) {
@@ -384,13 +302,13 @@ pub fn compose_with_cursor(
     }
     // Selected unit panel.
     if let [u] = scene.selected[..] {
-        let mu = &scene.units[u];
-        crate::ui::draw_grp_rgb(&ui.wireframe, mu.id, 170, 390, pal, out, w, h);
-        let name = ui.stat_txt.get(mu.id).map_or("", |s| s.split('\0').next().unwrap_or(""));
+        let mu = &scene.game.units[u];
+        crate::ui::draw_grp_rgb(&ui.wireframe, mu.kind, 170, 390, pal, out, w, h);
+        let name = ui.stat_txt.get(mu.kind).map_or("", |s| s.split('\0').next().unwrap_or(""));
         ui.font.draw(name, 260, 392, ui.text_color(2), pal, out, w, h);
-        let max = scene.a.dat.units.hit_points[mu.id] >> 8;
+        let max = scene.a.dat.units.hit_points[mu.kind] >> 8;
         if max > 0 {
-            let hp = format!("{}/{}", mu.hp.div_ceil(256), max);
+            let hp = format!("{}/{}", (mu.hp.max(0) as u32).div_ceil(256), max);
             ui.font.draw(&hp, 176, 456, ui.text_color(3), pal, out, w, h);
         }
     } else if !scene.selected.is_empty() {
@@ -463,7 +381,7 @@ pub fn run(a: &Assets, chk: Chk) -> io::Result<()> {
                     hits
                 } else {
                     // Box: BW only box-selects the player's own units (max 12).
-                    let mut hits: Vec<usize> = scene.units_in_rect(x0, y0, x1, y1).into_iter().filter(|&u| scene.units[u].owner == scene.local_player()).collect();
+                    let mut hits: Vec<usize> = scene.units_in_rect(x0, y0, x1, y1).into_iter().filter(|&u| scene.game.units[u].owner == scene.local_player()).collect();
                     hits.truncate(12);
                     hits
                 };
@@ -473,9 +391,11 @@ pub fn run(a: &Assets, chk: Chk) -> io::Result<()> {
         let rdown = win.get_mouse_down(minifb::MouseButton::Right);
         if rdown && !rmb_was_down && cy < vh - 120 {
             let (tx, ty) = ((cx + vx) as i16, (cy + vy) as i16);
-            for &u in &scene.selected {
-                if scene.units[u].owner == scene.local_player() {
-                    scene.units[u].flingy.set_move_target(tx, ty);
+            let me = scene.local_player();
+            for &u in &scene.selected.clone() {
+                if scene.game.units[u].owner == me {
+                    let t = crate::game::Target { pos: (tx, ty), unit: None };
+                    scene.game.issue_order(u, crate::game::orders::id::MOVE, t, false);
                 }
             }
         }

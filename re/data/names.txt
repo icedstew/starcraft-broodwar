@@ -1,4 +1,15 @@
 # address name  (applied to the Ghidra C dump by rename.py; regenerate with gen_names.py)
+0x140187b80 frame_reset_buffers
+0x1401881b0 atan_dir
+0x140188680 flingy_accelerate
+0x1401888b0 flingy_halt_distance
+0x1401899c0 flingy_set_speed
+0x140189c10 flingy_step
+0x140189e50 flingy_update_desired_direction
+0x140189f70 flingy_next_position
+0x14018a060 flingy_update_moving_flag
+0x14018a0f0 flingy_turn
+0x14018a1b0 flingy_update_speed
 0x140190f38 iscript_run_body
 0x1401a1d60 update_unit_post
 0x1401a5f00 order_PlaceBuilding
@@ -50,6 +61,7 @@
 0x1401bbc30 order_Harvest3
 0x1401bbc60 order_Harvest4
 0x1401bbcd0 order_ReturnGas
+0x1401bfc40 first_active_unit
 0x1401c4340 order_UnusedPowerup
 0x1401c44f0 order_PowerupIdle
 0x1401c4970 order_MoveToTargetThenOrder
@@ -67,13 +79,16 @@
 0x1401c5b80 order_StayInRange
 0x1401c5d10 order_Stop
 0x1401c5d40 order_WatchTarget
+0x1401c6280 unit_type
 0x1401c9840 order_Decloak
 0x1401c9b30 order_SelfDestructing
+0x1401c9ce0 order_done
 0x1401caf40 order_PlaceProtossBuilding
 0x1401cb270 order_IncompleteWarping
 0x1401cbcf0 order_CastHallucination
 0x1401cbfa0 order_CastMindControl
 0x1401cc190 order_CastFeedback
+0x1401cc660 is_at_move_target
 0x1401d06f0 order_ResetHarvestCollision
 0x1401d1b40 order_InitializeArbiter
 0x1401d1b90 order_RechargeShieldsBattery
@@ -115,9 +130,13 @@
 0x1401e1ba0 order_Pickup4
 0x1401e1df0 order_PickupIdle
 0x1401e1e60 order_Unload
+0x1401e3340 update_units
 0x1401e5c60 execute_main_order
+0x1401e6ab0 set_move_target_pos
+0x1401e6b00 set_move_target_unit
 0x1401e6f30 update_unit_timers
 0x1401e7650 update_unit
+0x1401e7860 update_hidden_unit
 0x1401e8070 order_ResearchTech
 0x1401e8140 order_Upgrade
 0x1401ec960 order_IncompleteMorphing
@@ -140,6 +159,7 @@
 0x1401efb70 order_SpawningLarva
 0x1401f0110 order_SpreadCreep
 0x1401f01e0 order_StoppingCreepGrowth
+0x14021d820 xy_length
 0x14025b760 order_ComputerAI
 0x14025b940 order_AIPatrol
 0x14025ba40 order_Neutral
