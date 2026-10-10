@@ -4,10 +4,13 @@
 //! translated from the decompiled routines (addresses noted). Unported
 //! callees are explicit `todo_port!` markers, never approximations.
 
+pub mod create;
+pub mod finder;
 pub mod flingy;
 pub mod frame;
 pub mod iscript;
 pub mod movement;
+pub mod players;
 pub mod list;
 pub mod rng;
 pub mod sprite;
@@ -136,6 +139,17 @@ pub struct State {
     pub moved_flag: bool,
     /// CPath pool (unit +0x100).
     pub paths: Vec<movement::Path>,
+    /// Unit finder (0x66ff74..).
+    pub finder: finder::Finder,
+    /// 0x6d5cd8: air repulse grid, 48px cells, 0xab per row.
+    pub repulse: Vec<u8>,
+    /// 0x59cca0: last error (stat_txt index) from unit creation and friends.
+    pub last_error: u16,
+    /// 0x57f0b0: local player's vision mask.
+    pub local_vision_mask: u8,
+    /// 0x58f440: playing Brood War (expansion) rules.
+    pub is_expansion: bool,
+    pub players: players::Players,
     /// Flingy predict globals (0x63fec0..0x63ff40).
     pub mv: flingy::MoveScratch,
     /// Sounds requested this frame (sfx id, x, y) for the front end to play.
@@ -201,6 +215,12 @@ impl State {
             finder_64dea8: 0,
             var_6957d0: 0,
             moved_flag: false,
+            finder: finder::Finder::new(max_units as usize),
+            repulse: vec![0; 0xab * 0xab],
+            last_error: 0,
+            local_vision_mask: 1,
+            is_expansion: true,
+            players: players::Players::default(),
             paths: Vec::new(),
             mv: flingy::MoveScratch::default(),
             sounds: Vec::new(),

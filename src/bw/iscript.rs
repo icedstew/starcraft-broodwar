@@ -591,7 +591,7 @@ pub fn run(st: &mut State, d: &Data, img: u32, nse: bool, mut distance: Option<&
                         if i.flags & iflag::FLIPPED != 0 {
                             lx = lx.wrapping_neg();
                         }
-                        let depleted = unit.is_some_and(|u| st.units[u as usize].resource_amount == 0);
+                        let depleted = unit.is_some_and(|u| st.units[u as usize].resource_amount() == 0);
                         let base: u16 = if depleted { 0x1b3 } else { 0x1ae };
                         let (x, y) = (i.x.wrapping_add(lx), i.y.wrapping_add(ly));
                         let s = i.sprite;

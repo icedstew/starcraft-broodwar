@@ -304,7 +304,7 @@ impl State {
             return false;
         }
         let (old, new) = (self.mv.old_pos, self.mv.new_pos);
-        self.stub_unit_finder_move(u, new.0 as i32 - old.0 as i32, new.1 as i32 - old.1 as i32);
+        self.finder_move(u, new.0 as i32 - old.0 as i32, new.1 as i32 - old.1 as i32);
         if old.0 / 32 != new.0 / 32 || old.1 / 32 != new.1 / 32 {
             self.moved_flag = true;
         }
@@ -1142,10 +1142,6 @@ impl State {
         false
     }
 
-    /// 0x46a000: move the unit's unit-finder entries by (dx, dy).
-    fn stub_unit_finder_move(&mut self, _u: u32, _dx: i32, _dy: i32) {
-        todo_port!("0x46a000", "unit finder update");
-    }
 }
 
 #[cfg(test)]

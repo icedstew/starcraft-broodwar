@@ -92,8 +92,8 @@ pub struct Unit {
     pub remaining_build_time: u16,    // 0xAC / 0xf0
     pub previous_hp: u16,             // 0xAE / 0xf2
     pub loaded_units: [u16; 8],       // 0xB0 / 0xf4
-    /// 0xC0..0xDB unions (worker, building, carrier, ...): raw words until typed views are needed.
-    pub union_c0: [u32; 7],
+    /// 0xC0..0xDB unions (worker, building, carrier, resource, ...) as raw bytes; see the accessors below.
+    pub union_c0: [u8; 0x1c],
     pub status: u32,                  // 0xDC / 0x140
     pub resource_type: u8,            // 0xE0 / 0x144
     pub wireframe_seed: u8,           // 0xE1 / 0x145
@@ -137,8 +137,6 @@ pub struct Unit {
     pub repulse_angle: u8,            // 0x14D
     pub repulse_x: u8,                // 0x14E
     pub repulse_y: u8,                // 0x14F
-    /// Resource amount for mineral fields/geysers (union at 0xD0).
-    pub resource_amount: u16,
 }
 
 impl Default for Unit {
@@ -196,7 +194,7 @@ impl Default for Unit {
             remaining_build_time: 0,
             previous_hp: 0,
             loaded_units: [0; 8],
-            union_c0: [0; 7],
+            union_c0: [0; 0x1c],
             status: 0,
             resource_type: 0,
             wireframe_seed: 0,
@@ -240,8 +238,29 @@ impl Default for Unit {
             repulse_angle: 0,
             repulse_x: 0,
             repulse_y: 0,
-            resource_amount: 0,
         }
+    }
+}
+
+impl Unit {
+    /// Read/write a byte of the 0xC0 union by its x86 CUnit offset.
+    pub fn u8_at(&self, off: usize) -> u8 {
+        self.union_c0[off - 0xc0]
+    }
+    pub fn set_u8_at(&mut self, off: usize, v: u8) {
+        self.union_c0[off - 0xc0] = v;
+    }
+    pub fn u16_at(&self, off: usize) -> u16 {
+        let i = off - 0xc0;
+        u16::from_le_bytes([self.union_c0[i], self.union_c0[i + 1]])
+    }
+    pub fn set_u16_at(&mut self, off: usize, v: u16) {
+        let i = off - 0xc0;
+        self.union_c0[i..i + 2].copy_from_slice(&v.to_le_bytes());
+    }
+    /// Resource amount of a mineral field / geyser (x86 +0xD0).
+    pub fn resource_amount(&self) -> u16 {
+        self.u16_at(0xd0)
     }
 }
 
