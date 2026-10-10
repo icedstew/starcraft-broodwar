@@ -156,6 +156,19 @@ pub struct State {
     pub sounds: Vec<(u16, i16, i16)>,
 }
 
+/// Free list built by inserting 1..n after element 0 with insert_after_head, as 1.16.1 does
+/// for images (0x4d...), sprites (0x499900), thingies (0x488550) and orders (0x48c590):
+/// allocation order is 0, n-1, n-2, ..., 1.
+fn pool_after_head<T: Default + Clone + list::Node>(n: usize) -> (Vec<T>, List) {
+    let mut v = vec![T::default(); n];
+    let mut l = List::default();
+    for i in 0..n as u32 {
+        list::insert_after_head(&mut v, i, &mut l);
+    }
+    (v, l)
+}
+
+/// Free list in index order (units, 0x49e1f0).
 fn pool<T: Default + Clone + list::Node>(n: usize) -> (Vec<T>, List) {
     // Free lists start in index order: element i -> i+1.
     let mut v = vec![T::default(); n];
@@ -169,10 +182,11 @@ fn pool<T: Default + Clone + list::Node>(n: usize) -> (Vec<T>, List) {
 
 impl State {
     pub fn new(map_tiles: (usize, usize), tileset: u16, max_units: u32) -> State {
-        let (images, free_images) = pool(MAX_IMAGES);
-        let (sprites, free_sprites) = pool(MAX_SPRITES);
-        let (thingies, free_thingies) = pool(MAX_THINGIES);
+        let (images, free_images) = pool_after_head::<Image>(MAX_IMAGES);
+        let (sprites, free_sprites) = pool_after_head(MAX_SPRITES);
+        let (thingies, free_thingies) = pool_after_head(MAX_THINGIES);
         let (units, free_units) = pool(max_units as usize);
+        debug_assert!(free_images.head == 0 && images[0].link.next == MAX_IMAGES as u32 - 1);
         State {
             images,
             free_images,
