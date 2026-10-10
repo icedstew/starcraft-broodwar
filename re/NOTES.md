@@ -29,3 +29,10 @@ Tools: `re/xref.py` (RIP-relative xrefs, numpy), `re/datlayout.py` (dat layouts)
 | 0x140daa0a0 | weapons.dat table |
 | 0x140da9f00 | upgrades.dat table |
 | 0x140da9700 | techdata.dat table |
+| 0x140190f38 | iscript interpreter body; opcode `cmp eax,0x44` (69 ops); jump table 0x1401922c0 |
+| 0x140e61c30 | iscript.bin buffer pointer |
+| 0x14039aa10 | `rand(call_site_id)`: returns 0 if rng disabled (0x1410936ac); per-id counters at 0x1410936b0; seed 0x1410936a0; `seed=seed*0x15A4E35+1; (seed>>16)&0x7FFF` |
+
+Notes:
+- Game-state globals are often pointer-obfuscated: `ptr = [global] ^ 0x3703db00831bdfe2`.
+- Junk-byte opaque predicates (`and dh,0xff; jno ...`) also appear inside decrypted functions.

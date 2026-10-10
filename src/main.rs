@@ -1,7 +1,12 @@
+#![allow(dead_code)] // dat fields are consumed incrementally as game systems land
+
 mod casc;
 mod dat;
+mod grp;
+mod iscript;
 mod map;
 mod mpq;
+mod view;
 
 use std::path::PathBuf;
 
@@ -42,15 +47,40 @@ fn main() -> std::io::Result<()> {
                 );
             }
         }
+        Some("view") => {
+            let a = view::Assets::load(casc)?;
+            view::run(&a, load_chk(&args[1])?)?;
+        }
+        Some("shot") => {
+            let a = view::Assets::load(casc)?;
+            let mut scene = view::Scene::new(&a, load_chk(&args[1])?)?;
+            let frames: usize = args.get(5).and_then(|f| f.parse().ok()).unwrap_or(24);
+            for _ in 0..frames {
+                scene.step();
+            }
+            let (x, y) = (args[3].parse().unwrap_or(0), args[4].parse().unwrap_or(0));
+            let mut buf = vec![0u8; 960 * 640];
+            scene.draw(x, y, 960, 640, &mut buf);
+            write_png(&args[2], 960, 640, &buf, scene.palette())?;
+        }
         Some("render") => {
-            let chk = map::Chk::parse(&mpq::Mpq::open(args[1].as_ref())?.read("staredit\\scenario.chk")?);
+            let chk = load_chk(&args[1])?;
             let ts = map::Tileset::load(&casc, chk.tileset())?;
             let (w, h, img) = map::render_terrain(&chk, &ts);
             write_png(&args[2], w, h, &img, &ts.palette)?;
         }
-        _ => eprintln!("usage: scbw ls | extract <path> <out> | render <map.scm> <out.png>"),
+        _ => eprintln!(
+            "usage: scbw ls | extract <path> <out> | dat | render <map> <out.png> | view <map> | shot <map> <out.png> <x> <y> [frames]"
+        ),
     }
     Ok(())
+}
+
+fn load_chk(path: &str) -> std::io::Result<map::Chk> {
+    if path.to_ascii_lowercase().ends_with(".chk") {
+        return Ok(map::Chk::parse(&std::fs::read(path)?));
+    }
+    Ok(map::Chk::parse(&mpq::Mpq::open(path.as_ref())?.read("staredit\\scenario.chk")?))
 }
 
 fn write_png(path: &str, w: usize, h: usize, idx: &[u8], pal: &[[u8; 3]; 256]) -> std::io::Result<()> {
