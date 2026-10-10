@@ -2,7 +2,12 @@
 usage: python3 -I rename.py in.c out.c"""
 import re, sys
 names = {}
-for l in open(__file__.replace('rename.py', 'data/names.txt')):
+nf = 'data/names.txt'
+if '--names' in sys.argv:
+    i = sys.argv.index('--names')
+    nf = sys.argv[i + 1]
+    del sys.argv[i:i + 2]
+for l in open(__file__.replace('rename.py', nf)):
     if l.strip() and not l.startswith('#'):
         a, n = l.split()[:2]
         names[f'FUN_{int(a, 16):08x}'] = n

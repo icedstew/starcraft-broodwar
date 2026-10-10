@@ -1,0 +1,19 @@
+# BW 1.16.1 StarCraft.exe address -> name (apply with: rename.py --names data/names116.txt)
+0x4dc4a0 sync_rand
+0x4dc4e0 seed_rng
+0x4dc550 sync_rand_between
+0x4dc540 set_rng_enabled
+0x4d94b0 game_step
+0x47e410 random_event_tick
+0x4a2b00 ai_update
+0x49c4c0 creep_update_100
+0x480880 vision_reset_100
+0x4ed000 update_units
+0x4ecf70 update_unit
+0x4ec290 update_unit_timers
+0x4ec4d0 execute_main_order
+0x4ec170 execute_secondary_order
+0x48c3d0 update_bullets
+0x496330 update_thingies
+0x488510 update_sprite_lists_488510
+0x497920 update_unit_sprite
