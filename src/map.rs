@@ -89,6 +89,8 @@ pub struct Tileset {
     cv5: Vec<u8>,
     vx4: Vec<u32>,
     vr4: Vec<u8>,
+    /// Per megatile, 16 minitile flag words (0x1 walkable, 0x2 mid, 0x4 high, 0x8 blocks view).
+    vf4: Vec<u16>,
 }
 
 impl Tileset {
@@ -101,13 +103,18 @@ impl Tileset {
             p.copy_from_slice(&wpe[i * 4..i * 4 + 3]);
         }
         let vx4 = rd("vx4ex")?.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect();
-        Ok(Tileset { palette, cv5: rd("cv5")?, vx4, vr4: rd("vr4")? })
+        let vf4 = rd("vf4")?.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+        Ok(Tileset { palette, cv5: rd("cv5")?, vx4, vr4: rd("vr4")?, vf4 })
     }
 
     pub fn megatile(&self, tile: u16) -> usize {
         let (group, idx) = (tile as usize >> 4, tile as usize & 15);
         let o = group * 52 + 20 + idx * 2;
         self.cv5.get(o..o + 2).map_or(0, |b| u16::from_le_bytes([b[0], b[1]]) as usize)
+    }
+
+    pub fn minitile_flags(&self, mega: usize, mini: usize) -> u16 {
+        self.vf4.get(mega * 16 + mini).copied().unwrap_or(0)
     }
 
     /// Blit a 32x32 megatile as palette indices into `dst` (row stride `pitch`).
@@ -138,4 +145,19 @@ pub fn render_terrain(chk: &Chk, ts: &Tileset) -> (usize, usize, Vec<u8>) {
         ts.draw_megatile(ts.megatile(t), &mut img[off..], pitch);
     }
     (pitch, h * 32, img)
+}
+
+/// Walkability grid in 8x8 minitiles (BW's pathing resolution).
+pub fn walk_grid(chk: &Chk, ts: &Tileset) -> (usize, usize, Vec<bool>) {
+    let (w, h) = chk.dims();
+    let tiles = chk.tiles();
+    let mut g = vec![false; w * 4 * h * 4];
+    for (i, &t) in tiles.iter().enumerate() {
+        let mega = ts.megatile(t);
+        for m in 0..16 {
+            let (x, y) = ((i % w) * 4 + m % 4, (i / w) * 4 + m / 4);
+            g[y * w * 4 + x] = ts.minitile_flags(mega, m) & 1 != 0;
+        }
+    }
+    (w * 4, h * 4, g)
 }

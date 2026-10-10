@@ -89,6 +89,15 @@ fn main() -> std::io::Result<()> {
             view::compose(&scene, ui.as_ref(), x, y, &mut idx, &mut rgb);
             write_png_rgb(&args[2], w, h, &rgb)?;
         }
+        Some("walk") => {
+            let chk = load_chk(&args[1])?;
+            let ts = map::Tileset::load(&casc, chk.tileset())?;
+            let (w, h, g) = map::walk_grid(&chk, &ts);
+            let mut pal = [[0u8; 3]; 256];
+            pal[1] = [255, 255, 255];
+            let img: Vec<u8> = g.iter().map(|&b| b as u8).collect();
+            write_png(&args[2], w, h, &img, &pal)?;
+        }
         Some("render") => {
             let chk = load_chk(&args[1])?;
             let ts = map::Tileset::load(&casc, chk.tileset())?;
