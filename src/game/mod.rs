@@ -9,6 +9,7 @@ pub mod buttons;
 pub mod combat;
 pub mod economy;
 pub mod flingy;
+pub mod morph;
 pub mod orders;
 pub mod path;
 
@@ -47,6 +48,12 @@ pub struct Unit {
     pub attacking: bool,
     /// False while a structure is under construction.
     pub completed: bool,
+    /// Structure completes by itself (Zerg morph / Protoss warp-in) rather than via a builder.
+    pub self_building: bool,
+    /// Larva: hatchery it belongs to.
+    pub parent: Option<UnitId>,
+    /// Hatchery: frames until the next larva.
+    pub larva_timer: u16,
     /// Worker: structure it is on its way to place.
     pub build_kind: Option<usize>,
     /// Resource units: amount left. Workers: cargo carried.
@@ -130,6 +137,9 @@ impl Game {
             air_cooldown: 0,
             attacking: false,
             completed: true,
+            self_building: false,
+            parent: None,
+            larva_timer: morph::LARVA_TIME,
             build_kind: None,
             resources: 0,
             carry: 0,
@@ -230,6 +240,11 @@ impl Game {
             if race == 0 {
                 let (x, y) = economy::spawn_point(self, w, d, 42);
                 self.create_unit(w, 42, owner, x, y, 100);
+                for _ in 0..3 {
+                    let (x, y) = economy::spawn_point(self, w, d, morph::LARVA);
+                    let l = self.create_unit(w, morph::LARVA, owner, x, y, 100);
+                    self.units[l].parent = Some(d);
+                }
             }
         }
     }
@@ -267,6 +282,7 @@ impl Game {
             }
             orders::update_unit(self, w, id);
             economy::update_production(self, w, id);
+            morph::update(self, w, id);
             self.update_unit_movement(w, id, &mut fx);
         }
         combat::update_bullets(self, w);

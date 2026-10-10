@@ -108,6 +108,7 @@ pub fn order_place_building(g: &mut Game, w: &World, u: UnitId) {
     g.players[owner].gas -= gas;
     // A gas building replaces its geyser and inherits the remaining gas.
     let geyser = geyser_at(g, sx, sy);
+    let worker_kind = g.units[u].kind;
     let b = g.create_unit(w, kind, owner as u8, sx, sy, 10);
     if let Some(gy) = geyser {
         g.units[b].resources = g.units[gy].resources;
@@ -121,6 +122,21 @@ pub fn order_place_building(g: &mut Game, w: &World, u: UnitId) {
     g.units[u].build_kind = None;
     let p = g.units[u].flingy.pos;
     g.units[u].flingy.set_move_target(p.0, p.1);
+    match worker_kind {
+        // Drone is consumed by the morph; probe just warps it in and walks off.
+        41 | 64 => {
+            g.units[b].self_building = true;
+            if worker_kind == 41 {
+                g.units[u].dead = true;
+                let s = g.units[u].sprite;
+                g.sprites[s] = None;
+            } else {
+                orders::order_done(g, w, u);
+            }
+            return;
+        }
+        _ => {}
+    }
     let un = &mut g.units[u];
     un.order = id::CONSTRUCTING_BUILDING;
     un.order_state = 0;

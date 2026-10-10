@@ -118,6 +118,14 @@ fn main() -> std::io::Result<()> {
                     game::build::order_build(&mut scene.game, b, k as usize, site);
                 }
             }
+            if let Some(k) = std::env::var("SCBW_MORPH").ok().and_then(|v| v.parse::<usize>().ok()) {
+                let larva = (0..scene.game.units.len()).filter(|&u| scene.game.units[u].owner == 0 && scene.game.units[u].kind == 35).collect::<Vec<_>>();
+                let frames = |_: u16| 0;
+                for l in larva {
+                    let w = scene.world(&frames);
+                    eprintln!("morph: {:?}", game::morph::morph_unit(&mut scene.game, &w, l, k));
+                }
+            }
             if let Some(k) = std::env::var("SCBW_TRAIN").ok().and_then(|v| v.parse::<usize>().ok()) {
                 let depot = (0..scene.game.units.len()).find(|&u| scene.game.units[u].owner == 0 && a.dat.units.flags[scene.game.units[u].kind] & 0x1000 != 0);
                 if let Some(b) = depot {

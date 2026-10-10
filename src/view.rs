@@ -486,6 +486,19 @@ pub fn run(a: &Assets, chk: Chk) -> io::Result<()> {
                 Act::HoldPosition => issue_to_selection(&mut scene, crate::game::orders::id::HOLD_POSITION, None),
                 Act::Move | Act::Attack | Act::Patrol | Act::Gather => targeting = Some(act),
                 Act::Menu => scene.card_menu = Some(btn.act_var as usize),
+                Act::MorphUnit => {
+                    // One morph per click: the first selected larva/hydra/muta that isn't already an egg.
+                    let me = scene.local_player();
+                    let src = scene.selected.iter().copied().find(|&u| {
+                        let un = &scene.game.units[u];
+                        un.owner == me && matches!(un.kind, 35 | 38 | 43)
+                    });
+                    if let Some(u) = src {
+                        let frames = |_: u16| 0;
+                        let wd = scene.world(&frames);
+                        let _ = crate::game::morph::morph_unit(&mut scene.game, &wd, u, btn.act_var as usize);
+                    }
+                }
                 Act::CancelMenu => {
                     scene.card_menu = None;
                     scene.placing = None;

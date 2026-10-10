@@ -314,7 +314,8 @@ pub fn train(g: &mut Game, w: &World, b: UnitId, kind: usize) -> Result<(), Trai
 
 /// Advance a building's production by one frame; spawn finished units below it.
 pub fn update_production(g: &mut Game, w: &World, b: UnitId) {
-    if !g.units[b].completed {
+    // Eggs/cocoons use the build queue for their morph target (handled in morph.rs).
+    if !g.units[b].completed || matches!(g.units[b].kind, 36 | 59 | 97) {
         return;
     }
     let Some(&kind) = g.units[b].build_queue.front() else { return };
