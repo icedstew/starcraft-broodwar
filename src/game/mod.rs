@@ -4,6 +4,7 @@
 //! updates, update_units, bullets, thingies, disable RNG. Only the parts
 //! ported so far run here.
 
+pub mod buttons;
 pub mod combat;
 pub mod flingy;
 pub mod orders;
@@ -42,6 +43,8 @@ pub struct Unit {
     pub air_cooldown: u8,    // +0x72
     /// In an attack cycle (next attack uses the Rpt anim instead of Init).
     pub attacking: bool,
+    /// Where a Patrol order started (it walks back here, then out again).
+    pub patrol_origin: (i16, i16),
     /// Remaining waypoints toward move_target (ground units).
     pub path: VecDeque<(i16, i16)>,
     pub dead: bool,
@@ -103,6 +106,7 @@ impl Game {
             ground_cooldown: 0,
             air_cooldown: 0,
             attacking: false,
+            patrol_origin: (x as i16, y as i16),
             path: VecDeque::new(),
             dead: false,
         });

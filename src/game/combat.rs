@@ -100,7 +100,13 @@ pub fn order_attack_unit(g: &mut Game, w: &World, u: UnitId) {
     let (tx, ty) = g.unit_pos(t);
     let range = w.dat.weapons.max_range[wpn as usize];
     let is_sub = w.dat.units.flags[g.units[u].kind] & 0x10 != 0;
+    // Units fighting from Hold Position never chase.
+    let holding = g.units[u].order_queue.front().is_some_and(|(o, _)| *o == id::HOLD_POSITION);
     if units_distance(g, w, u, t) > range {
+        if holding {
+            orders::order_done(g, w, u);
+            return;
+        }
         // Re-path only when the target moved away from our current goal (pathing is not free).
         let goal_far = {
             let un = &g.units[u];

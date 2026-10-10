@@ -160,6 +160,9 @@ pub struct Ui {
     pub icons: Grp,
     pub cursor: Grp,
     pub wireframe: Grp,
+    pub cmdicons: Grp,
+    /// ticon.pcx: 6 states x 16 colors for command icons.
+    pub ticon: Vec<u8>,
     pub stat_txt: Vec<String>,
     /// tfontgam rows of 8 palette indices per text color.
     pub text_colors: Vec<u8>,
@@ -173,9 +176,11 @@ impl Ui {
         let icons = Grp::parse(casc.read("game/icons.grp")?);
         let cursor = Grp::parse(casc.read("cursor/arrow.grp")?);
         let wireframe = Grp::parse(casc.read("unit/wirefram/wirefram.grp")?);
+        let cmdicons = Grp::parse(casc.read("unit/cmdicons/cmdicons.grp")?);
+        let ticon = crate::view::pcx(&casc.read("game/ticon.pcx")?).2;
         let stat_txt = crate::dat::parse_tbl(&casc.read("rez/stat_txt.tbl")?);
         let (_, _, text_colors) = crate::view::pcx(&casc.read("game/tfontgam.pcx")?);
-        Ok(Ui { console, font, icons, cursor, wireframe, stat_txt, text_colors })
+        Ok(Ui { console, font, icons, cursor, wireframe, cmdicons, ticon, stat_txt, text_colors })
     }
 
     pub fn text_color(&self, c: usize) -> &[u8] {
@@ -185,6 +190,22 @@ impl Ui {
 
     pub fn draw_icon(&self, frame: usize, x: i32, y: i32, pal: &[[u8; 3]; 256], dst: &mut [u32], dw: i32, dh: i32) {
         draw_grp_rgb(&self.icons, frame, x, y, pal, dst, dw, dh);
+    }
+
+    /// Command icon `frame` at (x, y); state 0 normal, 1 disabled, 2 highlighted.
+    pub fn draw_cmd_icon(&self, frame: usize, state: usize, x: i32, y: i32, pal: &[[u8; 3]; 256], dst: &mut [u32], dw: i32, dh: i32) {
+        let g = &self.cmdicons;
+        let (w, h) = (g.w, g.h);
+        let mut tmp = vec![0u8; (w * h) as usize];
+        g.draw(frame, false, 0, 0, &mut tmp, w, h, Blend::Normal);
+        for (i, &c) in tmp.iter().enumerate() {
+            let (px, py) = (x + i as i32 % w, y + i as i32 / w);
+            if c != 0 && px >= 0 && py >= 0 && px < dw && py < dh {
+                let idx = self.ticon.get(state * 16 + (c as usize & 15)).copied().unwrap_or(c);
+                let [r, g2, b] = pal[idx as usize];
+                dst[(py * dw + px) as usize] = (r as u32) << 16 | (g2 as u32) << 8 | b as u32;
+            }
+        }
     }
 
     /// Cursor centered on (x, y), animating over `tick`.

@@ -56,6 +56,7 @@ fn execute_main_order(g: &mut Game, w: &World, u: UnitId) {
         id::MOVE => order_move(g, w, u),
         id::STOP => order_stop(g, w, u),
         id::ATTACK_UNIT => super::combat::order_attack_unit(g, w, u),
+        id::ATTACK_MOVE | id::PATROL => order_attack_move(g, w, u),
         id::GUARD | id::PLAYER_GUARD | id::TURRET_GUARD | id::HOLD_POSITION => order_guard(g, w, u),
         _ => {}
     }
@@ -94,12 +95,60 @@ fn order_stop(g: &mut Game, w: &World, u: UnitId) {
 }
 
 /// Idle guard orders: attack the nearest enemy in acquisition range.
+/// Hold position comes back to hold after the fight (and never chases, see combat).
 fn order_guard(g: &mut Game, w: &World, u: UnitId) {
+    if g.units[u].order == id::HOLD_POSITION && g.units[u].order_state == 0 {
+        let p = g.units[u].flingy.pos;
+        g.units[u].path.clear();
+        g.units[u].flingy.set_move_target(p.0, p.1);
+        g.units[u].order_state = 1;
+    }
     if let Some(t) = super::combat::acquire_target(g, w, u) {
         let unit = &mut g.units[u];
+        if unit.order == id::HOLD_POSITION {
+            unit.order_queue.push_front((id::HOLD_POSITION, unit.order_target));
+        }
         unit.order = id::ATTACK_UNIT;
         unit.order_state = 0;
         unit.order_target = Target { pos: (0, 0), unit: Some(t) };
+    }
+}
+
+/// Attack-move / patrol: walk toward the target, fighting anything acquired on the way.
+/// ponytail: BW's versions (0x1401b3a10, 0x1401b44a0) use the 0x1401b3940-family acquire rules.
+fn order_attack_move(g: &mut Game, w: &World, u: UnitId) {
+    if g.units[u].order_state == 0 {
+        let dest = g.units[u].order_target.pos;
+        if g.units[u].order == id::PATROL {
+            g.units[u].patrol_origin = g.units[u].flingy.pos;
+        }
+        g.move_unit(w, u, dest.0, dest.1);
+        g.units[u].order_state = 1;
+        return;
+    }
+    if let Some(t) = super::combat::acquire_target(g, w, u) {
+        let unit = &mut g.units[u];
+        // Resume this order (re-pathing from wherever the fight ends) after the target dies.
+        let resume = (unit.order, unit.order_target);
+        unit.order_queue.push_front(resume);
+        unit.order = id::ATTACK_UNIT;
+        unit.order_state = 0;
+        unit.order_target = Target { pos: (0, 0), unit: Some(t) };
+        return;
+    }
+    let unit = &g.units[u];
+    if unit.flingy.pos == unit.flingy.move_target && unit.path.is_empty() {
+        if unit.order == id::PATROL {
+            // Turn around: patrol back to where this leg started.
+            let back = unit.patrol_origin;
+            let here = unit.flingy.pos;
+            let unit = &mut g.units[u];
+            unit.order_target = Target { pos: back, unit: None };
+            unit.patrol_origin = here;
+            g.move_unit(w, u, back.0, back.1);
+        } else {
+            order_done(g, w, u);
+        }
     }
 }
 

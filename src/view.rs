@@ -226,6 +226,24 @@ impl<'a> Scene<'a> {
 pub const SCREEN_W: i32 = 640;
 pub const SCREEN_H: i32 = 480;
 const MINIMAP: (i32, i32, i32) = (6, 348, 128); // x, y, size
+/// Command card: top-left of button 1 and the slot pitch (3x3, positions 1..9).
+const CARD: (i32, i32, i32, i32) = (505, 358, 46, 40);
+
+/// Screen rect origin of command card position `pos` (1..=9).
+pub fn card_slot(pos: u16) -> (i32, i32) {
+    let i = pos as i32 - 1;
+    (CARD.0 + (i % 3) * CARD.2, CARD.1 + (i / 3) * CARD.3)
+}
+
+/// Buttons for the current selection (the first selected unit's type).
+pub fn card_buttons(scene: &Scene) -> &'static [crate::game::buttons::Button] {
+    match scene.selected.first() {
+        Some(&u) if scene.game.units[u].owner == scene.local_player() => {
+            crate::game::buttons::SETS.get(scene.game.units[u].kind).copied().unwrap_or(&[])
+        }
+        _ => &[],
+    }
+}
 
 /// Full frame: map view + console + minimap + resource bar, as 0xRRGGBB.
 pub fn compose(scene: &Scene, ui: Option<&crate::ui::Ui>, vx: i32, vy: i32, idx: &mut [u8], out: &mut [u32]) {
@@ -334,8 +352,29 @@ pub fn compose_with_cursor(
             }
         }
     }
+    for b in card_buttons(scene) {
+        let (bx, by) = card_slot(b.pos);
+        ui.draw_cmd_icon(b.icon as usize, 0, bx + 2, by + 1, pal, out, w, h);
+    }
     if let Some((tick, cx, cy)) = cursor {
         ui.draw_cursor(tick, cx, cy, pal, out, w, h);
+    }
+}
+
+use crate::game::buttons::Act;
+
+fn on_minimap_pt(x: i32, y: i32) -> bool {
+    (MINIMAP.0..MINIMAP.0 + MINIMAP.2).contains(&x) && (MINIMAP.1..MINIMAP.1 + MINIMAP.2).contains(&y)
+}
+
+/// Give `order` to every selected unit the local player owns.
+fn issue_to_selection(scene: &mut Scene, order: u8, target: Option<crate::game::Target>) {
+    let me = scene.local_player();
+    for &u in &scene.selected.clone() {
+        if scene.game.units[u].owner == me {
+            let t = target.unwrap_or(crate::game::Target { pos: scene.game.units[u].flingy.pos, unit: None });
+            scene.game.issue_order(u, order, t, false);
+        }
     }
 }
 
@@ -360,6 +399,9 @@ pub fn run(a: &Assets, chk: Chk) -> io::Result<()> {
     let mut tick = 0usize;
     let mut drag_start: Option<(i32, i32)> = None;
     let mut rmb_was_down = false;
+    let mut lmb_was_down = false;
+    // Command-card targeting mode (Move/Attack/Patrol waiting for a map click).
+    let mut targeting: Option<Act> = None;
     while win.is_open() && !win.is_key_down(Key::Escape) {
         tick += 1;
         let sp = 16;
@@ -370,6 +412,55 @@ pub fn run(a: &Assets, chk: Chk) -> io::Result<()> {
         if cy >= vh - 2 { vy += sp }
         let (ox, oy, scale) = minimap_geom(&scene);
         let down = win.get_mouse_down(minifb::MouseButton::Left);
+        let clicked = down && !lmb_was_down;
+        lmb_was_down = down;
+        // Command card: click a button or press its hotkey.
+        let mut pressed: Option<Act> = None;
+        if clicked {
+            pressed = card_buttons(&scene).iter().find(|b| {
+                let (bx, by) = card_slot(b.pos);
+                (bx..bx + 40).contains(&cx) && (by..by + 36).contains(&cy)
+            }).map(|b| b.act);
+        }
+        for k in win.get_keys_pressed(minifb::KeyRepeat::No) {
+            let want = match k {
+                Key::M => Some(Act::Move),
+                Key::S => Some(Act::Stop),
+                Key::A => Some(Act::Attack),
+                Key::P => Some(Act::Patrol),
+                Key::H => Some(Act::HoldPosition),
+                _ => None,
+            };
+            if let Some(a) = want.filter(|a| card_buttons(&scene).iter().any(|b| b.act == *a)) {
+                pressed = Some(a);
+            }
+        }
+        if let Some(act) = pressed {
+            match act {
+                Act::Stop => issue_to_selection(&mut scene, crate::game::orders::id::STOP, None),
+                Act::HoldPosition => issue_to_selection(&mut scene, crate::game::orders::id::HOLD_POSITION, None),
+                Act::Move | Act::Attack | Act::Patrol => targeting = Some(act),
+                _ => {}
+            }
+        }
+        if let (Some(act), true) = (targeting, clicked && cy < vh - 120 && pressed.is_none()) {
+            let (tx, ty) = ((cx + vx) as i16, (cy + vy) as i16);
+            let hit = scene.units_in_rect(tx as i32, ty as i32, tx as i32, ty as i32).into_iter().next();
+            let me = scene.local_player();
+            let order = match act {
+                Act::Attack => match hit {
+                    Some(h) if scene.game.units[h].owner != me => crate::game::orders::id::ATTACK_UNIT,
+                    _ => crate::game::orders::id::ATTACK_MOVE,
+                },
+                Act::Patrol => crate::game::orders::id::PATROL,
+                _ => crate::game::orders::id::MOVE,
+            };
+            issue_to_selection(&mut scene, order, Some(crate::game::Target { pos: (tx, ty), unit: hit }));
+            targeting = None;
+            lmb_was_down = true; // the click is consumed; don't start a drag
+            drag_start = None;
+        }
+        let down = down && targeting.is_none() && pressed.is_none() && !(clicked && cy >= vh - 120 && !on_minimap_pt(cx, cy));
         let on_minimap = (MINIMAP.0..MINIMAP.0 + MINIMAP.2).contains(&cx) && (MINIMAP.1..MINIMAP.1 + MINIMAP.2).contains(&cy);
         if down && on_minimap && drag_start.is_none() {
             vx = (cx - ox) * scale - vw / 2;
@@ -397,7 +488,9 @@ pub fn run(a: &Assets, chk: Chk) -> io::Result<()> {
             }
         }
         let rdown = win.get_mouse_down(minifb::MouseButton::Right);
-        if rdown && !rmb_was_down && cy < vh - 120 {
+        if rdown && !rmb_was_down && targeting.take().is_some() {
+            // Right-click cancels targeting.
+        } else if rdown && !rmb_was_down && cy < vh - 120 {
             let (tx, ty) = ((cx + vx) as i16, (cy + vy) as i16);
             let me = scene.local_player();
             // Right-click on a unit: attack if hostile, else move to it.
@@ -414,10 +507,10 @@ pub fn run(a: &Assets, chk: Chk) -> io::Result<()> {
             }
         }
         rmb_was_down = rdown;
-        if win.is_key_down(Key::Left) || win.is_key_down(Key::A) { vx -= sp }
-        if win.is_key_down(Key::Right) || win.is_key_down(Key::D) { vx += sp }
-        if win.is_key_down(Key::Up) || win.is_key_down(Key::W) { vy -= sp }
-        if win.is_key_down(Key::Down) || win.is_key_down(Key::S) { vy += sp }
+        if win.is_key_down(Key::Left) { vx -= sp }
+        if win.is_key_down(Key::Right) { vx += sp }
+        if win.is_key_down(Key::Up) { vy -= sp }
+        if win.is_key_down(Key::Down) { vy += sp }
         vx = vx.clamp(0, (mw - vw).max(0));
         vy = vy.clamp(0, (mh - vh + 120).max(0)); // console covers the bottom
         scene.selected.retain(|&u| !scene.game.units[u].dead);

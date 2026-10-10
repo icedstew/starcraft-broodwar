@@ -100,8 +100,9 @@ fn main() -> std::io::Result<()> {
             }) {
                 for &u in &scene.selected.clone() {
                     let t = game::Target { pos: (mx, my), unit: None };
+                    let order = std::env::var("SCBW_ORDER").ok().and_then(|v| v.parse().ok()).unwrap_or(game::orders::id::MOVE);
                     if scene.game.units[u].owner == 0 {
-                        scene.game.issue_order(u, game::orders::id::MOVE, t, false);
+                        scene.game.issue_order(u, order, t, false);
                     }
                 }
             }
