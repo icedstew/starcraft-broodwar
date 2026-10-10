@@ -9,7 +9,8 @@ Pure Rust, no platform-specific code: builds for any target Rust supports.
 
 ## Usage
 
-    SCBW_INSTALL="/path/to/StarCraft" cargo run --release -- render "Maps/(4)Blood Bath.scm" out.png
+    cargo run --release -- view "/path/to/StarCraft/Maps/(4)Blood Bath.scm"   # arrows/WASD scroll, Esc quits
+    cargo run --release -- render "/path/to/map.scm" out.png                  # full-map terrain PNG
 
 Set `SCBW_INSTALL` to the directory containing `.build.info` and `Data/` (defaults to the Lutris/Wine path).
 
