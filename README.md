@@ -24,3 +24,15 @@ Set `SCBW_INSTALL` to the directory containing `.build.info` and `Data/` (defaul
 - `src/iscript.rs` – iscript interpreter, images, sprites, BW RNG
 - `src/view.rs` – map viewer (window + headless screenshot)
 - `re/` – reverse-engineering tools and notes (see re/NOTES.md)
+
+## Status
+
+Working: asset loading (CASC, MPQ maps, replays), terrain, sprites/iscript animation,
+shadows/remaps/player colors, console HUD, minimap, cursor, selection, sound/music.
+
+Not yet: game simulation (unit movement, orders, combat, pathing), command card,
+triggers, AI, networking. Game logic is being reverse-engineered from the
+StarCraft: Remastered binary; see `re/NOTES.md`.
+
+Commands: `view <map|chk|rep>`, `shot <map> out.png x y [frames] [n_select]`,
+`render`, `walk`, `rep <file.rep>`, `dat`, `ls`, `extract <path> <out>`.
