@@ -145,20 +145,26 @@ impl<'a> Scene<'a> {
         self.sprites = new;
     }
 
-    pub fn step(&mut self) {
+    /// Advance one frame; returns sounds (sfx id, x, y) requested this frame.
+    pub fn step(&mut self) -> Vec<(u16, i32, i32)> {
         let a = self.a;
         let frames = |id: u16| a.grp(id).map_or(0, |g| g.frame_count() as u16);
         let w = self.world(&frames);
         let mut fx = Vec::new();
         let rng = &mut self.rng;
         self.sprites.retain_mut(|s| s.step(&w, rng, &mut fx));
+        let mut sounds = Vec::new();
         for e in fx {
-            if let Effect::SpawnSprite { sprite, x, y, elevation_delta } = e {
-                let mut s = Sprite::new(&w, &mut self.rng, sprite, 11, x, y);
-                s.elevation = s.elevation.saturating_add_signed(elevation_delta);
-                self.sprites.push(s);
+            match e {
+                Effect::SpawnSprite { sprite, x, y, elevation_delta } => {
+                    let mut s = Sprite::new(&w, &mut self.rng, sprite, 11, x, y);
+                    s.elevation = s.elevation.saturating_add_signed(elevation_delta);
+                    self.sprites.push(s);
+                }
+                Effect::Sound { id, x, y } => sounds.push((id, x, y)),
             }
         }
+        sounds
     }
 
     /// Draw the view at (vx, vy) into an indexed buffer of vw*vh.
@@ -198,6 +204,10 @@ impl<'a> Scene<'a> {
 pub fn run(a: &Assets, chk: Chk) -> io::Result<()> {
     use minifb::{Key, Window, WindowOptions};
     let mut scene = Scene::new(a, chk)?;
+    let mut audio = crate::audio::Audio::open(&a.casc);
+    if let Some(au) = audio.as_mut() {
+        au.play_music(&a.casc, "music/terran1.ogg");
+    }
     let (vw, vh) = (960i32, 640i32);
     let mut win = Window::new("scbw", vw as usize, vh as usize, WindowOptions::default()).map_err(|e| io::Error::other(e.to_string()))?;
     win.set_target_fps(24); // BW "fastest" = 42 ms/frame
@@ -213,7 +223,14 @@ pub fn run(a: &Assets, chk: Chk) -> io::Result<()> {
         if win.is_key_down(Key::Down) || win.is_key_down(Key::S) { vy += sp }
         vx = vx.clamp(0, (mw - vw).max(0));
         vy = vy.clamp(0, (mh - vh).max(0));
-        scene.step();
+        for (id, x, y) in scene.step() {
+            // ponytail: on-screen only, no distance falloff or per-frame voice limits yet.
+            if let Some(au) = &audio {
+                if (vx..vx + vw).contains(&x) && (vy..vy + vh).contains(&y) {
+                    au.play(&a.casc, &a.dat, id, 0.6);
+                }
+            }
+        }
         scene.draw(vx, vy, vw, vh, &mut idx);
         let pal = scene.palette();
         for (o, &i) in rgb.iter_mut().zip(&idx) {

@@ -113,7 +113,7 @@ pub struct Sprite {
 /// Things an image script asks for that reach outside its own image.
 pub enum Effect {
     SpawnSprite { sprite: u16, x: i32, y: i32, elevation_delta: i8 },
-    Sound(u16),
+    Sound { id: u16, x: i32, y: i32 },
 }
 
 pub struct World<'a> {
@@ -341,20 +341,20 @@ impl Sprite {
                     }
                 }
                 0x18 => {
-                    fx.push(Effect::Sound(u16_at(pc)));
+                    fx.push(Effect::Sound { id: u16_at(pc), x: self.x, y: self.y });
                     pc += 2;
                 }
                 0x19 | 0x1c => {
                     let n = u8_at(pc) as usize;
                     if n > 0 {
                         let k = rng.next() as usize % n;
-                        fx.push(Effect::Sound(u16_at(pc + 1 + k * 2)));
+                        fx.push(Effect::Sound { id: u16_at(pc + 1 + k * 2), x: self.x, y: self.y });
                     }
                     pc += 1 + n * 2;
                 }
                 0x1a => {
                     let (a, b) = (u16_at(pc) as u32, u16_at(pc + 2) as u32);
-                    fx.push(Effect::Sound(rng.between(a, b.max(a)) as u16));
+                    fx.push(Effect::Sound { id: rng.between(a, b.max(a)) as u16, x: self.x, y: self.y });
                     pc += 4;
                 }
                 0x1b | 0x26 | 0x27 | 0x2a | 0x2e | 0x2f | 0x44 => {} // unit-side ops (no units yet)
