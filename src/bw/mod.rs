@@ -188,24 +188,14 @@ fn pool_after_head<T: Default + Clone + list::Node>(n: usize) -> (Vec<T>, List) 
     (v, l)
 }
 
-/// Free list in index order (units, 0x49e1f0).
-fn pool<T: Default + Clone + list::Node>(n: usize) -> (Vec<T>, List) {
-    // Free lists start in index order: element i -> i+1.
-    let mut v = vec![T::default(); n];
-    for i in 0..n {
-        let l = v[i].link_mut();
-        l.prev = if i == 0 { NIL } else { i as u32 - 1 };
-        l.next = if i + 1 == n { NIL } else { i as u32 + 1 };
-    }
-    (v, List { head: 0, tail: n as u32 - 1 })
-}
 
 impl State {
     pub fn new(map_tiles: (usize, usize), tileset: u16, max_units: u32) -> State {
         let (images, free_images) = pool_after_head::<Image>(MAX_IMAGES);
         let (sprites, free_sprites) = pool_after_head(MAX_SPRITES);
         let (thingies, free_thingies) = pool_after_head(MAX_THINGIES);
-        let (units, free_units) = pool(max_units as usize);
+        // New game (0x49f380) builds the unit free list like the other pools.
+        let (units, free_units) = pool_after_head::<Unit>(max_units as usize);
         let (orders, free_orders) = pool_after_head::<orders::Order>(orders::MAX_ORDERS);
         debug_assert!(free_images.head == 0 && images[0].link.next == MAX_IMAGES as u32 - 1);
         let mut st = State {
