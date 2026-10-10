@@ -67,6 +67,15 @@ def sai_layout(e, base):
     return bytes(b)
 
 
+def contours_layout(e, c):
+    b = bytearray(e.read(c, 0x38))
+    b[0:0x10] = bytes(0x10)
+    for i in range(4):
+        n = struct.unpack_from("<h", b, 0x10 + i * 2)[0]
+        b += e.read(e.r32(c + i * 4), n * 8)
+    return bytes(b)
+
+
 def check_sai(name, want, got):
     if check(name, want, got):
         return
@@ -94,14 +103,15 @@ def main():
     e = Emu(exe)
     snap = {}
     e.at(0x483d2f, lambda e: snap.setdefault("minitiles", e.read(e.r32(MINITILES), 0x100000)))
-    e.at(0x484251, lambda e: snap.setdefault("sai", sai_layout(e, e.r32(SAI))))
     w, h, ok = load(e, d)
+    snap["sai"] = sai_layout(e, e.r32(SAI))
     print("MTXM handler returned", ok)
     rd = lambda n: open(os.path.join(d, n), "rb").read()
     check("tile_flags", e.read(e.r32(TILE_FLAGS), w * h * 4), rd("tile_flags"))
     check("megatiles", e.read(e.r32(MEGATILES), w * h * 2), rd("megatiles"))
     check("minitiles", snap["minitiles"], rd("minitiles"))
     check_sai("sai", snap["sai"], rd("sai"))
+    check("contours", contours_layout(e, e.r32(e.r32(SAI) + 0x97a1c)), rd("contours"))
 
 
 if __name__ == "__main__":

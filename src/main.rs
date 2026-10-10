@@ -264,6 +264,7 @@ fn main() -> std::io::Result<()> {
             std::fs::write(dir.join("minitiles"), &m.minitiles)?;
             if let Some(sai) = bw::sai::create(&mut m, &ts) {
                 std::fs::write(dir.join("sai"), bw::sai::layout(&sai))?;
+                std::fs::write(dir.join("contours"), bw::sai::contours_layout(sai.contours.as_ref().unwrap()))?;
             }
         }
         Some("render") => {

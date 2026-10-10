@@ -66,8 +66,8 @@ pub struct Sai {
     pub region_count: u16,
     /// 0x4: next free slot in the shared neighbor buffer.
     pub neighbor_cursor: u16,
-    /// 0x8: split tile pointer set (always 0x2000c once set).
-    pub splits_ptr_set: bool,
+    /// 0x8: end of the used split tiles (None = null pointer).
+    pub split_cursor: Option<u16>,
     /// 0xc: region id per tile, 256 per row. >= 0x2000 = split tile index + 0x2000.
     pub tiles: Vec<u16>,
     /// 0x2000c
@@ -76,6 +76,8 @@ pub struct Sai {
     pub regions: Vec<Region>,
     /// 0x92bfc
     pub neighbor_buf: Vec<u16>,
+    /// 0x97a1c
+    pub contours: Option<Contours>,
 }
 
 impl Sai {
@@ -83,11 +85,12 @@ impl Sai {
         Sai {
             region_count: 0,
             neighbor_cursor: 0,
-            splits_ptr_set: false,
+            split_cursor: None,
             tiles: vec![0; 0x10000],
             splits: vec![Split::default(); SPLIT_COUNT],
             regions: vec![Region::default(); MAX_REGIONS],
             neighbor_buf: vec![0; NEIGHBOR_BUF],
+            contours: None,
         }
     }
 
@@ -140,8 +143,12 @@ pub fn create(map: &mut GameMap, ts: &super::map::TilesetData) -> Option<Sai> {
     let mut sai = Sai::new();
     init_tiles(&mut sai, map, ts);
     add_bottom_region(&mut sai, map);
-    if !split_regions(&mut sai, map, (0, 0, map.width as i32, map.height as i32)) {
+    if !split_regions(&mut sai, map, ts, (0, 0, map.width as i32, map.height as i32)) {
         return None;
+    }
+    create_contours(&mut sai, map);
+    for r in 0..sai.region_count as usize {
+        sai.regions[r].properties = region_properties(&sai, r);
     }
     Some(sai)
 }
@@ -184,7 +191,7 @@ fn add_bottom_region(sai: &mut Sai, map: &GameMap) {
 }
 
 /// 0x484210
-fn split_regions(sai: &mut Sai, map: &mut GameMap, area: (i32, i32, i32, i32)) -> bool {
+fn split_regions(sai: &mut Sai, map: &mut GameMap, ts: &super::map::TilesetData, area: (i32, i32, i32, i32)) -> bool {
     let first = sai.region_count as i32;
     if !make_regions(sai, map, area) {
         return false;
@@ -193,8 +200,105 @@ fn split_regions(sai: &mut Sai, map: &mut GameMap, area: (i32, i32, i32, i32)) -
     merge_small_regions(sai);
     compact_regions(sai, map);
     update_regions(sai, map, first);
-    sai.splits_ptr_set = true;
+    sai.split_cursor = Some(0);
+    create_splits(sai, map, ts);
+    let n = sai.region_count as usize;
+    sai.regions[n..].fill(Region::default());
     true
+}
+
+/// 0x483260: every partially walkable tile becomes a split tile dividing it between
+/// its own region and the neighbor across its most blocked (or most open) edge.
+fn create_splits(sai: &mut Sai, map: &GameMap, ts: &super::map::TilesetData) {
+    let mut cursor = 0usize;
+    let w = map.width as usize;
+    for y in 0..map.height as i32 {
+        for x in 0..w as i32 {
+            let ti = y as usize * w + x as usize;
+            if map.tile_flags[ti] & 0x2000_0000 == 0 {
+                continue;
+            }
+            let mega = (map.megatiles[ti] & 0x7fff) as usize;
+            let mut mask: u16 = 0;
+            for k in (0..16).rev() {
+                mask = mask << 1 | (!ts.vf4.get(mega * 16 + k).copied().unwrap_or(0) & 1);
+            }
+            let cur = sai.tile(x, y);
+            let near = tile_neighbors(sai, map, x, y);
+            let p = ((y * 0x400 + x) * 4) as isize;
+            let mt = &map.minitiles;
+            let blocked = |o: isize| ((mt[(p + o) as usize] as i8) < 0) as i8;
+            let open = |o: isize| 1 - blocked(o);
+            let edge = |i: usize, f: &dyn Fn(isize) -> i8| -> i8 {
+                let os: &[isize] = match i {
+                    0 => &[-0x400, -0x3ff, -0x3fe, -0x3fd],
+                    1 => &[0xbff, 0x7ff, 0x3ff, -1],
+                    2 => &[0xc04, 0x804, 0x404, 4],
+                    3 => &[0x1003, 0x1002, 0x1001, 0x1000],
+                    4 => &[-0x401],
+                    5 => &[-0x3fc],
+                    6 => &[0xfff],
+                    _ => &[0x1004],
+                };
+                os.iter().map(|&o| f(o)).sum()
+            };
+            let own = |f: &dyn Fn(isize) -> i8| -> [i8; 8] {
+                [
+                    f(2) + f(1) + f(0) + f(3),
+                    f(0x800) + f(0x400) + f(0xc00) + f(0),
+                    f(0x803) + f(0x403) + f(0xc03) + f(3),
+                    f(0xc02) + f(0xc01) + f(0xc03) + f(0xc00),
+                    f(0),
+                    f(3),
+                    f(0xc00),
+                    f(0xc03),
+                ]
+            };
+            let walkable_region = sai.regions[cur as usize].flags != UNWALKABLE;
+            let (c, sides, f): ([i8; 8], usize, &dyn Fn(isize) -> i8) =
+                if walkable_region { (own(&blocked), 8, &blocked) } else { (own(&open), 4, &open) };
+            let (mut best, mut bi) = (0i8, 0usize);
+            for i in (0..sides).rev() {
+                if c[i] <= best {
+                    continue;
+                }
+                let n = near[i];
+                if n == cur {
+                    continue;
+                }
+                let take = if n >= 0x2000 {
+                    edge(i, f) != 0
+                } else {
+                    n < MAX_REGIONS as u16 && (sai.regions[n as usize].flags == UNWALKABLE) == walkable_region
+                };
+                if take {
+                    best = c[i];
+                    bi = i;
+                }
+            }
+            let (rgn1, rgn2) = if best == 0 {
+                (cur, cur)
+            } else {
+                let v = near[bi];
+                let s = |v: u16| sai.splits[v as usize - 0x2000];
+                if walkable_region {
+                    (cur, if v >= 0x2000 { s(v).rgn2 } else { v })
+                } else {
+                    (if v >= 0x2000 { s(v).rgn1 } else { v }, cur)
+                }
+            };
+            let unwalk = |r: u16| sai.regions[r as usize].flags == UNWALKABLE;
+            if rgn1 == rgn2 {
+                mask = if unwalk(rgn1) { 0xffff } else { 0 };
+            } else if unwalk(rgn1) && unwalk(rgn2) {
+                mask = 0xffff;
+            }
+            sai.splits[cursor] = Split { mask, rgn1, rgn2 };
+            sai.set_tile(x, y, 0x2000 + cursor as u16);
+            cursor += 1;
+        }
+    }
+    sai.split_cursor = Some(cursor as u16);
 }
 
 /// 0x483e30: cover every unassigned tile in `area` with rectangular regions.
@@ -702,8 +806,8 @@ pub fn layout(sai: &Sai) -> Vec<u8> {
     let w32 = |b: &mut Vec<u8>, o: usize, v: u32| b[o..o + 4].copy_from_slice(&v.to_le_bytes());
     w16(&mut b, 0, sai.region_count);
     w32(&mut b, 4, 0x92bfc + sai.neighbor_cursor as u32 * 2);
-    if sai.splits_ptr_set {
-        w32(&mut b, 8, 0x2000c);
+    if let Some(n) = sai.split_cursor {
+        w32(&mut b, 8, 0x2000c + n as u32 * 6);
     }
     for (i, &t) in sai.tiles.iter().enumerate() {
         w16(&mut b, 0xc + i * 2, t);
@@ -742,6 +846,212 @@ pub fn layout(sai: &Sai) -> Vec<u8> {
     }
     for (i, &v) in sai.neighbor_buf.iter().take(NEIGHBOR_BUF).enumerate() {
         w16(&mut b, 0x92bfc + i * 2, v);
+    }
+    b
+}
+
+/// One contour edge (8 bytes): for horizontal lists (y, x0, x1), vertical (x, y0, y1).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ContourEntry {
+    pub v: [i16; 3],
+    pub dir: u8,
+    pub flags: u8,
+}
+
+/// Contours (sai +0x97a1c, 0x38 bytes): walkability edges, one list per side.
+#[derive(Clone, Debug, Default)]
+pub struct Contours {
+    pub lists: [Vec<ContourEntry>; 4],
+    /// +0x18: allocated capacities (grow by 2500).
+    pub caps: [i16; 4],
+    /// +0x28..+0x30
+    pub unk28: [u16; 4],
+}
+
+/// 0x42c5c0
+fn create_contours(sai: &mut Sai, map: &mut GameMap) {
+    let mut c = Contours { unk28: [1, 0xffff, 0xffff, 1], ..Default::default() };
+    trace_contours(&mut c, map);
+    sai.contours = Some(c);
+}
+
+// 0x515af8.. tables.
+const EDGE_DIR: [i8; 16] = [-1, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0];
+const EDGE_B08: [u8; 16] = [0xff, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 0, 1, 0, 1, 0];
+const START_OFS: [(i16, i16); 8] = [(-1, -1), (8, -1), (8, 8), (-1, 8), (0, -1), (8, 0), (7, 8), (-1, 7)];
+const END_OFS: [(i16, i16); 8] = [(8, -1), (8, 8), (-1, 8), (-1, -1), (7, -1), (8, 7), (0, 8), (-1, 0)];
+const STEP: [isize; 4] = [-0x400, 1, 0x400, -1];
+const STEP_XY: [(i32, i32); 4] = [(0, -1), (1, 0), (0, 1), (-1, 0)];
+const TURN_XY: [(i32, i32); 4] = [(1, -1), (1, 1), (-1, 1), (-1, -1)];
+
+/// 0x42b760: next minitile with edge bits, scanning from (x, y) 4 at a time.
+fn next_edge(m: &[u8], mw: i32, mh: i32, y: &mut i32, x: &mut i32) -> bool {
+    let (mut cx, mut cy) = (*x, *y);
+    if cx >= mw {
+        cx = 0;
+        cy += 1;
+        if cy >= mh {
+            cy = 0;
+        }
+    }
+    cx &= !3;
+    let start = (cy * 0x400 + cx) as isize;
+    let mut p = start;
+    loop {
+        let d = u32::from_le_bytes(m[p as usize..p as usize + 4].try_into().unwrap());
+        if d & 0x7f7f_7f7f != 0 {
+            while (m[p as usize] as i8) < 1 {
+                p += 1;
+                cx += 1;
+            }
+            *x = cx;
+            *y = cy;
+            return true;
+        }
+        cx += 4;
+        p += 4;
+        if cx == mw {
+            cx = 0;
+            cy += 1;
+            p += (0x400 - mw) as isize;
+            if cy >= mh {
+                cy = 0;
+                p = 0;
+            }
+        }
+        if p == start {
+            return false;
+        }
+    }
+}
+
+/// 0x42c060: walk every walkability boundary of the minitile map (consuming its edge
+/// bits), emitting one entry per straight edge into the list for its side, then sort.
+fn trace_contours(c: &mut Contours, map: &mut GameMap) {
+    let mw = (map.width as i32 * 32) >> 3;
+    let mh = (map.height as i32 * 32) >> 3;
+    c.caps = [5000; 4];
+    let m = &mut map.minitiles;
+    let (mut fy, mut fx) = (0i32, 0i32);
+    let mut found = next_edge(m, mw, mh, &mut fy, &mut fx);
+    while found {
+        let mut p = (fy * 0x400 + fx) as isize;
+        let mut d = EDGE_DIR[(m[p as usize] & 0xf) as usize] as u8;
+        let mut l7 = EDGE_B08[(m[p as usize] & 0xf) as usize];
+        let (mut yy, mut xx) = (fy, fx);
+        if d == 2 {
+            xx = fx - 1;
+            yy = fy + 1;
+            p = (yy * 0x400 + xx) as isize;
+            let b = m[p as usize] & 0xf;
+            d = EDGE_DIR[b as usize] as u8;
+            l7 = EDGE_B08[b as usize];
+        }
+        let e = START_OFS[(d as i8 as i32 + (l7 & 1) as i32 * 4) as usize];
+        let sx = ((xx << 3) as i16).wrapping_add(e.0);
+        let sy = ((yy << 3) as i16).wrapping_add(e.1);
+        let mut start = (sx, sy);
+        m[p as usize] ^= 1u8.wrapping_shl(d as u32 & 0x1f);
+        loop {
+            let n = d.wrapping_add(1) & 3;
+            let step = STEP[n as usize];
+            let (ddx, ddy) = STEP_XY[n as usize];
+            let cur_d = d as i8 as i32;
+            let bit = 1u8.wrapping_shl(d as u32 & 0x1f);
+            let mut b = m[p as usize] ^ bit;
+            m[p as usize] = b;
+            let mut turn = 0u8;
+            while (1u8 << n) & b == 0 {
+                if m[(p + step) as usize] & bit == 0 {
+                    turn = 1;
+                    break;
+                }
+                p += step;
+                yy += ddy;
+                xx += ddx;
+                m[p as usize] ^= bit;
+                b = m[p as usize];
+            }
+            let e = END_OFS[(cur_d + turn as i32 * 4) as usize];
+            let end = (((xx << 3) as i16).wrapping_add(e.0), ((yy << 3) as i16).wrapping_add(e.1));
+            if (0..4).any(|i| c.lists[i].len() as i16 == c.caps[i]) {
+                // 0x42b9f0
+                for cap in &mut c.caps {
+                    *cap += 0x9c4;
+                }
+            }
+            let b8 = (!(d << 1) & 3) ^ (l7 << 1) ^ d;
+            let b5 = (((d & 1) ^ turn) << 1) ^ d ^ 1;
+            let (v, flags) = match cur_d {
+                0 => ([start.1, start.0, end.0], ((((turn & 1) << 1 | l7 & 1) << 2 | b5 & 3) << 2) | b8 & 3),
+                1 => ([start.0, start.1, end.1], ((((turn & 1) << 1 | l7 & 1) << 2 | b5 & 3) << 2) | b8 & 3),
+                2 => ([start.1, end.0, start.0], (((((l7 & 1) << 1) | turn & 1) << 2 | b8 & 3) << 2) | b5 & 3),
+                _ => ([start.0, end.1, start.1], (((((l7 & 1) << 1) | turn & 1) << 2 | b8 & 3) << 2) | b5 & 3),
+            };
+            c.lists[cur_d as usize & 3].push(ContourEntry { v, dir: d, flags });
+            if turn == 0 {
+                d = n;
+            } else {
+                let (tx, ty) = TURN_XY[cur_d as usize & 3];
+                xx += tx;
+                yy += ty;
+                p = (yy * 0x400 + xx) as isize;
+                d = d.wrapping_sub(1) & 3;
+            }
+            start = end;
+            l7 = turn;
+            if end == (sx, sy) {
+                break;
+            }
+        }
+        m[p as usize] ^= 1u8.wrapping_shl(d as u32 & 0x1f);
+        found = next_edge(m, mw, mh, &mut fy, &mut fx);
+    }
+    // The minitile map is freed here (0x42c060 end).
+    map.minitiles = Vec::new();
+    for l in &mut c.lists {
+        super::crt::qsort(l, |a, b| (a.v[0], a.v[1]).cmp(&(b.v[0], b.v[1])));
+    }
+}
+
+/// 0x483160: count distinct groups (of regions > 3 tiles) among the unwalkable
+/// neighbors; 0 when fewer than 2, stops counting past 4.
+fn region_properties(sai: &Sai, r: usize) -> u8 {
+    let reg = &sai.regions[r];
+    let n = reg.neighbor_count as i32 - reg.walkable_neighbors as i32;
+    if n == 0 {
+        return 0;
+    }
+    let mut groups: Vec<u16> = Vec::new();
+    for i in 0..n.max(0) as usize {
+        let nb = &sai.regions[sai.neighbor(r, reg.walkable_neighbors as usize + i) as usize];
+        if nb.tile_count > 3 && !groups.contains(&nb.group) {
+            if groups.len() + 1 > 4 {
+                return 5;
+            }
+            groups.push(nb.group);
+        }
+    }
+    if groups.len() < 2 { 0 } else { groups.len() as u8 }
+}
+
+/// Contours in the 1.16.1 layout: the 0x38-byte header (array pointers zeroed) followed
+/// by the four sorted arrays.
+pub fn contours_layout(c: &Contours) -> Vec<u8> {
+    let mut b = vec![0u8; 0x38];
+    for i in 0..4 {
+        b[0x10 + i * 2..0x12 + i * 2].copy_from_slice(&(c.lists[i].len() as u16).to_le_bytes());
+        b[0x18 + i * 2..0x1a + i * 2].copy_from_slice(&(c.caps[i] as u16).to_le_bytes());
+        b[0x28 + i * 2..0x2a + i * 2].copy_from_slice(&c.unk28[i].to_le_bytes());
+    }
+    for l in &c.lists {
+        for e in l {
+            for v in e.v {
+                b.extend_from_slice(&v.to_le_bytes());
+            }
+            b.push(e.dir);
+            b.push(e.flags);
+        }
     }
     b
 }
