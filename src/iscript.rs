@@ -108,14 +108,28 @@ pub struct Sprite {
     next_serial: u32,
     /// Facing, 0..256 (0 = up, clockwise). Lives on the flingy in BW; kept here until units exist.
     pub direction: u8,
-    /// Index into Scene::units when this sprite is a unit's main sprite.
+    /// Index into Game::units when this sprite is a unit's main sprite.
     pub unit: Option<usize>,
+    /// Index into Game::bullets when this sprite is a bullet.
+    pub bullet: Option<usize>,
 }
 
 /// Things an image script asks for that reach outside its own image.
 pub enum Effect {
     SpawnSprite { sprite: u16, x: i32, y: i32, elevation_delta: i8 },
     Sound { id: u16, x: i32, y: i32 },
+    /// 0x26 attack: fire the weapon matching the target (ground/air).
+    Attack { unit: usize },
+    /// 0x25 attackwith: 1 = ground weapon, 2 = air weapon.
+    AttackWith { unit: usize, slot: u8 },
+    /// 0x28 useweapon: fire weapons.dat id directly.
+    UseWeapon { unit: usize, weapon: u8 },
+    /// 0x1c attackmelee: melee hit on the current target.
+    MeleeHit { unit: usize },
+    /// 0x1b domissiledmg / 0x44 dogrddamage on a bullet sprite.
+    BulletHit { bullet: usize },
+    /// 0x2a gotorepeatattk: attacker may start the next attack cycle.
+    RepeatAttack { unit: usize },
 }
 
 pub struct World<'a> {
@@ -127,7 +141,7 @@ pub struct World<'a> {
 
 impl Sprite {
     pub fn new(w: &World, rng: &mut Rng, id: u16, owner: u8, x: i32, y: i32) -> Sprite {
-        let mut s = Sprite { id, owner, x, y, elevation: 4, images: Vec::new(), main: 0, next_serial: 0, direction: 0, unit: None };
+        let mut s = Sprite { id, owner, x, y, elevation: 4, images: Vec::new(), main: 0, next_serial: 0, direction: 0, unit: None, bullet: None };
         s.add_image(w, rng, w.dat.sprites.image[id as usize], 0, 0, None);
         s
     }
@@ -348,6 +362,9 @@ impl Sprite {
                 }
                 0x19 | 0x1c => {
                     let n = u8_at(pc) as usize;
+                    if let (0x1c, Some(unit)) = (op, self.unit) {
+                        fx.push(Effect::MeleeHit { unit });
+                    }
                     if n > 0 {
                         let k = rng.next() as usize % n;
                         fx.push(Effect::Sound { id: u16_at(pc + 1 + k * 2), x: self.x, y: self.y });
@@ -359,7 +376,29 @@ impl Sprite {
                     fx.push(Effect::Sound { id: rng.between(a, b.max(a)) as u16, x: self.x, y: self.y });
                     pc += 4;
                 }
-                0x1b | 0x26 | 0x27 | 0x2a | 0x2e | 0x2f | 0x44 => {} // unit-side ops (no units yet)
+                0x1b | 0x44 => {
+                    if let Some(bullet) = self.bullet {
+                        fx.push(Effect::BulletHit { bullet });
+                    }
+                }
+                0x26 => {
+                    if let Some(unit) = self.unit {
+                        fx.push(Effect::Attack { unit });
+                    }
+                }
+                0x2a => {
+                    if let Some(unit) = self.unit {
+                        fx.push(Effect::RepeatAttack { unit });
+                    }
+                }
+                0x25 | 0x28 => {
+                    let v = u8_at(pc);
+                    pc += 1;
+                    if let Some(unit) = self.unit {
+                        fx.push(if op == 0x25 { Effect::AttackWith { unit, slot: v } } else { Effect::UseWeapon { unit, weapon: v } });
+                    }
+                }
+                0x27 | 0x2e | 0x2f => {} // castspell, nobrkcode: not ported yet
                 0x1d => {
                     // followmaingraphic
                     if let Some(m) = self.images.get(self.main).cloned() {
@@ -403,7 +442,7 @@ impl Sprite {
                     self.update_all_frames(w);
                     continue;
                 }
-                0x23 | 0x24 | 0x25 | 0x28 | 0x29 | 0x2b | 0x31 | 0x38 | 0x41 => pc += 1, // unit-side, 1 byte arg
+                0x23 | 0x24 | 0x29 | 0x2b | 0x31 | 0x38 | 0x41 => pc += 1, // unit-side, 1 byte arg
                 0x2c => {
                     // engset: frame block n of the main image
                     let n = u8_at(pc) as u16;

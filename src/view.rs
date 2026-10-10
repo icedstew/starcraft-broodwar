@@ -112,6 +112,13 @@ impl<'a> Scene<'a> {
         self.game.step(&w)
     }
 
+    pub fn spawn(&mut self, kind: usize, owner: u8, x: i32, y: i32) -> usize {
+        let a = self.a;
+        let frames = |id: u16| a.grp(id).map_or(0, |g| g.frame_count() as u16);
+        let w = self.world(&frames);
+        self.game.create_unit(&w, kind, owner, x, y, 100)
+    }
+
     /// Local player: first human (OWNR 6) slot.
     pub fn local_player(&self) -> u8 {
         self.chk.owners().iter().position(|&o| o == 6).unwrap_or(0) as u8

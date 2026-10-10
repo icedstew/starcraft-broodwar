@@ -4,6 +4,7 @@
 //! updates, update_units, bullets, thingies, disable RNG. Only the parts
 //! ported so far run here.
 
+pub mod combat;
 pub mod flingy;
 pub mod orders;
 
@@ -36,6 +37,10 @@ pub struct Unit {
     pub order_process_timer: u8, // +0xc9
     pub order_queue: VecDeque<(u8, Target)>, // +0xa8 head
     pub subunit: Option<UnitId>, // +0xa0
+    pub ground_cooldown: u8, // +0x71
+    pub air_cooldown: u8,    // +0x72
+    /// In an attack cycle (next attack uses the Rpt anim instead of Init).
+    pub attacking: bool,
     pub dead: bool,
 }
 
@@ -44,17 +49,20 @@ pub struct Game {
     pub rng: Rng,
     pub units: Vec<Unit>,
     pub sprites: Vec<Option<Sprite>>,
+    pub bullets: Vec<combat::Bullet>,
+    /// Effects raised outside the sprite pass (anims started by orders), handled with the frame's effects.
+    pub pending_fx: Vec<Effect>,
     pub tileset: u16,
 }
 
 impl Game {
     pub fn new(w: &World, chk: &Chk) -> Game {
-        let mut g = Game { frame: 0, rng: Rng { seed: 0 }, units: Vec::new(), sprites: Vec::new(), tileset: chk.tileset() as u16 };
+        let mut g = Game { frame: 0, rng: Rng { seed: 0 }, units: Vec::new(), sprites: Vec::new(), bullets: Vec::new(), pending_fx: Vec::new(), tileset: chk.tileset() as u16 };
         g.place_map_objects(w, chk);
         g
     }
 
-    fn add_sprite(&mut self, s: Sprite) -> usize {
+    pub fn add_sprite(&mut self, s: Sprite) -> usize {
         if let Some(i) = self.sprites.iter().position(Option::is_none) {
             self.sprites[i] = Some(s);
             i
@@ -88,6 +96,9 @@ impl Game {
             order_process_timer: 0,
             order_queue: VecDeque::new(),
             subunit: None,
+            ground_cooldown: 0,
+            air_cooldown: 0,
+            attacking: false,
             dead: false,
         });
         if (u.subunit1[kind] as usize) < dat::Units::COUNT {
@@ -161,17 +172,39 @@ impl Game {
             orders::update_unit(self, w, id);
             self.update_unit_movement(w, id, &mut fx);
         }
+        combat::update_bullets(self, w);
         // Thingies / sprites: run every sprite's iscript.
         for slot in 0..self.sprites.len() {
             let Some(mut s) = self.sprites[slot].take() else { continue };
             let alive = s.step(w, &mut self.rng, &mut fx);
             if alive {
                 self.sprites[slot] = Some(s);
+            } else if let Some(b) = s.bullet {
+                self.bullets[b].dead = true;
             }
         }
         let mut sounds = Vec::new();
-        for e in fx {
+        let mut pending = std::mem::take(&mut self.pending_fx);
+        pending.extend(fx);
+        // Effects can raise more effects (an attack anim fires a weapon); drain until quiet.
+        let mut queue: std::collections::VecDeque<Effect> = pending.into();
+        while let Some(e) = queue.pop_front() {
             match e {
+                Effect::Attack { unit } => {
+                    if let Some(t) = self.units[unit].order_target.unit.filter(|&t| !self.units[t].dead) {
+                        let wpn = combat::weapon_for(self, w, unit, t);
+                        combat::fire_weapon(self, w, unit, wpn);
+                    }
+                }
+                Effect::AttackWith { unit, slot } => {
+                    let k = self.units[unit].kind;
+                    let wpn = if slot == 2 { w.dat.units.air_weapon[k] } else { w.dat.units.ground_weapon[k] };
+                    combat::fire_weapon(self, w, unit, wpn);
+                }
+                Effect::UseWeapon { unit, weapon } => combat::fire_weapon(self, w, unit, weapon),
+                Effect::MeleeHit { unit } => combat::melee_hit(self, w, unit),
+                Effect::BulletHit { bullet } => combat::bullet_hit(self, w, bullet),
+                Effect::RepeatAttack { .. } => {}
                 Effect::SpawnSprite { sprite, x, y, elevation_delta } => {
                     let mut s = Sprite::new(w, &mut self.rng, sprite, 11, x, y);
                     s.elevation = s.elevation.saturating_add_signed(elevation_delta);
@@ -179,6 +212,7 @@ impl Game {
                 }
                 Effect::Sound { id, x, y } => sounds.push((id, x, y)),
             }
+            queue.extend(self.pending_fx.drain(..));
         }
         self.frame += 1;
         sounds

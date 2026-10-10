@@ -29,6 +29,12 @@ pub fn update_unit(g: &mut Game, w: &World, u: UnitId) {
 fn update_unit_timers(g: &mut Game, w: &World, u: UnitId) {
     let unit = &mut g.units[u];
     unit.order_timer = unit.order_timer.saturating_sub(1);
+    unit.ground_cooldown = unit.ground_cooldown.saturating_sub(1);
+    unit.air_cooldown = unit.air_cooldown.saturating_sub(1);
+    // BW forces an order tick as soon as an attacking unit's weapon is ready (0x1401e6f30).
+    if unit.order == id::ATTACK_UNIT && (unit.ground_cooldown == 0 || unit.air_cooldown == 0) {
+        unit.order_process_timer = 0;
+    }
     let units = &w.dat.units;
     if units.shield_enable[unit.kind] != 0 {
         let max = (units.shields[unit.kind] as i32) << 8;
@@ -49,7 +55,8 @@ fn execute_main_order(g: &mut Game, w: &World, u: UnitId) {
     match unit.order {
         id::MOVE => order_move(g, w, u),
         id::STOP => order_stop(g, w, u),
-        // Idle orders: nothing to do until the guard/acquire logic is ported.
+        id::ATTACK_UNIT => super::combat::order_attack_unit(g, w, u),
+        id::GUARD | id::PLAYER_GUARD | id::TURRET_GUARD | id::HOLD_POSITION => order_guard(g, w, u),
         _ => {}
     }
 }
@@ -86,6 +93,16 @@ fn order_stop(g: &mut Game, w: &World, u: UnitId) {
     order_done(g, w, u);
 }
 
+/// Idle guard orders: attack the nearest enemy in acquisition range.
+fn order_guard(g: &mut Game, w: &World, u: UnitId) {
+    if let Some(t) = super::combat::acquire_target(g, w, u) {
+        let unit = &mut g.units[u];
+        unit.order = id::ATTACK_UNIT;
+        unit.order_state = 0;
+        unit.order_target = Target { pos: (0, 0), unit: Some(t) };
+    }
+}
+
 /// 0x1401c9ce0: next queued order, else the unit type's return-to-idle order.
 pub fn order_done(g: &mut Game, w: &World, u: UnitId) {
     let unit = &mut g.units[u];
@@ -100,4 +117,5 @@ pub fn order_done(g: &mut Game, w: &World, u: UnitId) {
     unit.order_state = 0;
     unit.order_target = target;
     unit.order_process_timer = 0;
+    unit.attacking = false;
 }

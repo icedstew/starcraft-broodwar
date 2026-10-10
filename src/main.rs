@@ -75,6 +75,15 @@ fn main() -> std::io::Result<()> {
             let mut scene = view::Scene::new(&a, load_chk(&args[1])?)?;
             let frames: usize = args.get(5).and_then(|f| f.parse().ok()).unwrap_or(24);
             let (x, y) = (args[3].parse().unwrap_or(0), args[4].parse().unwrap_or(0));
+            // Debug: SCBW_SPAWN="kind,owner,x,y;..." creates units before stepping.
+            if let Ok(spec) = std::env::var("SCBW_SPAWN") {
+                for e in spec.split(';').filter(|e| !e.is_empty()) {
+                    let v: Vec<i32> = e.split(',').filter_map(|n| n.trim().parse().ok()).collect();
+                    if let [k, o, sx, sy] = v[..] {
+                        scene.spawn(k as usize, o as u8, sx, sy);
+                    }
+                }
+            }
             if let Some(n) = args.get(6).and_then(|v| v.parse::<usize>().ok()) {
                 // Debug: select up to n units in view.
                 let mut sel = scene.units_in_rect(x, y, x + 640, y + 360);
