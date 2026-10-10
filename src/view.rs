@@ -102,7 +102,7 @@ impl<'a> Scene<'a> {
         let w = World { dat: &a.dat, iscript: &a.iscript, grp_frames: &frames, tileset: chk.tileset() as u16 };
         let (gw, gh, walk) = map::walk_grid(&chk, &ts);
         let mut game = crate::game::Game::new(&w, &chk, crate::game::path::WalkGrid { w: gw, h: gh, walk }, map::build_grid(&chk, &ts));
-        if crate::game::Game::is_melee_map(&chk) {
+        if crate::game::Game::is_melee_map(&chk) && std::env::var("SCBW_NOMELEE").is_err() {
             // ponytail: local player slot 0 plays SCBW_RACE (default terran); other start
             // locations get computer slots cycling through the races until there's an AI.
             let mine = match std::env::var("SCBW_RACE").as_deref() {
@@ -203,7 +203,7 @@ impl<'a> Scene<'a> {
                 out[(y * vw + x) as usize] = row[(vx + x).clamp(0, *tw as i32 - 1) as usize];
             }
         }
-        let mut order: Vec<&Sprite> = self.game.sprites.iter().flatten().filter(|s| (s.x - vx).abs() < vw + 256 && (s.y - vy).abs() < vh + 256).collect();
+        let mut order: Vec<&Sprite> = self.game.sprites.iter().flatten().filter(|s| !s.hidden && (s.x - vx).abs() < vw + 256 && (s.y - vy).abs() < vh + 256).collect();
         order.sort_by_key(|s| (s.elevation, s.y));
         for s in &order {
             let Some(u) = s.unit.filter(|u| self.selected.contains(u)) else { continue };
@@ -380,7 +380,7 @@ pub fn compose_with_cursor(
     if let (Some(kind), Some((_, cx, cy))) = (scene.placing, cursor) {
         let frames = |_: u16| 0;
         let wd = scene.world(&frames);
-        let (px, py) = crate::game::build::snap(&wd, kind, cx + vx, cy + vy);
+        let (px, py) = crate::game::build::snap_on(&scene.game, &wd, kind, cx + vx, cy + vy);
         let ok = crate::game::build::can_place(&scene.game, &wd, kind, (px, py), scene.selected.first().copied());
         let (fw, fh) = crate::game::build::footprint(&wd, kind);
         let (l, t) = (px - fw / 2 - vx, py - fh / 2 - vy);
@@ -507,7 +507,7 @@ pub fn run(a: &Assets, chk: Chk) -> io::Result<()> {
         if let (Some(kind), true) = (scene.placing, clicked && cy < vh - 120 && pressed.is_none()) {
             let frames = |_: u16| 0;
             let wd = scene.world(&frames);
-            let site = crate::game::build::snap(&wd, kind, cx + vx, cy + vy);
+            let site = crate::game::build::snap_on(&scene.game, &wd, kind, cx + vx, cy + vy);
             let builder = scene.selected.first().copied();
             if let Some(b) = builder.filter(|_| crate::game::build::can_place(&scene.game, &wd, kind, site, builder)) {
                 crate::game::build::order_build(&mut scene.game, b, kind, site);
@@ -583,7 +583,8 @@ pub fn run(a: &Assets, chk: Chk) -> io::Result<()> {
                     let worker = flags[scene.game.units[u].kind] & economy::flag::WORKER != 0;
                     let order = match hit.map(|h| (h, &scene.game.units[h])) {
                         Some((_, h)) if worker && economy::is_mineral_field(h.kind) => id::MOVE_TO_MINERALS,
-                        Some((_, h)) if worker && h.owner == me && flags[h.kind] & economy::flag::RESOURCE_DEPOT != 0 && scene.game.units[u].carry > 0 => id::RETURN_MINERALS,
+                        Some((_, h)) if worker && h.owner == me && h.completed && economy::GAS_BUILDINGS.contains(&h.kind) => id::MOVE_TO_GAS,
+                        Some((_, h)) if worker && h.owner == me && flags[h.kind] & economy::flag::RESOURCE_DEPOT != 0 && scene.game.units[u].carry > 0 => if scene.game.units[u].carry_gas { id::RETURN_GAS } else { id::RETURN_MINERALS },
                         Some((_, h)) if h.owner != me && h.owner < 8 => id::ATTACK_UNIT,
                         _ => id::MOVE,
                     };

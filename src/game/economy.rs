@@ -10,6 +10,10 @@ use super::{Game, Target, UnitId};
 use crate::iscript::{anim, World};
 
 pub const MINERAL_FIELDS: std::ops::RangeInclusive<usize> = 176..=178;
+pub const GEYSER: usize = 188;
+/// Refinery, Extractor, Assimilator.
+pub const GAS_BUILDINGS: [usize; 3] = [110, 149, 157];
+pub const GAS_TIME: u8 = 37;
 pub const MINE_TIME: u8 = 75;
 pub const MINERALS_PER_TRIP: u32 = 8;
 
@@ -145,12 +149,83 @@ pub fn order_return_minerals(g: &mut Game, w: &World, u: UnitId) {
         _ => {
             if arrived(g, w, u, depot) {
                 stop(g, u);
-                g.players[owner as usize].minerals += g.units[u].carry as u32;
+                let (amt, gas) = (g.units[u].carry as u32, g.units[u].carry_gas);
+                let pl = &mut g.players[owner as usize];
+                if gas { pl.gas += amt } else { pl.minerals += amt }
                 g.units[u].carry = 0;
+                g.units[u].carry_gas = false;
                 let field = g.units[u].gather_field;
-                set_order(g, u, id::MOVE_TO_MINERALS, field);
+                set_order(g, u, if gas { id::MOVE_TO_GAS } else { id::MOVE_TO_MINERALS }, field);
             }
         }
+    }
+}
+
+/// MoveToGas (81) / WaitForGas (82): walk to an own completed refinery, wait until it's empty.
+pub fn order_move_to_gas(g: &mut Game, w: &World, u: UnitId) {
+    let owner = g.units[u].owner;
+    let ok = |o: &super::Unit| !o.dead && o.completed && o.owner == owner && GAS_BUILDINGS.contains(&o.kind);
+    let r = g.units[u].order_target.unit.filter(|&r| ok(&g.units[r])).or_else(|| nearest(g, w, u, ok));
+    let Some(r) = r else {
+        orders::order_done(g, w, u);
+        return;
+    };
+    g.units[u].gather_field = Some(r);
+    g.units[u].order_target.unit = Some(r);
+    if g.units[u].carry > 0 {
+        set_order(g, u, if g.units[u].carry_gas { id::RETURN_GAS } else { id::RETURN_MINERALS }, None);
+        return;
+    }
+    if g.units[u].order_state == 0 {
+        let (x, y) = g.unit_pos(r);
+        g.move_unit(w, u, x as i16, y as i16);
+        g.units[u].order_state = 1;
+        return;
+    }
+    if !arrived(g, w, u, r) {
+        return;
+    }
+    let busy = g.units[r].miner.is_some_and(|m| m != u && !g.units[m].dead && g.units[m].order == id::HARVEST_GAS);
+    if busy {
+        g.units[u].order = id::WAIT_FOR_GAS;
+        return;
+    }
+    stop(g, u);
+    g.units[r].miner = Some(u);
+    set_order(g, u, id::HARVEST_GAS, Some(r));
+}
+
+/// order_HarvestGas (83, 0x1401bb480): hide inside for 37 frames, come out with 8 gas.
+pub fn order_harvest_gas(g: &mut Game, w: &World, u: UnitId) {
+    let Some(r) = g.units[u].order_target.unit.filter(|&r| !g.units[r].dead) else {
+        set_hidden(g, u, false);
+        orders::order_done(g, w, u);
+        return;
+    };
+    match g.units[u].order_state {
+        0 => {
+            set_hidden(g, u, true);
+            g.units[u].order_state = 5;
+            g.units[u].order_timer = GAS_TIME;
+        }
+        5 if g.units[u].order_timer == 0 => {
+            // Depleted geysers still give 2 per trip in BW.
+            let take = if g.units[r].resources >= MINERALS_PER_TRIP { MINERALS_PER_TRIP } else { 2 };
+            g.units[r].resources = g.units[r].resources.saturating_sub(take);
+            g.units[r].miner = None;
+            g.units[u].carry = take as u8;
+            g.units[u].carry_gas = true;
+            set_hidden(g, u, false);
+            set_order(g, u, id::RETURN_GAS, None);
+        }
+        _ => {}
+    }
+}
+
+fn set_hidden(g: &mut Game, u: UnitId, hidden: bool) {
+    let sprite = g.units[u].sprite;
+    if let Some(s) = g.sprites[sprite].as_mut() {
+        s.hidden = hidden;
     }
 }
 

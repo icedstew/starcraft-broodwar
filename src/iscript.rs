@@ -114,6 +114,8 @@ pub struct Sprite {
     pub unit: Option<usize>,
     /// Index into Game::bullets when this sprite is a bullet.
     pub bullet: Option<usize>,
+    /// Not drawn (e.g. a worker inside a refinery).
+    pub hidden: bool,
 }
 
 /// Things an image script asks for that reach outside its own image.
@@ -145,7 +147,7 @@ pub struct World<'a> {
 
 impl Sprite {
     pub fn new(w: &World, rng: &mut Rng, id: u16, owner: u8, x: i32, y: i32) -> Sprite {
-        let mut s = Sprite { id, owner, x, y, elevation: 4, images: Vec::new(), main: 0, next_serial: 0, direction: 0, unit: None, bullet: None };
+        let mut s = Sprite { id, owner, x, y, elevation: 4, images: Vec::new(), main: 0, next_serial: 0, direction: 0, unit: None, bullet: None, hidden: false };
         s.add_image(w, rng, w.dat.sprites.image[id as usize], 0, 0, None);
         s
     }

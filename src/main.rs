@@ -114,7 +114,7 @@ fn main() -> std::io::Result<()> {
                 let worker = (0..scene.game.units.len()).find(|&u| scene.game.units[u].owner == 0 && a.dat.units.flags[scene.game.units[u].kind] & 0x8 != 0);
                 if let (Some(b), &[k, x, y]) = (worker, &v[..]) {
                     let frames = |_: u16| 0;
-                    let site = game::build::snap(&scene.world(&frames), k as usize, x, y);
+                    let site = game::build::snap_on(&scene.game, &scene.world(&frames), k as usize, x, y);
                     game::build::order_build(&mut scene.game, b, k as usize, site);
                 }
             }

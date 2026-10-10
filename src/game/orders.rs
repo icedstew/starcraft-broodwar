@@ -16,6 +16,10 @@ pub mod id {
     pub const NOTHING: u8 = 23;
     pub const PLACE_BUILDING: u8 = 30;
     pub const CONSTRUCTING_BUILDING: u8 = 33;
+    pub const MOVE_TO_GAS: u8 = 81;
+    pub const WAIT_FOR_GAS: u8 = 82;
+    pub const HARVEST_GAS: u8 = 83;
+    pub const RETURN_GAS: u8 = 84;
     pub const MOVE_TO_MINERALS: u8 = 85;
     pub const WAIT_FOR_MINERALS: u8 = 86;
     pub const MINING_MINERALS: u8 = 87;
@@ -72,7 +76,9 @@ fn execute_main_order(g: &mut Game, w: &World, u: UnitId) {
         id::MOVE_TO_MINERALS => super::economy::order_move_to_minerals(g, w, u),
         id::WAIT_FOR_MINERALS => super::economy::order_wait_for_minerals(g, w, u),
         id::MINING_MINERALS => super::economy::order_mining_minerals(g, w, u),
-        id::RETURN_MINERALS => super::economy::order_return_minerals(g, w, u),
+        id::RETURN_MINERALS | id::RETURN_GAS => super::economy::order_return_minerals(g, w, u),
+        id::MOVE_TO_GAS | id::WAIT_FOR_GAS => super::economy::order_move_to_gas(g, w, u),
+        id::HARVEST_GAS => super::economy::order_harvest_gas(g, w, u),
         id::GUARD | id::PLAYER_GUARD | id::TURRET_GUARD | id::HOLD_POSITION => order_guard(g, w, u),
         _ => {}
     }

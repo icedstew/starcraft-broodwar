@@ -13,7 +13,27 @@ pub fn footprint(w: &World, kind: usize) -> (i32, i32) {
     ((p & 0xFFFF) as i32, (p >> 16 & 0xFFFF) as i32)
 }
 
+/// Geyser whose center is (x, y).
+pub fn geyser_at(g: &Game, x: i32, y: i32) -> Option<UnitId> {
+    (0..g.units.len()).find(|&i| !g.units[i].dead && g.units[i].kind == super::economy::GEYSER && g.unit_pos(i) == (x, y))
+}
+
 /// Snap a cursor position to the building center BW would use (top-left on the 32px grid).
+pub fn snap_on(g: &Game, w: &World, kind: usize, x: i32, y: i32) -> (i32, i32) {
+    // Gas buildings snap onto the geyser under the cursor.
+    if super::economy::GAS_BUILDINGS.contains(&kind) {
+        let d = w.dat.units.dimensions[super::economy::GEYSER];
+        let (l, t, r, b) = ((d & 0xFFFF) as i32, (d >> 16 & 0xFFFF) as i32, (d >> 32 & 0xFFFF) as i32, (d >> 48) as i32);
+        for i in 0..g.units.len() {
+            let (gx, gy) = g.unit_pos(i);
+            if !g.units[i].dead && g.units[i].kind == super::economy::GEYSER && (gx - l..=gx + r).contains(&x) && (gy - t..=gy + b).contains(&y) {
+                return (gx, gy);
+            }
+        }
+    }
+    snap(w, kind, x, y)
+}
+
 pub fn snap(w: &World, kind: usize, x: i32, y: i32) -> (i32, i32) {
     let (fw, fh) = footprint(w, kind);
     let left = ((x - fw / 2 + 16) >> 5) << 5;
@@ -25,6 +45,9 @@ pub fn snap(w: &World, kind: usize, x: i32, y: i32) -> (i32, i32) {
 /// (other than `builder`) may stand in the footprint.
 /// ponytail: no creep/psi rules or fog checks yet.
 pub fn can_place(g: &Game, w: &World, kind: usize, (x, y): (i32, i32), builder: Option<UnitId>) -> bool {
+    if super::economy::GAS_BUILDINGS.contains(&kind) {
+        return geyser_at(g, x, y).is_some();
+    }
     let (fw, fh) = footprint(w, kind);
     let (l, t) = (x - fw / 2, y - fh / 2);
     let tiles_w = g.map_tiles.0 as i32;
@@ -83,7 +106,15 @@ pub fn order_place_building(g: &mut Game, w: &World, u: UnitId) {
     }
     g.players[owner].minerals -= m;
     g.players[owner].gas -= gas;
+    // A gas building replaces its geyser and inherits the remaining gas.
+    let geyser = geyser_at(g, sx, sy);
     let b = g.create_unit(w, kind, owner as u8, sx, sy, 10);
+    if let Some(gy) = geyser {
+        g.units[b].resources = g.units[gy].resources;
+        g.units[gy].dead = true;
+        let s = g.units[gy].sprite;
+        g.sprites[s] = None;
+    }
     let bt = w.dat.units.build_time[kind].max(1);
     g.units[b].completed = false;
     g.units[b].build_timer = bt;
@@ -118,6 +149,11 @@ pub fn order_constructing(g: &mut Game, w: &World, u: UnitId) {
             s.set_anim(w, &mut g.rng, anim::BUILT, &mut fx);
         }
         g.pending_fx.extend(fx);
-        orders::order_done(g, w, u);
+        if super::economy::GAS_BUILDINGS.contains(&kind) {
+            // The builder starts harvesting the refinery it just finished.
+            g.issue_order(u, id::MOVE_TO_GAS, Target { pos: g.units[u].flingy.pos, unit: Some(b) }, false);
+        } else {
+            orders::order_done(g, w, u);
+        }
     }
 }

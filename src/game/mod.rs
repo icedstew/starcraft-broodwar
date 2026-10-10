@@ -52,6 +52,8 @@ pub struct Unit {
     /// Resource units: amount left. Workers: cargo carried.
     pub resources: u32,
     pub carry: u8,
+    /// Cargo is gas (else minerals).
+    pub carry_gas: bool,
     /// Worker: mineral field it harvests. Mineral field: worker currently mining it.
     pub gather_field: Option<UnitId>,
     pub miner: Option<UnitId>,
@@ -131,6 +133,7 @@ impl Game {
             build_kind: None,
             resources: 0,
             carry: 0,
+            carry_gas: false,
             gather_field: None,
             miner: None,
             build_queue: VecDeque::new(),
