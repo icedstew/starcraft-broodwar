@@ -22,6 +22,9 @@ md.detail = True
 LOGIC = {'or', 'and', 'xor', 'test'}
 ALWAYS = {'jno', 'jae', 'jnb', 'jnc'}
 NEVER = {'jo', 'jb', 'jc', 'jnae'}
+# jcc X followed directly by its complement to the same X = unconditional jump.
+COMPLEMENT = {'je': 'jne', 'jne': 'je', 'jb': 'jae', 'jae': 'jb', 'jo': 'jno', 'jno': 'jo', 'js': 'jns', 'jns': 'js',
+              'jp': 'jnp', 'jnp': 'jp', 'jl': 'jge', 'jge': 'jl', 'jle': 'jg', 'jg': 'jle', 'jbe': 'ja', 'ja': 'jbe'}
 
 
 def insn_at(a):
@@ -49,6 +52,12 @@ while work:
             if inside(tgt):
                 work.append(tgt)
             break
+        if m in COMPLEMENT and tgt is not None:
+            nxt = insn_at(a + i.size)
+            if nxt is not None and nxt.mnemonic == COMPLEMENT[m] and nxt.operands and nxt.operands[0].type == x86.X86_OP_IMM and nxt.operands[0].imm == tgt:
+                if inside(tgt):
+                    work.append(tgt)
+                break
         if m.startswith('j') and m != 'jmp':
             opaque = prev is not None and prev.mnemonic in LOGIC
             if opaque and m in ALWAYS:

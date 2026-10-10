@@ -42,3 +42,52 @@ Notes:
 | 0x140ad4528 | remap table names (images.dat remapping 1..7): ofire gfire bfire bexpl trans50 red green |
 
 CUnit (x64) fields seen: +0x18 sprite*, +0x68 player, +0x69 order, +0x6a order_state, +0xa0 subunit*, +0xc9 order_process_timer, +0xd6 ?, +0xea secondary_order.
+
+## Deobfuscation
+
+`re/deobf.py` rewrites the obfuscator's opaque predicates (flag-tracked: logic ops,
+stc/clc, shifts by 0, complementary jcc pairs) into jmp/NOPs, exactly, only in code
+reachable from .pdata starts. 12k predicates patched. Ghidra on the cleaned dump
+decompiles functions that previously failed. Remaining oddities in some functions are
+anti-tamper timing checks reading KUSER_SHARED_DATA (0x7ffe0000) — not game logic.
+
+## CUnit layout (x64, SC:R 1.23.10)
+
+BWAPI's x86 BW::CUnit layout, with pointers widened to 8 and 8-byte alignment, plus
+SC:R insertions (4 bytes after velocityDirection2 at 0x64; 0x10 bytes before isBeingHealed).
+
+| x64 | x86 | field |
+|---|---|---|
+| 0x00/0x08 | 0x00/0x04 | prev/next (active unit list) |
+| 0x10 | 0x08 | hitPoints (24.8) |
+| 0x18 | 0x0C | sprite* |
+| 0x20/0x28 | 0x10/0x14 | moveTarget pos / unit* |
+| 0x30, 0x34 | 0x18, 0x1C | nextMovementWaypoint, nextTargetWaypoint |
+| 0x38..0x3f | 0x20..0x27 | movementFlags, heading, turnRate, velocityDir1, flingyID(u16), ?, movementType |
+| 0x40, 0x44, 0x48 | 0x28, 0x2C, 0x30 | position, exact x, exact y |
+| 0x4c..0x63 | 0x34..0x4B | topSpeed, speed, nextSpeed, velocity x/y, acceleration, velocityDir2, desiredDir |
+| 0x68 | 0x4C | playerID |
+| 0x69, 0x6a, 0x6b | 0x4D..0x4F | orderID, orderState, orderSignal |
+| 0x6c | 0x50 | orderUnitType |
+| 0x70..0x73 | 0x54..0x57 | mainOrderTimer, groundCooldown, airCooldown, spellCooldown |
+| 0x78, 0x80 | 0x58, 0x5C | orderTarget pos, unit* |
+| 0x88 | 0x60 | shieldPoints (24.8) |
+| 0x8c | 0x64 | unitType |
+| 0x90, 0x98 | 0x68, 0x6C | prev/next player unit |
+| 0xa0 | 0x70 | subUnit* |
+| 0xa8, 0xb0 | 0x74, 0x78 | orderQueue head/tail |
+| 0xb8, 0xc0 | 0x7C, 0x80 | autoTargetUnit*, connectedUnit* |
+| 0xc8, 0xc9 | 0x84, 0x85 | orderQueueCount, orderProcessTimer |
+| 0xd6, 0xd7 | 0x92, 0x93 | AIActionFlag, userActionFlags |
+| 0xdc..0xe5 | 0x98 | buildQueue[5] |
+| 0xe6 | 0xA2 | energy |
+| 0xe8 | 0xA4 | buildQueueSlot |
+| 0xea | 0xA6 | secondaryOrderID |
+| 0xf0 | 0xAC | remainingBuildTime |
+| 0x110..0x138 | worker union | target resource pos/unit, isCarrying(0x122), harvestTarget(0x128), prev/next harvester(0x130/0x138) |
+| 0x140 | 0xDC | statusFlags |
+| 0x147 | 0xE3 | recentOrderTimer |
+| 0x193 | 0x107 | isBeingHealed |
+| 0x19c | 0x110 | removeTimer |
+| 0x1b2 | | 8-frame status timer counter |
+| 0x1c8 | 0x134 | AI* |
