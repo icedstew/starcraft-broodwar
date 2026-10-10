@@ -64,7 +64,7 @@ pub struct Scene<'a> {
     pub terrain: (usize, usize, Vec<u8>),
     pub sprites: Vec<Sprite>,
     pub rng: Rng,
-    player_colors: [[u8; 8]; 12],
+    pub player_colors: [[u8; 8]; 12],
     shadow: [u8; 256],
 }
 
@@ -201,28 +201,95 @@ impl<'a> Scene<'a> {
     }
 }
 
+pub const SCREEN_W: i32 = 640;
+pub const SCREEN_H: i32 = 480;
+const MINIMAP: (i32, i32, i32) = (6, 348, 128); // x, y, size
+
+/// Full frame: map view + console + minimap + resource bar, as 0xRRGGBB.
+pub fn compose(scene: &Scene, ui: Option<&crate::ui::Ui>, vx: i32, vy: i32, idx: &mut [u8], out: &mut [u32]) {
+    let (w, h) = (SCREEN_W, SCREEN_H);
+    scene.draw(vx, vy, w, h, idx);
+    let pal = scene.palette();
+    for (o, &i) in out.iter_mut().zip(idx.iter()) {
+        let [r, g, b] = pal[i as usize];
+        *o = (r as u32) << 16 | (g as u32) << 8 | b as u32;
+    }
+    let Some(ui) = ui else { return };
+    crate::ui::blit_rgba(&ui.console, 0, h - ui.console.h as i32, out, w, h);
+    // Minimap: sample the terrain image, then mark units and the current view.
+    let (mx, my, ms) = MINIMAP;
+    let (tw, th, tpx) = &scene.terrain;
+    let scale = (*tw).max(*th) as i32 / ms;
+    let (mw, mh) = (*tw as i32 / scale.max(1), *th as i32 / scale.max(1));
+    let (ox, oy) = (mx + (ms - mw) / 2, my + (ms - mh) / 2);
+    let rgb = |i: u8| {
+        let [r, g, b] = pal[i as usize];
+        (r as u32) << 16 | (g as u32) << 8 | b as u32
+    };
+    for y in 0..mh {
+        for x in 0..mw {
+            let t = tpx[(y * scale) as usize * tw + (x * scale) as usize];
+            out[((oy + y) * w + ox + x) as usize] = rgb(t);
+        }
+    }
+    for s in &scene.sprites {
+        if s.owner < 8 {
+            let (px, py) = (ox + s.x / scale, oy + s.y / scale);
+            if (0..w).contains(&px) && (0..h).contains(&py) {
+                out[(py * w + px) as usize] = rgb(scene.player_colors[s.owner as usize][0]);
+            }
+        }
+    }
+    let (rx, ry, rw, rh) = (ox + vx / scale, oy + vy / scale, w / scale, (h - 120) / scale);
+    for i in 0..=rw {
+        for py in [ry, ry + rh] {
+            if (0..h).contains(&py) && (0..w).contains(&(rx + i)) {
+                out[(py * w + rx + i) as usize] = 0xFFFFFF;
+            }
+        }
+    }
+    for i in 0..=rh {
+        for px in [rx, rx + rw] {
+            if (0..h).contains(&(ry + i)) && (0..w).contains(&px) {
+                out[((ry + i) * w + px) as usize] = 0xFFFFFF;
+            }
+        }
+    }
+    // Resource bar (values come from game state once players exist).
+    // icons.grp frames: 0 minerals, 1..=3 gas (z/t/p), 4..=6 supply (z/t/p).
+    let col = ui.text_color(2);
+    let mut x = 440;
+    for (icon, text) in [(0, "0"), (2, "0"), (5, "0/0")] {
+        ui.draw_icon(icon, x, 2, pal, out, w, h);
+        ui.font.draw(text, x + 16, 4, col, pal, out, w, h);
+        x += 66;
+    }
+}
+
 pub fn run(a: &Assets, chk: Chk) -> io::Result<()> {
-    use minifb::{Key, Window, WindowOptions};
+    use minifb::{Key, Scale, Window, WindowOptions};
     let mut scene = Scene::new(a, chk)?;
+    let ui = crate::ui::Ui::load(&a.casc, "terran").ok();
     let mut audio = crate::audio::Audio::open(&a.casc);
     if let Some(au) = audio.as_mut() {
         au.play_music(&a.casc, "music/terran1.ogg");
     }
-    let (vw, vh) = (960i32, 640i32);
-    let mut win = Window::new("scbw", vw as usize, vh as usize, WindowOptions::default()).map_err(|e| io::Error::other(e.to_string()))?;
+    let (vw, vh) = (SCREEN_W, SCREEN_H);
+    let opts = WindowOptions { scale: Scale::X2, ..WindowOptions::default() };
+    let mut win = Window::new("scbw", vw as usize, vh as usize, opts).map_err(|e| io::Error::other(e.to_string()))?;
     win.set_target_fps(24); // BW "fastest" = 42 ms/frame
     let (mw, mh) = (scene.terrain.0 as i32, scene.terrain.1 as i32);
     let (mut vx, mut vy) = (0, 0);
     let mut idx = vec![0u8; (vw * vh) as usize];
     let mut rgb = vec![0u32; (vw * vh) as usize];
     while win.is_open() && !win.is_key_down(Key::Escape) {
-        let sp = 24;
+        let sp = 16;
         if win.is_key_down(Key::Left) || win.is_key_down(Key::A) { vx -= sp }
         if win.is_key_down(Key::Right) || win.is_key_down(Key::D) { vx += sp }
         if win.is_key_down(Key::Up) || win.is_key_down(Key::W) { vy -= sp }
         if win.is_key_down(Key::Down) || win.is_key_down(Key::S) { vy += sp }
         vx = vx.clamp(0, (mw - vw).max(0));
-        vy = vy.clamp(0, (mh - vh).max(0));
+        vy = vy.clamp(0, (mh - vh + 120).max(0)); // console covers the bottom
         for (id, x, y) in scene.step() {
             // ponytail: on-screen only, no distance falloff or per-frame voice limits yet.
             if let Some(au) = &audio {
@@ -231,12 +298,7 @@ pub fn run(a: &Assets, chk: Chk) -> io::Result<()> {
                 }
             }
         }
-        scene.draw(vx, vy, vw, vh, &mut idx);
-        let pal = scene.palette();
-        for (o, &i) in rgb.iter_mut().zip(&idx) {
-            let [r, g, b] = pal[i as usize];
-            *o = (r as u32) << 16 | (g as u32) << 8 | b as u32;
-        }
+        compose(&scene, ui.as_ref(), vx, vy, &mut idx, &mut rgb);
         win.update_with_buffer(&rgb, vw as usize, vh as usize).map_err(|e| io::Error::other(e.to_string()))?;
     }
     Ok(())

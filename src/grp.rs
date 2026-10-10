@@ -6,6 +6,8 @@ pub struct Grp {
     pub h: i32,
     data: Vec<u8>,
     frames: Vec<Frame>,
+    /// Uncompressed variant (UI grps): each frame is w*h raw pixels, 0 = transparent.
+    raw: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -32,7 +34,7 @@ impl Grp {
         let n = u16::from_le_bytes([data[0], data[1]]) as usize;
         let w = u16::from_le_bytes([data[2], data[3]]) as i32;
         let h = u16::from_le_bytes([data[4], data[5]]) as i32;
-        let frames = (0..n)
+        let frames: Vec<Frame> = (0..n)
             .map(|i| {
                 let f = &data[6 + i * 8..14 + i * 8];
                 Frame {
@@ -44,7 +46,9 @@ impl Grp {
                 }
             })
             .collect();
-        Grp { w, h, data, frames }
+        // Raw frames are packed back to back with no row-offset table.
+        let raw = frames.len() > 1 && frames.windows(2).all(|p| p[1].off == p[0].off + (p[0].w * p[0].h) as usize || p[1].off == p[0].off);
+        Grp { w, h, data, frames, raw }
     }
 
     pub fn frame_count(&self) -> usize {
@@ -60,6 +64,18 @@ impl Grp {
         let Some(f) = self.frames.get(i) else { return };
         let fx = if flip { x + self.w - f.x - f.w } else { x + f.x };
         let fy = y + f.y;
+        if self.raw {
+            for row in 0..f.h {
+                for col in 0..f.w {
+                    let (px, py) = (if flip { fx + f.w - 1 - col } else { fx + col }, fy + row);
+                    let c = self.data.get(f.off + (row * f.w + col) as usize).copied().unwrap_or(0);
+                    if c != 0 && px >= 0 && py >= 0 && px < dw && py < dh {
+                        dst[(py * dw + px) as usize] = c;
+                    }
+                }
+            }
+            return;
+        }
         for row in 0..f.h {
             let py = fy + row;
             if py < 0 || py >= dh {

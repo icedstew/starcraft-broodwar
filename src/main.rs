@@ -8,6 +8,7 @@ mod iscript;
 mod map;
 mod mpq;
 mod replay;
+mod ui;
 mod view;
 
 use std::path::PathBuf;
@@ -76,9 +77,11 @@ fn main() -> std::io::Result<()> {
                 scene.step();
             }
             let (x, y) = (args[3].parse().unwrap_or(0), args[4].parse().unwrap_or(0));
-            let mut buf = vec![0u8; 960 * 640];
-            scene.draw(x, y, 960, 640, &mut buf);
-            write_png(&args[2], 960, 640, &buf, scene.palette())?;
+            let ui = ui::Ui::load(&a.casc, "terran").ok();
+            let (w, h) = (view::SCREEN_W as usize, view::SCREEN_H as usize);
+            let (mut idx, mut rgb) = (vec![0u8; w * h], vec![0u32; w * h]);
+            view::compose(&scene, ui.as_ref(), x, y, &mut idx, &mut rgb);
+            write_png_rgb(&args[2], w, h, &rgb)?;
         }
         Some("render") => {
             let chk = load_chk(&args[1])?;
@@ -107,6 +110,14 @@ fn write_png(path: &str, w: usize, h: usize, idx: &[u8], pal: &[[u8; 3]; 256]) -
     let mut enc = png::Encoder::new(std::fs::File::create(path)?, w as u32, h as u32);
     enc.set_color(png::ColorType::Rgb);
     let rgb: Vec<u8> = idx.iter().flat_map(|&i| pal[i as usize]).collect();
+    enc.write_header()?.write_image_data(&rgb)?;
+    Ok(())
+}
+
+fn write_png_rgb(path: &str, w: usize, h: usize, px: &[u32]) -> std::io::Result<()> {
+    let mut enc = png::Encoder::new(std::fs::File::create(path)?, w as u32, h as u32);
+    enc.set_color(png::ColorType::Rgb);
+    let rgb: Vec<u8> = px.iter().flat_map(|&p| [(p >> 16) as u8, (p >> 8) as u8, p as u8]).collect();
     enc.write_header()?.write_image_data(&rgb)?;
     Ok(())
 }
