@@ -10,6 +10,7 @@ pub mod flingy;
 pub mod frame;
 pub mod iscript;
 pub mod movement;
+pub mod orders;
 pub mod players;
 pub mod list;
 pub mod rng;
@@ -150,6 +151,10 @@ pub struct State {
     /// 0x58f440: playing Brood War (expansion) rules.
     pub is_expansion: bool,
     pub players: players::Players,
+    /// COrder pool (0x6416a0), free list (0x64b2e0) and live count (0x641698).
+    pub orders: Vec<orders::Order>,
+    pub free_orders: List,
+    pub order_count: u32,
     /// Flingy predict globals (0x63fec0..0x63ff40).
     pub mv: flingy::MoveScratch,
     /// Sounds requested this frame (sfx id, x, y) for the front end to play.
@@ -186,6 +191,7 @@ impl State {
         let (sprites, free_sprites) = pool_after_head(MAX_SPRITES);
         let (thingies, free_thingies) = pool_after_head(MAX_THINGIES);
         let (units, free_units) = pool(max_units as usize);
+        let (orders, free_orders) = pool_after_head::<orders::Order>(orders::MAX_ORDERS);
         debug_assert!(free_images.head == 0 && images[0].link.next == MAX_IMAGES as u32 - 1);
         State {
             images,
@@ -235,6 +241,9 @@ impl State {
             local_vision_mask: 1,
             is_expansion: true,
             players: players::Players::default(),
+            orders,
+            free_orders,
+            order_count: 0,
             paths: Vec::new(),
             mv: flingy::MoveScratch::default(),
             sounds: Vec::new(),
