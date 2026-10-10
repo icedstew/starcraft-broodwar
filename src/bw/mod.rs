@@ -18,6 +18,7 @@ pub mod list;
 pub mod map;
 pub mod load;
 pub mod rng;
+pub mod sai;
 pub mod sprite;
 pub mod unit;
 

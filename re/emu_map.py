@@ -54,17 +54,54 @@ def check(name, want, got):
     return False
 
 
+def sai_layout(e, base):
+    """SAI bytes with pointers rebased to offsets from the SAI start."""
+    b = bytearray(e.read(base, 0x97a20))
+    rel = lambda o: struct.pack_into("<I", b, o, (struct.unpack_from("<I", b, o)[0] - base) & 0xffffffff
+                                     if struct.unpack_from("<I", b, o)[0] else 0)
+    rel(4)
+    rel(8)
+    for i in range(5000):
+        rel(0x449fc + i * 0x40 + 0xc)
+    struct.pack_into("<I", b, 0x97a1c, 0)
+    return bytes(b)
+
+
+def check_sai(name, want, got):
+    if check(name, want, got):
+        return
+    i = next(i for i in range(len(want)) if want[i] != got[i])
+    if i < 0xc:
+        print("  header")
+    elif i < 0x2000c:
+        t = (i - 0xc) // 2
+        print(f"  tile ({t % 256},{t // 256})")
+    elif i < 0x449fc:
+        print(f"  split {(i - 0x2000c) // 6}")
+    elif i < 0x92bfc:
+        r = (i - 0x449fc) // 0x40
+        print(f"  region {r} +{(i - 0x449fc) % 0x40:#x}")
+        o = 0x449fc + r * 0x40
+        print("  exe :", want[o:o + 0x40].hex(" "))
+        print("  rust:", got[o:o + 0x40].hex(" "))
+    else:
+        print(f"  neighbor buf {(i - 0x92bfc) // 2}")
+    print("  region count", struct.unpack_from("<H", want)[0], struct.unpack_from("<H", got)[0])
+
+
 def main():
     exe, d = sys.argv[1], sys.argv[2]
     e = Emu(exe)
     snap = {}
     e.at(0x483d2f, lambda e: snap.setdefault("minitiles", e.read(e.r32(MINITILES), 0x100000)))
+    e.at(0x484251, lambda e: snap.setdefault("sai", sai_layout(e, e.r32(SAI))))
     w, h, ok = load(e, d)
     print("MTXM handler returned", ok)
     rd = lambda n: open(os.path.join(d, n), "rb").read()
     check("tile_flags", e.read(e.r32(TILE_FLAGS), w * h * 4), rd("tile_flags"))
     check("megatiles", e.read(e.r32(MEGATILES), w * h * 2), rd("megatiles"))
     check("minitiles", snap["minitiles"], rd("minitiles"))
+    check_sai("sai", snap["sai"], rd("sai"))
 
 
 if __name__ == "__main__":

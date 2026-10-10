@@ -262,6 +262,9 @@ fn main() -> std::io::Result<()> {
             std::fs::write(dir.join("tile_flags"), le32(&m.tile_flags[..w * h]))?;
             std::fs::write(dir.join("megatiles"), le16(&m.megatiles[..w * h]))?;
             std::fs::write(dir.join("minitiles"), &m.minitiles)?;
+            if let Some(sai) = bw::sai::create(&mut m, &ts) {
+                std::fs::write(dir.join("sai"), bw::sai::layout(&sai))?;
+            }
         }
         Some("render") => {
             let chk = load_chk(&args[1])?;
