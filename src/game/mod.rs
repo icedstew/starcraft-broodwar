@@ -4,6 +4,7 @@
 //! updates, update_units, bullets, thingies, disable RNG. Only the parts
 //! ported so far run here.
 
+pub mod build;
 pub mod buttons;
 pub mod combat;
 pub mod economy;
@@ -44,6 +45,10 @@ pub struct Unit {
     pub air_cooldown: u8,    // +0x72
     /// In an attack cycle (next attack uses the Rpt anim instead of Init).
     pub attacking: bool,
+    /// False while a structure is under construction.
+    pub completed: bool,
+    /// Worker: structure it is on its way to place.
+    pub build_kind: Option<usize>,
     /// Resource units: amount left. Workers: cargo carried.
     pub resources: u32,
     pub carry: u8,
@@ -73,11 +78,14 @@ pub struct Game {
     pub pending_fx: Vec<Effect>,
     pub tileset: u16,
     pub walk: path::WalkGrid,
+    /// Buildable 32px tiles, row-major over map_tiles (w, h).
+    pub buildable: Vec<bool>,
+    pub map_tiles: (usize, usize),
 }
 
 impl Game {
-    pub fn new(w: &World, chk: &Chk, walk: path::WalkGrid) -> Game {
-        let mut g = Game { frame: 0, rng: Rng { seed: 0 }, units: Vec::new(), sprites: Vec::new(), bullets: Vec::new(), players: [economy::Player { minerals: 50, gas: 0 }; 12], pending_fx: Vec::new(), tileset: chk.tileset() as u16, walk };
+    pub fn new(w: &World, chk: &Chk, walk: path::WalkGrid, buildable: Vec<bool>) -> Game {
+        let mut g = Game { frame: 0, rng: Rng { seed: 0 }, units: Vec::new(), sprites: Vec::new(), bullets: Vec::new(), players: [economy::Player { minerals: 50, gas: 0 }; 12], pending_fx: Vec::new(), tileset: chk.tileset() as u16, walk, buildable, map_tiles: chk.dims() };
         g.place_map_objects(w, chk);
         g
     }
@@ -119,6 +127,8 @@ impl Game {
             ground_cooldown: 0,
             air_cooldown: 0,
             attacking: false,
+            completed: true,
+            build_kind: None,
             resources: 0,
             carry: 0,
             gather_field: None,

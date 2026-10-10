@@ -60,6 +60,10 @@ impl Assets {
 pub struct Scene<'a> {
     pub game: crate::game::Game,
     pub selected: Vec<usize>,
+    /// Command card submenu (button set index) opened by a Menu button, e.g. SCV "Build".
+    pub card_menu: Option<usize>,
+    /// Building type being placed (placement preview follows the cursor).
+    pub placing: Option<usize>,
     /// Screen-space drag rectangle while box-selecting.
     pub drag_box: Option<(i32, i32, i32, i32)>,
     pub a: &'a Assets,
@@ -97,8 +101,8 @@ impl<'a> Scene<'a> {
         let frames = |id: u16| a.grp(id).map_or(0, |g| g.frame_count() as u16);
         let w = World { dat: &a.dat, iscript: &a.iscript, grp_frames: &frames, tileset: chk.tileset() as u16 };
         let (gw, gh, walk) = map::walk_grid(&chk, &ts);
-        let game = crate::game::Game::new(&w, &chk, crate::game::path::WalkGrid { w: gw, h: gh, walk });
-        Ok(Scene { game, selected: Vec::new(), drag_box: None, a, chk, ts, terrain, player_colors, shadow, remaps })
+        let game = crate::game::Game::new(&w, &chk, crate::game::path::WalkGrid { w: gw, h: gh, walk }, map::build_grid(&chk, &ts));
+        Ok(Scene { game, selected: Vec::new(), card_menu: None, placing: None, drag_box: None, a, chk, ts, terrain, player_colors, shadow, remaps })
     }
 
     pub fn world(&self, frames: &'a dyn Fn(u16) -> u16) -> World<'a> {
@@ -233,6 +237,9 @@ pub fn card_slot(pos: u16) -> (i32, i32) {
 
 /// Buttons for the current selection (the first selected unit's type).
 pub fn card_buttons(scene: &Scene) -> &'static [crate::game::buttons::Button] {
+    if let Some(set) = scene.card_menu {
+        return crate::game::buttons::SETS.get(set).copied().unwrap_or(&[]);
+    }
     match scene.selected.first() {
         Some(&u) if scene.game.units[u].owner == scene.local_player() => {
             crate::game::buttons::SETS.get(scene.game.units[u].kind).copied().unwrap_or(&[])
@@ -349,6 +356,25 @@ pub fn compose_with_cursor(
             }
         }
     }
+    if let (Some(kind), Some((_, cx, cy))) = (scene.placing, cursor) {
+        let frames = |_: u16| 0;
+        let wd = scene.world(&frames);
+        let (px, py) = crate::game::build::snap(&wd, kind, cx + vx, cy + vy);
+        let ok = crate::game::build::can_place(&scene.game, &wd, kind, (px, py), scene.selected.first().copied());
+        let (fw, fh) = crate::game::build::footprint(&wd, kind);
+        let (l, t) = (px - fw / 2 - vx, py - fh / 2 - vy);
+        let col = if ok { 0x20E020 } else { 0xE02020 };
+        for x in l..l + fw {
+            for y in [t, t + fh - 1] {
+                if (0..w).contains(&x) && (0..h).contains(&y) { out[(y * w + x) as usize] = col; }
+            }
+        }
+        for y in t..t + fh {
+            for x in [l, l + fw - 1] {
+                if (0..w).contains(&x) && (0..h).contains(&y) { out[(y * w + x) as usize] = col; }
+            }
+        }
+    }
     for b in card_buttons(scene) {
         let (bx, by) = card_slot(b.pos);
         ui.draw_cmd_icon(b.icon as usize, 0, bx + 2, by + 1, pal, out, w, h);
@@ -438,6 +464,12 @@ pub fn run(a: &Assets, chk: Chk) -> io::Result<()> {
                 Act::Stop => issue_to_selection(&mut scene, crate::game::orders::id::STOP, None),
                 Act::HoldPosition => issue_to_selection(&mut scene, crate::game::orders::id::HOLD_POSITION, None),
                 Act::Move | Act::Attack | Act::Patrol | Act::Gather => targeting = Some(act),
+                Act::Menu => scene.card_menu = Some(btn.act_var as usize),
+                Act::CancelMenu => {
+                    scene.card_menu = None;
+                    scene.placing = None;
+                }
+                Act::BuildTerran | Act::BuildProtoss | Act::BuildZerg => scene.placing = Some(btn.act_var as usize),
                 Act::ReturnCargo => issue_to_selection(&mut scene, crate::game::orders::id::RETURN_MINERALS, None),
                 Act::Train => {
                     // The card belongs to the first selected unit; train there.
@@ -451,6 +483,20 @@ pub fn run(a: &Assets, chk: Chk) -> io::Result<()> {
                 _ => {}
             }
         }
+        if let (Some(kind), true) = (scene.placing, clicked && cy < vh - 120 && pressed.is_none()) {
+            let frames = |_: u16| 0;
+            let wd = scene.world(&frames);
+            let site = crate::game::build::snap(&wd, kind, cx + vx, cy + vy);
+            let builder = scene.selected.first().copied();
+            if let Some(b) = builder.filter(|_| crate::game::build::can_place(&scene.game, &wd, kind, site, builder)) {
+                crate::game::build::order_build(&mut scene.game, b, kind, site);
+                scene.placing = None;
+                scene.card_menu = None;
+            }
+            lmb_was_down = true;
+            drag_start = None;
+        }
+        let down = down && scene.placing.is_none();
         if let (Some(act), true) = (targeting, clicked && cy < vh - 120 && pressed.is_none()) {
             let (tx, ty) = ((cx + vx) as i16, (cy + vy) as i16);
             let hit = scene.units_in_rect(tx as i32, ty as i32, tx as i32, ty as i32).into_iter().next();
@@ -493,12 +539,16 @@ pub fn run(a: &Assets, chk: Chk) -> io::Result<()> {
                     hits.truncate(12);
                     hits
                 };
+                if scene.selected != hits {
+                    scene.card_menu = None;
+                    scene.placing = None;
+                }
                 scene.selected = hits;
             }
         }
         let rdown = win.get_mouse_down(minifb::MouseButton::Right);
-        if rdown && !rmb_was_down && targeting.take().is_some() {
-            // Right-click cancels targeting.
+        if rdown && !rmb_was_down && (targeting.take().is_some() || scene.placing.take().is_some()) {
+            // Right-click cancels targeting / placement.
         } else if rdown && !rmb_was_down && cy < vh - 120 {
             let (tx, ty) = ((cx + vx) as i16, (cy + vy) as i16);
             let me = scene.local_player();

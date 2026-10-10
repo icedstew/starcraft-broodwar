@@ -132,7 +132,7 @@ pub fn order_mining_minerals(g: &mut Game, w: &World, u: UnitId) {
 pub fn order_return_minerals(g: &mut Game, w: &World, u: UnitId) {
     let owner = g.units[u].owner;
     let flags = &w.dat.units.flags;
-    let Some(depot) = nearest(g, w, u, |o| o.owner == owner && flags[o.kind] & flag::RESOURCE_DEPOT != 0) else {
+    let Some(depot) = nearest(g, w, u, |o| o.owner == owner && o.completed && flags[o.kind] & flag::RESOURCE_DEPOT != 0) else {
         orders::order_done(g, w, u);
         return;
     };
@@ -185,7 +185,9 @@ pub fn supply(g: &Game, w: &World, player: u8, race: usize) -> (u32, u32) {
     let (mut used, mut max) = (0u32, 0u32);
     for un in g.units.iter().filter(|m| !m.dead && m.owner == player && u.staredit_group_flags[m.kind] & race_flag != 0) {
         used += u.supply_required[un.kind] as u32;
-        max += u.supply_provided[un.kind] as u32;
+        if un.completed {
+            max += u.supply_provided[un.kind] as u32;
+        }
         // Units still in a build queue already count against supply.
         used += un.build_queue.iter().map(|&k| u.supply_required[k] as u32).sum::<u32>();
     }
@@ -237,6 +239,9 @@ pub fn train(g: &mut Game, w: &World, b: UnitId, kind: usize) -> Result<(), Trai
 
 /// Advance a building's production by one frame; spawn finished units below it.
 pub fn update_production(g: &mut Game, w: &World, b: UnitId) {
+    if !g.units[b].completed {
+        return;
+    }
     let Some(&kind) = g.units[b].build_queue.front() else { return };
     if g.units[b].build_timer > 0 {
         g.units[b].build_timer -= 1;

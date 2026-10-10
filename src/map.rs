@@ -113,6 +113,12 @@ impl Tileset {
         self.cv5.get(o..o + 2).map_or(0, |b| u16::from_le_bytes([b[0], b[1]]) as usize)
     }
 
+    /// cv5 group flags for a map tile: low byte 0x80 = unbuildable; high byte = ground height.
+    pub fn tile_flags(&self, tile: u16) -> u16 {
+        let o = (tile as usize >> 4) * 52 + 2;
+        self.cv5.get(o..o + 2).map_or(0x80, |b| u16::from_le_bytes([b[0], b[1]]))
+    }
+
     pub fn minitile_flags(&self, mega: usize, mini: usize) -> u16 {
         self.vf4.get(mega * 16 + mini).copied().unwrap_or(0)
     }
@@ -160,4 +166,12 @@ pub fn walk_grid(chk: &Chk, ts: &Tileset) -> (usize, usize, Vec<bool>) {
         }
     }
     (w * 4, h * 4, g)
+}
+
+/// Buildable 32x32 tiles: cv5 says buildable and every minitile is walkable.
+pub fn build_grid(chk: &Chk, ts: &Tileset) -> Vec<bool> {
+    chk.tiles()
+        .iter()
+        .map(|&t| ts.tile_flags(t) & 0x80 == 0 && (0..16).all(|m| ts.minitile_flags(ts.megatile(t), m) & 1 != 0))
+        .collect()
 }

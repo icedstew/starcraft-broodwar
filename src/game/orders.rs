@@ -14,6 +14,8 @@ pub mod id {
     pub const ATTACK_UNIT: u8 = 10;
     pub const ATTACK_MOVE: u8 = 14;
     pub const NOTHING: u8 = 23;
+    pub const PLACE_BUILDING: u8 = 30;
+    pub const CONSTRUCTING_BUILDING: u8 = 33;
     pub const MOVE_TO_MINERALS: u8 = 85;
     pub const WAIT_FOR_MINERALS: u8 = 86;
     pub const MINING_MINERALS: u8 = 87;
@@ -50,6 +52,12 @@ fn update_unit_timers(g: &mut Game, w: &World, u: UnitId) {
 
 /// 0x1401e5c60 (subset): orders that run on the 9-frame order-process tick.
 fn execute_main_order(g: &mut Game, w: &World, u: UnitId) {
+    // Every-frame orders (first switch in 0x1401e5c60).
+    match g.units[u].order {
+        id::PLACE_BUILDING => return super::build::order_place_building(g, w, u),
+        id::CONSTRUCTING_BUILDING => return super::build::order_constructing(g, w, u),
+        _ => {}
+    }
     let unit = &mut g.units[u];
     if unit.order_process_timer != 0 {
         unit.order_process_timer -= 1;

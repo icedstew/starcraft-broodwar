@@ -106,6 +106,18 @@ fn main() -> std::io::Result<()> {
                     }
                 }
             }
+            if let Some(m) = std::env::var("SCBW_MINERALS").ok().and_then(|v| v.parse().ok()) {
+                scene.game.players[0].minerals = m;
+            }
+            if let Ok(spec) = std::env::var("SCBW_BUILD") {
+                let v: Vec<i32> = spec.split(',').filter_map(|n| n.parse().ok()).collect();
+                let worker = (0..scene.game.units.len()).find(|&u| scene.game.units[u].owner == 0 && a.dat.units.flags[scene.game.units[u].kind] & 0x8 != 0);
+                if let (Some(b), &[k, x, y]) = (worker, &v[..]) {
+                    let frames = |_: u16| 0;
+                    let site = game::build::snap(&scene.world(&frames), k as usize, x, y);
+                    game::build::order_build(&mut scene.game, b, k as usize, site);
+                }
+            }
             if let Some(k) = std::env::var("SCBW_TRAIN").ok().and_then(|v| v.parse::<usize>().ok()) {
                 let depot = (0..scene.game.units.len()).find(|&u| scene.game.units[u].owner == 0 && a.dat.units.flags[scene.game.units[u].kind] & 0x1000 != 0);
                 if let Some(b) = depot {
