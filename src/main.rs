@@ -1,4 +1,5 @@
 mod casc;
+mod dat;
 mod map;
 mod mpq;
 
@@ -23,6 +24,23 @@ fn main() -> std::io::Result<()> {
         Some("extract") => {
             let data = casc.read(&args[1])?;
             std::fs::write(&args[2], data)?;
+        }
+        Some("dat") => {
+            let dat = dat::Dat::load(&casc)?;
+            let names = dat::parse_tbl(&casc.read("rez/stat_txt.tbl")?);
+            let u = &dat.units;
+            for id in 0..dat::Units::COUNT {
+                println!(
+                    "{id:3} {:32} hp={:4} min={:3} gas={:3} gw={:3} flingy={:3} sprite={}",
+                    names.get(id).map_or("", String::as_str),
+                    u.hit_points[id] >> 8,
+                    u.mineral_cost[id],
+                    u.gas_cost[id],
+                    u.ground_weapon[id],
+                    u.flingy[id],
+                    dat.flingy.sprite[u.flingy[id] as usize],
+                );
+            }
         }
         Some("render") => {
             let chk = map::Chk::parse(&mpq::Mpq::open(args[1].as_ref())?.read("staredit\\scenario.chk")?);
