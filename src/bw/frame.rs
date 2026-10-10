@@ -83,7 +83,7 @@ impl State {
             let next = self.units[u as usize].link.next;
             self.iscript_unit_slot = Some(u);
             self.iscript_order_unit = Some(u);
-            todo_port!("0x4ebc30", "unit movement (movement state machine 0x46c480, subunit follow)");
+            self.unit_movement(d, u);
             u = next;
         }
         // Scanner sweeps (0x6283f4).

@@ -30,6 +30,15 @@ impl Rng {
         self.seed = self.seed.wrapping_mul(0x015A_4E35).wrapping_add(1);
         (self.seed >> 16) & 0x7FFF
     }
+
+    /// 1.16.1 0x4dc550: uniform in [lo, hi]; returns lo without advancing when disabled.
+    pub fn rand_between(&mut self, site: u32, lo: i32, hi: i32) -> i32 {
+        if !self.enabled {
+            return lo;
+        }
+        let r = self.rand(site) as i32;
+        (((hi - lo) + 1) * r >> 15) + lo
+    }
 }
 
 #[cfg(test)]
