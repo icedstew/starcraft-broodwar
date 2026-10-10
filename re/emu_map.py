@@ -21,6 +21,8 @@ def load(e, d):
     w, h = struct.unpack("<HH", rd("dims"))
     e.w16(W, w)
     e.w16(H, h)
+    e.w16(0x628450, w * 32)  # map size in pixels
+    e.w16(0x6284b4, h * 32)
     for g, n in ((MTXM, 0x20000), (MEGATILES, 0x20000), (0x628454, 0x49800), (TILE_FLAGS, 0x40000)):
         e.w32(g, e.alloc(n))
     e.w32(0x6d5cd8, e.alloc(0x7239))

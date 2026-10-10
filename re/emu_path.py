@@ -24,9 +24,12 @@ def main():
     ctx = e.alloc(0x16c)
     snap = {}
 
+    phase = {"regions": True}
+
     def grab(e):
-        snap["ctx"] = e.read(ctx, 0x16c)
-        e.stop()
+        if phase["regions"]:
+            snap["ctx"] = e.read(ctx, 0x16c)
+            e.stop()
     e.at(WAYPOINTS, grab)
     bad = 0
     n = len(tests) // 8
@@ -56,6 +59,41 @@ def main():
             if bad > 3:
                 break
     print(f"{n - bad}/{n} region searches match")
+    phase["regions"] = False
+    full(e, d, tests, unit, ctx)
+
+
+def full(e, d, tests, unit, ctx):
+    rd = lambda n: open(os.path.join(d, n), "rb").read()
+    want_all = rd("path_full")
+    t, *dims = struct.unpack("<5h", rd("path_unit"))
+    e.write(0x6617c8 + t * 8, struct.pack("<4h", *dims))
+    e.w16(unit + 0x64, t)
+    bad = 0
+    n = len(tests) // 8
+    for i in range(n):
+        sx, sy, tx, ty = struct.unpack_from("<hhhh", tests, i * 8)
+        e.write(ctx, bytes(0x16c))
+        e.w32(ctx, unit)
+        e.write(ctx + 4, struct.pack("<hhhh", sx, sy, tx, ty))
+        try:
+            e.call(0x4e25f0, regs={"eax": ctx})
+        except Exception as ex:
+            print(f"full {i}: emu error {ex}")
+            bad += 1
+            continue
+        got = bytearray(e.read(ctx, 0x16c))
+        got[0:4] = bytes(4)
+        want = want_all[i * 0x16c:(i + 1) * 0x16c]
+        if bytes(got) != want:
+            bad += 1
+            j = next(j for j in range(0x16c) if got[j] != want[j])
+            print(f"full {i} ({sx},{sy})->({tx},{ty}) differs at +{j:#x}")
+            print("  exe :", bytes(got[j & ~15:(j & ~15) + 32]).hex(" "))
+            print("  rust:", want[j & ~15:(j & ~15) + 32].hex(" "))
+            if bad > 3:
+                break
+    print(f"{n - bad}/{n} full searches match")
 
 
 if __name__ == "__main__":

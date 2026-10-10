@@ -21,6 +21,7 @@ pub mod map;
 pub mod load;
 pub mod rng;
 pub mod sai;
+pub mod short_path;
 pub mod sprite;
 pub mod unit;
 

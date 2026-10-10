@@ -452,3 +452,12 @@ pub fn find_path_regions(sai: &mut Sai, ctx: &mut PathCtx, unit_dims: [i16; 4]) 
     }
     find_region_path(sai, ctx)
 }
+
+/// 0x4e25f0: full path search (region path, then waypoints for the first leg).
+pub fn find_path(env: &mut super::short_path::Env, w: &mut super::short_path::Walker, ctx: &mut PathCtx) -> bool {
+    let dims = (env.dims)(env.unit_type);
+    if !find_path_regions(env.sai, ctx, dims) {
+        return false;
+    }
+    super::short_path::next_leg(env, w, ctx)
+}

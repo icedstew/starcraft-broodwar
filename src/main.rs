@@ -280,8 +280,27 @@ fn main() -> std::io::Result<()> {
                     bw::path::find_path_regions(&mut sai, &mut ctx, [0; 4]);
                     out.extend_from_slice(&ctx.layout());
                 }
-                std::fs::write(dir.join("path_tests"), tests)?;
+                std::fs::write(dir.join("path_tests"), &tests)?;
                 std::fs::write(dir.join("path_regions"), out)?;
+                // Full searches for a marine.
+                let dat = dat::Dat::load(&casc)?;
+                let dims = |t: u16| {
+                    let d = dat.units.dimensions[t as usize];
+                    [d as i16, (d >> 16) as i16, (d >> 32) as i16, (d >> 48) as i16]
+                };
+                let unit_type = 0u16;
+                let mut out = Vec::new();
+                let mut walker = bw::short_path::Walker::default();
+                for t in tests.chunks_exact(8) {
+                    let r = |i: usize| i16::from_le_bytes([t[i], t[i + 1]]);
+                    let mut ctx = bw::path::PathCtx { start: (r(0), r(2)), target: (r(4), r(6)), ..Default::default() };
+                    let mut env = bw::short_path::Env { sai: &mut sai, map_w: w as u16 * 32, map_h: h as u16 * 32, dims: &dims, unit_type };
+                    bw::path::find_path(&mut env, &mut walker, &mut ctx);
+                    out.extend_from_slice(&ctx.layout());
+                }
+                let d = dims(unit_type);
+                std::fs::write(dir.join("path_unit"), le16(&[unit_type, d[0] as u16, d[1] as u16, d[2] as u16, d[3] as u16]))?;
+                std::fs::write(dir.join("path_full"), out)?;
                 std::fs::write(dir.join("sai"), bw::sai::layout(&sai))?;
                 std::fs::write(dir.join("contours"), bw::sai::contours_layout(sai.contours.as_ref().unwrap()))?;
             }
