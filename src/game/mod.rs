@@ -43,6 +43,8 @@ pub struct Unit {
     pub air_cooldown: u8,    // +0x72
     /// In an attack cycle (next attack uses the Rpt anim instead of Init).
     pub attacking: bool,
+    /// Frames spent blocked by another unit (collision).
+    pub blocked: u8,
     /// Where a Patrol order started (it walks back here, then out again).
     pub patrol_origin: (i16, i16),
     /// Remaining waypoints toward move_target (ground units).
@@ -106,6 +108,7 @@ impl Game {
             ground_cooldown: 0,
             air_cooldown: 0,
             attacking: false,
+            blocked: 0,
             patrol_origin: (x as i16, y as i16),
             path: VecDeque::new(),
             dead: false,
@@ -249,6 +252,34 @@ impl Game {
         sounds
     }
 
+    /// Would ground unit `id` moving from `from` to `to` run into another ground unit or building?
+    /// Only overlaps that are new at `to` count, so already-stacked units can separate.
+    /// ponytail: O(n) scan per moving unit; BW uses contour lists and pushes idle units aside.
+    fn blocked_at(&self, w: &World, id: UnitId, from: (i16, i16), to: (i16, i16)) -> bool {
+        let flags = &w.dat.units.flags;
+        let me = &self.units[id];
+        if flags[me.kind] & (0x4 | 0x10) != 0 {
+            return false; // flyers and subunits don't collide
+        }
+        let dim = |k: usize| {
+            let d = w.dat.units.dimensions[k];
+            ((d & 0xFFFF) as i32, (d >> 16 & 0xFFFF) as i32, (d >> 32 & 0xFFFF) as i32, (d >> 48) as i32)
+        };
+        let (l, t, r, b) = dim(me.kind);
+        let rect = |p: (i16, i16)| (p.0 as i32 - l, p.1 as i32 - t, p.0 as i32 + r, p.1 as i32 + b);
+        let (a0, a1) = (rect(from), rect(to));
+        self.units.iter().enumerate().any(|(j, o)| {
+            if j == id || o.dead || flags[o.kind] & (0x4 | 0x10) != 0 {
+                return false;
+            }
+            let (ol, ot, or, ob) = dim(o.kind);
+            let (ox, oy) = (o.flingy.pos.0 as i32, o.flingy.pos.1 as i32);
+            let ob_rect = (ox - ol, oy - ot, ox + or, oy + ob);
+            let hit = |a: (i32, i32, i32, i32)| a.0 <= ob_rect.2 && a.2 >= ob_rect.0 && a.1 <= ob_rect.3 && a.3 >= ob_rect.1;
+            hit(a1) && !hit(a0)
+        })
+    }
+
     fn update_unit_movement(&mut self, w: &World, id: UnitId, fx: &mut Vec<Effect>) {
         let u = &mut self.units[id];
         if w.dat.units.flags[u.kind] & 0x1 != 0 {
@@ -260,7 +291,24 @@ impl Game {
                 u.flingy.set_move_target(next.0, next.1);
             }
         }
+        let old = (u.flingy.pos, u.flingy.exact);
         let r = u.flingy.step(&w.dat.flingy);
+        if r.new_pos != old.0 && self.blocked_at(w, id, old.0, r.new_pos) {
+            // Blocked: stay put; after a while give up and settle here (avoids stacking).
+            let u = &mut self.units[id];
+            u.flingy.pos = old.0;
+            u.flingy.exact = old.1;
+            u.blocked = u.blocked.saturating_add(1);
+            if u.blocked > 12 {
+                u.path.clear();
+                let p = u.flingy.pos;
+                u.flingy.set_move_target(p.0, p.1);
+                u.blocked = 0;
+            }
+            return;
+        }
+        let u = &mut self.units[id];
+        u.blocked = 0;
         let heading = u.flingy.heading;
         let sub = u.subunit;
         let Some(s) = self.sprites[u.sprite].as_mut() else { return };
