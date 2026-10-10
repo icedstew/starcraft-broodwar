@@ -80,11 +80,11 @@
 0x1401c5d10 order_Stop
 0x1401c5d40 order_WatchTarget
 0x1401c6280 unit_type
-0x1401c9840 order_Decloak
 0x1401c9b30 order_SelfDestructing
 0x1401c9ce0 order_done
 0x1401caf40 order_PlaceProtossBuilding
 0x1401cb270 order_IncompleteWarping
+0x1401cb690 order_CreateProtossBuilding
 0x1401cbcf0 order_CastHallucination
 0x1401cbfa0 order_CastMindControl
 0x1401cc190 order_CastFeedback
@@ -101,7 +101,6 @@
 0x1401d22f0 order_DarkArchonMeld
 0x1401d25d0 order_CastRecall
 0x1401d3950 order_RightClickAction
-0x1401d8cd0 order_Cloak
 0x1401d9d40 order_CastSpell
 0x1401da1e0 order_CloakNearbyUnits
 0x1401ddcb0 order_BuildAddon
@@ -110,6 +109,8 @@
 0x1401de390 order_CastDefensiveMatrix
 0x1401df120 order_BuildingLand
 0x1401df5a0 order_BuildingLiftOff
+0x1401df750 order_Cloak
+0x1401df760 order_Decloak
 0x1401df770 order_LiftingOff
 0x1401df940 order_Medic
 0x1401dfa10 order_MedicHeal

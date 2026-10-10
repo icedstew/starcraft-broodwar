@@ -1,0 +1,174 @@
+//! Faithful port of the SC:R (BW 1.16-compatible) game engine.
+//!
+//! Structures mirror the binary's (field offsets noted), functions are
+//! translated from the decompiled routines (addresses noted). Unported
+//! callees are explicit `todo_port!` markers, never approximations.
+
+pub mod iscript;
+pub mod list;
+pub mod rng;
+pub mod sprite;
+pub mod unit;
+
+use crate::dat::Dat;
+use list::{List, NIL};
+use sprite::{Image, Sprite, Thingy, MAX_IMAGES, MAX_SPRITES, MAX_THINGIES};
+use unit::Unit;
+
+/// Marks a call into a routine that has not been ported yet.
+#[macro_export]
+macro_rules! todo_port {
+    ($addr:literal, $what:literal) => {{
+        #[cfg(debug_assertions)]
+        eprintln!(concat!("todo_port ", $addr, " ", $what));
+    }};
+}
+
+/// Read-only game data (dat tables, iscript, GRP sizes, LO overlay offsets).
+pub struct Data<'a> {
+    pub dat: &'a Dat,
+    pub iscript: &'a [u8],
+    /// (frame count, width, height) per images.dat id.
+    pub grp: &'a dyn Fn(u16) -> (u16, u16, u16),
+    /// LO files per [type 0..=4 (attack, damage, special, landing, liftoff)][image id].
+    pub lo: &'a [Vec<Option<Vec<u8>>>; 5],
+}
+
+impl Data<'_> {
+    pub fn grp_size(&self, image_id: u16) -> (u16, u16) {
+        let (_, w, h) = (self.grp)(image_id);
+        (w, h)
+    }
+
+    pub fn grp_frames(&self, image_id: u16) -> u16 {
+        (self.grp)(image_id).0
+    }
+
+    pub fn iscript_u8(&self, at: usize) -> u8 {
+        self.iscript.get(at).copied().unwrap_or(0)
+    }
+
+    pub fn iscript_u16(&self, at: usize) -> u16 {
+        u16::from_le_bytes([self.iscript_u8(at), self.iscript_u8(at + 1)])
+    }
+
+    /// 0x14018e5c0: header offset for an iscript id (table at the u32 at offset 0).
+    pub fn iscript_header(&self, id: u32) -> Option<u16> {
+        let mut p = u32::from_le_bytes(self.iscript.get(0..4)?.try_into().ok()?) as usize;
+        loop {
+            let k = self.iscript_u16(p);
+            if k as u32 == id {
+                return Some(self.iscript_u16(p + 2));
+            }
+            if k == 0xffff {
+                return None;
+            }
+            p += 4;
+        }
+    }
+
+    /// LO offset (x, y) for overlay `index` of `frame` in image `image_id`'s LO file of `kind`.
+    pub fn lo_offset(&self, kind: usize, image_id: u16, frame: u16, index: i8) -> Option<(i8, i8)> {
+        let lo = self.lo.get(kind)?.get(image_id as usize)?.as_ref()?;
+        let o = u32::from_le_bytes(lo.get(8 + frame as usize * 4..12 + frame as usize * 4)?.try_into().ok()?) as usize;
+        let at = (o as isize + index as isize * 2) as usize;
+        Some((*lo.get(at)? as i8, *lo.get(at + 1)? as i8))
+    }
+}
+
+pub struct State {
+    pub images: Vec<Image>,
+    pub free_images: List,
+    pub sprites: Vec<Sprite>,
+    pub free_sprites: List,
+    /// Per tile-row sprite lists (heads 0x140e76c90, tails 0x140e77490).
+    pub sprite_rows: Vec<List>,
+    pub thingies: Vec<Thingy>,
+    pub free_thingies: List,
+    pub active_thingies: List,
+    pub units: Vec<Unit>,
+    pub free_units: List,      // 0x140e77fe0 / 0x140e77fd8
+    pub visible_units: List,   // 0x140e77fc8 / 0x140e78078
+    pub hidden_units: List,    // 0x140e77fe8 / 0x140e78088
+    pub dead_units: List,      // 0x140e78080 / 0x140e77fd0
+    pub unit_count: u32,       // 0x140e77ff8
+    pub max_units: u32,        // 0x140e7e024
+    /// First unit of each player's unit list (0x140e78000), linked via +0x90/+0x98.
+    pub player_units: [u32; 12],
+    pub rng: rng::Rng,
+    /// Unit whose iscript is running (0x140e617d0), order unit (0x140e617d8), bullet (0x140e617e0).
+    pub iscript_unit: Option<u32>,
+    pub iscript_order_unit: Option<u32>,
+    pub iscript_bullet: Option<u32>,
+    pub map_px: (u16, u16),
+    pub map_tiles: (usize, usize),
+    pub tileset: u16,
+    pub local_player: u8,
+    pub replay: bool,
+    pub reveal_all: bool,
+    pub frame: u32,
+    /// Sounds requested this frame (sfx id, x, y) for the front end to play.
+    pub sounds: Vec<(u16, i16, i16)>,
+}
+
+fn pool<T: Default + Clone + list::Node>(n: usize) -> (Vec<T>, List) {
+    // Free lists start in index order: element i -> i+1.
+    let mut v = vec![T::default(); n];
+    for i in 0..n {
+        let l = v[i].link_mut();
+        l.prev = if i == 0 { NIL } else { i as u32 - 1 };
+        l.next = if i + 1 == n { NIL } else { i as u32 + 1 };
+    }
+    (v, List { head: 0, tail: n as u32 - 1 })
+}
+
+impl State {
+    pub fn new(map_tiles: (usize, usize), tileset: u16, max_units: u32) -> State {
+        let (images, free_images) = pool(MAX_IMAGES);
+        let (sprites, free_sprites) = pool(MAX_SPRITES);
+        let (thingies, free_thingies) = pool(MAX_THINGIES);
+        let (units, free_units) = pool(max_units as usize);
+        State {
+            images,
+            free_images,
+            sprites,
+            free_sprites,
+            sprite_rows: vec![List::default(); map_tiles.1.max(1)],
+            thingies,
+            free_thingies,
+            active_thingies: List::default(),
+            units,
+            free_units,
+            visible_units: List::default(),
+            hidden_units: List::default(),
+            dead_units: List::default(),
+            unit_count: 0,
+            max_units,
+            player_units: [NIL; 12],
+            rng: rng::Rng::default(),
+            iscript_unit: None,
+            iscript_order_unit: None,
+            iscript_bullet: None,
+            map_px: ((map_tiles.0 * 32) as u16, (map_tiles.1 * 32) as u16),
+            map_tiles,
+            tileset,
+            local_player: 0,
+            replay: false,
+            reveal_all: false,
+            frame: 0,
+            sounds: Vec::new(),
+        }
+    }
+
+    pub fn host_is_hallucination(&self, u: u32) -> bool {
+        self.units[u as usize].status & unit::status::HALLUCINATION != 0
+    }
+
+    pub fn host_is_cloaked(&self, u: u32) -> bool {
+        self.units[u as usize].status & (unit::status::REQUIRES_DETECTION | unit::status::CLOAKED) != 0
+    }
+
+    pub fn host_unit_owner(&self, u: u32) -> u8 {
+        self.units[u as usize].player
+    }
+}

@@ -1,6 +1,7 @@
 #![allow(dead_code)] // dat fields are consumed incrementally as game systems land
 
 mod audio;
+mod bw;
 mod casc;
 mod dat;
 mod game;
