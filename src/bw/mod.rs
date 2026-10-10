@@ -4,6 +4,7 @@
 //! translated from the decompiled routines (addresses noted). Unported
 //! callees are explicit `todo_port!` markers, never approximations.
 
+pub mod frame;
 pub mod iscript;
 pub mod list;
 pub mod rng;
@@ -107,6 +108,28 @@ pub struct State {
     pub replay: bool,
     pub reveal_all: bool,
     pub frame: u32,
+    /// game_step 100-frame countdown (1.16.1 0x51ce98) and its "is 100th frame" flag (0x51ce9c).
+    pub counter_100: u32,
+    pub is_100th_frame: bool,
+    /// 0x65eb10 random event countdown (random_event_tick 0x47e410).
+    pub random_event_timer: u32,
+    /// update_units stagger countdowns (150 / 300 frames).
+    pub stagger_150: u32,
+    pub stagger_300: u32,
+    /// Unit finder search-id ring index (advances each frame).
+    pub finder_ring: u32,
+    /// 1.16.1 0x6d11fc: unit currently being stepped by update_units.
+    pub iscript_unit_slot: Option<u32>,
+    /// Scanner sweep / special units list stepped last in update_units.
+    pub scanner_units: List,
+    /// 0x57eee8 player type per player (2 = human).
+    pub player_types: [u8; 12],
+    /// 0x658ae4: shared countdown for 0x4000-status dead-unit removal.
+    pub dead_removal_counter: u32,
+    /// 0x64dec8 ring rows, 0x64dea8, 0x6957d0.
+    pub finder_rows: [[u32; 0x20]; 0x20],
+    pub finder_64dea8: u32,
+    pub var_6957d0: u32,
     /// Sounds requested this frame (sfx id, x, y) for the front end to play.
     pub sounds: Vec<(u16, i16, i16)>,
 }
@@ -156,6 +179,19 @@ impl State {
             replay: false,
             reveal_all: false,
             frame: 0,
+            counter_100: 0,
+            is_100th_frame: false,
+            random_event_timer: 0,
+            stagger_150: 1,
+            stagger_300: 1,
+            finder_ring: 0,
+            iscript_unit_slot: None,
+            scanner_units: List::default(),
+            player_types: [0; 12],
+            dead_removal_counter: 0,
+            finder_rows: [[0; 0x20]; 0x20],
+            finder_64dea8: 0,
+            var_6957d0: 0,
             sounds: Vec::new(),
         }
     }
@@ -166,6 +202,10 @@ impl State {
 
     pub fn host_is_cloaked(&self, u: u32) -> bool {
         self.units[u as usize].status & (unit::status::REQUIRES_DETECTION | unit::status::CLOAKED) != 0
+    }
+
+    pub fn player_type(&self, p: u8) -> u8 {
+        self.player_types.get(p as usize).copied().unwrap_or(0)
     }
 
     pub fn host_unit_owner(&self, u: u32) -> u8 {
