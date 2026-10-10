@@ -183,6 +183,31 @@ impl<'a> Scene<'a> {
         sounds
     }
 
+    /// Local player: first human (OWNR 6) slot.
+    pub fn local_player(&self) -> u8 {
+        self.chk.owners().iter().position(|&o| o == 6).unwrap_or(0) as u8
+    }
+
+    /// Local player's race (SIDE: 0 zerg, 1 terran, 2 protoss); random/other -> terran.
+    pub fn local_race(&self) -> usize {
+        match self.chk.races()[self.local_player() as usize] {
+            r @ 0..=2 => r as usize,
+            _ => 1,
+        }
+    }
+
+    /// (used, max) supply for `player` and race, from units.dat values (stored doubled).
+    pub fn supply(&self, player: u8, race: usize) -> (u32, u32) {
+        let u = &self.a.dat.units;
+        let race_flag = [1u8, 2, 4][race];
+        let (mut used, mut max) = (0u32, 0u32);
+        for mu in self.units.iter().filter(|m| m.owner == player && u.staredit_group_flags[m.id] & race_flag != 0) {
+            used += u.supply_required[mu.id] as u32;
+            max += u.supply_provided[mu.id] as u32;
+        }
+        (used.div_ceil(2), (max / 2).min(200))
+    }
+
     /// (x, y, unit index) for every unit, from its sprite.
     pub fn unit_positions(&self) -> Vec<(i32, i32, usize)> {
         self.sprites.iter().filter_map(|s| s.unit.map(|u| (s.x, s.y, u))).collect()
@@ -328,8 +353,12 @@ pub fn compose_with_cursor(
     // Resource bar (values come from game state once players exist).
     // icons.grp frames: 0 minerals, 1..=3 gas (z/t/p), 4..=6 supply (z/t/p).
     let col = ui.text_color(2);
+    let race = scene.local_race();
+    let (used, max) = scene.supply(scene.local_player(), race);
+    // icons.grp race order is z/t/p, same as SIDE race ids.
+    let supply = format!("{}/{}", used, max);
     let mut x = 440;
-    for (icon, text) in [(0, "0"), (2, "0"), (5, "0/0")] {
+    for (icon, text) in [(0, "50"), (1 + race, "0"), (4 + race, supply.as_str())] {
         ui.draw_icon(icon, x, 2, pal, out, w, h);
         ui.font.draw(text, x + 16, 4, col, pal, out, w, h);
         x += 66;
@@ -368,10 +397,11 @@ pub fn compose_with_cursor(
 pub fn run(a: &Assets, chk: Chk) -> io::Result<()> {
     use minifb::{Key, Scale, Window, WindowOptions};
     let mut scene = Scene::new(a, chk)?;
-    let ui = crate::ui::Ui::load(&a.casc, "terran").ok();
+    let race = ["zerg", "terran", "protoss"][scene.local_race()];
+    let ui = crate::ui::Ui::load(&a.casc, race).ok();
     let mut audio = crate::audio::Audio::open(&a.casc);
     if let Some(au) = audio.as_mut() {
-        au.play_music(&a.casc, "music/terran1.ogg");
+        au.play_music(&a.casc, &format!("music/{race}1.ogg"));
     }
     let (vw, vh) = (SCREEN_W, SCREEN_H);
     let opts = WindowOptions { scale: Scale::X2, ..WindowOptions::default() };
@@ -413,7 +443,7 @@ pub fn run(a: &Assets, chk: Chk) -> io::Result<()> {
                     hits
                 } else {
                     // Box: BW only box-selects the player's own units (max 12).
-                    let mut hits: Vec<usize> = scene.units_in_rect(x0, y0, x1, y1).into_iter().filter(|&u| scene.units[u].owner == 0).collect();
+                    let mut hits: Vec<usize> = scene.units_in_rect(x0, y0, x1, y1).into_iter().filter(|&u| scene.units[u].owner == scene.local_player()).collect();
                     hits.truncate(12);
                     hits
                 };

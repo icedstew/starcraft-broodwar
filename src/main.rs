@@ -83,7 +83,7 @@ fn main() -> std::io::Result<()> {
                 sel.truncate(n);
                 scene.selected = sel;
             }
-            let ui = ui::Ui::load(&a.casc, "terran").ok();
+            let ui = ui::Ui::load(&a.casc, ["zerg", "terran", "protoss"][scene.local_race()]).ok();
             let (w, h) = (view::SCREEN_W as usize, view::SCREEN_H as usize);
             let (mut idx, mut rgb) = (vec![0u8; w * h], vec![0u32; w * h]);
             view::compose(&scene, ui.as_ref(), x, y, &mut idx, &mut rgb);
