@@ -105,6 +105,15 @@ fn order_guard(g: &mut Game, w: &World, u: UnitId) {
 
 /// 0x1401c9ce0: next queued order, else the unit type's return-to-idle order.
 pub fn order_done(g: &mut Game, w: &World, u: UnitId) {
+    if g.units[u].attacking {
+        // Leaving an attack cycle: GndAttkToIdle (ponytail: air units use AirAttkToIdle).
+        let sprite = g.units[u].sprite;
+        let mut fx = Vec::new();
+        if let Some(s) = g.sprites[sprite].as_mut() {
+            s.set_anim(w, &mut g.rng, crate::iscript::anim::GND_ATTK_TO_IDLE, &mut fx);
+        }
+        g.pending_fx.extend(fx);
+    }
     let unit = &mut g.units[u];
     let (order, target) = match unit.order_queue.pop_front() {
         Some(o) => o,

@@ -399,10 +399,16 @@ pub fn run(a: &Assets, chk: Chk) -> io::Result<()> {
         if rdown && !rmb_was_down && cy < vh - 120 {
             let (tx, ty) = ((cx + vx) as i16, (cy + vy) as i16);
             let me = scene.local_player();
+            // Right-click on a unit: attack if hostile, else move to it.
+            let hit = scene.units_in_rect(tx as i32, ty as i32, tx as i32, ty as i32).into_iter().next();
             for &u in &scene.selected.clone() {
                 if scene.game.units[u].owner == me {
-                    let t = crate::game::Target { pos: (tx, ty), unit: None };
-                    scene.game.issue_order(u, crate::game::orders::id::MOVE, t, false);
+                    let t = crate::game::Target { pos: (tx, ty), unit: hit };
+                    let order = match hit {
+                        Some(h) if scene.game.units[h].owner != me && scene.game.units[h].owner < 8 => crate::game::orders::id::ATTACK_UNIT,
+                        _ => crate::game::orders::id::MOVE,
+                    };
+                    scene.game.issue_order(u, order, t, false);
                 }
             }
         }
@@ -413,6 +419,7 @@ pub fn run(a: &Assets, chk: Chk) -> io::Result<()> {
         if win.is_key_down(Key::Down) || win.is_key_down(Key::S) { vy += sp }
         vx = vx.clamp(0, (mw - vw).max(0));
         vy = vy.clamp(0, (mh - vh + 120).max(0)); // console covers the bottom
+        scene.selected.retain(|&u| !scene.game.units[u].dead);
         for (id, x, y) in scene.step() {
             // ponytail: on-screen only, no distance falloff or per-frame voice limits yet.
             if let Some(au) = &audio {
