@@ -207,6 +207,26 @@ const MINIMAP: (i32, i32, i32) = (6, 348, 128); // x, y, size
 
 /// Full frame: map view + console + minimap + resource bar, as 0xRRGGBB.
 pub fn compose(scene: &Scene, ui: Option<&crate::ui::Ui>, vx: i32, vy: i32, idx: &mut [u8], out: &mut [u32]) {
+    compose_with_cursor(scene, ui, vx, vy, None, idx, out)
+}
+
+/// Minimap geometry: (origin x, origin y, map pixels per minimap pixel).
+pub fn minimap_geom(scene: &Scene) -> (i32, i32, i32) {
+    let (mx, my, ms) = MINIMAP;
+    let (tw, th) = (scene.terrain.0 as i32, scene.terrain.1 as i32);
+    let scale = (tw.max(th) / ms).max(1);
+    (mx + (ms - tw / scale) / 2, my + (ms - th / scale) / 2, scale)
+}
+
+pub fn compose_with_cursor(
+    scene: &Scene,
+    ui: Option<&crate::ui::Ui>,
+    vx: i32,
+    vy: i32,
+    cursor: Option<(usize, i32, i32)>,
+    idx: &mut [u8],
+    out: &mut [u32],
+) {
     let (w, h) = (SCREEN_W, SCREEN_H);
     scene.draw(vx, vy, w, h, idx);
     let pal = scene.palette();
@@ -217,11 +237,9 @@ pub fn compose(scene: &Scene, ui: Option<&crate::ui::Ui>, vx: i32, vy: i32, idx:
     let Some(ui) = ui else { return };
     crate::ui::blit_rgba(&ui.console, 0, h - ui.console.h as i32, out, w, h);
     // Minimap: sample the terrain image, then mark units and the current view.
-    let (mx, my, ms) = MINIMAP;
     let (tw, th, tpx) = &scene.terrain;
-    let scale = (*tw).max(*th) as i32 / ms;
-    let (mw, mh) = (*tw as i32 / scale.max(1), *th as i32 / scale.max(1));
-    let (ox, oy) = (mx + (ms - mw) / 2, my + (ms - mh) / 2);
+    let (ox, oy, scale) = minimap_geom(scene);
+    let (mw, mh) = (*tw as i32 / scale, *th as i32 / scale);
     let rgb = |i: u8| {
         let [r, g, b] = pal[i as usize];
         (r as u32) << 16 | (g as u32) << 8 | b as u32
@@ -264,6 +282,9 @@ pub fn compose(scene: &Scene, ui: Option<&crate::ui::Ui>, vx: i32, vy: i32, idx:
         ui.font.draw(text, x + 16, 4, col, pal, out, w, h);
         x += 66;
     }
+    if let Some((tick, cx, cy)) = cursor {
+        ui.draw_cursor(tick, cx, cy, pal, out, w, h);
+    }
 }
 
 pub fn run(a: &Assets, chk: Chk) -> io::Result<()> {
@@ -282,8 +303,21 @@ pub fn run(a: &Assets, chk: Chk) -> io::Result<()> {
     let (mut vx, mut vy) = (0, 0);
     let mut idx = vec![0u8; (vw * vh) as usize];
     let mut rgb = vec![0u32; (vw * vh) as usize];
+    win.set_cursor_visibility(false);
+    let mut tick = 0usize;
     while win.is_open() && !win.is_key_down(Key::Escape) {
+        tick += 1;
         let sp = 16;
+        let (cx, cy) = win.get_mouse_pos(minifb::MouseMode::Clamp).map_or((vw / 2, vh / 2), |(x, y)| (x as i32, y as i32));
+        if cx <= 1 { vx -= sp }
+        if cx >= vw - 2 { vx += sp }
+        if cy <= 1 { vy -= sp }
+        if cy >= vh - 2 { vy += sp }
+        let (ox, oy, scale) = minimap_geom(&scene);
+        if win.get_mouse_down(minifb::MouseButton::Left) && (MINIMAP.0..MINIMAP.0 + MINIMAP.2).contains(&cx) && (MINIMAP.1..MINIMAP.1 + MINIMAP.2).contains(&cy) {
+            vx = (cx - ox) * scale - vw / 2;
+            vy = (cy - oy) * scale - (vh - 120) / 2;
+        }
         if win.is_key_down(Key::Left) || win.is_key_down(Key::A) { vx -= sp }
         if win.is_key_down(Key::Right) || win.is_key_down(Key::D) { vx += sp }
         if win.is_key_down(Key::Up) || win.is_key_down(Key::W) { vy -= sp }
@@ -298,7 +332,7 @@ pub fn run(a: &Assets, chk: Chk) -> io::Result<()> {
                 }
             }
         }
-        compose(&scene, ui.as_ref(), vx, vy, &mut idx, &mut rgb);
+        compose_with_cursor(&scene, ui.as_ref(), vx, vy, Some((tick, cx, cy)), &mut idx, &mut rgb);
         win.update_with_buffer(&rgb, vw as usize, vh as usize).map_err(|e| io::Error::other(e.to_string()))?;
     }
     Ok(())

@@ -158,6 +158,7 @@ pub struct Ui {
     pub console: Rgba,
     pub font: Font,
     pub icons: Grp,
+    pub cursor: Grp,
     /// tfontgam rows of 8 palette indices per text color.
     pub text_colors: Vec<u8>,
 }
@@ -168,8 +169,9 @@ impl Ui {
         let console = dds(&casc.read(&format!("sd/game/consoles/{race}/console.dds"))?)?;
         let font = Font::parse(casc.read("sd/font/font10.fnt")?);
         let icons = Grp::parse(casc.read("game/icons.grp")?);
+        let cursor = Grp::parse(casc.read("cursor/arrow.grp")?);
         let (_, _, text_colors) = crate::view::pcx(&casc.read("game/tfontgam.pcx")?);
-        Ok(Ui { console, font, icons, text_colors })
+        Ok(Ui { console, font, icons, cursor, text_colors })
     }
 
     pub fn text_color(&self, c: usize) -> &[u8] {
@@ -177,17 +179,27 @@ impl Ui {
         &self.text_colors[o..o + 8]
     }
 
-    /// Icon frame drawn through an indexed scratch buffer (GRPs are palette-indexed).
     pub fn draw_icon(&self, frame: usize, x: i32, y: i32, pal: &[[u8; 3]; 256], dst: &mut [u32], dw: i32, dh: i32) {
-        let (w, h) = (self.icons.w, self.icons.h);
-        let mut tmp = vec![0u8; (w * h) as usize];
-        self.icons.draw(frame, false, 0, 0, &mut tmp, w, h, Blend::Normal);
-        for (i, &c) in tmp.iter().enumerate() {
-            let (px, py) = (x + i as i32 % w, y + i as i32 / w);
-            if c != 0 && px >= 0 && py >= 0 && px < dw && py < dh {
-                let [r, g, b] = pal[c as usize];
-                dst[(py * dw + px) as usize] = (r as u32) << 16 | (g as u32) << 8 | b as u32;
-            }
+        draw_grp_rgb(&self.icons, frame, x, y, pal, dst, dw, dh);
+    }
+
+    /// Cursor centered on (x, y), animating over `tick`.
+    pub fn draw_cursor(&self, tick: usize, x: i32, y: i32, pal: &[[u8; 3]; 256], dst: &mut [u32], dw: i32, dh: i32) {
+        let f = (tick / 4) % self.cursor.frame_count().max(1);
+        draw_grp_rgb(&self.cursor, f, x - self.cursor.w / 2, y - self.cursor.h / 2, pal, dst, dw, dh);
+    }
+}
+
+/// Draw a palette-indexed GRP frame onto an RGB buffer (via a scratch buffer).
+pub fn draw_grp_rgb(grp: &Grp, frame: usize, x: i32, y: i32, pal: &[[u8; 3]; 256], dst: &mut [u32], dw: i32, dh: i32) {
+    let (w, h) = (grp.w, grp.h);
+    let mut tmp = vec![0u8; (w * h) as usize];
+    grp.draw(frame, false, 0, 0, &mut tmp, w, h, Blend::Normal);
+    for (i, &c) in tmp.iter().enumerate() {
+        let (px, py) = (x + i as i32 % w, y + i as i32 / w);
+        if c != 0 && px >= 0 && py >= 0 && px < dw && py < dh {
+            let [r, g, b] = pal[c as usize];
+            dst[(py * dw + px) as usize] = (r as u32) << 16 | (g as u32) << 8 | b as u32;
         }
     }
 }
