@@ -66,8 +66,8 @@ impl State {
         let mut u = self.dead_units.head;
         while u != NIL {
             let next = self.units[u as usize].link.next;
-            self.iscript_unit_slot = Some(u);
-            self.iscript_order_unit = Some(u);
+            self.iscript_order_unit = Some(u); // 0x6d11f4
+            self.iscript_unit = Some(u); // 0x6d11fc
             self.update_dead_unit(d, u);
             if self.units[u as usize].sprite != NIL {
                 if self.is_100th_frame && self.player_type(self.units[u as usize].player) == 2 {
@@ -81,8 +81,8 @@ impl State {
         let mut u = self.visible_units.head;
         while u != NIL {
             let next = self.units[u as usize].link.next;
-            self.iscript_unit_slot = Some(u);
-            self.iscript_order_unit = Some(u);
+            self.iscript_order_unit = Some(u); // 0x6d11f4
+            self.iscript_unit = Some(u); // 0x6d11fc
             self.unit_movement(d, u);
             u = next;
         }
@@ -92,6 +92,7 @@ impl State {
             while u != NIL {
                 let next = self.units[u as usize].link.next;
                 self.iscript_order_unit = Some(u);
+                self.iscript_unit = Some(u);
                 todo_port!("0x4e5f30", "scanner sweep vision");
                 u = next;
             }
@@ -115,8 +116,8 @@ impl State {
         let mut u = self.visible_units.head;
         while u != NIL {
             let next = self.units[u as usize].link.next;
-            self.iscript_unit_slot = Some(u);
-            self.iscript_order_unit = Some(u);
+            self.iscript_order_unit = Some(u); // 0x6d11f4
+            self.iscript_unit = Some(u); // 0x6d11fc
             self.update_unit(d, u);
             u = next;
         }
@@ -127,6 +128,7 @@ impl State {
                 self.units[u as usize].is_cloaked = 0;
             }
             self.iscript_order_unit = Some(u);
+            self.iscript_unit = Some(u);
             todo_port!("0x4ec420", "update_hidden_unit");
             u = next;
         }
@@ -140,11 +142,12 @@ impl State {
         while u != NIL {
             let next = self.units[u as usize].link.next;
             self.iscript_order_unit = Some(u);
+            self.iscript_unit = Some(u);
             self.update_unit(d, u);
             u = next;
         }
-        self.iscript_unit_slot = None;
         self.iscript_order_unit = None;
+        self.iscript_unit = None;
     }
 
     /// 0x4eb5e0 (dead-unit list step).
@@ -183,13 +186,13 @@ impl State {
             todo_port!("0x4ebbd0", "sprite visibility for owner");
         }
         self.update_unit_timers(d, u);
-        todo_port!("0x4ec4d0", "execute_main_order");
+        self.execute_main_order(d, u);
         self.execute_secondary_order(d, u);
         let sub = self.units[u as usize].subunit;
         if sub != NIL && d.dat.units.flags[ut] & 0x10 == 0 {
-            self.iscript_order_unit = Some(sub);
+            self.iscript_unit = Some(sub);
             self.update_unit(d, sub);
-            self.iscript_order_unit = Some(u);
+            self.iscript_unit = Some(u);
         }
         let s = self.units[u as usize].sprite;
         if s != NIL {

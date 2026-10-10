@@ -178,7 +178,7 @@ impl State {
     /// 0x4753a0: start the next queued order, or fall back to the idle order.
     pub fn order_done_or_next(&mut self, d: &Data, u: u32) {
         if self.units[u as usize].order_queue_head != NIL {
-            self.units[u as usize].user_action_flags |= 1;
+            self.units[u as usize].order_flags |= 1;
             self.prepare_next_order(d, u);
             return;
         }
@@ -192,28 +192,28 @@ impl State {
 
     /// 0x475310: replace the queue with `order` (no target) and start it.
     pub fn order_now(&mut self, d: &Data, u: u32, order: u8) {
-        self.units[u as usize].user_action_flags |= 1;
+        self.units[u as usize].order_flags |= 1;
         self.issue_order(d, u, order, true, (0, 0), NIL, 0xe4);
         self.prepare_next_order(d, u);
     }
 
     /// 0x474c30: issue `order` targeting `target`/`pos`, clearing interruptible orders, and start it.
     pub fn order_target(&mut self, d: &Data, u: u32, order: u8, pos: (i16, i16), target: u32) {
-        self.units[u as usize].user_action_flags |= 1;
+        self.units[u as usize].order_flags |= 1;
         self.issue_order(d, u, order, true, pos, target, 0xe4);
         self.prepare_next_order(d, u);
     }
 
     /// 0x474fb0: issue `order` at a position with a unit type, and start it.
     pub fn order_pos_type(&mut self, d: &Data, u: u32, order: u8, unit_type: u16, x: i16, y: i16) {
-        self.units[u as usize].user_action_flags |= 1;
+        self.units[u as usize].order_flags |= 1;
         self.issue_order(d, u, order, true, (x, y), NIL, unit_type);
         self.prepare_next_order(d, u);
     }
 
     /// 0x475220: issue_order + prepare_next_order.
     pub fn order_issue_now(&mut self, d: &Data, u: u32, order: u8, pos: (i16, i16), target: u32, unit_type: u16) {
-        self.units[u as usize].user_action_flags |= 1;
+        self.units[u as usize].order_flags |= 1;
         self.issue_order(d, u, order, true, pos, target, unit_type);
         self.prepare_next_order(d, u);
     }
@@ -264,7 +264,7 @@ impl State {
         let not_interruptible = d.dat.orders.interruptible[o.order as usize] == 0;
         un.order_process_timer = 0;
         un.recent_order_timer = 0;
-        un.user_action_flags &= !1;
+        un.order_flags &= !1;
         un.status = (un.status & 0xf7ff_eff7) | ((not_interruptible as u32) << 12);
         if o.target != NIL {
             self.set_order_target_unit(u, o.order, o.target);
@@ -308,7 +308,7 @@ impl State {
     }
 
     /// 0x476550: clear "nobrk", sprite flag 0x80 and the flingy STARTING flag; leave attack anims.
-    fn order_start(&mut self, d: &Data, u: u32) {
+    pub(crate) fn order_start(&mut self, d: &Data, u: u32) {
         let un = &mut self.units[u as usize];
         un.status &= !super::unit::status::NO_BRK_CODE_START;
         let s = un.sprite;

@@ -153,7 +153,7 @@ impl State {
             un.acid_spore_count = 0;
             un.acid_spore_time = [0; 9];
             un.status = 0;
-            un.user_action_flags = 0;
+            un.order_flags = 0;
             un.pathing_flags = 0;
             un.previous_hp = 1;
             un.ai = NIL;
@@ -235,11 +235,11 @@ impl State {
 
     /// 0x49ecf0: flingy, sprite, hp/shields/energy, status from units.dat.
     fn initialize_unit_base(&mut self, d: &Data, u: u32, ut: u16, x: i16, y: i16, player: u8) -> bool {
-        let saved = self.iscript_order_unit;
-        self.iscript_order_unit = Some(u);
+        let saved = self.iscript_unit;
+        self.iscript_unit = Some(u);
         let fid = d.dat.units.flingy[ut as usize] as u16;
         if !self.initialize_unit_flingy(d, u, fid, x, y, player, 0) {
-            self.iscript_order_unit = saved;
+            self.iscript_unit = saved;
             return false;
         }
         {
@@ -267,7 +267,7 @@ impl State {
                 self.units[u as usize].sprite = NIL;
             }
         }
-        self.iscript_order_unit = saved;
+        self.iscript_unit = saved;
         let t = self.units[u as usize].unit_type as usize;
         let un = &mut self.units[u as usize];
         un.secondary_order_timer = 8;
@@ -529,7 +529,10 @@ impl State {
         let mut total = 0i32;
         for _ in 0..0x20 {
             let mut dist = 0u32;
+            let saved_unit = self.iscript_unit;
+            self.iscript_unit = Some(u);
             super::iscript::run(self, d, mi, true, Some(&mut dist));
+            self.iscript_unit = saved_unit;
             let m = self.speed_mod(u);
             if m > 0 {
                 dist *= 2;

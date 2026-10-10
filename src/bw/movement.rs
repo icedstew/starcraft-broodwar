@@ -138,7 +138,7 @@ impl State {
             si.flags |= super::sprite::iflag::REDRAW;
             si.x = ox;
         }
-        self.iscript_order_unit = Some(sub);
+        self.iscript_unit = Some(sub);
         let moving = self.units[u as usize].fl.flags & mflags::MOVING != 0;
         let sub_walking = self.units[sub as usize].status & status::PASSIVE_REVEAL != 0;
         if !moving && sub_walking {
@@ -153,7 +153,7 @@ impl State {
             }
         }
         self.unit_movement(d, sub);
-        self.iscript_order_unit = Some(u);
+        self.iscript_unit = Some(u);
     }
 
     /// 0x4eb660: rotate a subunit along with its parent (ESI = subunit).
@@ -223,22 +223,57 @@ impl State {
     /// 0x46bf00: stop: zero speed, clear move target, mark unmovable-at-target.
     pub fn unit_stop_moving(&mut self, d: &Data, u: u32) {
         set_speeds(&mut self.units[u as usize].fl, 0);
-        self.unit_halt(u);
+        self.unit_halt(d, u);
         let p = self.unit_sprite_pos(u);
         self.set_move_target_xy(d, u, p);
         self.units[u as usize].status |= status::UNMOVABLE;
-        self.units[u as usize].user_action_flags &= !2; // +0x93 bit 1
+        self.units[u as usize].order_flags &= !2; // +0x93 bit 1
     }
 
-    /// 0x4eb290.
-    fn unit_halt(&mut self, u: u32) {
+    /// 0x4eb290: stop at the current position (or the braking point), clamped to the map.
+    pub fn unit_halt(&mut self, d: &Data, u: u32) {
         let un = &mut self.units[u as usize];
         if un.pathing_flags & 2 != 0 {
             un.pathing_flags |= 4;
         }
-        todo_port!("0x4957a0", "flingy halt (move target := position, clear flags 0x70)");
-        todo_port!("0x401fa0", "clamp move target to map");
-        self.units[u as usize].recent_order_timer = 0xf;
+        self.flingy_halt(d, u);
+        let mut t = self.units[u as usize].fl.move_target;
+        let old = t;
+        let ut = self.units[u as usize].unit_type;
+        self.clamp_unit_pos(d, ut, &mut t);
+        let un = &mut self.units[u as usize];
+        un.recent_order_timer = 0xf;
+        if t != old {
+            un.fl.move_target = t;
+            un.fl.next_waypoint = t;
+        }
+    }
+
+    /// 0x4957a0: move target := position, or the point where braking ends if moving.
+    fn flingy_halt(&mut self, d: &Data, u: u32) {
+        let sp = self.unit_sprite_pos(u);
+        let halt = flingy::halt_distance(&self.units[u as usize].fl, d);
+        let un = &mut self.units[u as usize];
+        let flags = un.fl.flags;
+        if flags & mflags::BRAKING != 0 {
+            return;
+        }
+        let f = &mut un.fl;
+        f.move_target = f.pos;
+        f.flags = flags & 0x8f;
+        un.move_target_unit = NIL;
+        let f = &mut un.fl;
+        f.next_waypoint = f.move_target;
+        if flags & mflags::MOVING != 0 && f.movement_type == 0 {
+            let (dx, dy) = crate::game::flingy::direction_table()[f.velocity_dir_prev as usize];
+            let x = (((dx * halt) >> 8) + f.exact.0) as u32 >> 8;
+            let y = (f.exact.1 + ((dy * halt) >> 8)) as u32 >> 8;
+            f.move_target = (x as i16, y as i16);
+            f.next_waypoint = f.move_target;
+            if f.move_target != sp {
+                f.flags = (flags & 0x8f) | mflags::BRAKING;
+            }
+        }
     }
 
     /// 0x4eb820: set move target to (x, y) (EBX/EDI in the original).
@@ -266,8 +301,10 @@ impl State {
         un.recent_order_timer = 0xf;
         un.status &= !status::UNMOVABLE;
         let q = un.order_queue_head;
-        let _ = q;
-        todo_port!("0x4eb820", "order queue head: set flingy flag 0x20 unless orders.dat 0x665100[order] (needs order queue)");
+        if q != NIL && d.dat.orders.stop_moving[self.orders[q as usize].order as usize] == 0 {
+            self.units[u as usize].fl.flags |= 0x20;
+            return true;
+        }
         self.units[u as usize].fl.flags &= !0x20;
         true
     }
@@ -629,7 +666,7 @@ impl State {
             un.fl.flags = (un.fl.flags & !mflags::BRAKING) | mflags::TURNING;
             un.fl.next_waypoint = sp;
         }
-        self.unit_halt(u);
+        self.unit_halt(d, u);
         false
     }
 
@@ -708,8 +745,8 @@ impl State {
             return false;
         }
         let un = &mut self.units[u as usize];
-        if un.user_action_flags & 2 != 0 {
-            un.user_action_flags &= !2;
+        if un.order_flags & 2 != 0 {
+            un.order_flags &= !2;
             if un.fl.movement_type == 2 {
                 let w = self.rng.rand_between(0x33, 0, 2) as u8;
                 let p = self.units[u as usize].path;

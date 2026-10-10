@@ -116,9 +116,10 @@ fn main() -> std::io::Result<()> {
                         let un = &st.units[u as usize];
                         let s = &st.sprites[un.sprite as usize];
                         println!(
-                            "f{f:4} u{u} order {:#x} st {} mv {:#x} pos ({},{}) tgt {:?} spd {} anim {}",
+                            "f{f:4} u{u} order {:#x} st {} mv {:#x} pos ({},{}) tgt {:?} spd {} anim {} top {} next {} fl {:#x}",
                             un.order, un.order_state, un.movement_state, s.x, s.y, un.fl.move_target, un.fl.speed,
-                            st.images[s.main_image as usize].iscript.anim
+                            st.images[s.main_image as usize].iscript.anim,
+                            un.fl.top_speed, un.fl.next_speed, un.fl.flags
                         );
                     }
                 }

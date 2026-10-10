@@ -11,6 +11,7 @@ pub mod flingy;
 pub mod frame;
 pub mod iscript;
 pub mod movement;
+pub mod order_exec;
 pub mod orders;
 pub mod players;
 pub mod list;
@@ -105,7 +106,8 @@ pub struct State {
     /// First unit of each player's unit list (0x140e78000), linked via +0x90/+0x98.
     pub player_units: [u32; 12],
     pub rng: rng::Rng,
-    /// Unit whose iscript is running (0x140e617d0), order unit (0x140e617d8), bullet (0x140e617e0).
+    /// Unit whose iscript is running (x86 0x6d11fc / x64 0x140e617d0), order unit (0x6d11f4 / 0x140e617d8),
+    /// bullet (0x6d11f8 / 0x140e617e0).
     pub iscript_unit: Option<u32>,
     pub iscript_order_unit: Option<u32>,
     pub iscript_bullet: Option<u32>,
@@ -126,8 +128,6 @@ pub struct State {
     pub stagger_300: u32,
     /// Unit finder search-id ring index (advances each frame).
     pub finder_ring: u32,
-    /// 1.16.1 0x6d11fc: unit currently being stepped by update_units.
-    pub iscript_unit_slot: Option<u32>,
     /// Scanner sweep / special units list stepped last in update_units.
     pub scanner_units: List,
     /// 0x57eee8 player type per player (2 = human).
@@ -229,7 +229,6 @@ impl State {
             stagger_150: 1,
             stagger_300: 1,
             finder_ring: 0,
-            iscript_unit_slot: None,
             scanner_units: List::default(),
             player_types: [0; 12],
             dead_removal_counter: 0,

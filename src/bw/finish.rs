@@ -135,7 +135,7 @@ impl State {
         }
         let ptype = self.player_type(self.units[u as usize].player);
         if ptype == 3 {
-            self.units[u as usize].user_action_flags |= 1;
+            self.units[u as usize].order_flags |= 1;
             if self.units[u as usize].order != 0 {
                 loop {
                     let tl = self.units[u as usize].order_queue_tail;
@@ -165,7 +165,7 @@ impl State {
             let un = &mut self.units[u as usize];
             un.set_u16_at(0xd0, p.0 as u16);
             un.set_u16_at(0xd2, p.1 as u16);
-            un.user_action_flags |= 1;
+            un.order_flags |= 1;
             let order = d.dat.units.ai_human_idle[t];
             self.issue_order(d, u, order, true, (0, 0), NIL, 0xe4);
             self.prepare_next_order(d, u);

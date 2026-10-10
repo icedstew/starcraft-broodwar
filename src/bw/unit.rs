@@ -78,6 +78,8 @@ pub struct Unit {
     pub secondary_order_timer: u8,    // 0x90 / 0xd5
     pub ai_action_flag: u8,           // 0x91 / 0xd6 (cloak/vision stagger counter in update_units)
     pub user_action_flags: u8,        // 0x92 / 0xd7
+    /// 0x93: bit 0 = order queued/started by command, bit 1 = random wait before pathing.
+    pub order_flags: u8,              // 0x93
     pub button_set: u16,              // 0x94 / 0xd8
     pub is_cloaked: u8,               // 0x96 / 0xda
     pub movement_state: u8,           // 0x97 / 0xdb
@@ -180,6 +182,7 @@ impl Default for Unit {
             secondary_order_timer: 0,
             ai_action_flag: 0,
             user_action_flags: 0,
+            order_flags: 0,
             button_set: 0,
             is_cloaked: 0,
             movement_state: 0,
