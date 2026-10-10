@@ -159,6 +159,8 @@ pub struct Ui {
     pub font: Font,
     pub icons: Grp,
     pub cursor: Grp,
+    pub wireframe: Grp,
+    pub stat_txt: Vec<String>,
     /// tfontgam rows of 8 palette indices per text color.
     pub text_colors: Vec<u8>,
 }
@@ -170,8 +172,10 @@ impl Ui {
         let font = Font::parse(casc.read("sd/font/font10.fnt")?);
         let icons = Grp::parse(casc.read("game/icons.grp")?);
         let cursor = Grp::parse(casc.read("cursor/arrow.grp")?);
+        let wireframe = Grp::parse(casc.read("unit/wirefram/wirefram.grp")?);
+        let stat_txt = crate::dat::parse_tbl(&casc.read("rez/stat_txt.tbl")?);
         let (_, _, text_colors) = crate::view::pcx(&casc.read("game/tfontgam.pcx")?);
-        Ok(Ui { console, font, icons, cursor, text_colors })
+        Ok(Ui { console, font, icons, cursor, wireframe, stat_txt, text_colors })
     }
 
     pub fn text_color(&self, c: usize) -> &[u8] {

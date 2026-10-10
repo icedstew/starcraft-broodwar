@@ -108,6 +108,8 @@ pub struct Sprite {
     next_serial: u32,
     /// Facing, 0..256 (0 = up, clockwise). Lives on the flingy in BW; kept here until units exist.
     pub direction: u8,
+    /// Index into Scene::units when this sprite is a unit's main sprite.
+    pub unit: Option<usize>,
 }
 
 /// Things an image script asks for that reach outside its own image.
@@ -125,7 +127,7 @@ pub struct World<'a> {
 
 impl Sprite {
     pub fn new(w: &World, rng: &mut Rng, id: u16, owner: u8, x: i32, y: i32) -> Sprite {
-        let mut s = Sprite { id, owner, x, y, elevation: 4, images: Vec::new(), main: 0, next_serial: 0, direction: 0 };
+        let mut s = Sprite { id, owner, x, y, elevation: 4, images: Vec::new(), main: 0, next_serial: 0, direction: 0, unit: None };
         s.add_image(w, rng, w.dat.sprites.image[id as usize], 0, 0, None);
         s
     }

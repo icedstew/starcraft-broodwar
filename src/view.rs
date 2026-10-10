@@ -57,7 +57,19 @@ impl Assets {
     }
 }
 
+/// A map-placed unit (game logic proper comes later; this backs selection/UI).
+pub struct MapUnit {
+    pub id: usize,
+    pub owner: u8,
+    /// Hit points, 24.8 fixed point like BW.
+    pub hp: u32,
+}
+
 pub struct Scene<'a> {
+    pub units: Vec<MapUnit>,
+    pub selected: Vec<usize>,
+    /// Screen-space drag rectangle while box-selecting.
+    pub drag_box: Option<(i32, i32, i32, i32)>,
     pub a: &'a Assets,
     pub chk: Chk,
     pub ts: Tileset,
@@ -92,7 +104,7 @@ impl<'a> Scene<'a> {
         }
         // images.dat remapping ids 1..=7
         let remaps = ["ofire", "gfire", "bfire", "bexpl", "trans50", "red", "green"].map(tbl);
-        let mut s = Scene { a, chk, ts, terrain, sprites: Vec::new(), rng: Rng { seed: 0 }, player_colors, shadow, remaps };
+        let mut s = Scene { units: Vec::new(), selected: Vec::new(), drag_box: None, a, chk, ts, terrain, sprites: Vec::new(), rng: Rng { seed: 0 }, player_colors, shadow, remaps };
         s.place_map_objects();
         Ok(s)
     }
@@ -117,6 +129,10 @@ impl<'a> Scene<'a> {
                 let sprite = a.dat.flingy.sprite[u.flingy[id] as usize];
                 let mut s = Sprite::new(&w, &mut self.rng, sprite, owner, x, y);
                 s.elevation = u.elevation[id];
+                // UNIT record: hp% at offset 0x11 (percentage of max).
+                let pct = if r[17] == 0 { 100 } else { r[17] as u32 };
+                s.unit = Some(self.units.len());
+                self.units.push(MapUnit { id, owner, hp: u.hit_points[id] / 100 * pct });
                 new.push(s);
                 if u.subunit1[id] as usize != 228 {
                     let sub = u.subunit1[id] as usize;
@@ -167,6 +183,25 @@ impl<'a> Scene<'a> {
         sounds
     }
 
+    /// (x, y, unit index) for every unit, from its sprite.
+    pub fn unit_positions(&self) -> Vec<(i32, i32, usize)> {
+        self.sprites.iter().filter_map(|s| s.unit.map(|u| (s.x, s.y, u))).collect()
+    }
+
+    /// Units whose units.dat bounds intersect the map-space rectangle.
+    pub fn units_in_rect(&self, x0: i32, y0: i32, x1: i32, y1: i32) -> Vec<usize> {
+        let d = &self.a.dat.units.dimensions;
+        self.unit_positions()
+            .into_iter()
+            .filter(|&(x, y, u)| {
+                let dm = d[self.units[u].id];
+                let (l, t, r, b) = ((dm & 0xFFFF) as i32, (dm >> 16 & 0xFFFF) as i32, (dm >> 32 & 0xFFFF) as i32, (dm >> 48) as i32);
+                x - l <= x1.max(x0) && x + r >= x0.min(x1) && y - t <= y1.max(y0) && y + b >= y0.min(y1)
+            })
+            .map(|(_, _, u)| u)
+            .collect()
+    }
+
     /// Draw the view at (vx, vy) into an indexed buffer of vw*vh.
     pub fn draw(&self, vx: i32, vy: i32, vw: i32, vh: i32, out: &mut [u8]) {
         let (tw, th, tpx) = &self.terrain;
@@ -179,6 +214,19 @@ impl<'a> Scene<'a> {
         }
         let mut order: Vec<&Sprite> = self.sprites.iter().filter(|s| (s.x - vx).abs() < vw + 256 && (s.y - vy).abs() < vh + 256).collect();
         order.sort_by_key(|s| (s.elevation, s.y));
+        for s in &order {
+            let Some(u) = s.unit.filter(|u| self.selected.contains(u)) else { continue };
+            let sp = &self.a.dat.sprites;
+            let id = s.id as usize;
+            // selection circle images start at 561; offset is the vertical shift.
+            let img = 561 + sp.selection_circle[id] as u16;
+            if let Some(g) = self.a.grp(img) {
+                let x = s.x - g.w / 2 - vx;
+                let y = s.y + sp.selection_offset[id] as i32 - g.h / 2 - vy;
+                let _ = u;
+                g.draw(0, false, x, y, out, vw, vh, Blend::Normal);
+            }
+        }
         for s in order {
             for img in &s.images {
                 if img.flags & crate::iscript::image_flags::HIDDEN != 0 {
@@ -286,6 +334,32 @@ pub fn compose_with_cursor(
         ui.font.draw(text, x + 16, 4, col, pal, out, w, h);
         x += 66;
     }
+    // Selected unit panel.
+    if let [u] = scene.selected[..] {
+        let mu = &scene.units[u];
+        crate::ui::draw_grp_rgb(&ui.wireframe, mu.id, 170, 390, pal, out, w, h);
+        let name = ui.stat_txt.get(mu.id).map_or("", |s| s.split('\0').next().unwrap_or(""));
+        ui.font.draw(name, 260, 392, ui.text_color(2), pal, out, w, h);
+        let max = scene.a.dat.units.hit_points[mu.id] >> 8;
+        if max > 0 {
+            let hp = format!("{}/{}", mu.hp.div_ceil(256), max);
+            ui.font.draw(&hp, 176, 456, ui.text_color(3), pal, out, w, h);
+        }
+    } else if !scene.selected.is_empty() {
+        ui.font.draw(&format!("{} units", scene.selected.len()), 260, 392, ui.text_color(2), pal, out, w, h);
+    }
+    if let Some((x0, y0, x1, y1)) = scene.drag_box {
+        for x in x0.min(x1)..=x0.max(x1) {
+            for y in [y0, y1] {
+                if (0..w).contains(&x) && (0..h).contains(&y) { out[(y * w + x) as usize] = 0x10FC18; }
+            }
+        }
+        for y in y0.min(y1)..=y0.max(y1) {
+            for x in [x0, x1] {
+                if (0..w).contains(&x) && (0..h).contains(&y) { out[(y * w + x) as usize] = 0x10FC18; }
+            }
+        }
+    }
     if let Some((tick, cx, cy)) = cursor {
         ui.draw_cursor(tick, cx, cy, pal, out, w, h);
     }
@@ -309,6 +383,7 @@ pub fn run(a: &Assets, chk: Chk) -> io::Result<()> {
     let mut rgb = vec![0u32; (vw * vh) as usize];
     win.set_cursor_visibility(false);
     let mut tick = 0usize;
+    let mut drag_start: Option<(i32, i32)> = None;
     while win.is_open() && !win.is_key_down(Key::Escape) {
         tick += 1;
         let sp = 16;
@@ -318,9 +393,32 @@ pub fn run(a: &Assets, chk: Chk) -> io::Result<()> {
         if cy <= 1 { vy -= sp }
         if cy >= vh - 2 { vy += sp }
         let (ox, oy, scale) = minimap_geom(&scene);
-        if win.get_mouse_down(minifb::MouseButton::Left) && (MINIMAP.0..MINIMAP.0 + MINIMAP.2).contains(&cx) && (MINIMAP.1..MINIMAP.1 + MINIMAP.2).contains(&cy) {
+        let down = win.get_mouse_down(minifb::MouseButton::Left);
+        let on_minimap = (MINIMAP.0..MINIMAP.0 + MINIMAP.2).contains(&cx) && (MINIMAP.1..MINIMAP.1 + MINIMAP.2).contains(&cy);
+        if down && on_minimap && drag_start.is_none() {
             vx = (cx - ox) * scale - vw / 2;
             vy = (cy - oy) * scale - (vh - 120) / 2;
+        } else if down && cy < vh - 120 {
+            let (sx, sy) = *drag_start.get_or_insert((cx, cy));
+            scene.drag_box = Some((sx, sy, cx, cy));
+        } else if !down {
+            if let Some((sx, sy)) = drag_start.take() {
+                scene.drag_box = None;
+                let (x0, y0, x1, y1) = (sx + vx, sy + vy, cx + vx, cy + vy);
+                let hits = if (x1 - x0).abs() < 4 && (y1 - y0).abs() < 4 {
+                    // Click: the single unit nearest the point.
+                    let pt = (cx + vx, cy + vy);
+                    let mut hits = scene.units_in_rect(pt.0, pt.1, pt.0, pt.1);
+                    hits.truncate(1);
+                    hits
+                } else {
+                    // Box: BW only box-selects the player's own units (max 12).
+                    let mut hits: Vec<usize> = scene.units_in_rect(x0, y0, x1, y1).into_iter().filter(|&u| scene.units[u].owner == 0).collect();
+                    hits.truncate(12);
+                    hits
+                };
+                scene.selected = hits;
+            }
         }
         if win.is_key_down(Key::Left) || win.is_key_down(Key::A) { vx -= sp }
         if win.is_key_down(Key::Right) || win.is_key_down(Key::D) { vx += sp }

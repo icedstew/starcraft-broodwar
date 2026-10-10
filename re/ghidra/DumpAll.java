@@ -1,46 +1,60 @@
-// Decompile every function (in parallel, all cores) to one C file:
-//   analyzeHeadless ... -postScript DumpAll.java <out.c>
+// Decompile functions in parallel, appending to <out.c> in batches:
+//   analyzeHeadless <proj> sc -process -noanalysis -postScript DumpAll.java <out.c> [addresses.txt]
+// addresses.txt: one hex entry per line, in the order to decompile (default: all functions).
 import ghidra.app.script.GhidraScript;
 import ghidra.app.decompiler.*;
 import ghidra.app.decompiler.parallel.*;
 import ghidra.program.model.listing.*;
 import ghidra.util.task.TaskMonitor;
 import java.io.*;
+import java.nio.file.*;
 import java.util.*;
 
 public class DumpAll extends GhidraScript {
     @Override
     public void run() throws Exception {
-        String out = getScriptArgs()[0];
+        String[] args = getScriptArgs();
+        String out = args[0];
+        FunctionManager fm = currentProgram.getFunctionManager();
         List<Function> funcs = new ArrayList<>();
-        currentProgram.getFunctionManager().getFunctions(true).forEach(funcs::add);
+        if (args.length > 1) {
+            for (String line : Files.readAllLines(Paths.get(args[1]))) {
+                line = line.trim();
+                if (line.isEmpty()) continue;
+                Function f = fm.getFunctionAt(toAddr(Long.parseUnsignedLong(line.replace("0x", ""), 16)));
+                if (f != null) funcs.add(f);
+            }
+        } else {
+            fm.getFunctions(true).forEach(funcs::add);
+        }
         println("decompiling " + funcs.size() + " functions");
 
-        DecompilerCallback<String[]> cb = new DecompilerCallback<>(currentProgram, di -> {
+        DecompilerCallback<String> cb = new DecompilerCallback<>(currentProgram, di -> {
             di.toggleCCode(true);
             di.toggleSyntaxTree(false);
             di.setSimplificationStyle("decompile");
         }) {
             @Override
-            public String[] process(DecompileResults r, TaskMonitor m) {
+            public String process(DecompileResults r, TaskMonitor m) {
                 Function f = r.getFunction();
                 String body = r.decompileCompleted() ? r.getDecompiledFunction().getC() : "// decompile failed: " + r.getErrorMessage();
-                return new String[] { f.getEntryPoint().toString(), "// ==== " + f.getEntryPoint() + " " + f.getName() + "\n" + body };
+                return "// ==== " + f.getEntryPoint() + " " + f.getName() + "\n" + body;
             }
         };
-        cb.setTimeout(60);
-        List<String[]> results;
-        try {
-            results = ParallelDecompiler.decompileFunctions(cb, funcs, monitor);
+        cb.setTimeout(30);
+        int batch = 500, done = 0;
+        try (PrintWriter w = new PrintWriter(new BufferedWriter(new FileWriter(out, true)))) {
+            for (int i = 0; i < funcs.size() && !monitor.isCancelled(); i += batch) {
+                List<Function> chunk = funcs.subList(i, Math.min(funcs.size(), i + batch));
+                for (String s : ParallelDecompiler.decompileFunctions(cb, chunk, monitor)) {
+                    w.println(s);
+                }
+                w.flush();
+                done += chunk.size();
+                println("decompiled " + done + "/" + funcs.size());
+            }
         } finally {
             cb.dispose();
         }
-        results.sort(Comparator.comparing(a -> a[0]));
-        try (PrintWriter w = new PrintWriter(new BufferedWriter(new FileWriter(out)))) {
-            for (String[] r : results) {
-                w.println(r[1]);
-            }
-        }
-        println("decompiled " + results.size() + " functions -> " + out);
     }
 }

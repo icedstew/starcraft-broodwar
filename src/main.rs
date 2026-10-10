@@ -77,6 +77,12 @@ fn main() -> std::io::Result<()> {
                 scene.step();
             }
             let (x, y) = (args[3].parse().unwrap_or(0), args[4].parse().unwrap_or(0));
+            if let Some(n) = args.get(6).and_then(|v| v.parse::<usize>().ok()) {
+                // Debug: select up to n units in view.
+                let mut sel = scene.units_in_rect(x, y, x + 640, y + 360);
+                sel.truncate(n);
+                scene.selected = sel;
+            }
             let ui = ui::Ui::load(&a.casc, "terran").ok();
             let (w, h) = (view::SCREEN_W as usize, view::SCREEN_H as usize);
             let (mut idx, mut rgb) = (vec![0u8; w * h], vec![0u32; w * h]);
