@@ -236,6 +236,33 @@ fn main() -> std::io::Result<()> {
             let img: Vec<u8> = g.iter().map(|&b| b as u8).collect();
             write_png(&args[2], w, h, &img, &pal)?;
         }
+        Some("mapdump") => {
+            // Differential-test inputs/outputs for re/emu_map.py: mapdump <map> <dir>
+            let chk = load_chk(&args[1])?;
+            let dir = std::path::Path::new(&args[2]);
+            std::fs::create_dir_all(dir)?;
+            let name = map::TILESETS[chk.tileset()];
+            let vf4 = casc.read(&format!("tileset/{name}.vf4"))?;
+            let cv5 = casc.read(&format!("tileset/{name}.cv5"))?;
+            let ts = bw::map::TilesetData {
+                vf4: vf4.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect(),
+                cv5: cv5.clone(),
+            };
+            let (w, h) = chk.dims();
+            let mtxm = chk.section(b"MTXM").unwrap_or(&[]).to_vec();
+            let mut m = bw::map::GameMap::new(w as u16, h as u16, &ts);
+            m.load_mtxm(&ts, &mtxm);
+            m.build_minitiles(&ts);
+            let le16 = |v: &[u16]| v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>();
+            let le32 = |v: &[u32]| v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>();
+            std::fs::write(dir.join("dims"), le16(&[w as u16, h as u16]))?;
+            std::fs::write(dir.join("mtxm"), &mtxm)?;
+            std::fs::write(dir.join("vf4"), &vf4)?;
+            std::fs::write(dir.join("cv5"), &cv5)?;
+            std::fs::write(dir.join("tile_flags"), le32(&m.tile_flags[..w * h]))?;
+            std::fs::write(dir.join("megatiles"), le16(&m.megatiles[..w * h]))?;
+            std::fs::write(dir.join("minitiles"), &m.minitiles)?;
+        }
         Some("render") => {
             let chk = load_chk(&args[1])?;
             let ts = map::Tileset::load(&casc, chk.tileset())?;

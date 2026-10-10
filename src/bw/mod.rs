@@ -15,6 +15,7 @@ pub mod order_exec;
 pub mod orders;
 pub mod players;
 pub mod list;
+pub mod map;
 pub mod load;
 pub mod rng;
 pub mod sprite;
