@@ -445,6 +445,13 @@ impl Sprite {
         }
     }
 
+    pub fn set_direction(&mut self, w: &World, d: u8) {
+        if self.direction != d {
+            self.direction = d;
+            self.update_all_frames(w);
+        }
+    }
+
     fn update_all_frames(&mut self, w: &World) {
         for i in 0..self.images.len() {
             self.update_frame(w, i);

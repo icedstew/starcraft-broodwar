@@ -63,6 +63,7 @@ pub struct MapUnit {
     pub owner: u8,
     /// Hit points, 24.8 fixed point like BW.
     pub hp: u32,
+    pub flingy: crate::game::flingy::Flingy,
 }
 
 pub struct Scene<'a> {
@@ -132,7 +133,8 @@ impl<'a> Scene<'a> {
                 // UNIT record: hp% at offset 0x11 (percentage of max).
                 let pct = if r[17] == 0 { 100 } else { r[17] as u32 };
                 s.unit = Some(self.units.len());
-                self.units.push(MapUnit { id, owner, hp: u.hit_points[id] / 100 * pct });
+                let fl = crate::game::flingy::Flingy::new(&a.dat.flingy, u.flingy[id] as u16, x as i16, y as i16, s.direction);
+                self.units.push(MapUnit { id, owner, hp: u.hit_points[id] / 100 * pct, flingy: fl });
                 new.push(s);
                 if u.subunit1[id] as usize != 228 {
                     let sub = u.subunit1[id] as usize;
@@ -167,6 +169,23 @@ impl<'a> Scene<'a> {
         let frames = |id: u16| a.grp(id).map_or(0, |g| g.frame_count() as u16);
         let w = self.world(&frames);
         let mut fx = Vec::new();
+        // Movement first (BW moves units, then runs their iscripts).
+        for s in self.sprites.iter_mut() {
+            let Some(ui) = s.unit else { continue };
+            let mu = &mut self.units[ui];
+            if a.dat.units.flags[mu.id] & 0x1 != 0 {
+                continue; // buildings don't move
+            }
+            let r = mu.flingy.step(&a.dat.flingy);
+            s.x = r.new_pos.0 as i32;
+            s.y = r.new_pos.1 as i32;
+            s.set_direction(&w, mu.flingy.heading);
+            if r.starting {
+                s.set_anim(&w, &mut self.rng, crate::iscript::anim::WALKING, &mut fx);
+            } else if r.stopping {
+                s.set_anim(&w, &mut self.rng, crate::iscript::anim::WALKING_TO_IDLE, &mut fx);
+            }
+        }
         let rng = &mut self.rng;
         self.sprites.retain_mut(|s| s.step(&w, rng, &mut fx));
         let mut sounds = Vec::new();
@@ -414,6 +433,7 @@ pub fn run(a: &Assets, chk: Chk) -> io::Result<()> {
     win.set_cursor_visibility(false);
     let mut tick = 0usize;
     let mut drag_start: Option<(i32, i32)> = None;
+    let mut rmb_was_down = false;
     while win.is_open() && !win.is_key_down(Key::Escape) {
         tick += 1;
         let sp = 16;
@@ -450,6 +470,16 @@ pub fn run(a: &Assets, chk: Chk) -> io::Result<()> {
                 scene.selected = hits;
             }
         }
+        let rdown = win.get_mouse_down(minifb::MouseButton::Right);
+        if rdown && !rmb_was_down && cy < vh - 120 {
+            let (tx, ty) = ((cx + vx) as i16, (cy + vy) as i16);
+            for &u in &scene.selected {
+                if scene.units[u].owner == scene.local_player() {
+                    scene.units[u].flingy.set_move_target(tx, ty);
+                }
+            }
+        }
+        rmb_was_down = rdown;
         if win.is_key_down(Key::Left) || win.is_key_down(Key::A) { vx -= sp }
         if win.is_key_down(Key::Right) || win.is_key_down(Key::D) { vx += sp }
         if win.is_key_down(Key::Up) || win.is_key_down(Key::W) { vy -= sp }

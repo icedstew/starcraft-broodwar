@@ -16,12 +16,20 @@ public class DumpAll extends GhidraScript {
         String[] args = getScriptArgs();
         String out = args[0];
         FunctionManager fm = currentProgram.getFunctionManager();
-        List<Function> funcs = new ArrayList<>();
+        Set<Function> funcs = new LinkedHashSet<>();
         if (args.length > 1) {
             for (String line : Files.readAllLines(Paths.get(args[1]))) {
                 line = line.trim();
                 if (line.isEmpty()) continue;
-                Function f = fm.getFunctionAt(toAddr(Long.parseUnsignedLong(line.replace("0x", ""), 16)));
+                ghidra.program.model.address.Address a = toAddr(Long.parseUnsignedLong(line.replace("0x", ""), 16));
+                Function f = fm.getFunctionAt(a);
+                // .pdata entry with no Ghidra function (obfuscation broke flow): create it (not saved with -readOnly).
+                if (f == null) {
+                    f = fm.getFunctionContaining(a);
+                    if (f == null) {
+                        f = createFunction(a, null);
+                    }
+                }
                 if (f != null) funcs.add(f);
             }
         } else {
@@ -44,8 +52,9 @@ public class DumpAll extends GhidraScript {
         cb.setTimeout(30);
         int batch = 500, done = 0;
         try (PrintWriter w = new PrintWriter(new BufferedWriter(new FileWriter(out, true)))) {
-            for (int i = 0; i < funcs.size() && !monitor.isCancelled(); i += batch) {
-                List<Function> chunk = funcs.subList(i, Math.min(funcs.size(), i + batch));
+            List<Function> all = new ArrayList<>(funcs);
+            for (int i = 0; i < all.size() && !monitor.isCancelled(); i += batch) {
+                List<Function> chunk = all.subList(i, Math.min(all.size(), i + batch));
                 for (String s : ParallelDecompiler.decompileFunctions(cb, chunk, monitor)) {
                     w.println(s);
                 }

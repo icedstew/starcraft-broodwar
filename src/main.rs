@@ -3,6 +3,7 @@
 mod audio;
 mod casc;
 mod dat;
+mod game;
 mod grp;
 mod iscript;
 mod map;
@@ -73,15 +74,24 @@ fn main() -> std::io::Result<()> {
             let a = view::Assets::load(casc)?;
             let mut scene = view::Scene::new(&a, load_chk(&args[1])?)?;
             let frames: usize = args.get(5).and_then(|f| f.parse().ok()).unwrap_or(24);
-            for _ in 0..frames {
-                scene.step();
-            }
             let (x, y) = (args[3].parse().unwrap_or(0), args[4].parse().unwrap_or(0));
             if let Some(n) = args.get(6).and_then(|v| v.parse::<usize>().ok()) {
                 // Debug: select up to n units in view.
                 let mut sel = scene.units_in_rect(x, y, x + 640, y + 360);
                 sel.truncate(n);
                 scene.selected = sel;
+            }
+            // Debug: SCBW_MOVE=x,y orders the selection to move there before stepping.
+            if let Some((mx, my)) = std::env::var("SCBW_MOVE").ok().and_then(|v| {
+                let (a, b) = v.split_once(',')?;
+                Some((a.parse::<i16>().ok()?, b.parse::<i16>().ok()?))
+            }) {
+                for &u in &scene.selected.clone() {
+                    scene.units[u].flingy.set_move_target(mx, my);
+                }
+            }
+            for _ in 0..frames {
+                scene.step();
             }
             let ui = ui::Ui::load(&a.casc, ["zerg", "terran", "protoss"][scene.local_race()]).ok();
             let (w, h) = (view::SCREEN_W as usize, view::SCREEN_H as usize);
