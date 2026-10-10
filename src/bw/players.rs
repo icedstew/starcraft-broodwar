@@ -16,6 +16,19 @@ pub struct Players {
     pub factories: [i32; 12],
     pub buildings: [i32; 12],
     pub men: [i32; 12],
+    /// 0x584de4: completed unit counts [unit type][player].
+    pub completed_counts: Vec<[i32; 12]>,
+    /// 0x582144 / 0x5821d4 / 0x582264: supply provided (zerg / terran / protoss).
+    pub supply_provided: [[i32; 12]; 3],
+    /// 0x5820b4 / 0x581e14 / 0x581f64: completed factories, men, buildings.
+    pub factories_completed: [i32; 12],
+    pub men_completed: [i32; 12],
+    pub buildings_completed: [i32; 12],
+    /// 0x581e44 units produced, 0x581ed4 unit score, 0x581f94 buildings constructed, 0x582024 building score.
+    pub units_produced: [i32; 12],
+    pub unit_score: [i32; 12],
+    pub buildings_constructed: [i32; 12],
+    pub building_score: [i32; 12],
 }
 
 impl Default for Players {
@@ -29,6 +42,15 @@ impl Default for Players {
             factories: [0; 12],
             buildings: [0; 12],
             men: [0; 12],
+            completed_counts: vec![[0; 12]; 228],
+            supply_provided: [[0; 12]; 3],
+            factories_completed: [0; 12],
+            men_completed: [0; 12],
+            buildings_completed: [0; 12],
+            units_produced: [0; 12],
+            unit_score: [0; 12],
+            buildings_constructed: [0; 12],
+            building_score: [0; 12],
         }
     }
 }

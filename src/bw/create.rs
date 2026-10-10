@@ -588,7 +588,7 @@ impl State {
     }
 
     /// 0x453300: register a flyer in the repulse grid (48px cells, 0xab per row).
-    fn repulse_init(&mut self, d: &Data, u: u32) {
+    pub(crate) fn repulse_init(&mut self, d: &Data, u: u32) {
         let t = self.units[u as usize].unit_type;
         if self.units[u as usize].status & 0x20000 == 0 || d.dat.units.flags[t as usize] & 1 != 0 || t == 0x49 {
             return;

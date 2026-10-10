@@ -78,6 +78,53 @@ fn main() -> std::io::Result<()> {
                 );
             }
         }
+        Some("bwsim") => {
+            // Faithful-engine harness: SCBW_UNITS="type,x,y,player;..." SCBW_MOVE="x,y" bwsim <frames>
+            let l = bw::load::Loaded::load(&casc)?;
+            let g = |i: u16| l.grp_size(i);
+            let d = bw::load::data(&l, &g);
+            let mut st = bw::State::new((64, 64), 0, 1700);
+            st.player_types = [2; 12];
+            let mut made = Vec::new();
+            for e in std::env::var("SCBW_UNITS").unwrap_or("0,320,320,0".into()).split(';').filter(|e| !e.is_empty()) {
+                let v: Vec<i32> = e.split(',').filter_map(|n| n.trim().parse().ok()).collect();
+                if let [t, x, y, p] = v[..] {
+                    st.rng.enabled = true;
+                    let u = st.create_unit(&d, t as u16, x as i16, y as i16, p as u8);
+                    if let Some(u) = u {
+                        st.finish_unit_pre(&d, u);
+                        if st.place_unit(&d, u) {
+                            st.finish_unit_post(&d, u);
+                        }
+                        made.push(u);
+                    }
+                    st.rng.enabled = false;
+                    println!("create {t} at ({x},{y}) p{p} -> {u:?}");
+                }
+            }
+            if let Ok(m) = std::env::var("SCBW_MOVE") {
+                let v: Vec<i16> = m.split(',').filter_map(|n| n.trim().parse().ok()).collect();
+                for &u in &made {
+                    st.order_target(&d, u, 6, (v[0], v[1]), bw::list::NIL);
+                }
+            }
+            let frames: u32 = args.get(1).and_then(|f| f.parse().ok()).unwrap_or(48);
+            for f in 0..frames {
+                st.game_step(&d);
+                if f % 8 == 0 || f + 1 == frames {
+                    for &u in &made {
+                        let un = &st.units[u as usize];
+                        let s = &st.sprites[un.sprite as usize];
+                        println!(
+                            "f{f:4} u{u} order {:#x} st {} mv {:#x} pos ({},{}) tgt {:?} spd {} anim {}",
+                            un.order, un.order_state, un.movement_state, s.x, s.y, un.fl.move_target, un.fl.speed,
+                            st.images[s.main_image as usize].iscript.anim
+                        );
+                    }
+                }
+            }
+            println!("rng seed {:#x} draws {}", st.rng.seed, st.rng.total);
+        }
         Some("view") => {
             let a = view::Assets::load(casc)?;
             view::run(&a, load_chk(&args[1])?)?;

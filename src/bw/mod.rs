@@ -6,6 +6,7 @@
 
 pub mod create;
 pub mod finder;
+pub mod finish;
 pub mod flingy;
 pub mod frame;
 pub mod iscript;
@@ -13,6 +14,7 @@ pub mod movement;
 pub mod orders;
 pub mod players;
 pub mod list;
+pub mod load;
 pub mod rng;
 pub mod sprite;
 pub mod unit;

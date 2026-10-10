@@ -189,7 +189,7 @@ impl State {
     }
 
     /// 0x495f20: snap a unit's heading/velocity to `dir`; next target waypoint := position.
-    fn subunit_face(&mut self, d: &Data, u: u32, dir: u8) {
+    pub(crate) fn subunit_face(&mut self, d: &Data, u: u32, dir: u8) {
         let f = &mut self.units[u as usize].fl;
         f.velocity_dir_prev = dir;
         f.heading = dir;
