@@ -24,6 +24,17 @@ fn install_dir() -> PathBuf {
 
 fn main() -> std::io::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(String::as_str) == Some("mpqls") {
+        let m = mpq::Mpq::open(args[1].as_ref())?;
+        let list = m.read("(listfile)")?;
+        print!("{}", String::from_utf8_lossy(&list));
+        return Ok(());
+    }
+    if args.first().map(String::as_str) == Some("mpqx") {
+        let m = mpq::Mpq::open(args[1].as_ref())?;
+        std::fs::write(&args[3], m.read(&args[2])?)?;
+        return Ok(());
+    }
     if args.first().map(String::as_str) == Some("rep") {
         let r = replay::Replay::parse(&std::fs::read(&args[1])?)?;
         let h = &r.header;

@@ -91,3 +91,22 @@ SC:R insertions (4 bytes after velocityDirection2 at 0x64; 0x10 bytes before isB
 | 0x19c | 0x110 | removeTimer |
 | 0x1b2 | | 8-frame status timer counter |
 | 0x1c8 | 0x134 | AI* |
+
+## Classic 1.16.1 reference binary
+
+SC:R protects core game routines (unit loop, bullets, speed, sprite init) with
+anti-cheat code (rdtsc checks, encrypted state); they decompile as junk. The classic
+1.16.1 `StarCraft.exe` has the same game logic, unprotected. It ships inside the
+Blizzard patch installer (an MPQ appended to the exe): `scbw mpqx SC-1161.exe StarCraft.exe out`,
+then strip the 24-byte patch header (`tail -c +25`). Ghidra decompiles all 4644 functions.
+
+| 1.16.1 | SC:R x64 | what |
+|---|---|---|
+| 0x4dc4a0 | 0x14039aa10 | sync rand (site id in EAX); 0x4dc550 rand_between |
+| 0x6d11c8 | 0x1410936ac | RNG enabled flag; seed 0x51ca14 |
+| 0x4ed000 | 0x1401e3340 | update_units |
+| 0x4ecf70 | 0x1401e7650 | update_unit |
+| 0x4ec290 | 0x1401e6f30 | update_unit_timers |
+| 0x4ec4d0 | 0x1401e5c60 | execute_main_order |
+| 0x4ec170 | (inline) | secondary orders |
+| 0x492eb0 / 0x493790 | | bullets / thingies update (called from update_units) |
