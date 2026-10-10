@@ -6,6 +6,7 @@ mod grp;
 mod iscript;
 mod map;
 mod mpq;
+mod replay;
 mod view;
 
 use std::path::PathBuf;
@@ -19,6 +20,21 @@ fn install_dir() -> PathBuf {
 
 fn main() -> std::io::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(String::as_str) == Some("rep") {
+        let r = replay::Replay::parse(&std::fs::read(&args[1])?)?;
+        let h = &r.header;
+        println!("map {:?} {}x{}, {} frames, title {:?}, host {:?}", h.map_name, h.map_width, h.map_height, h.frames, h.title, h.host);
+        for s in h.slots.iter().filter(|s| !s.name.is_empty()) {
+            println!("  slot {} player {} race {} team {} {:?}", s.slot_id, s.player_id, s.race, s.team, s.name);
+        }
+        let mut hist = std::collections::BTreeMap::new();
+        for c in &r.commands {
+            *hist.entry(c.data[0]).or_insert(0) += 1;
+        }
+        println!("{} commands, by id: {:x?}", r.commands.len(), hist);
+        println!("chk {} bytes, tileset {}", r.chk.len(), map::Chk::parse(&r.chk).tileset());
+        return Ok(());
+    }
     let casc = casc::Casc::open(&install_dir())?;
     match args.first().map(String::as_str) {
         Some("ls") => {
@@ -77,6 +93,9 @@ fn main() -> std::io::Result<()> {
 }
 
 fn load_chk(path: &str) -> std::io::Result<map::Chk> {
+    if path.to_ascii_lowercase().ends_with(".rep") {
+        return Ok(map::Chk::parse(&replay::Replay::parse(&std::fs::read(path)?)?.chk));
+    }
     if path.to_ascii_lowercase().ends_with(".chk") {
         return Ok(map::Chk::parse(&std::fs::read(path)?));
     }

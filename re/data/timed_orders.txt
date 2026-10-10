@@ -1,0 +1,187 @@
+  1 Stop                     case 0x1401e659c -> jmp 0x1401c5d10
+  2 Guard                    case 0x1401e62cc -> jmp 0x1401b3de0
+  3 PlayerGuard              case 0x1401e62de -> jmp 0x1401b4770
+  4 TurretGuard              case 0x1401e6003 -> jmp 0x14025b940
+  5 BunkerGuard              case 0x1401e6003 -> jmp 0x14025b940
+  6 Move                     case 0x1401e6380 -> jmp 0x1401c5830
+  7 ReaverStop               case 0x1401e612e -> jmp 0x1401ab8d0
+  8 Attack1                  case 0x1401e6003 -> jmp 0x14025b940
+  9 Attack2                  case 0x1401e6686 -> jmp 0x1401c4970
+ 10 AttackUnit               case 0x1401e607a -> jmp 0x1401b3b60
+ 11 AttackFixedRange         case 0x1401e6020 -> jmp 0x1401b3940
+ 12 AttackTile               case 0x1401e6068 -> jmp 0x14014ed40
+ 13 Hover                    case 0x1401e6032 -> jmp 0x14014ed40
+ 14 AttackMove               case 0x1401e6044 -> jmp 0x1401b3a10
+ 15 InfestedCommandCenter    case 0x1401e609e -> jmp 0x1401eea10
+ 16 UnusedNothing            case 0x1401e6003 -> jmp 0x14025b940
+ 17 UnusedPowerup            case 0x1401e624e -> jmp 0x1401c4340
+ 18 TowerGuard               case 0x1401e65e4 -> jmp 0x1401b4aa0
+ 19 TowerAttack              case 0x1401e65f6 -> jmp 0x1401b4b10
+ 20 VultureMine              case 0x1401e663e -> jmp 0x1401e0ae0
+ 21 StayInRange              case 0x1401e658a -> jmp 0x1401c5b80
+ 22 TurretAttack             case 0x1401e6003 -> jmp 0x14025b940
+ 23 Nothing                  case 0x1401e5ff1 -> call 0x1401c9d40
+ 24 Unused_24                case 0x1401e6003 -> jmp 0x14025b940
+ 25 DroneStartBuild          case 0x1401e6206 -> jmp 0x1401ece90
+ 26 DroneBuild               case 0x1401e6003 -> jmp 0x14025b940
+ 27 CastInfestation          case 0x1401e64d6 -> jmp 0x1401ef8f0
+ 28 MoveToInfest             case 0x1401e6686 -> jmp 0x1401c4970
+ 29 InfestingCommandCenter   case 0x1401e64e8 -> jmp 0x1401efa30
+ 30 PlaceBuilding            case 0x1401e6003 -> jmp 0x14025b940
+ 31 PlaceProtossBuilding     case 0x1401e6003 -> jmp 0x14025b940
+ 32 CreateProtossBuilding    case 0x1401e64c4 -> jmp 0x1401cb690
+ 33 ConstructingBuilding     case 0x1401e6003 -> jmp 0x14025b940
+ 34 Repair                   case 0x1401e6003 -> jmp 0x14025b940
+ 35 MoveToRepair             case 0x1401e6686 -> jmp 0x1401c4970
+ 36 PlaceAddon               case 0x1401e648e -> jmp 0x1401dde20
+ 37 BuildAddon               case 0x1401e6003 -> jmp 0x14025b940
+ 38 Train                    case 0x1401e6003 -> jmp 0x14025b940
+ 39 RallyPointUnit           case 0x1401e6003 -> jmp 0x14025b940
+ 40 RallyPointTile           case 0x1401e6003 -> jmp 0x14025b940
+ 41 ZergBirth                case 0x1401e6003 -> jmp 0x14025b940
+ 42 ZergUnitMorph            case 0x1401e6003 -> jmp 0x14025b940
+ 43 ZergBuildingMorph        case 0x1401e6662 -> jmp 0x1401ed4c0
+ 44 IncompleteBuilding       case 0x1401e6003 -> jmp 0x14025b940
+ 45 IncompleteMorphing       case 0x1401e6003 -> jmp 0x14025b940
+ 46 BuildNydusExit           case 0x1401e6458 -> jmp 0x1401ed130
+ 47 EnterNydusCanal          case 0x1401e6218 -> jmp 0x1401ef550
+ 48 IncompleteWarping        case 0x1401e6003 -> jmp 0x14025b940
+ 49 Follow                   case 0x1401e62ba -> jmp 0x1401c5390
+ 50 Carrier                  case 0x1401e60d4 -> jmp 0x1401a97b0
+ 51 ReaverCarrierMove        case 0x1401e6380 -> jmp 0x1401c5830
+ 52 CarrierStop              case 0x1401e610a -> jmp 0x1401a9b20
+ 53 CarrierAttack            case 0x1401e60f8 -> jmp 0x1401a9860
+ 54 CarrierMoveToAttack      case 0x1401e6686 -> jmp 0x1401c4970
+ 55 CarrierIgnore2           case 0x1401e60e6 -> jmp 0x1401a9920
+ 56 CarrierFight             case 0x1401e60d4 -> jmp 0x1401a97b0
+ 57 CarrierHoldPosition      case 0x1401e60d4 -> jmp 0x1401a97b0
+ 58 Reaver                   case 0x1401e6608 -> jmp 0x1401ab6e0
+ 59 ReaverAttack             case 0x1401e661a -> jmp 0x1401ab810
+ 60 ReaverMoveToAttack       case 0x1401e6686 -> jmp 0x1401c4970
+ 61 ReaverFight              case 0x1401e6608 -> jmp 0x1401ab6e0
+ 62 ReaverHoldPosition       case 0x1401e6608 -> jmp 0x1401ab6e0
+ 63 TrainFighter             case 0x1401e6003 -> jmp 0x14025b940
+ 64 InterceptorAttack        case 0x1401e65c0 -> jmp 0x1401a9d50
+ 65 ScarabAttack             case 0x1401e6003 -> jmp 0x14025b940
+ 66 RechargeShieldsUnit      case 0x1401e6003 -> jmp 0x14025b940
+ 67 RechargeShieldsBattery   case 0x1401e608c -> jmp 0x1401d1b90
+ 68 ShieldBattery            case 0x1401e6003 -> jmp 0x14025b940
+ 69 InterceptorReturn        case 0x1401e651e -> jmp 0x1401a9b80
+ 70 DroneLand                case 0x1401e61f4 -> jmp 0x1401ef1d0
+ 71 BuildingLand             case 0x1401e6003 -> jmp 0x14025b940
+ 72 BuildingLiftOff          case 0x1401e6003 -> jmp 0x14025b940
+ 73 DroneLiftOff             case 0x1401e6003 -> jmp 0x14025b940
+ 74 LiftingOff               case 0x1401e63c8 -> jmp 0x1401df770
+ 75 ResearchTech             case 0x1401e6003 -> jmp 0x14025b940
+ 76 Upgrade                  case 0x1401e6003 -> jmp 0x14025b940
+ 77 Larva                    case 0x1401e63b6 -> jmp 0x1401ef690
+ 78 SpawningLarva            case 0x1401e6003 -> jmp 0x14025b940
+ 79 Harvest1                 case 0x1401e6302 -> jmp 0x1401bb300
+ 80 Harvest2                 case 0x1401e6686 -> jmp 0x1401c4970
+ 81 MoveToGas                case 0x1401e6302 -> jmp 0x1401bb300
+ 82 WaitForGas               case 0x1401e6314 -> jmp 0x1401bb660
+ 83 HarvestGas               case 0x1401e6326 -> jmp 0x1401bb480
+ 84 ReturnGas                case 0x1401e6530 -> jmp 0x1401bbcd0
+ 85 MoveToMinerals           case 0x1401e6338 -> jmp 0x1401bb8c0
+ 86 WaitForMinerals          case 0x1401e634a -> jmp 0x1401bbbc0
+ 87 MiningMinerals           case 0x1401e635c -> jmp 0x1401bb6d0
+ 88 Harvest3                 case 0x1401e6003 -> jmp 0x14025b940
+ 89 Harvest4                 case 0x1401e6003 -> jmp 0x14025b940
+ 90 ReturnMinerals           case 0x1401e6530 -> jmp 0x1401bbcd0
+ 91 Interrupted              case 0x1401e6003 -> jmp 0x14025b940
+ 92 EnterTransport           case 0x1401e622a -> jmp 0x1401e1780
+ 93 PickupIdle               case 0x1401e647c -> jmp 0x1401e1df0
+ 94 PickupTransport          case 0x1401e623c -> jmp 0x1401e1870
+ 95 PickupBunker             case 0x1401e6260 -> jmp 0x1401e1960
+ 96 Pickup4                  case 0x1401e63ec -> jmp 0x1401e1ba0
+ 97 PowerupIdle              case 0x1401e64b2 -> jmp 0x1401c44f0
+ 98 Sieging                  case 0x1401e6003 -> jmp 0x14025b940
+ 99 Unsieging                case 0x1401e6003 -> jmp 0x14025b940
+100 WatchTarget              case 0x1401e6650 -> jmp 0x1401c5d40
+101 InitCreepGrowth          case 0x1401e6392 -> jmp 0x1401ef640
+102 SpreadCreep              case 0x1401e6003 -> jmp 0x14025b940
+103 StoppingCreepGrowth      case 0x1401e65ae -> jmp 0x1401f01e0
+104 GuardianAspect           case 0x1401e6003 -> jmp 0x14025b940
+105 ArchonWarp               case 0x1401e6003 -> jmp 0x14025b940
+106 CompletingArchonSummon   case 0x1401e6003 -> jmp 0x14025b940
+107 HoldPosition             case 0x1401e636e -> jmp 0x1401b4130
+108 QueenHoldPosition        case 0x1401e5efa -> call 0x1401cc990
+109 Cloak                    case 0x1401e6003 -> jmp 0x14025b940
+110 Decloak                  case 0x1401e6003 -> jmp 0x14025b940
+111 Unload                   case 0x1401e662c -> jmp 0x1401e1e60
+112 MoveUnload               case 0x1401e63da -> jmp 0x1401e19b0
+113 FireYamatoGun            case 0x1401e6674 -> jmp 0x1401d9d40
+114 MoveToFireYamatoGun      case 0x1401e6686 -> jmp 0x1401c4970
+115 CastLockdown             case 0x1401e6674 -> jmp 0x1401d9d40
+116 Burrowing                case 0x1401e60b0 -> jmp 0x1401eec50
+117 Burrowed                 case 0x1401e60c2 -> jmp 0x1401eef00
+118 Unburrowing              case 0x1401e6188 -> jmp 0x1401eefa0
+119 CastDarkSwarm            case 0x1401e6674 -> jmp 0x1401d9d40
+120 CastParasite             case 0x1401e6674 -> jmp 0x1401d9d40
+121 CastSpawnBroodlings      case 0x1401e6674 -> jmp 0x1401d9d40
+122 CastEMPShockwave         case 0x1401e6674 -> jmp 0x1401d9d40
+123 NukeWait                 case 0x1401e6003 -> jmp 0x14025b940
+124 NukeTrain                case 0x1401e6003 -> jmp 0x14025b940
+125 NukeLaunch               case 0x1401e6422 -> jmp 0x1401dfdd0
+126 NukePaint                case 0x1401e6434 -> jmp 0x1401e0190
+127 NukeUnit                 case 0x1401e6446 -> jmp 0x1401b4450
+128 CastNuclearStrike        case 0x1401e6410 -> jmp 0x1401b41e0
+129 NukeTrack                case 0x1401e6003 -> jmp 0x14025b940
+130 InitializeArbiter        case 0x1401e6003 -> jmp 0x14025b940
+131 CloakNearbyUnits         case 0x1401e6003 -> jmp 0x14025b940
+132 PlaceMine                case 0x1401e64a0 -> jmp 0x1401e02f0
+133 RightClickAction         case 0x1401e64fa -> jmp 0x1401d3950
+134 SuicideUnit              case 0x1401e6554 -> jmp 0x1401b4910
+135 SuicideLocation          case 0x1401e6542 -> jmp 0x1401b4850
+136 SuicideHoldPosition      case 0x1401e5efa -> call 0x1401cc990
+137 CastRecall               case 0x1401e65d2 -> jmp 0x1401d25d0
+138 Teleport                 case 0x1401e6003 -> jmp 0x14025b940
+139 CastScannerSweep         case 0x1401e6566 -> jmp 0x1401e0480
+140 Scanner                  case 0x1401e6578 -> jmp 0x1401e06e0
+141 CastDefensiveMatrix      case 0x1401e619a -> jmp 0x1401de390
+142 CastPsionicStorm         case 0x1401e6674 -> jmp 0x1401d9d40
+143 CastIrradiate            case 0x1401e6674 -> jmp 0x1401d9d40
+144 CastPlague               case 0x1401e6674 -> jmp 0x1401d9d40
+145 CastConsume              case 0x1401e6674 -> jmp 0x1401d9d40
+146 CastEnsnare              case 0x1401e6674 -> jmp 0x1401d9d40
+147 CastStasisField          case 0x1401e6674 -> jmp 0x1401d9d40
+148 CastHallucination        case 0x1401e611c -> jmp 0x1401cbcf0
+149 Hallucination2           case 0x1401e6003 -> jmp 0x14025b940
+150 ResetCollision           case 0x1401e6003 -> jmp 0x14025b940
+151 ResetHarvestCollision    case 0x1401e6003 -> jmp 0x14025b940
+152 Patrol                   case 0x1401e646a -> jmp 0x1401b44a0
+153 CTFCOPInit               case 0x1401e6164 -> jmp 0x1401a89e0
+154 CTFCOP1                  case 0x1401e6176 -> jmp 0x1401a89a0
+155 CTFCOP2                  case 0x1401e6003 -> jmp 0x14025b940
+156 ComputerAI               case 0x1401e6140 -> jmp 0x14025b760
+157 AtkMoveEP                case 0x1401e6056 -> jmp 0x1401b3a70
+158 HarassMove               case 0x1401e6272 -> jmp 0x1401b3fd0
+159 AIPatrol                 case 0x1401e600e -> jmp 0x14025b940
+160 GuardPost                case 0x1401e62f0 -> jmp 0x1401b3ee0
+161 RescuePassive            case 0x1401e650c -> jmp 0x14025bcf0
+162 Neutral                  case 0x1401e63fe -> jmp 0x14025ba40
+163 ComputerReturn           case 0x1401e6152 -> jmp 0x1401b3880
+164 InitializePsiProvider    case 0x1401e63a4 -> jmp 0x1401d1c20
+165 SelfDestructing          case 0x1401e6003 -> jmp 0x14025b940
+166 Critter                  case 0x1401e6003 -> jmp 0x14025b940
+167 HiddenGun                case 0x1401e6284 -> jmp 0x1401c55d0
+168 OpenDoor                 case 0x1401e61ac -> jmp 0x1401c51e0
+169 CloseDoor                case 0x1401e61be -> jmp 0x1401c5160
+170 HideTrap                 case 0x1401e6296 -> jmp 0x1401c5740
+171 RevealTrap               case 0x1401e62a8 -> jmp 0x1401c5b00
+172 EnableDoodad             case 0x1401e61e2 -> jmp 0x1401c5250
+173 DisableDoodad            case 0x1401e61d0 -> jmp 0x1401c5010
+174 WarpIn                   case 0x1401e6003 -> jmp 0x14025b940
+175 Medic                    case 0x1401e6698 -> jmp 0x1401df940
+176 MedicHeal                case 0x1401e6003 -> jmp 0x14025b940
+177 HealMove                 case 0x1401e6003 -> jmp 0x14025b940
+178 MedicHoldPosition        case 0x1401e6003 -> jmp 0x14025b940
+179 MedicHealToIdle          case 0x1401e6003 -> jmp 0x14025b940
+180 CastRestoration          case 0x1401e6674 -> jmp 0x1401d9d40
+181 CastDisruptionWeb        case 0x1401e6674 -> jmp 0x1401d9d40
+182 CastMindControl          case 0x1401e66aa -> jmp 0x1401cbfa0
+183 DarkArchonMeld           case 0x1401e6003 -> jmp 0x14025b940
+184 CastFeedback             case 0x1401e66bc -> jmp 0x1401cc190
+185 CastOpticalFlare         case 0x1401e6674 -> jmp 0x1401d9d40
+186 CastMaelstrom            case 0x1401e6674 -> jmp 0x1401d9d40
+187 JunkYardDog              case 0x1401e66ce -> jmp 0x1401c58b0

@@ -207,6 +207,14 @@ dat!(Techdata, "arr/techdata.dat", 44;
     broodwar: u8 = (1, 44, 0),
 );
 
+dat!(Sfxdata, "arr/sfxdata.dat", 1144;
+    file: u32 = (4, 1144, 0), // 1-based sfxdata.tbl index
+    priority: u8 = (1, 1144, 0),
+    flags: u8 = (1, 1144, 0),
+    race: u16 = (2, 1144, 0),
+    volume: u8 = (1, 1144, 0),
+);
+
 pub struct Dat {
     pub units: Units,
     pub weapons: Weapons,
@@ -216,6 +224,7 @@ pub struct Dat {
     pub orders: Orders,
     pub upgrades: Upgrades,
     pub techdata: Techdata,
+    pub sfxdata: Sfxdata,
 }
 
 impl Dat {
@@ -229,6 +238,7 @@ impl Dat {
             orders: Orders::load(casc)?,
             upgrades: Upgrades::load(casc)?,
             techdata: Techdata::load(casc)?,
+            sfxdata: Sfxdata::load(casc)?,
         })
     }
 }

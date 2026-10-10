@@ -47,6 +47,34 @@ impl Chk {
         self.u16s(b"ERA ").first().copied().unwrap_or(0) as usize & 7
     }
 
+    /// OWNR: per-slot controller (0 inactive, 3 rescuable, 5 computer, 6 human, 7 neutral).
+    pub fn owners(&self) -> [u8; 12] {
+        let mut o = [0u8; 12];
+        if let Some(s) = self.section(b"OWNR") {
+            o[..s.len().min(12)].copy_from_slice(&s[..s.len().min(12)]);
+        }
+        o
+    }
+
+    /// SIDE: per-slot race (0 zerg, 1 terran, 2 protoss, 5 user select, 7 inactive).
+    pub fn races(&self) -> [u8; 12] {
+        let mut o = [0u8; 12];
+        if let Some(s) = self.section(b"SIDE") {
+            o[..s.len().min(12)].copy_from_slice(&s[..s.len().min(12)]);
+        }
+        o
+    }
+
+    /// STR string table (1-based ids, as referenced by other sections).
+    pub fn string(&self, id: u16) -> Option<String> {
+        let s = self.section(b"STR ")?;
+        let n = u16::from_le_bytes([s[0], s[1]]) as usize;
+        let i = (id as usize).checked_sub(1).filter(|&i| i < n)?;
+        let o = u16::from_le_bytes([*s.get(2 + i * 2)?, *s.get(3 + i * 2)?]) as usize;
+        let end = s[o..].iter().position(|&b| b == 0).map_or(s.len(), |e| o + e);
+        Some(String::from_utf8_lossy(&s[o..end]).into_owned())
+    }
+
     /// Megatile ids, row-major, padded to width*height.
     pub fn tiles(&self) -> Vec<u16> {
         let (w, h) = self.dims();

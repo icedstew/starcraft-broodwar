@@ -1,0 +1,180 @@
+  4 TurretGuard              case 0x1401e5e4d -> call 0x1401b4d90
+  5 BunkerGuard              case 0x1401e5ea5 -> call 0x1402791b0
+  6 Move                     case 0x1401e5ea5 -> call 0x1402791b0
+  7 ReaverStop               case 0x1401e5ea5 -> call 0x1402791b0
+  8 Attack1                  case 0x1401e5ea5 -> call 0x1402791b0
+  9 Attack2                  case 0x1401e5ea5 -> call 0x1402791b0
+ 10 AttackUnit               case 0x1401e5ea5 -> call 0x1402791b0
+ 11 AttackFixedRange         case 0x1401e5ea5 -> call 0x1402791b0
+ 12 AttackTile               case 0x1401e5ea5 -> call 0x1402791b0
+ 13 Hover                    case 0x1401e5ea5 -> call 0x1402791b0
+ 14 AttackMove               case 0x1401e5ea5 -> call 0x1402791b0
+ 15 InfestedCommandCenter    case 0x1401e5ea5 -> call 0x1402791b0
+ 16 UnusedNothing            case 0x1401e5ea5 -> call 0x1402791b0
+ 17 UnusedPowerup            case 0x1401e5ea5 -> call 0x1402791b0
+ 18 TowerGuard               case 0x1401e5ea5 -> call 0x1402791b0
+ 19 TowerAttack              case 0x1401e5ea5 -> call 0x1402791b0
+ 20 VultureMine              case 0x1401e5ea5 -> call 0x1402791b0
+ 21 StayInRange              case 0x1401e5ea5 -> call 0x1402791b0
+ 22 TurretAttack             case 0x1401e5e43 -> call 0x1401b4b80
+ 23 Nothing                  case 0x1401e5ea5 -> call 0x1402791b0
+ 24 Unused_24                case 0x1401e5ea5 -> call 0x1402791b0
+ 25 DroneStartBuild          case 0x1401e5ea5 -> call 0x1402791b0
+ 26 DroneBuild               case 0x1401e5d6f -> call 0x1401ecbc0
+ 27 CastInfestation          case 0x1401e5ea5 -> call 0x1402791b0
+ 28 MoveToInfest             case 0x1401e5ea5 -> call 0x1402791b0
+ 29 InfestingCommandCenter   case 0x1401e5ea5 -> call 0x1402791b0
+ 30 PlaceBuilding            case 0x1401e5d21 -> call 0x1401a5f00
+ 31 PlaceProtossBuilding     case 0x1401e5d2e -> call 0x1401caf40
+ 32 CreateProtossBuilding    case 0x1401e5ea5 -> call 0x1402791b0
+ 33 ConstructingBuilding     case 0x1401e5d55 -> call 0x1401a6430
+ 34 Repair                   case 0x1401e5dd7 -> call 0x1401a6a40
+ 35 MoveToRepair             case 0x1401e5ea5 -> call 0x1402791b0
+ 36 PlaceAddon               case 0x1401e5ea5 -> call 0x1402791b0
+ 37 BuildAddon               case 0x1401e5ea5 -> call 0x1402791b0
+ 38 Train                    case 0x1401e5ea5 -> call 0x1402791b0
+ 39 RallyPointUnit           case 0x1401e5ea5 -> call 0x1402791b0
+ 40 RallyPointTile           case 0x1401e5ea5 -> call 0x1402791b0
+ 41 ZergBirth                case 0x1401e5e75 -> call 0x1401ed290
+ 42 ZergUnitMorph            case 0x1401e5da3 -> call 0x1401eced0
+ 43 ZergBuildingMorph        case 0x1401e5ea5 -> call 0x1402791b0
+ 44 IncompleteBuilding       case 0x1401e5d3b -> call 0x1401a62c0
+ 45 IncompleteMorphing       case 0x1401e5d48 -> call 0x1401ec960
+ 46 BuildNydusExit           case 0x1401e5ea5 -> call 0x1402791b0
+ 47 EnterNydusCanal          case 0x1401e5ea5 -> call 0x1402791b0
+ 48 IncompleteWarping        case 0x1401e5ea5 -> call 0x1402791b0
+ 49 Follow                   case 0x1401e5ea5 -> call 0x1402791b0
+ 50 Carrier                  case 0x1401e5ea5 -> call 0x1402791b0
+ 51 ReaverCarrierMove        case 0x1401e5ea5 -> call 0x1402791b0
+ 52 CarrierStop              case 0x1401e5ea5 -> call 0x1402791b0
+ 53 CarrierAttack            case 0x1401e5ea5 -> call 0x1402791b0
+ 54 CarrierMoveToAttack      case 0x1401e5ea5 -> call 0x1402791b0
+ 55 CarrierIgnore2           case 0x1401e5ea5 -> call 0x1402791b0
+ 56 CarrierFight             case 0x1401e5ea5 -> call 0x1402791b0
+ 57 CarrierHoldPosition      case 0x1401e5ea5 -> call 0x1402791b0
+ 58 Reaver                   case 0x1401e5ea5 -> call 0x1402791b0
+ 59 ReaverAttack             case 0x1401e5ea5 -> call 0x1402791b0
+ 60 ReaverMoveToAttack       case 0x1401e5ea5 -> call 0x1402791b0
+ 61 ReaverFight              case 0x1401e5ea5 -> call 0x1402791b0
+ 62 ReaverHoldPosition       case 0x1401e5ea5 -> call 0x1402791b0
+ 63 TrainFighter             case 0x1401e5ea5 -> call 0x1402791b0
+ 64 InterceptorAttack        case 0x1401e5ea5 -> call 0x1402791b0
+ 65 ScarabAttack             case 0x1401e5e39 -> call 0x1401ab930
+ 66 RechargeShieldsUnit      case 0x1401e5dca -> call 0x1401d1cb0
+ 67 RechargeShieldsBattery   case 0x1401e5ea5 -> call 0x1402791b0
+ 68 ShieldBattery            case 0x1401e5ea5 -> call 0x1402791b0
+ 69 InterceptorReturn        case 0x1401e5ea5 -> call 0x1402791b0
+ 70 DroneLand                case 0x1401e5ea5 -> call 0x1402791b0
+ 71 BuildingLand             case 0x1401e5d07 -> call 0x1401df120
+ 72 BuildingLiftOff          case 0x1401e5d14 -> call 0x1401df5a0
+ 73 DroneLiftOff             case 0x1401e5ea5 -> call 0x1402791b0
+ 74 LiftingOff               case 0x1401e5ea5 -> call 0x1402791b0
+ 75 ResearchTech             case 0x1401e5de4 -> call 0x1401e8070
+ 76 Upgrade                  case 0x1401e5e6b -> call 0x1401e8140
+ 77 Larva                    case 0x1401e5ea5 -> call 0x1402791b0
+ 78 SpawningLarva            case 0x1401e5ea5 -> call 0x1402791b0
+ 79 Harvest1                 case 0x1401e5ea5 -> call 0x1402791b0
+ 80 Harvest2                 case 0x1401e5ea5 -> call 0x1402791b0
+ 81 MoveToGas                case 0x1401e5ea5 -> call 0x1402791b0
+ 82 WaitForGas               case 0x1401e5ea5 -> call 0x1402791b0
+ 83 HarvestGas               case 0x1401e5ea5 -> call 0x1402791b0
+ 84 ReturnGas                case 0x1401e5ea5 -> call 0x1402791b0
+ 85 MoveToMinerals           case 0x1401e5ea5 -> call 0x1402791b0
+ 86 WaitForMinerals          case 0x1401e5ea5 -> call 0x1402791b0
+ 87 MiningMinerals           case 0x1401e5ea5 -> call 0x1402791b0
+ 88 Harvest3                 case 0x1401e5d89 -> call 0x1401bbc30
+ 89 Harvest4                 case 0x1401e5d7c -> call 0x1401bbc60
+ 90 ReturnMinerals           case 0x1401e5ea5 -> call 0x1402791b0
+ 91 Interrupted              case 0x1401e5e0b -> call 0x1401d1f40
+ 92 EnterTransport           case 0x1401e5ea5 -> call 0x1402791b0
+ 93 PickupIdle               case 0x1401e5ea5 -> call 0x1402791b0
+ 94 PickupTransport          case 0x1401e5ea5 -> call 0x1402791b0
+ 95 PickupBunker             case 0x1401e5ea5 -> call 0x1402791b0
+ 96 Pickup4                  case 0x1401e5ea5 -> call 0x1402791b0
+ 97 PowerupIdle              case 0x1401e5ea5 -> call 0x1402791b0
+ 98 Sieging                  case 0x1401e5dfe -> call 0x1401e0700
+ 99 Unsieging                case 0x1401e5e2f -> call 0x1401e0940
+100 WatchTarget              case 0x1401e5ea5 -> call 0x1402791b0
+101 InitCreepGrowth          case 0x1401e5ea5 -> call 0x1402791b0
+102 SpreadCreep              case 0x1401e5ea5 -> call 0x1402791b0
+103 StoppingCreepGrowth      case 0x1401e5ea5 -> call 0x1402791b0
+104 GuardianAspect           case 0x1401e5ea5 -> call 0x1402791b0
+105 ArchonWarp               case 0x1401e5e18 -> call 0x1401d1fa0
+106 CompletingArchonSummon   case 0x1401e5e25 -> call 0x1401d2210
+107 HoldPosition             case 0x1401e5ea5 -> call 0x1402791b0
+108 QueenHoldPosition        case 0x1401e5ea5 -> call 0x1402791b0
+109 Cloak                    case 0x1401e5ea5 -> call 0x1402791b0
+110 Decloak                  case 0x1401e5ea5 -> call 0x1402791b0
+111 Unload                   case 0x1401e5ea5 -> call 0x1402791b0
+112 MoveUnload               case 0x1401e5ea5 -> call 0x1402791b0
+113 FireYamatoGun            case 0x1401e5ea5 -> call 0x1402791b0
+114 MoveToFireYamatoGun      case 0x1401e5ea5 -> call 0x1402791b0
+115 CastLockdown             case 0x1401e5ea5 -> call 0x1402791b0
+116 Burrowing                case 0x1401e5ea5 -> call 0x1402791b0
+117 Burrowed                 case 0x1401e5ea5 -> call 0x1402791b0
+118 Unburrowing              case 0x1401e5ea5 -> call 0x1402791b0
+119 CastDarkSwarm            case 0x1401e5ea5 -> call 0x1402791b0
+120 CastParasite             case 0x1401e5ea5 -> call 0x1402791b0
+121 CastSpawnBroodlings      case 0x1401e5ea5 -> call 0x1402791b0
+122 CastEMPShockwave         case 0x1401e5ea5 -> call 0x1402791b0
+123 NukeWait                 case 0x1401e5ea5 -> call 0x1402791b0
+124 NukeTrain                case 0x1401e5db0 -> call 0x1401ddd90
+125 NukeLaunch               case 0x1401e5ea5 -> call 0x1402791b0
+126 NukePaint                case 0x1401e5ea5 -> call 0x1402791b0
+127 NukeUnit                 case 0x1401e5ea5 -> call 0x1402791b0
+128 CastNuclearStrike        case 0x1401e5ea5 -> call 0x1402791b0
+129 NukeTrack                case 0x1401e5ea5 -> call 0x1402791b0
+130 InitializeArbiter        case 0x1401e5cfa -> call 0x1401d1b40
+131 CloakNearbyUnits         case 0x1401e5ea5 -> call 0x1402791b0
+132 PlaceMine                case 0x1401e5ea5 -> call 0x1402791b0
+133 RightClickAction         case 0x1401e5ea5 -> call 0x1402791b0
+134 SuicideUnit              case 0x1401e5ea5 -> call 0x1402791b0
+135 SuicideLocation          case 0x1401e5ea5 -> call 0x1402791b0
+136 SuicideHoldPosition      case 0x1401e5ea5 -> call 0x1402791b0
+137 CastRecall               case 0x1401e5ea5 -> call 0x1402791b0
+138 Teleport                 case 0x1401e5ea5 -> call 0x1402791b0
+139 CastScannerSweep         case 0x1401e5ea5 -> call 0x1402791b0
+140 Scanner                  case 0x1401e5ea5 -> call 0x1402791b0
+141 CastDefensiveMatrix      case 0x1401e5ea5 -> call 0x1402791b0
+142 CastPsionicStorm         case 0x1401e5ea5 -> call 0x1402791b0
+143 CastIrradiate            case 0x1401e5ea5 -> call 0x1402791b0
+144 CastPlague               case 0x1401e5ea5 -> call 0x1402791b0
+145 CastConsume              case 0x1401e5ea5 -> call 0x1402791b0
+146 CastEnsnare              case 0x1401e5ea5 -> call 0x1402791b0
+147 CastStasisField          case 0x1401e5ea5 -> call 0x1402791b0
+148 CastHallucination        case 0x1401e5ea5 -> call 0x1402791b0
+149 Hallucination2           case 0x1401e5ea5 -> call 0x1402791b0
+150 ResetCollision           case 0x1401e5e57 -> call 0x1401a7130
+151 ResetHarvestCollision    case 0x1401e5e61 -> call 0x1401d06f0
+152 Patrol                   case 0x1401e5ea5 -> call 0x1402791b0
+153 CTFCOPInit               case 0x1401e5ea5 -> call 0x1402791b0
+154 CTFCOP1                  case 0x1401e5ea5 -> call 0x1402791b0
+155 CTFCOP2                  case 0x1401e5dbd -> call 0x1401a8ad0
+156 ComputerAI               case 0x1401e5ea5 -> call 0x1402791b0
+157 AtkMoveEP                case 0x1401e5ea5 -> call 0x1402791b0
+158 HarassMove               case 0x1401e5ea5 -> call 0x1402791b0
+159 AIPatrol                 case 0x1401e5ea5 -> call 0x1402791b0
+160 GuardPost                case 0x1401e5ea5 -> call 0x1402791b0
+161 RescuePassive            case 0x1401e5ea5 -> call 0x1402791b0
+162 Neutral                  case 0x1401e5ea5 -> call 0x1402791b0
+163 ComputerReturn           case 0x1401e5ea5 -> call 0x1402791b0
+164 InitializePsiProvider    case 0x1401e5ea5 -> call 0x1402791b0
+165 SelfDestructing          case 0x1401e5df1 -> call 0x1401c9b30
+166 Critter                  case 0x1401e5d62 -> call 0x1401c4ea0
+167 HiddenGun                case 0x1401e5ea5 -> call 0x1402791b0
+168 OpenDoor                 case 0x1401e5ea5 -> call 0x1402791b0
+169 CloseDoor                case 0x1401e5ea5 -> call 0x1402791b0
+170 HideTrap                 case 0x1401e5ea5 -> call 0x1402791b0
+171 RevealTrap               case 0x1401e5ea5 -> call 0x1402791b0
+172 EnableDoodad             case 0x1401e5ea5 -> call 0x1402791b0
+173 DisableDoodad            case 0x1401e5ea5 -> call 0x1402791b0
+174 WarpIn                   case 0x1401e5ea5 -> call 0x1402791b0
+175 Medic                    case 0x1401e5ea5 -> call 0x1402791b0
+176 MedicHeal                case 0x1401e5e89 -> call 0x1401dfa10
+177 HealMove                 case 0x1401e5e93 -> call 0x1401dfb10
+178 MedicHoldPosition        case 0x1401e5e9d -> call 0x1401dfc60
+179 MedicHealToIdle          case 0x1401e5d96 -> call 0x1401dfda0
+180 CastRestoration          case 0x1401e5ea5 -> call 0x1402791b0
+181 CastDisruptionWeb        case 0x1401e5ea5 -> call 0x1402791b0
+182 CastMindControl          case 0x1401e5ea5 -> call 0x1402791b0
+183 DarkArchonMeld           case 0x1401e5e7f -> call 0x1401d22f0
