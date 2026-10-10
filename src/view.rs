@@ -96,7 +96,8 @@ impl<'a> Scene<'a> {
         let remaps = ["ofire", "gfire", "bfire", "bexpl", "trans50", "red", "green"].map(tbl);
         let frames = |id: u16| a.grp(id).map_or(0, |g| g.frame_count() as u16);
         let w = World { dat: &a.dat, iscript: &a.iscript, grp_frames: &frames, tileset: chk.tileset() as u16 };
-        let game = crate::game::Game::new(&w, &chk);
+        let (gw, gh, walk) = map::walk_grid(&chk, &ts);
+        let game = crate::game::Game::new(&w, &chk, crate::game::path::WalkGrid { w: gw, h: gh, walk });
         Ok(Scene { game, selected: Vec::new(), drag_box: None, a, chk, ts, terrain, player_colors, shadow, remaps })
     }
 

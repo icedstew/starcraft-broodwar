@@ -130,6 +130,8 @@ pub enum Effect {
     BulletHit { bullet: usize },
     /// 0x2a gotorepeatattk: attacker may start the next attack cycle.
     RepeatAttack { unit: usize },
+    /// 0x29 move: iscript-driven movement (flingy movement type 2) advances this many pixels.
+    Move { unit: usize, dist: u8 },
 }
 
 pub struct World<'a> {
@@ -442,7 +444,14 @@ impl Sprite {
                     self.update_all_frames(w);
                     continue;
                 }
-                0x23 | 0x24 | 0x29 | 0x2b | 0x31 | 0x38 | 0x41 => pc += 1, // unit-side, 1 byte arg
+                0x29 => {
+                    let d = u8_at(pc);
+                    pc += 1;
+                    if let Some(unit) = self.unit {
+                        fx.push(Effect::Move { unit, dist: d });
+                    }
+                }
+                0x23 | 0x24 | 0x2b | 0x31 | 0x38 | 0x41 => pc += 1, // unit-side, 1 byte arg
                 0x2c => {
                     // engset: frame block n of the main image
                     let n = u8_at(pc) as u16;

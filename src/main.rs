@@ -90,6 +90,9 @@ fn main() -> std::io::Result<()> {
                 sel.truncate(n);
                 scene.selected = sel;
             }
+            if std::env::var("SCBW_SEL_ALL").is_ok() {
+                scene.selected = (0..scene.game.units.len()).filter(|&u| scene.game.units[u].owner == 0).collect();
+            }
             // Debug: SCBW_MOVE=x,y orders the selection to move there before stepping.
             if let Some((mx, my)) = std::env::var("SCBW_MOVE").ok().and_then(|v| {
                 let (a, b) = v.split_once(',')?;
@@ -97,17 +100,34 @@ fn main() -> std::io::Result<()> {
             }) {
                 for &u in &scene.selected.clone() {
                     let t = game::Target { pos: (mx, my), unit: None };
-                    scene.game.issue_order(u, game::orders::id::MOVE, t, false);
+                    if scene.game.units[u].owner == 0 {
+                        scene.game.issue_order(u, game::orders::id::MOVE, t, false);
+                    }
                 }
             }
             for _ in 0..frames {
                 scene.step();
+            }
+            if std::env::var("SCBW_DEBUG").is_ok() {
+                for (i, u) in scene.game.units.iter().enumerate().filter(|(_, u)| u.owner < 8) {
+                    eprintln!("unit {i} kind {} owner {} order {} state {} pos {:?} target {:?} path {:?} hp {} dead {}",
+                        u.kind, u.owner, u.order, u.order_state, u.flingy.pos, u.flingy.move_target, u.path, u.hp, u.dead);
+                }
             }
             let ui = ui::Ui::load(&a.casc, ["zerg", "terran", "protoss"][scene.local_race()]).ok();
             let (w, h) = (view::SCREEN_W as usize, view::SCREEN_H as usize);
             let (mut idx, mut rgb) = (vec![0u8; w * h], vec![0u32; w * h]);
             view::compose(&scene, ui.as_ref(), x, y, &mut idx, &mut rgb);
             write_png_rgb(&args[2], w, h, &rgb)?;
+        }
+        Some("path") => {
+            let chk = load_chk(&args[1])?;
+            let ts = map::Tileset::load(&casc, chk.tileset())?;
+            let (w, h, walk) = map::walk_grid(&chk, &ts);
+            let g = game::path::WalkGrid { w, h, walk };
+            let n: Vec<i32> = args[2..6].iter().map(|v| v.parse().unwrap_or(0)).collect();
+            let t = std::time::Instant::now();
+            println!("{:?} in {:?}", g.find((n[0], n[1]), (n[2], n[3])), t.elapsed());
         }
         Some("walk") => {
             let chk = load_chk(&args[1])?;

@@ -101,8 +101,14 @@ pub fn order_attack_unit(g: &mut Game, w: &World, u: UnitId) {
     let range = w.dat.weapons.max_range[wpn as usize];
     let is_sub = w.dat.units.flags[g.units[u].kind] & 0x10 != 0;
     if units_distance(g, w, u, t) > range {
-        if !is_sub {
-            g.units[u].flingy.set_move_target(tx as i16, ty as i16);
+        // Re-path only when the target moved away from our current goal (pathing is not free).
+        let goal_far = {
+            let un = &g.units[u];
+            let goal = un.path.back().copied().unwrap_or(un.flingy.move_target);
+            (goal.0 as i32 - tx).abs() + (goal.1 as i32 - ty).abs() > 32
+        };
+        if !is_sub && goal_far {
+            g.move_unit(w, u, tx as i16, ty as i16);
         }
         return;
     }
@@ -111,7 +117,9 @@ pub fn order_attack_unit(g: &mut Game, w: &World, u: UnitId) {
     if !is_sub && fl.move_target != fl.pos {
         let p = fl.pos;
         fl.set_move_target(p.0, p.1);
+        g.units[u].path.clear();
     }
+    let fl = &mut g.units[u].flingy;
     fl.next_target_waypoint = (tx as i16, ty as i16);
     fl.flags |= super::flingy::mflags::TURNING;
     let (ux, uy) = (fl.pos.0 as i32, fl.pos.1 as i32);

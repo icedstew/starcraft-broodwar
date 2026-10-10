@@ -73,12 +73,11 @@ fn order_move(g: &mut Game, w: &World, u: UnitId) {
                 }
                 None => t.pos,
             };
-            // ponytail: straight-line move target; BW's set_move_target also runs the pathfinder.
-            g.units[u].flingy.set_move_target(x, y);
+            g.move_unit(w, u, x, y);
             g.units[u].order_state = 1;
         }
         1 => {
-            if g.units[u].flingy.pos == g.units[u].flingy.move_target {
+            if g.units[u].flingy.pos == g.units[u].flingy.move_target && g.units[u].path.is_empty() {
                 order_done(g, w, u);
             }
         }
@@ -89,6 +88,7 @@ fn order_move(g: &mut Game, w: &World, u: UnitId) {
 /// 0x1401c5d10: stop moving, then finish the order.
 fn order_stop(g: &mut Game, w: &World, u: UnitId) {
     let p = g.units[u].flingy.pos;
+    g.units[u].path.clear();
     g.units[u].flingy.set_move_target(p.0, p.1);
     order_done(g, w, u);
 }

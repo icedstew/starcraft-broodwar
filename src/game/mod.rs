@@ -7,6 +7,7 @@
 pub mod combat;
 pub mod flingy;
 pub mod orders;
+pub mod path;
 
 use crate::dat;
 use crate::iscript::{anim, Effect, Rng, Sprite, World};
@@ -41,6 +42,8 @@ pub struct Unit {
     pub air_cooldown: u8,    // +0x72
     /// In an attack cycle (next attack uses the Rpt anim instead of Init).
     pub attacking: bool,
+    /// Remaining waypoints toward move_target (ground units).
+    pub path: VecDeque<(i16, i16)>,
     pub dead: bool,
 }
 
@@ -53,11 +56,12 @@ pub struct Game {
     /// Effects raised outside the sprite pass (anims started by orders), handled with the frame's effects.
     pub pending_fx: Vec<Effect>,
     pub tileset: u16,
+    pub walk: path::WalkGrid,
 }
 
 impl Game {
-    pub fn new(w: &World, chk: &Chk) -> Game {
-        let mut g = Game { frame: 0, rng: Rng { seed: 0 }, units: Vec::new(), sprites: Vec::new(), bullets: Vec::new(), pending_fx: Vec::new(), tileset: chk.tileset() as u16 };
+    pub fn new(w: &World, chk: &Chk, walk: path::WalkGrid) -> Game {
+        let mut g = Game { frame: 0, rng: Rng { seed: 0 }, units: Vec::new(), sprites: Vec::new(), bullets: Vec::new(), pending_fx: Vec::new(), tileset: chk.tileset() as u16, walk };
         g.place_map_objects(w, chk);
         g
     }
@@ -99,6 +103,7 @@ impl Game {
             ground_cooldown: 0,
             air_cooldown: 0,
             attacking: false,
+            path: VecDeque::new(),
             dead: false,
         });
         if (u.subunit1[kind] as usize) < dat::Units::COUNT {
@@ -141,6 +146,26 @@ impl Game {
                 self.add_sprite(s);
             }
         }
+    }
+
+    /// Move toward (x, y), pathing around terrain for ground units.
+    pub fn move_unit(&mut self, w: &World, id: UnitId, x: i16, y: i16) {
+        let u = &mut self.units[id];
+        let flyer = w.dat.units.flags[u.kind] & 0x4 != 0;
+        let from = (u.flingy.pos.0 as i32, u.flingy.pos.1 as i32);
+        u.path.clear();
+        if !flyer {
+            match self.walk.find(from, (x as i32, y as i32)) {
+                Some(p) => u.path.extend(p),
+                None => {
+                    // Unreachable: stay put (BW would move to the closest reachable region).
+                    u.flingy.set_move_target(u.flingy.pos.0, u.flingy.pos.1);
+                    return;
+                }
+            }
+        }
+        let first = u.path.pop_front().unwrap_or((x, y));
+        u.flingy.set_move_target(first.0, first.1);
     }
 
     pub fn unit_pos(&self, id: UnitId) -> (i32, i32) {
@@ -205,6 +230,8 @@ impl Game {
                 Effect::MeleeHit { unit } => combat::melee_hit(self, w, unit),
                 Effect::BulletHit { bullet } => combat::bullet_hit(self, w, bullet),
                 Effect::RepeatAttack { .. } => {}
+                // ponytail: speed upgrades (e.g. leg enhancements) not applied to iscript moves yet.
+                Effect::Move { unit, dist } => self.units[unit].flingy.next_speed = (dist as i32) << 8,
                 Effect::SpawnSprite { sprite, x, y, elevation_delta } => {
                     let mut s = Sprite::new(w, &mut self.rng, sprite, 11, x, y);
                     s.elevation = s.elevation.saturating_add_signed(elevation_delta);
@@ -222,6 +249,12 @@ impl Game {
         let u = &mut self.units[id];
         if w.dat.units.flags[u.kind] & 0x1 != 0 {
             return; // buildings don't move
+        }
+        // Advance along the path when a waypoint is reached.
+        if u.flingy.pos == u.flingy.move_target {
+            if let Some(next) = u.path.pop_front() {
+                u.flingy.set_move_target(next.0, next.1);
+            }
         }
         let r = u.flingy.step(&w.dat.flingy);
         let heading = u.flingy.heading;
