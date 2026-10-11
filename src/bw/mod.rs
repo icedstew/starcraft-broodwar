@@ -15,6 +15,7 @@ pub mod finder;
 pub mod finish;
 pub mod flingy;
 pub mod frame;
+pub mod harvest;
 pub mod iscript;
 pub mod movement;
 pub mod order_exec;

@@ -142,6 +142,23 @@ fn main() -> std::io::Result<()> {
                 let v: Vec<&str> = m.split(';').filter(|p| !p.is_empty()).collect();
                 for (i, &u) in made.iter().enumerate() {
                     let p = v[i % v.len()];
+                    if let Some(rest) = p.strip_prefix('o') {
+                        let (o, xy) = rest.split_once(':').unwrap_or(("0", "0,0"));
+                        let o = if let Some(h) = o.strip_prefix("0x") { u8::from_str_radix(h, 16).unwrap_or(0) } else { o.parse().unwrap_or(0) };
+                        let v: Vec<i16> = xy.split(',').filter_map(|n| n.trim().parse().ok()).collect();
+                        let mut t = bw::list::NIL;
+                        let mut a = st.visible_units.head;
+                        while a != bw::list::NIL {
+                            let s = &st.sprites[st.units[a as usize].sprite as usize];
+                            if (s.x, s.y) == (v[0], v[1]) {
+                                t = a;
+                            }
+                            a = st.units[a as usize].link.next;
+                        }
+                        let pos = (v[0], v[1]);
+                        st.order_target(&d, u, o, pos, t);
+                        continue;
+                    }
                     if let Some(k) = p.strip_prefix('@') {
                         let t = made[k.parse::<usize>().unwrap_or(0)];
                         let s = &st.sprites[st.units[t as usize].sprite as usize];
@@ -176,6 +193,8 @@ fn main() -> std::io::Result<()> {
                     writeln!(t, "{}", thingy_trace(&st, f))?;
                     writeln!(t, "{}", fog_trace(&st, f))?;
                     writeln!(t, "{}", bullet_trace(&st, f))?;
+                    let r: Vec<String> = (0..2).map(|p| format!("{},{}", st.players.minerals[p], st.players.gas[p])).collect();
+                    writeln!(t, "f{f} res {}", r.join(" "))?;
                     writeln!(t, "f{f} rng {:#x} {}", st.rng.seed, st.rng.total)?;
                 }
                 if f % 8 == 0 || f + 1 == frames {

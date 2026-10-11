@@ -472,7 +472,9 @@ pub fn run(st: &mut State, d: &Data, img: u32, nse: bool, mut distance: Option<&
             0x28 => {
                 p = a + 1;
                 if !nse {
-                    todo_port!("0x1401b5060", "useweapon");
+                    if let Some(u) = unit {
+                        st.use_weapon(d, u, u8_(a));
+                    }
                 }
             }
             0x29 => {

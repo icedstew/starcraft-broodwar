@@ -2,6 +2,11 @@
 
 #[derive(Clone, Debug)]
 pub struct Players {
+    /// 0x57f0f0 / 0x57f120: minerals and gas; 0x57f180 / 0x57f150: gathered totals.
+    pub minerals: [i32; 12],
+    pub gas: [i32; 12],
+    pub minerals_gathered: [i32; 12],
+    pub gas_gathered: [i32; 12],
     /// 0x58d2b0: upgrade levels 0..46, [player][upgrade].
     pub upgrade_sc: [[u8; 46]; 12],
     /// 0x58f32c: Brood War upgrade levels 46..61.
@@ -34,6 +39,10 @@ pub struct Players {
 impl Default for Players {
     fn default() -> Players {
         Players {
+            minerals: [0; 12],
+            gas: [0; 12],
+            minerals_gathered: [0; 12],
+            gas_gathered: [0; 12],
             upgrade_sc: [[0; 46]; 12],
             upgrade_bw: [[0; 15]; 12],
             upgrade_in_progress: [[0; 8]; 12],

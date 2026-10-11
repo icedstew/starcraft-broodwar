@@ -173,7 +173,7 @@ impl State {
     }
 
     /// 0x4eb720: move toward unit `target` (move target unit +0x14).
-    fn move_to_unit(&mut self, d: &Data, u: u32, target: u32) -> bool {
+    pub(super) fn move_to_unit(&mut self, d: &Data, u: u32, target: u32) -> bool {
         let un = &self.units[u as usize];
         if un.move_target_unit == target {
             let ts = &self.sprites[self.units[target as usize].sprite as usize];
@@ -817,5 +817,18 @@ impl State {
         let bonus = (d.dat.weapons.damage_bonus[w as usize] as u32 * level) & 0xffff;
         let dmg = (bonus + d.dat.weapons.damage[w as usize] as u32) << 8;
         self.damage_unit(d, t, dmg, w, 1, dir, u, player);
+    }
+
+    /// 0x479c30: iscript `useweapon`: weapon `w` at the order target position.
+    pub fn use_weapon(&mut self, d: &Data, u: u32, w: u8) {
+        if d.dat.weapons.flingy[w as usize] == 0 {
+            return;
+        }
+        let un = &self.units[u as usize];
+        let (p, player, dir) = (un.order_target_pos, un.player, un.fl.heading);
+        self.create_bullet(d, u, w, p.0, p.1, player, dir);
+        if d.dat.weapons.damage_factor[w as usize] == 2 {
+            self.create_bullet(d, u, w, p.0, p.1, player, dir);
+        }
     }
 }

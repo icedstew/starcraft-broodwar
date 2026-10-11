@@ -230,6 +230,17 @@ def scenario(e, units, move, frames, out):
     if move:
         for i, u in enumerate(made):
             m = move[i % len(move)]
+            if m[0] == "o":  # order m[1] targeting the unit at position m[2]
+                t = UNITS
+                a = e.r32(0x628430)
+                while a:
+                    sp = e.r32(a + 0xc)
+                    if (s16(e, sp + 0x14), s16(e, sp + 0x16)) == m[2]:
+                        t = a
+                    a = e.r32(a + 4)
+                sp = e.r32(t + 0xc)
+                e.call(0x474c30, regs={"esi": UNITS + u * 0x150}, stack=[m[1], e.r32(sp + 0x14), t])
+                continue
             if m[0] == "@":  # attack made unit k (AttackUnit, order 0xa)
                 t = UNITS + made[m[1]] * 0x150
                 sp = e.r32(t + 0xc)
@@ -252,6 +263,7 @@ def scenario(e, units, move, frames, out):
             fo.write(thingy_trace(e, f) + "\n")
             fo.write(fog_trace(e, f) + "\n")
             fo.write(bullet_trace(e, f) + "\n")
+            fo.write(f"f{f} res " + " ".join(f"{e.r32(0x57f0f0 + p * 4)},{e.r32(0x57f120 + p * 4)}" for p in range(2)) + "\n")
             fo.write(f"f{f} rng {e.r32(0x51ca14):#x} {e.r32(0x51ca18)}\n")
 
 
@@ -266,7 +278,15 @@ def main():
         units = [tuple(int(v) for v in u.split(",")) for u in sys.argv[4].split(";") if u]
         # "x,y" for every unit, or "x,y;x,y;..." cycled over the units.
         # "@k" attacks the k-th created unit.
-        move = [("@", int(m[1:])) if m[0] == "@" else tuple(int(v) for v in m.split(",")) for m in sys.argv[5].split(";") if m]
+        # "o<order>:<x>,<y>" orders the unit at (x, y) as target.
+        def parse(m):
+            if m[0] == "@":
+                return ("@", int(m[1:]))
+            if m[0] == "o":
+                o, xy = m[1:].split(":")
+                return ("o", int(o, 0), tuple(int(v) for v in xy.split(",")))
+            return tuple(int(v) for v in m.split(","))
+        move = [parse(m) for m in sys.argv[5].split(";") if m]
         frames, out = int(sys.argv[6]), sys.argv[7]
         try:
             scenario(e, units, move, frames, out)

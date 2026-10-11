@@ -74,7 +74,8 @@ impl State {
         un.order_process_timer = 8;
         self.order_timer_tick(d, u);
         self.units[u as usize].user_action_flags = 0;
-        match order {
+        // The first switch may have changed the order (0x4ec4d0 re-reads +0x4d).
+        match self.units[u as usize].order {
             0x1 => self.order_stop(d, u),
             0x2 => self.order_guard(d, u),
             0x3 => self.order_player_guard(d, u),
@@ -114,7 +115,7 @@ impl State {
             0x4f | 0x51 => self.order_harvest1(d, u),
             0x52 => self.order_wait_for_gas(d, u),
             0x53 => self.order_harvest_gas(d, u),
-            0x54 | 0x5a => self.order_return_gas(d, u),
+            0x54 | 0x5a => self.order_return_resources(d, u),
             0x55 => self.order_move_to_minerals(d, u),
             0x56 => self.order_wait_for_minerals(d, u),
             0x57 => self.order_mining_minerals(d, u),
@@ -361,8 +362,48 @@ impl State {
     }
 
     /// 0x42e320: ResetHarvestCollision.
-    fn order_reset_harvest_collision(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x42e320", "ResetHarvestCollision");
+    fn order_reset_harvest_collision(&mut self, d: &Data, u: u32) {
+        let head = self.units[u as usize].order_queue_head;
+        if head != super::list::NIL && matches!(self.orders[head as usize].order, 0x4f | 0x51 | 0x52 | 0x53 | 0x55 | 0x56 | 0x57 | 0x59 | 0x58) {
+            // Still harvesting: keep this order queued behind the harvest orders.
+            if self.units[u as usize].order != 0 {
+                loop {
+                    let t = self.units[u as usize].order_queue_tail;
+                    if t == super::list::NIL || self.orders[t as usize].order != 0x97 {
+                        break;
+                    }
+                    self.order_remove(d, u, t);
+                }
+                self.order_queue_append(d, u, 0x97, 0xe4, (0, 0), super::list::NIL);
+            }
+            self.order_next_or_idle(d, u);
+            return;
+        }
+        self.units[u as usize].status &= 0xff5f_ffff;
+        self.update_unit_overlaps(d, u);
+        if self.units[u as usize].order_queue_head == super::list::NIL {
+            let idle = d.dat.units.ai_return_to_idle[self.units[u as usize].unit_type as usize];
+            self.issue_order(d, u, idle, false, (0, 0), super::list::NIL, 0xe4);
+        }
+        self.path_delete(u);
+        self.units[u as usize].movement_state = 0;
+        let s = self.units[u as usize].sprite;
+        let low = (self.sprites[s as usize].elevation < 0xc) as u8;
+        let pf = &mut self.units[u as usize].pathing_flags;
+        *pf = (*pf & !1) | low;
+        self.order_next_or_idle(d, u);
+    }
+
+    /// 0x475420: clear 0x1000 and start the next queued order, else idle.
+    pub fn order_next_or_idle(&mut self, d: &Data, u: u32) {
+        self.units[u as usize].status &= !0x1000;
+        if self.units[u as usize].order_queue_head != super::list::NIL {
+            self.units[u as usize].order_flags |= 1;
+            self.prepare_next_order(d, u);
+            return;
+        }
+        let o = if self.units[u as usize].ai != super::list::NIL { 0x9c } else { d.dat.units.ai_return_to_idle[self.units[u as usize].unit_type as usize] };
+        self.order_now(d, u, o);
     }
 
     /// 0x4e3fb0: CTFCOP2.
@@ -682,10 +723,6 @@ impl State {
         todo_port!("0x4e9f90", "Larva");
     }
 
-    /// 0x469500: Harvest1, MoveToGas.
-    fn order_harvest1(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x469500", "Harvest1, MoveToGas");
-    }
 
     /// 0x469000: WaitForGas.
     fn order_wait_for_gas(&mut self, _d: &Data, _u: u32) {
@@ -697,25 +734,9 @@ impl State {
         todo_port!("0x469980", "HarvestGas");
     }
 
-    /// 0x4690c0: ReturnGas, ReturnMinerals.
-    fn order_return_gas(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x4690c0", "ReturnGas, ReturnMinerals");
-    }
 
-    /// 0x469240: MoveToMinerals.
-    fn order_move_to_minerals(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x469240", "MoveToMinerals");
-    }
 
-    /// 0x468f60: WaitForMinerals.
-    fn order_wait_for_minerals(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x468f60", "WaitForMinerals");
-    }
 
-    /// 0x4697c0: MiningMinerals.
-    fn order_mining_minerals(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x4697c0", "MiningMinerals");
-    }
 
     /// 0x4e7cf0: EnterTransport.
     fn order_enter_transport(&mut self, _d: &Data, _u: u32) {

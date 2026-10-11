@@ -288,7 +288,7 @@ impl State {
     }
 
     /// 0x45cd00: incomplete building morphing into a zerg building.
-    fn morphing_zerg_building(&self, u: u32) -> bool {
+    pub(super) fn morphing_zerg_building(&self, u: u32) -> bool {
         let un = &self.units[u as usize];
         let t = un.build_queue[un.build_queue_slot as usize % 5];
         un.status & 1 == 0 && matches!(t, 0x85 | 0x84 | 0x89 | 0x90 | 0x92)
