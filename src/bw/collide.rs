@@ -1,6 +1,7 @@
 //! Unit box searches (result stack 0x6bb938) and unit/unit overlap flags.
 
 use super::{Data, State};
+use crate::todo_port;
 
 /// 0x6bb938 / 0x6bd3d0 sizes (units + 1).
 pub const SEARCH_SLOTS: usize = 0x6a5;
@@ -1180,5 +1181,328 @@ impl State {
             out.push(((hx >> 8) as i16, (hy >> 8) as i16));
         }
         out
+    }
+}
+
+type Pt = (i16, i16);
+
+/// 0x42a5c0: clip segment (a, b) to `rc` (left, top, right, bottom), Cohen-Sutherland.
+pub fn clip_segment(mut a: Pt, mut b: Pt, rc: [i16; 4]) -> Option<(Pt, Pt)> {
+    let code = |p: Pt| -> u8 {
+        (p.0 < rc[0]) as u8 | ((p.0 > rc[2]) as u8) << 1 | ((p.1 < rc[1]) as u8) << 3 | ((p.1 > rc[3]) as u8) << 2
+    };
+    let (mut ca, mut cb) = (code(a), code(b));
+    loop {
+        if ca == 0 && cb == 0 {
+            return Some((a, b));
+        }
+        if ca & cb != 0 {
+            return None;
+        }
+        let c = if ca != 0 { ca } else { cb };
+        let (x0, y0, x1, y1) = (a.0 as i32, a.1 as i32, b.0 as i32, b.1 as i32);
+        let at_y = |y: i16| ((((x1 - x0) * (y as i32 - y0)) / (y1 - y0) + x0) as i16, y);
+        let at_x = |x: i16| (x, (((y1 - y0) * (x as i32 - x0)) / (x1 - x0) + y0) as i16);
+        let p = if c & 8 != 0 {
+            at_y(rc[1])
+        } else if c & 4 != 0 {
+            at_y(rc[3])
+        } else if c & 2 != 0 {
+            at_x(rc[2])
+        } else {
+            at_x(rc[0])
+        };
+        if c == ca {
+            a = p;
+            ca = code(a);
+        } else {
+            b = p;
+            cb = code(b);
+        }
+    }
+}
+
+/// 0x4f16c0: clip each segment to `rc` (`keep_inside`) or cut `rc` out of it.
+pub fn clip_segments(segs: &mut Vec<(Pt, Pt)>, rc: [i16; 4], keep_inside: bool) {
+    let mut out = Vec::with_capacity(segs.len());
+    for &(a, b) in segs.iter() {
+        let clip = clip_segment(a, b, rc);
+        if keep_inside {
+            if let Some(s) = clip {
+                out.push(s);
+            }
+            continue;
+        }
+        let Some((ca, cb)) = clip else {
+            out.push((a, b));
+            continue;
+        };
+        if ca != a {
+            out.push((a, ca));
+        }
+        if cb != b {
+            out.push((cb, b));
+        }
+    }
+    *segs = out;
+}
+
+impl State {
+    /// 0x404810: `a`'s box at its position grown by `b`'s box (spots where `b` touches it).
+    fn touch_box(&self, d: &Data, a: u32, b: u32) -> [i16; 4] {
+        let s = &self.sprites[self.units[a as usize].sprite as usize];
+        let [l, t, r, bt] = self.unit_box_at(d, self.units[a as usize].unit_type, s.x, s.y);
+        let [nl, nt, br, bb] = self.unit_box_at(d, self.units[b as usize].unit_type, 0, 0);
+        [l.wrapping_sub(1).wrapping_sub(br), t.wrapping_sub(1).wrapping_sub(bb), r.wrapping_sub(nl).wrapping_add(1), bt.wrapping_sub(nt).wrapping_add(1)]
+    }
+
+    fn region_group_at(&self, p: Pt) -> u16 {
+        let r = super::path::region_at(&self.sai, p.0 as i32, p.1 as i32);
+        self.sai.regions[r as usize].group
+    }
+
+    /// 0x49cb60: `p` is in the same region group as `u`.
+    fn same_group(&self, u: u32, p: Pt) -> bool {
+        self.region_group_at(self.unit_sprite_pos(u)) == self.region_group_at(p)
+    }
+
+    fn step_dir(pos: Pt, dir: u8, dist: i32, shift: u32) -> Pt {
+        let (tx, ty) = crate::game::flingy::direction_table()[dir as usize];
+        (pos.0.wrapping_add((tx.wrapping_mul(dist) >> shift) as i16), pos.1.wrapping_add((ty.wrapping_mul(dist) >> shift) as i16))
+    }
+
+    /// 0x4f2de0: a ground unit standing on terrain or another unit picks a free spot
+    /// next to it and moves there. True if it was sent.
+    pub fn unstack_unit(&mut self, d: &Data, u: u32) -> bool {
+        if self.units[u as usize].status & 0x10_0000 == 0 {
+            return false;
+        }
+        let pos = self.unit_sprite_pos(u);
+        if self.spot_blocker(d, u, pos).is_none() {
+            return false;
+        }
+        if self.units[u as usize].status & 0x3000 != 0 || self.units[u as usize].fl.flags & 8 != 0 {
+            self.units[u as usize].status |= 0x4_0000;
+            return false;
+        }
+        let mut p = self.escape_spot(d, u);
+        let ut = self.units[u as usize].unit_type;
+        self.clamp_unit_pos(d, ut, &mut p);
+        if p == pos {
+            self.units[u as usize].status |= 0x4_0000;
+            return false;
+        }
+        self.path_delete(u);
+        if self.unit_at_move_target(u) == 0 && self.units[u as usize].fl.flags & 4 == 0 {
+            self.set_next_waypoint(u, p);
+        } else {
+            self.set_move_target_xy(d, u, p);
+        }
+        self.path_direct(u, p, p);
+        self.units[u as usize].contour_bounds = [0; 4];
+        true
+    }
+
+    /// 0x4f29e0: where a stacked unit should go.
+    fn escape_spot(&mut self, d: &Data, u: u32) -> Pt {
+        let pos = self.unit_sprite_pos(u);
+        let ut = self.units[u as usize].unit_type;
+        if !self.terrain_fits(d, ut, pos.0, pos.1) {
+            return self.terrain_escape(d, u);
+        }
+        match self.spot_blocker(d, u, pos) {
+            None => pos,
+            Some(b) => {
+                self.terrain_blocks_move(d, u, 0, 0);
+                match b {
+                    Some(b) => self.unit_escape(d, u, b),
+                    None => {
+                        todo_port!("0x4f2a59", "1.16.1 passes blocker -1 (map edge) to 0x4f2260");
+                        pos
+                    }
+                }
+            }
+        }
+    }
+
+    /// 0x4f1c70: out of unwalkable terrain: toward a neighboring walkable region,
+    /// or a short random hop toward the region center.
+    fn terrain_escape(&mut self, d: &Data, u: u32) -> Pt {
+        let _ = d;
+        let pos = self.unit_sprite_pos(u);
+        let center = |st: &State, r: u16| {
+            let c = st.sai.regions[r as usize].center;
+            ((c.0 >> 8) as i16, (c.1 >> 8) as i16)
+        };
+        let dist = |a: Pt, b: Pt| super::path::approx_distance(a.0 as i32, b.0 as i32, a.1 as i32, b.1 as i32) as i32;
+        let dir = |a: Pt, b: Pt| crate::game::flingy::direction_to(a.0 as i32, a.1 as i32, b.0 as i32, b.1 as i32);
+        let r = super::path::region_at(&self.sai, pos.0 as i32, pos.1 as i32);
+        let reg = self.sai.regions[r as usize];
+        if reg.flags != 0x1ffd {
+            let c = center(self, r);
+            let off = self.rng.rand_between(0x32, -2, 2) as u8;
+            let dr = dir(pos, c).wrapping_add(off << 4);
+            let mut step = self.rng.rand_between(0x32, 2, 4) << 11;
+            let max = dist(pos, c) << 8;
+            if step >= max {
+                step = max - 1;
+            }
+            let p = Self::step_dir(pos, dr, step, 16);
+            return if self.same_group(u, p) { p } else { pos };
+        }
+        let walkable = reg.walkable_neighbors as usize;
+        if walkable == 0 {
+            let hi = reg.neighbor_count as i32 - reg.zero_neighbors as i8 as i32 - 1;
+            let n = self.rng.rand_between(0x32, 0, hi);
+            let c = center(self, self.sai.neighbor(r as usize, n as usize));
+            let step = dist(pos, c).min(0x40);
+            return Self::step_dir(pos, dir(pos, c), step, 8);
+        }
+        let mut best = 0x8000;
+        let mut sel = r;
+        let mut last = (0, 0);
+        for i in 0..walkable {
+            let nr = self.sai.neighbor(r as usize, i);
+            let c = center(self, nr);
+            last = c;
+            let dd = dist(pos, c);
+            if dd < best {
+                sel = nr;
+                best = dd;
+            }
+        }
+        let rc = self.sai.regions[sel as usize].rect;
+        let (px, py) = (pos.0 as i32, pos.1 as i32);
+        let near = px + 0x20 >= rc[0] as i32 && px - 0x20 < rc[2] as i32 && py + 0x20 >= rc[1] as i32 && py - 0x20 < rc[3] as i32;
+        let dr = if near {
+            let g = super::short_path::closest_tile_in_region(&self.sai, self.map_px.0, self.map_px.1, pos, sel);
+            if g != pos {
+                return g;
+            }
+            dir(pos, g)
+        } else {
+            // 1.16.1 aims at the last neighbor scanned, not the closest one.
+            dir(pos, last)
+        };
+        let (tx, ty) = crate::game::flingy::direction_table()[dr as usize];
+        (pos.0.wrapping_add(((tx << 6) >> 8) as i16), pos.1.wrapping_add(((ty << 6) >> 8) as i16))
+    }
+
+    /// 0x4f2260: away from blocking unit `b`: the closest free spot on the edge of
+    /// `b`'s box not covered by other units, else a random hop.
+    fn unit_escape(&mut self, d: &Data, u: u32, b: u32) -> Pt {
+        let pos = self.unit_sprite_pos(u);
+        let bu = &self.units[b as usize];
+        let bpos = self.unit_sprite_pos(b);
+        let edge_search =
+            bu.status & 0x2_0000 == 0 || (bu.fl.move_target == bpos && !matches!(bu.movement_state, 0xc | 0xd));
+        if edge_search {
+            if let Some(p) = self.unit_escape_edge(d, u, b, pos) {
+                return p;
+            }
+        } else if (self.rng.rand(0x32) << 5) >> 15 < 0x18 {
+            return pos;
+        }
+        let bstat = self.units[b as usize].status;
+        let hop_len = |st: &mut State| {
+            let mut n = ((st.rng.rand(0x32) * 3) >> 15) as i32 * 4 + 8;
+            if edge_search && bstat & 2 != 0 {
+                n *= 3;
+            }
+            n << 8
+        };
+        let r = self.rng.rand(0x32);
+        let dr = (((r * 7) >> 15) as u8).wrapping_sub(3).wrapping_shl(4).wrapping_add(self.units[u as usize].fl.velocity_dir_prev);
+        let len = hop_len(self);
+        let p = Self::step_dir(pos, dr, len, 16);
+        if self.spot_blocker(d, u, p).is_none() && self.same_group(u, p) {
+            return p;
+        }
+        let mt = self.units[u as usize].fl.move_target;
+        let far = super::path::approx_distance(pos.0 as i32, mt.0 as i32, pos.1 as i32, mt.1 as i32) > 0x20;
+        let toward = far && (self.rng.rand(0x32) << 5) >> 15 < 0x18;
+        let p = if toward {
+            let base = crate::game::flingy::direction_to(pos.0 as i32, pos.1 as i32, mt.0 as i32, mt.1 as i32);
+            let r = self.rng.rand(0x32);
+            let dr = (((r * 3) >> 15) as u8).wrapping_sub(1).wrapping_shl(4).wrapping_add(base);
+            let len = hop_len(self);
+            Self::step_dir(pos, dr, len, 16)
+        } else {
+            let x = (((self.rng.rand(0x32) * 5) >> 15) as i16 - 2) * 16;
+            let y = (((self.rng.rand(0x32) * 5) >> 15) as i16 - 2) * 16;
+            (x.wrapping_add(pos.0), y.wrapping_add(pos.1))
+        };
+        match self.spot_blocker(d, u, p) {
+            Some(None) => pos,
+            Some(Some(o)) if !edge_search && self.units[o as usize].status & 0x2_0000 == 0 => pos,
+            _ => {
+                if self.same_group(u, p) {
+                    p
+                } else {
+                    pos
+                }
+            }
+        }
+    }
+
+    /// 0x4f22d1..0x4f2545: closest point of `b`'s touch box edges, inside `u`'s contour
+    /// bounds and outside the touch boxes of other obstacles.
+    fn unit_escape_edge(&mut self, d: &Data, u: u32, b: u32, pos: Pt) -> Option<Pt> {
+        let [l, t, r, bt] = self.touch_box(d, b, u);
+        let mut segs = vec![((l, t), (r, t)), ((r, t), (r, bt)), ((l, bt), (r, bt)), ((l, t), (l, bt))];
+        clip_segments(&mut segs, self.units[u as usize].contour_bounds, true);
+        let ut = self.units[u as usize].unit_type;
+        let [nl, nt, ur, ub] = self.unit_box_at(d, ut, 0, 0);
+        let area = [l.wrapping_add(nl), t.wrapping_add(nt), r.wrapping_add(ur), bt.wrapping_add(ub)];
+        // 0x42e170: path obstacles (0x6bee80 set) in the area.
+        let mut search = std::mem::replace(&mut self.search, UnitSearch::empty());
+        let start = search.units_in_finder_box(self, area);
+        self.path_all_units = true;
+        let found: Vec<u32> = search.results(start).into_iter().filter(|&c| super::short_path::path_obstacle(self, c, Some(u))).collect();
+        self.path_all_units = false;
+        search.pop();
+        self.search = search;
+        for c in found {
+            let rc = self.touch_box(d, c, u);
+            clip_segments(&mut segs, rc, false);
+        }
+        let mut best = 9999i32;
+        let mut spot = pos;
+        for &((x0, y0), (x1, y1)) in &segs {
+            let x = if pos.0 > x1 { x1 } else if pos.0 < x0 { x0 } else { pos.0 };
+            let y = if pos.1 > y1 { y1 } else if pos.1 < y0 { y0 } else { pos.1 };
+            let dd = super::path::approx_distance(x as i32, pos.0 as i32, y as i32, pos.1 as i32) as i32;
+            if dd < best {
+                best = dd;
+                spot = (x, y);
+            }
+        }
+        if best < 9999 && self.terrain_fits(d, ut, spot.0, spot.1) && self.spot_blocker(d, u, spot).is_none() && self.same_group(u, spot) {
+            return Some(spot);
+        }
+        None
+    }
+
+    /// 0x4f2160: step out of terrain along the path while the move stays on the map.
+    /// True when there is nothing more to do.
+    pub fn terrain_escape_step(&mut self, d: &Data, u: u32) -> bool {
+        if !self.path_usable(u) {
+            return true;
+        }
+        self.predict(d, u);
+        let (nx, ny) = self.mv.new_pos;
+        let v = d.dat.units.dimensions[self.units[u as usize].unit_type as usize];
+        let [l, t, r, b] = [v as i16 as i32, (v >> 16) as i16 as i32, (v >> 32) as i16 as i32, (v >> 48) as i16 as i32];
+        let (nx, ny) = (nx as i32, ny as i32);
+        if nx - l >= 0 && ny - t >= 0 && r + nx < self.map_px.0 as i32 && b + ny < self.map_px.1 as i32 {
+            self.apply_move_checked(d, u);
+            return false;
+        }
+        if !self.facing_next_waypoint(u) {
+            self.predict(d, u);
+            self.unit_turn_in_place(d, u);
+            return false;
+        }
+        true
     }
 }

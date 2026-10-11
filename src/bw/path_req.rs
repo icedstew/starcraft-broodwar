@@ -205,7 +205,7 @@ impl State {
     }
 
     /// 0x42f920: the current path still leads somewhere useful.
-    fn path_usable(&self, u: u32) -> bool {
+    pub(super) fn path_usable(&self, u: u32) -> bool {
         let un = &self.units[u as usize];
         let p = un.path;
         if p == super::list::NIL {

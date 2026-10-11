@@ -1995,29 +1995,34 @@ fn find_open_spot(env: &Env, ctx: &PathCtx, pos: &mut (i16, i16)) -> bool {
 /// 0x422fa0: aim at the nearest tile of `region` to the goal (spiral search from the
 /// goal clamped into the region's box), else its center.
 fn closest_reachable(env: &Env, ctx: &mut PathCtx, region: u16) -> bool {
+    ctx.goal = closest_tile_in_region(env.sai, env.map_w, env.map_h, ctx.goal, region);
+    ctx.unk1f = 1;
+    true
+}
+
+/// 0x422fa0 body: the goal moved to the nearest tile center of `region`.
+pub fn closest_tile_in_region(sai: &Sai, map_w: u16, map_h: u16, goal: (i16, i16), region: u16) -> (i16, i16) {
     const DX: [u16; 4] = [1, 0, 0xffff, 0];
     const DY: [u16; 4] = [0, 1, 0, 0xffff];
-    let r = env.sai.regions[region as usize];
-    let (gx, gy) = ctx.goal;
+    let r = sai.regions[region as usize];
+    let (gx, gy) = goal;
     let cy = if r.rect[1] <= gy { if gy <= r.rect[3] { gy } else { r.rect[3] } } else { r.rect[1] };
     let cx = if r.rect[0] <= gx { if r.rect[2] < gx { r.rect[2] } else { gx } } else { r.rect[0] };
     let mut tx = (cx as i32 / 32) as u16;
     let mut ty = (cy as i32 / 32) as u16;
-    let (w, h) = (env.map_w / 32, env.map_h / 32);
+    let (w, h) = (map_w / 32, map_h / 32);
     let mut ring = 1;
     loop {
         for dir in 0..4 {
             for _ in 0..ring {
                 if tx < w && ty < h {
                     let (x, y) = (tx as i16 as i32, ty as i16 as i32);
-                    let mut v = env.sai.tiles[(y * 256 + x) as usize];
+                    let mut v = sai.tiles[(y * 256 + x) as usize];
                     if v > 0x1fff {
-                        v = env.sai.splits[v as usize - 0x2000].rgn1;
+                        v = sai.splits[v as usize - 0x2000].rgn1;
                     }
                     if v == region {
-                        ctx.goal = ((tx as i16).wrapping_mul(32).wrapping_add(16), (ty as i16).wrapping_mul(32).wrapping_add(16));
-                        ctx.unk1f = 1;
-                        return true;
+                        return ((tx as i16).wrapping_mul(32).wrapping_add(16), (ty as i16).wrapping_mul(32).wrapping_add(16));
                     }
                 }
                 tx = tx.wrapping_add(DX[dir]);
@@ -2030,9 +2035,7 @@ fn closest_reachable(env: &Env, ctx: &mut PathCtx, region: u16) -> bool {
         ty = ty.wrapping_sub(1);
         ring += 2;
         if ring > 0xf {
-            ctx.goal = ((r.center.0 >> 8) as i16, (r.center.1 >> 8) as i16);
-            ctx.unk1f = 1;
-            return true;
+            return ((r.center.0 >> 8) as i16, (r.center.1 >> 8) as i16);
         }
     }
 }

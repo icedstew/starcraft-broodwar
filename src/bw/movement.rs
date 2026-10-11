@@ -187,7 +187,7 @@ impl State {
         self.sprite_images_set_direction(d, s, dir);
     }
 
-    fn unit_sprite_pos(&self, u: u32) -> (i16, i16) {
+    pub(super) fn unit_sprite_pos(&self, u: u32) -> (i16, i16) {
         let s = &self.sprites[self.units[u as usize].sprite as usize];
         (s.x, s.y)
     }
@@ -326,14 +326,14 @@ impl State {
     }
 
     /// 0x495ee0 on a unit.
-    fn predict(&mut self, d: &Data, u: u32) {
+    pub(super) fn predict(&mut self, d: &Data, u: u32) {
         let mut m = self.mv;
         flingy::predict(&mut self.units[u as usize].fl, d, &mut m);
         self.mv = m;
     }
 
     /// 0x46ad90: apply the predicted move, updating the unit finder.
-    fn apply_move_checked(&mut self, d: &Data, u: u32) -> bool {
+    pub(super) fn apply_move_checked(&mut self, d: &Data, u: u32) -> bool {
         if !self.unit_apply_move(d, u) {
             return false;
         }
@@ -586,9 +586,9 @@ impl State {
     }
 
     /// 0x46bdf0: terrain-only unit: check whether still stuck in terrain.
-    fn mv_repath_check(&mut self, _d: &Data, u: u32) -> bool {
+    fn mv_repath_check(&mut self, d: &Data, u: u32) -> bool {
         self.units[u as usize].status &= !status::IGNORE_TILE_COLLISION;
-        if self.stub_4f2de0(u) {
+        if self.unstack_unit(d, u) {
             self.units[u as usize].pathing_flags |= 2;
             self.state(u, 0xd);
             return false;
@@ -618,7 +618,7 @@ impl State {
         if p.flags & 1 != 0 || p.next_waypoint != self.units[u as usize].fl.next_waypoint {
             self.units[u as usize].fl.next_waypoint = p.next_waypoint;
         }
-        if !self.stub_4f2160(u) {
+        if !self.terrain_escape_step(d, u) {
             return false;
         }
         if self.units[u as usize].path != NIL {
@@ -1399,25 +1399,8 @@ impl State {
         false
     }
 
-    // ---- Unported callees. Each returns the "no obstruction / no work" value. ----
-
-
-
-
-
-
-    fn stub_4f2de0(&mut self, _u: u32) -> bool {
-        todo_port!("0x4f2de0", "unit stuck in terrain");
-        false
-    }
-
-    fn stub_4f2160(&mut self, _u: u32) -> bool {
-        todo_port!("0x4f2160", "terrain escape step");
-        true
-    }
-
     /// 0x402a90: moving toward the next waypoint (+0x18) already.
-    fn facing_next_waypoint(&self, u: u32) -> bool {
+    pub(super) fn facing_next_waypoint(&self, u: u32) -> bool {
         let f = &self.units[u as usize].fl;
         let sp = self.unit_sprite_pos(u);
         f.velocity_dir_prev == direction_to(sp.0 as i32, sp.1 as i32, f.next_waypoint.0 as i32, f.next_waypoint.1 as i32)
