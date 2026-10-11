@@ -492,16 +492,28 @@ impl State {
         } else {
             base
         };
-        // 0x47b8a0
-        let a = d.dat.flingy.acceleration[fid] as u32;
-        let acc = if m > 0 { a * 2 } else if m < 0 { a - (a >> 2) } else { a };
-        // 0x47b850
-        let tr = d.dat.flingy.turn_rate[fid] as u32;
-        let turn = if m > 0 { tr * 2 } else if m < 0 { tr - (tr >> 2) } else { tr };
+        let acc = self.unit_acceleration(d, u);
+        let turn = self.unit_turn_rate(d, u);
         let f = &mut self.units[u as usize].fl;
         f.top_speed = top as i32;
         f.acceleration = acc as u16;
         f.turn_rate = turn as u8;
+    }
+
+    /// 0x47b8a0: flingy acceleration with speed modifiers.
+    pub fn unit_acceleration(&self, d: &Data, u: u32) -> u32 {
+        let fid = d.dat.units.flingy[self.units[u as usize].unit_type as usize] as usize;
+        let a = d.dat.flingy.acceleration[fid] as u32;
+        let m = self.speed_mod(u);
+        if m > 0 { a * 2 } else if m < 0 { a - (a >> 2) } else { a }
+    }
+
+    /// 0x47b850: flingy turn rate with speed modifiers.
+    pub fn unit_turn_rate(&self, d: &Data, u: u32) -> u32 {
+        let fid = d.dat.units.flingy[self.units[u as usize].unit_type as usize] as usize;
+        let tr = d.dat.flingy.turn_rate[fid] as u32;
+        let m = self.speed_mod(u);
+        if m > 0 { tr * 2 } else if m < 0 { tr - (tr >> 2) } else { tr }
     }
 
     /// 0x42d8c0: iscript-driven units: average `move` distance of 32 dry runs of Walking.

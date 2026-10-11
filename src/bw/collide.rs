@@ -947,3 +947,220 @@ impl State {
         dist >= super::path::approx_distance(0, dx, 0, dy)
     }
 }
+
+impl State {
+    /// 0x430190: units whose finder boxes lie within (dx, dy) of `u`'s, scanning the
+    /// x lists sideways and the y lists up/down. Entries may repeat. Returns the result
+    /// start; close with `self.search.pop()`.
+    pub fn units_near(&mut self, u: u32, dx: i16, dy: i16) -> usize {
+        self.search.stack.push(self.search.top);
+        let start = self.search.top;
+        let s = self.units[u as usize].sprite as usize;
+        if self.sprites[s].flags & super::sprite::sflag::HIDDEN != 0 {
+            self.search.put(start, 0);
+            self.search.top = start + 1;
+            return start;
+        }
+        let fi = self.units[u as usize].finder_index;
+        let f = &self.finder;
+        let n = f.count as i32;
+        let xv = |i: i32| f.x[i as usize].1;
+        let yv = |i: i32| f.y[i as usize].1;
+        let ofi = |e: u32| self.units[(e - 1) as usize].finder_index;
+        let mut found = Vec::new();
+        let (left, right) = (xv(fi[0]) as i16, xv(fi[1]) as i16);
+        let (top, bottom) = (yv(fi[2]) as i16, yv(fi[3]) as i16);
+        let y_overlap = |o: [i32; 4]| top.wrapping_sub(dy) as i32 <= yv(o[3]) && yv(o[2]) < bottom.wrapping_add(dy) as i32;
+        let x_overlap = |o: [i32; 4]| left as i32 <= xv(o[1]) && xv(o[0]) < right as i32;
+        let mut i = fi[1] + 1;
+        while i < n && xv(i) < right.wrapping_add(dx) as i32 {
+            let e = f.x[i as usize].0;
+            if e != u + 1 && y_overlap(ofi(e)) {
+                found.push(e);
+            }
+            i += 1;
+        }
+        let mut i = fi[0] - 1;
+        while i >= 0 && left.wrapping_sub(dx) as i32 <= xv(i) {
+            let e = f.x[i as usize].0;
+            if e != u + 1 && y_overlap(ofi(e)) {
+                found.push(e);
+            }
+            i -= 1;
+        }
+        let mut i = fi[3] + 1;
+        while i < n && yv(i) < bottom.wrapping_add(dy) as i32 {
+            let e = f.y[i as usize].0;
+            if e != u + 1 && x_overlap(ofi(e)) {
+                found.push(e);
+            }
+            i += 1;
+        }
+        let mut i = fi[2] - 1;
+        while i >= 0 && top.wrapping_sub(dy) as i32 <= yv(i) {
+            let e = f.y[i as usize].0;
+            if e != u + 1 && x_overlap(ofi(e)) {
+                found.push(e);
+            }
+            i -= 1;
+        }
+        let mut out = start;
+        for e in found {
+            self.search.put(out, e);
+            out += 1;
+        }
+        self.search.put(out, 0);
+        self.search.top = out;
+        start
+    }
+
+    /// 0x42e000: moving ground units near `u` (0x430190 with 0x20, 0x20) that collide
+    /// with it, at most `max`, filtered in place. Close with `self.search.pop()`.
+    pub fn moving_units_near(&mut self, u: u32, max: usize) -> (usize, usize) {
+        let start = self.units_near(u, 0x20, 0x20);
+        let mut out = start;
+        let mut i = start;
+        let mut count = 0;
+        while self.search.buf[i] != 0 {
+            let c = self.search.buf[i] - 1;
+            let cu = &self.units[c as usize];
+            let sp = &self.sprites[cu.sprite as usize];
+            let moving = cu.fl.move_target != (sp.x, sp.y);
+            if moving
+                && cu.status & 0x10_0000 != 0
+                && cu.pathing_flags & 1 != 0
+                && cu.status & 0x20_0000 == 0
+                && c != u
+                && self.units_collide(c, u)
+            {
+                self.search.buf[out] = self.search.buf[i];
+                out += 1;
+                count += 1;
+                if count == max {
+                    break;
+                }
+            }
+            i += 1;
+        }
+        self.search.buf[out] = 0;
+        (start, count)
+    }
+
+    /// 0x42db50: `u`'s position after `frames` frames of steering toward its next
+    /// waypoint, `n` times in a row (iscript movers dry-run their Walking script).
+    pub fn predict_positions(&mut self, d: &Data, u: u32, n: usize, frames: u32) -> Vec<(i16, i16)> {
+        let s = self.units[u as usize].sprite as usize;
+        let desired_dir = |st: &State| {
+            let p = (st.sprites[s].x as i32, st.sprites[s].y as i32);
+            let wp = st.units[u as usize].fl.next_waypoint;
+            crate::game::flingy::direction_to(p.0, p.1, wp.0 as i32, wp.1 as i32)
+        };
+        let table = crate::game::flingy::direction_table();
+        let mut desired = desired_dir(self);
+        let fl = self.units[u as usize].fl.clone();
+        let mut vel_dir = fl.velocity_dir_prev;
+        let turn = self.unit_turn_rate(d, u) as u8 as i32;
+        let (mut hx, mut hy) = fl.exact;
+        let mut speed = fl.next_speed;
+        let top = fl.top_speed;
+        let acc = self.unit_acceleration(d, u) as u16 as i32;
+        let mut recalc = true;
+        let (mut vx, mut vy) = (0i32, 0i32);
+        let mut out = Vec::with_capacity(n);
+        if fl.movement_type == 2 {
+            let mi = self.sprites[s].main_image;
+            let saved = self.images[mi as usize].clone();
+            let dry_run = |st: &mut State, dist: &mut u32| {
+                let prev = st.iscript_unit;
+                st.iscript_unit = Some(u);
+                super::iscript::run(st, d, mi, true, Some(dist));
+                st.iscript_unit = prev;
+            };
+            let mut dist = speed as u32;
+            if self.images[mi as usize].iscript.anim != 0xb {
+                // 0x42d600: start Walking on the copy.
+                let is = &mut self.images[mi as usize].iscript;
+                is.anim = 0xb;
+                let header = is.header as usize;
+                if 0xb <= d.iscript_u16(header + 4) {
+                    let pc = d.iscript_u16(header + 8 + 0xb * 2);
+                    let is = &mut self.images[mi as usize].iscript;
+                    is.pc = pc;
+                    if pc != 0 {
+                        is.wait = 0;
+                        is.ret = 0;
+                    }
+                }
+                dry_run(self, &mut dist);
+            }
+            for _ in 0..n {
+                for _ in 0..frames {
+                    let mut moves = true;
+                    if desired != vel_dir {
+                        let diff = desired.wrapping_sub(vel_dir);
+                        let step = if diff as i8 as i32 >= turn {
+                            turn as u8
+                        } else if diff as i8 as i32 <= -turn {
+                            (turn as u8).wrapping_neg()
+                        } else {
+                            diff
+                        };
+                        vel_dir = vel_dir.wrapping_add(step);
+                        recalc = true;
+                        moves = vel_dir == desired;
+                    }
+                    if moves && dist != 0 {
+                        if recalc {
+                            let (tx, ty) = table[vel_dir as usize];
+                            vx = (tx.wrapping_mul(dist as i32)) >> 8;
+                            vy = (ty.wrapping_mul(dist as i32)) >> 8;
+                            recalc = false;
+                        }
+                        hx = hx.wrapping_add(vx);
+                        hy = hy.wrapping_add(vy);
+                    }
+                    dist = 0;
+                    dry_run(self, &mut dist);
+                }
+                out.push(((hx >> 8) as i16, (hy >> 8) as i16));
+            }
+            self.images[mi as usize] = saved;
+            return out;
+        }
+        for _ in 0..n {
+            for _ in 0..frames {
+                if desired != vel_dir {
+                    let half = turn / 2;
+                    let diff = desired.wrapping_sub(vel_dir);
+                    let step = if (diff as i8 as i32) >= half {
+                        half as u8
+                    } else if (diff as i8 as i32) <= -half {
+                        (half as u8).wrapping_neg()
+                    } else {
+                        diff
+                    };
+                    vel_dir = vel_dir.wrapping_add(step);
+                    desired = desired_dir(self);
+                    recalc = true;
+                }
+                if speed < top {
+                    speed += acc;
+                    if speed > top {
+                        speed = top;
+                    }
+                    recalc = true;
+                }
+                if recalc {
+                    let (tx, ty) = table[vel_dir as usize];
+                    vx = tx.wrapping_mul(speed) >> 8;
+                    vy = ty.wrapping_mul(speed) >> 8;
+                    recalc = false;
+                }
+                hx = hx.wrapping_add(vx);
+                hy = hy.wrapping_add(vy);
+            }
+            out.push(((hx >> 8) as i16, (hy >> 8) as i16));
+        }
+        out
+    }
+}

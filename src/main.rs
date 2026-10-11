@@ -132,9 +132,11 @@ fn main() -> std::io::Result<()> {
                 }
             }
             if let Ok(m) = std::env::var("SCBW_MOVE") {
-                let v: Vec<i16> = m.split(',').filter_map(|n| n.trim().parse().ok()).collect();
-                for &u in &made {
-                    st.order_target(&d, u, 6, (v[0], v[1]), bw::list::NIL);
+                // "x,y" for every unit, or "x,y;x,y;..." cycled over the units.
+                let v: Vec<Vec<i16>> = m.split(';').map(|p| p.split(',').filter_map(|n| n.trim().parse().ok()).collect()).collect();
+                for (i, &u) in made.iter().enumerate() {
+                    let t = &v[i % v.len()];
+                    st.order_target(&d, u, 6, (t[0], t[1]), bw::list::NIL);
                 }
             }
             let frames: u32 = args.get(1).and_then(|f| f.parse().ok()).unwrap_or(48);

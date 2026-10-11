@@ -63,7 +63,7 @@ impl State {
                 0x17 => self.mv_repath_after_collision(d, u),
                 0x18 => self.mv_repath_ignoring_units(d, u),
                 0x19 => self.mv_follow_path(d, u),
-                0x1a => self.mv_check_blockers(u),
+                0x1a => self.mv_check_blockers(d, u),
                 0x1b => {
                     self.units[u as usize].movement_state = 0x19;
                     true
@@ -951,12 +951,31 @@ impl State {
     }
 
     /// 0x46ab10: count units blocking the path's next region; 0x1b if any, else 0x19.
-    fn mv_check_blockers(&mut self, u: u32) -> bool {
+    fn mv_check_blockers(&mut self, d: &Data, u: u32) -> bool {
         if self.mv_check_path_state(u, true) {
             return true;
         }
-        todo_port!("0x46ab10", "unit finder search (0x42e000/0x42db50/0x402b10)");
-        self.state(u, 0x19);
+        let mut blockers = 0;
+        let (start, count) = self.moving_units_near(u, 0x20);
+        if count != 0 {
+            let me = self.predict_positions(d, u, 1, 0x1e)[0];
+            let others: Vec<_> = self.search.results(start);
+            let ahead: Vec<_> = others.iter().map(|&c| self.predict_positions(d, c, 1, 0x1e)[0]).collect();
+            let ut = self.units[u as usize].unit_type;
+            for (&c, &(x, y)) in others.iter().zip(&ahead) {
+                // 0x402b10: c's box at its predicted spot, grown by u's box.
+                let ct = self.units[c as usize].unit_type;
+                let [cl, cu, cr, cd] = self.unit_box_at(d, ct, x, y);
+                // Own box at (0, 0) is [-left, -up, right, down].
+                let [nl, nu, r, dn] = self.unit_box_at(d, ut, 0, 0);
+                let b = [cl.wrapping_sub(1).wrapping_sub(r), cu.wrapping_sub(1).wrapping_sub(dn), cr.wrapping_sub(nl).wrapping_add(1), cd.wrapping_sub(nu).wrapping_add(1)];
+                if b[0] <= me.0 && me.0 <= b[2] && b[1] <= me.1 && me.1 <= b[3] {
+                    blockers += 1;
+                }
+            }
+        }
+        self.search.pop();
+        self.state(u, if blockers > 0 { 0x1b } else { 0x19 });
         true
     }
 

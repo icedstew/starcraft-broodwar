@@ -191,8 +191,9 @@ def scenario(e, units, move, frames, out):
             made.append((u - UNITS) // 0x150)
         e.w32(0x6d11c8, 0)
     if move:
-        for u in made:
-            e.call(0x474c30, regs={"esi": UNITS + u * 0x150}, stack=[6, (move[1] << 16) | (move[0] & 0xffff), 0])
+        for i, u in enumerate(made):
+            mx, my = move[i % len(move)]
+            e.call(0x474c30, regs={"esi": UNITS + u * 0x150}, stack=[6, (my << 16) | (mx & 0xffff), 0])
     with open(out, "w") as fo:
         for f in range(frames):
             e.w32(0x57f23c, e.r32(0x57f23c) + 1)  # 0x4d9670 advances the frame first
@@ -211,7 +212,8 @@ def main():
     check_sai(e, md)
     if len(sys.argv) > 4:
         units = [tuple(int(v) for v in u.split(",")) for u in sys.argv[4].split(";") if u]
-        move = tuple(int(v) for v in sys.argv[5].split(",")) if sys.argv[5] else None
+        # "x,y" for every unit, or "x,y;x,y;..." cycled over the units.
+        move = [tuple(int(v) for v in m.split(",")) for m in sys.argv[5].split(";") if m]
         frames, out = int(sys.argv[6]), sys.argv[7]
         try:
             scenario(e, units, move, frames, out)
