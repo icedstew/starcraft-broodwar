@@ -1,0 +1,482 @@
+//! Attacking: the AttackUnit order (0x479bd0), weapon ranges and firing.
+
+use super::list::NIL;
+use super::{Data, State};
+use crate::todo_port;
+
+/// Weapon id meaning "none".
+pub const NO_WEAPON: u8 = 0x82;
+
+impl State {
+    fn is_turret(&self, d: &Data, u: u32) -> bool {
+        u != NIL && d.dat.units.flags[self.units[u as usize].unit_type as usize] & 0x10 != 0
+    }
+
+    /// The unit that holds the weapons: the turret if `u` has one.
+    fn weapon_unit(&self, d: &Data, u: u32) -> u32 {
+        let sub = self.units[u as usize].subunit;
+        if self.is_turret(d, sub) { sub } else { u }
+    }
+
+    /// 0x475ad0: ground weapon (an unburrowed lurker has none).
+    pub fn ground_weapon(&self, d: &Data, u: u32) -> u8 {
+        let un = &self.units[u as usize];
+        if un.unit_type == 0x67 && un.status & 0x10 == 0 {
+            return NO_WEAPON;
+        }
+        d.dat.units.ground_weapon[un.unit_type as usize]
+    }
+
+    /// Weapon `u` would use against `target` (air weapon for air targets).
+    fn weapon_against(&self, d: &Data, u: u32, target: u32) -> u8 {
+        let w = self.weapon_unit(d, u);
+        if self.units[target as usize].status & 4 != 0 {
+            d.dat.units.air_weapon[self.units[w as usize].unit_type as usize]
+        } else {
+            self.ground_weapon(d, w)
+        }
+    }
+
+    /// 0x401d60: `target` is cloaked and not detected by `u`'s owner.
+    fn cloaked_from(&self, target: u32, u: u32) -> bool {
+        let t = &self.units[target as usize];
+        t.status & 0x300 != 0 && t.visibility & (1 << (self.units[u as usize].player & 0x1f)) == 0
+    }
+
+    /// 0x4e5e30: `target` is visible to `u`'s owner.
+    fn target_visible(&self, target: u32, u: u32) -> bool {
+        let bit = 1u32 << (self.units[u as usize].player & 0x1f);
+        let t = &self.units[target as usize];
+        if t.status & 0x300 != 0 && t.visibility & bit == 0 {
+            return false;
+        }
+        self.sprites[t.sprite as usize].visibility as u32 & bit != 0
+    }
+
+    /// 0x402210: `target` is a damaged (< 50% hp) completed unit of type 0x6a.
+    fn damaged_6a(&self, d: &Data, target: u32) -> bool {
+        let t = &self.units[target as usize];
+        if t.status & 1 == 0 || t.unit_type != 0x6a {
+            return false;
+        }
+        let mut max = d.dat.units.hit_points[0x6a] as i32 >> 8;
+        if max == 0 {
+            max = (t.hp + 0xff) >> 8;
+            if max == 0 {
+                max = 1;
+            }
+        }
+        ((t.hp + 0xff) >> 8) * 100 / max < 0x32
+    }
+
+    /// 0x476730 / the inline copy in 0x478540: `u` can attack `target` at all.
+    fn can_attack(&self, d: &Data, u: u32, target: u32, check_cloak: bool) -> bool {
+        let un = &self.units[u as usize];
+        if un.status & 0x400 != 0 || un.lockdown_timer != 0 || un.stasis_timer != 0 || un.maelstrom_timer != 0 || target == NIL {
+            return false;
+        }
+        let ts = self.units[target as usize].status;
+        if ts & 0x400_0000 != 0 || self.sprites[self.units[target as usize].sprite as usize].flags & super::sprite::sflag::HIDDEN != 0 {
+            return false;
+        }
+        if check_cloak && self.cloaked_from(target, u) {
+            return false;
+        }
+        let w = self.weapon_unit(d, u);
+        let t = un.unit_type;
+        if matches!(t, 0x48 | 0x52) {
+            // Carriers (0x401470).
+            return true;
+        }
+        if matches!(t, 0x53 | 0x51) {
+            // Reavers (0x401490): ground targets in the same region group (0x49cbb0).
+            return ts & 4 == 0 && self.same_group(target, self.unit_sprite_pos(u));
+        }
+        if matches!(t, 0x2d | 0x31) {
+            // 0x402750
+            return self.damaged_6a(d, target);
+        }
+        if t == 0x47 && un.ai != NIL {
+            return false;
+        }
+        if ts & 4 != 0 {
+            d.dat.units.air_weapon[self.units[w as usize].unit_type as usize] != NO_WEAPON
+        } else {
+            self.ground_weapon(d, w) != NO_WEAPON
+        }
+    }
+
+    /// 0x475870: weapon range in pixels with range upgrades and the bunker bonus.
+    fn weapon_range(&self, d: &Data, u: u32, weapon: u8) -> u32 {
+        let un = &self.units[u as usize];
+        let base = d.dat.weapons.max_range[weapon as usize];
+        let mut bonus = if un.status & 0x20 != 0 { 0x40 } else { 0 };
+        let up = &self.players.upgrade_sc[un.player as usize];
+        match un.unit_type {
+            0 if up[0x10] != 0 => return base + bonus + 0x20,
+            3 | 4 if weapon == 8 => {
+                if self.players.upgrade_bw[un.player as usize][8] != 0 {
+                    bonus += 0x60;
+                }
+            }
+            0x11 | 0x12 if weapon == 10 => todo_port!("0x475870", "hero range upgrade flag 0x58f440"),
+            0x26 if up[0x1e] != 0 => return base + bonus + 0x20,
+            0x42 if up[0x21] != 0 => return base + bonus + 0x40,
+            0x4e => todo_port!("0x475870", "hero range upgrade flag 0x58f440"),
+            _ => {}
+        }
+        base + bonus
+    }
+
+    /// 0x4763d0: `target` is within `range` of `u`, plus `u`'s stopping distance when
+    /// it moves and the target is not moving the same way.
+    fn in_attack_range(&self, d: &Data, u: u32, mut range: u32, target: u32) -> bool {
+        let f = &self.units[u as usize].fl;
+        if f.flags & 2 != 0 {
+            let tf = &self.units[target as usize].fl;
+            let mut diff = tf.velocity_dir_prev.wrapping_sub(f.velocity_dir_prev) as u32;
+            if diff > 0x80 {
+                diff = 0x100 - diff;
+            }
+            if tf.flags & 2 == 0 || diff >= 0x21 {
+                range = range.wrapping_add((super::flingy::halt_distance(f, d) >> 8) as u32);
+            }
+        }
+        self.box_distance_within(d, u, range, target)
+    }
+
+    /// 0x476430: `u` cannot hit `target` from here (not visible or out of range).
+    fn cannot_hit_now(&self, d: &Data, u: u32, target: u32) -> bool {
+        if !self.target_visible(target, u) {
+            return true;
+        }
+        let w = self.weapon_against(d, u, target);
+        if w == NO_WEAPON {
+            return false;
+        }
+        let r = self.weapon_range(d, u, w);
+        !self.in_attack_range(d, u, r, target)
+    }
+
+    /// 0x475a10: `u` has a ground weapon that fires a projectile (not 0x2f).
+    fn has_ranged_ground_weapon(&self, d: &Data, u: u32) -> bool {
+        let t = self.units[u as usize].unit_type as usize;
+        if t == 0x2f {
+            return false;
+        }
+        let w = d.dat.units.ground_weapon[t];
+        w == NO_WEAPON || d.dat.weapons.flingy[w as usize] != 0
+    }
+
+    /// 0x4eb720: move toward unit `target` (move target unit +0x14).
+    fn move_to_unit(&mut self, d: &Data, u: u32, target: u32) -> bool {
+        let un = &self.units[u as usize];
+        if un.move_target_unit == target {
+            let ts = &self.sprites[self.units[target as usize].sprite as usize];
+            if un.fl.move_target == (ts.x, ts.y) || self.at_goal_unit_edge(u, un.fl.move_target) {
+                self.units[u as usize].status &= !0x8_0000;
+                return true;
+            }
+        }
+        if self.units[u as usize].ai != NIL && self.units[u as usize].order != 0x60 {
+            todo_port!("0x4e7420", "AI move-to-unit check");
+        }
+        let p = self.units[u as usize].path;
+        if p != NIL {
+            self.paths[p as usize].flags |= 1;
+        }
+        let ts = &self.sprites[self.units[target as usize].sprite as usize];
+        let tp = (ts.x, ts.y);
+        let un = &mut self.units[u as usize];
+        if tp != un.fl.move_target || un.move_target_unit != target {
+            un.fl.move_target = tp;
+            un.move_target_unit = target;
+            un.fl.flags = (un.fl.flags & 0xfb) | 1;
+            un.fl.next_waypoint = tp;
+        }
+        un.recent_order_timer = 0xf;
+        un.status &= !0x8_0000;
+        let q = un.order_queue_head;
+        if q != NIL && d.dat.orders.stop_moving[self.orders[q as usize].order as usize] == 0 {
+            self.units[u as usize].fl.flags |= 0x20;
+        } else {
+            self.units[u as usize].fl.flags &= 0xdf;
+        }
+        true
+    }
+
+    /// 0x42da90: `p` lies on the edge of the box where `u` touches its move target unit.
+    fn at_goal_unit_edge(&self, u: u32, p: (i16, i16)) -> bool {
+        todo_port!("0x42da90", "point on goal unit box edge");
+        let _ = (u, p);
+        false
+    }
+
+    /// 0x4eb900: chase `target` unless recently ordered; give up when it is out of
+    /// sight and far.
+    fn chase(&mut self, d: &Data, u: u32, target: u32) -> bool {
+        if self.units[u as usize].recent_order_timer != 0 {
+            return true;
+        }
+        let bit = 1u8 << (self.units[u as usize].player & 0x1f);
+        if self.sprites[self.units[target as usize].sprite as usize].visibility & bit == 0 && !self.box_distance_within(d, u, 0x1c0, target) {
+            if self.unit_at_move_target(u) != 1 {
+                return true;
+            }
+            self.order_done_or_next(d, u);
+            return false;
+        }
+        self.move_to_unit(d, u, target)
+    }
+
+    /// 0x477f10: approach `target`'s position (melee units turning to it), or chase it.
+    fn approach(&mut self, d: &Data, _u: u32, target: u32) {
+        let _ = (d, target);
+        todo_port!("0x477f10", "approach target");
+    }
+
+    /// 0x478540: AttackUnit core. True when in range and ready to fire.
+    fn attack_unit_step(&mut self, d: &Data, u: u32) -> bool {
+        let target = self.units[u as usize].order_target_unit;
+        if !self.can_attack(d, u, target, true) {
+            let un = &self.units[u as usize];
+            if un.order_target_unit != NIL && un.status & 0x800_0000 == 0 {
+                if un.ai == NIL {
+                    let ts = &self.sprites[self.units[target as usize].sprite as usize];
+                    let p = (ts.x, ts.y);
+                    self.order_queue_front(d, u, 6, p);
+                }
+                self.order_done_or_next(d, u);
+                return false;
+            }
+            self.unit_halt(d, u);
+            if self.units[u as usize].order_queue_head != NIL {
+                self.units[u as usize].order_flags |= 1;
+                self.prepare_next_order(d, u);
+                return false;
+            }
+            let idle = if self.units[u as usize].ai != NIL { 0x9c } else { d.dat.units.ai_return_to_idle[self.units[u as usize].unit_type as usize] };
+            self.order_now(d, u, idle);
+            return false;
+        }
+        let ts = &self.sprites[self.units[target as usize].sprite as usize];
+        let tp = (ts.x, ts.y);
+        let un = &mut self.units[u as usize];
+        un.order_target_pos = tp;
+        if un.fl.next_target_waypoint != tp {
+            un.fl.next_target_waypoint = tp;
+        }
+        if un.order_state == 0 {
+            let w = self.weapon_against(d, u, target);
+            let wu = self.weapon_unit(d, u);
+            let in_range = self.target_visible(target, u)
+                && w < NO_WEAPON
+                && {
+                    let min = d.dat.weapons.min_range[w as usize];
+                    (min == 0 || !self.box_distance_within(d, wu, min, target)) && {
+                        let r = self.weapon_range(d, u, w);
+                        self.in_attack_range(d, u, r, target)
+                    }
+                };
+            if !in_range && !self.move_to_unit(d, u, self.units[u as usize].order_target_unit) {
+                return false;
+            }
+            self.units[u as usize].order_state = 1;
+            return true;
+        }
+        if !self.cannot_hit_now(d, u, target) {
+            if self.units[u as usize].unit_type == 0x2f {
+                self.approach(d, u, target);
+            } else {
+                self.unit_halt(d, u);
+            }
+            return true;
+        }
+        if self.units[u as usize].ai != NIL {
+            todo_port!("0x478804", "AI attack: 0x476c50 / 0x477160");
+        } else {
+            let un = &self.units[u as usize];
+            let st = un.status;
+            if (st & 0x800_0000 != 0 && st & 0xc == 0 && self.units[target as usize].status & 4 != 0) || self.unit_at_move_target(u) == 2 {
+                self.unit_halt_facing(d, u);
+                self.order_done_or_next(d, u);
+                return false;
+            }
+        }
+        if self.has_ranged_ground_weapon(d, u) {
+            self.chase(d, u, target);
+        } else {
+            self.approach(d, u, target);
+        }
+        false
+    }
+
+    /// 0x479bd0: AttackUnit.
+    pub fn order_attack_unit(&mut self, d: &Data, u: u32) {
+        let un = &self.units[u as usize];
+        if self.player_type(un.player) == 1 {
+            todo_port!("0x479bd0", "computer players: 0x462ea0");
+        }
+        if un.status & 0x800_0000 != 0 {
+            todo_port!("0x477510", "pick a better target (auto-targeting units)");
+        }
+        if !self.attack_unit_step(d, u) {
+            return;
+        }
+        if self.units[u as usize].ai != NIL {
+            todo_port!("0x43ffd0", "AI attack notification");
+        }
+        self.fire(d, u, 5);
+    }
+
+    /// 0x476ed0: fire at the order target with the right weapon, starting `anim`
+    /// (`anim + 1` for air targets).
+    pub fn fire(&mut self, d: &Data, u: u32, anim: u8) {
+        let st = self.units[u as usize].status;
+        if st & 0x8000 != 0 {
+            return;
+        }
+        let target = self.units[u as usize].order_target_unit;
+        let t = self.units[u as usize].unit_type;
+        if target != NIL && self.units[target as usize].status & 4 != 0 {
+            let w = d.dat.units.air_weapon[t as usize];
+            self.fire_weapon(d, u, w, 2, anim + 1);
+        } else if t == 0x67 && st & 0x10 == 0 {
+            self.fire_weapon(d, u, NO_WEAPON, 1, anim);
+        } else {
+            let w = d.dat.units.ground_weapon[t as usize];
+            self.fire_weapon(d, u, w, 1, anim);
+        }
+    }
+
+    /// 0x476c90: start the attack animation when the cooldown of `slot` (1 ground,
+    /// 2 air) is over and the target can be hit.
+    fn fire_weapon(&mut self, d: &Data, u: u32, w: u8, slot: u8, anim: u8) -> bool {
+        if w == NO_WEAPON {
+            return false;
+        }
+        let cd = if slot == 1 { self.units[u as usize].ground_cooldown } else { self.units[u as usize].air_cooldown };
+        if cd != 0 {
+            let un = &mut self.units[u as usize];
+            if (cd as i32 - 1) < un.order_process_timer as i32 {
+                un.order_process_timer = cd - 1;
+            }
+            return false;
+        }
+        if !self.weapon_ready(d, u, w) {
+            return false;
+        }
+        self.units[u as usize].fl.flags |= 8;
+        let base = self.weapon_cooldown(d, u, w);
+        let r = (self.rng.rand(0xc) & 3) as u8;
+        let cd = base.wrapping_add(r.wrapping_sub(1));
+        let un = &mut self.units[u as usize];
+        un.ground_cooldown = cd;
+        un.air_cooldown = cd;
+        let s = un.sprite;
+        self.sprite_images_run_anim(d, s, anim);
+        true
+    }
+
+    /// 0x474a20: queue `order` at `p` in front of the queue.
+    fn order_queue_front(&mut self, d: &Data, u: u32, order: u8, p: (i16, i16)) {
+        let head = self.units[u as usize].order_queue_head;
+        if head != NIL {
+            self.order_insert_before(d, u, order, 0xe4, p, NIL, head);
+        } else {
+            self.order_queue_append(d, u, order, 0xe4, p, NIL);
+        }
+    }
+
+    /// 0x475dc0: weapon cooldown with acid spores, stim/adrenal and ensnare.
+    fn weapon_cooldown(&self, d: &Data, u: u32, w: u8) -> u8 {
+        let un = &self.units[u as usize];
+        let base = d.dat.weapons.cooldown[w as usize] as u32;
+        let mut c = base;
+        if un.acid_spore_count != 0 {
+            c += (base >> 3).max(3) * un.acid_spore_count as u32;
+        }
+        let m = (un.stim_timer != 0) as i32 + (un.status & 0x2000_0000 != 0) as i32 - (un.ensnare_timer != 0) as i32;
+        if m < 0 {
+            c += c >> 2;
+        } else if m > 0 {
+            c >>= 1;
+        }
+        c.clamp(5, 0xfa) as u8
+    }
+
+    /// 0x476640: the order target (or position) is within weapon `w`'s range and arc.
+    fn weapon_ready(&mut self, d: &Data, u: u32, w: u8) -> bool {
+        if self.units[u as usize].fl.flags & 8 != 0 {
+            return false;
+        }
+        let target = self.units[u as usize].order_target_unit;
+        let dist = if target != NIL { self.unit_box_gap(d, target, u) } else { self.point_gap(d, u, self.units[u as usize].order_target_pos) };
+        let min = d.dat.weapons.min_range[w as usize];
+        if (min != 0 && dist < min) || dist > self.weapon_range(d, u, w) || self.units[u as usize].pathing_flags & 2 != 0 {
+            return false;
+        }
+        let un = &self.units[u as usize];
+        if un.fl.next_target_waypoint != un.fl.pos && !self.facing(d, u, un.fl.next_target_waypoint, w) {
+            self.units[u as usize].order_process_timer = 0;
+            return false;
+        }
+        true
+    }
+
+    /// 0x475be0: `u` faces (x, y) within weapon `w`'s attack angle (lurkers just turn).
+    fn facing(&mut self, d: &Data, u: u32, p: (i16, i16), w: u8) -> bool {
+        let s = self.unit_sprite_pos(u);
+        let dir = crate::game::flingy::direction_to(s.0 as i32, s.1 as i32, p.0 as i32, p.1 as i32);
+        if self.units[u as usize].unit_type == 0x67 {
+            self.units[u as usize].fl.heading = dir;
+            return true;
+        }
+        let mut diff = self.units[u as usize].fl.heading as i32 - dir as i32;
+        if diff < 0 {
+            diff += 0x100;
+        }
+        if diff > 0x80 {
+            diff = 0x100 - diff;
+        }
+        diff <= d.dat.weapons.attack_angle[w as usize] as i32
+    }
+
+    /// Box of `u` (its parent's box for a turret).
+    fn body_box(&self, d: &Data, u: u32) -> [i16; 4] {
+        let b = if self.is_turret(d, u) { self.units[u as usize].subunit } else { u };
+        self.unit_box(d, b)
+    }
+
+    /// 0x430d30: approximate gap between the boxes of `a` and `b` (`b`'s parent for a
+    /// turret).
+    fn unit_box_gap(&self, d: &Data, a: u32, b: u32) -> u32 {
+        let ba = self.unit_box(d, a);
+        let bb = self.body_box(d, b);
+        let gap = |lo: i16, hi1: i16, lo2: i16, hi2: i16| {
+            let g = lo as i32 - hi1.wrapping_add(1) as i32;
+            if g >= 0 {
+                return g;
+            }
+            let g = lo2 as i32 - hi2.wrapping_add(1) as i32;
+            if g >= 0 { g } else { 0 }
+        };
+        let dx = gap(bb[0], ba[2], ba[0], bb[2]);
+        let dy = gap(bb[1], ba[3], ba[1], bb[3]);
+        super::path::approx_distance(0, dx, 0, dy)
+    }
+
+    /// 0x430e50: approximate gap between `u`'s box and a point.
+    fn point_gap(&self, d: &Data, u: u32, p: (i16, i16)) -> u32 {
+        let b = self.body_box(d, u);
+        let gap = |lo: i16, hi: i16, v: i16| {
+            let g = lo as i32 - v as i32;
+            if g >= 0 {
+                return g;
+            }
+            let g = v as i32 - hi.wrapping_add(1) as i32;
+            if g >= 0 { g } else { 0 }
+        };
+        super::path::approx_distance(0, gap(b[0], b[2], p.0), 0, gap(b[1], b[3], p.1))
+    }
+}

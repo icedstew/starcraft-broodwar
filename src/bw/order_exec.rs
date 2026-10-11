@@ -543,11 +543,6 @@ impl State {
         todo_port!("0x4f6fa0", "Attack2, MoveToInfest, MoveToRepair, CarrierMoveToAttack, ReaverMoveToAttack, Harvest2, MoveToFireYamatoGun");
     }
 
-    /// 0x479bd0: AttackUnit.
-    fn order_attack_unit(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x479bd0", "AttackUnit");
-    }
-
     /// 0x477d00: AttackFixedRange.
     fn order_attack_fixed_range(&mut self, _d: &Data, _u: u32) {
         todo_port!("0x477d00", "AttackFixedRange");

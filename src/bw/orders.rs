@@ -123,7 +123,7 @@ impl State {
     }
 
     /// 0x474540: queue an order before `before` (AI units are limited to 8 queued orders).
-    fn order_insert_before(&mut self, d: &Data, u: u32, order: u8, unit_type: u16, pos: (i16, i16), target: u32, before: u32) -> Option<u32> {
+    pub(super) fn order_insert_before(&mut self, d: &Data, u: u32, order: u8, unit_type: u16, pos: (i16, i16), target: u32, before: u32) -> Option<u32> {
         if self.units[u as usize].ai != NIL && self.units[u as usize].order_queue_count > 8 {
             return None;
         }

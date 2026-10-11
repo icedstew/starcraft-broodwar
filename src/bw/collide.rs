@@ -1262,7 +1262,7 @@ impl State {
     }
 
     /// 0x49cb60: `p` is in the same region group as `u`.
-    fn same_group(&self, u: u32, p: Pt) -> bool {
+    pub(super) fn same_group(&self, u: u32, p: Pt) -> bool {
         self.region_group_at(self.unit_sprite_pos(u)) == self.region_group_at(p)
     }
 

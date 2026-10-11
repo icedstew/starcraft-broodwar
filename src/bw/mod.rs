@@ -4,6 +4,7 @@
 //! translated from the decompiled routines (addresses noted). Unported
 //! callees are explicit `todo_port!` markers, never approximations.
 
+pub mod attack;
 pub mod chk_load;
 pub mod collide;
 pub mod create;
