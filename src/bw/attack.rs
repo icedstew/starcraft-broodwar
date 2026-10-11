@@ -119,10 +119,14 @@ impl State {
                     bonus += 0x60;
                 }
             }
-            0x11 | 0x12 if weapon == 10 => todo_port!("0x475870", "hero range upgrade flag 0x58f440"),
+            0x11 | 0x12 if weapon == 10 => {
+                if self.is_expansion {
+                    bonus += 0x60;
+                }
+            }
             0x26 if up[0x1e] != 0 => return base + bonus + 0x20,
             0x42 if up[0x21] != 0 => return base + bonus + 0x40,
-            0x4e => todo_port!("0x475870", "hero range upgrade flag 0x58f440"),
+            0x4e if self.is_expansion => return base + bonus + 0x40,
             _ => {}
         }
         base + bonus
@@ -478,5 +482,91 @@ impl State {
             if g >= 0 { g } else { 0 }
         };
         super::path::approx_distance(0, gap(b[0], b[2], p.0), 0, gap(b[1], b[3], p.1))
+    }
+
+    /// 0x479d60: fire the ground (1) or air (2) weapon at the order target.
+    pub fn attack_with(&mut self, d: &Data, u: u32, slot: u8) {
+        if self.units[u as usize].order_target_unit == NIL {
+            return;
+        }
+        let w = if slot == 1 { self.ground_weapon(d, u) } else { d.dat.units.air_weapon[self.units[u as usize].unit_type as usize] };
+        self.fire_projectile(d, u, w);
+        if d.dat.weapons.damage_factor[w as usize] == 2 {
+            self.fire_projectile(d, u, w);
+        }
+    }
+
+    /// 0x479c90: create weapon `w`'s bullet at its launch point.
+    pub fn fire_projectile(&mut self, d: &Data, u: u32, w: u8) {
+        let wi = w as usize;
+        let un = &self.units[u as usize];
+        let (x, y) = match d.dat.weapons.behavior[wi] {
+            2 => {
+                if un.order_target_unit == NIL {
+                    return;
+                }
+                self.impact_point(d, u)
+            }
+            4 => un.order_target_pos,
+            _ => {
+                let (tx, ty) = crate::game::flingy::direction_table()[un.fl.heading as usize];
+                let fwd = self.forward_offset(d, w) as i32;
+                let p = self.unit_sprite_pos(u);
+                (
+                    (((tx * fwd) >> 8) + p.0 as i32) as i16,
+                    ((((ty * fwd) >> 8) - d.dat.weapons.upward_offset[wi] as i32) + p.1 as i32) as i16,
+                )
+            }
+        };
+        if d.dat.weapons.flingy[wi] != 0 {
+            let (player, dir) = (self.units[u as usize].player, self.units[u as usize].fl.heading);
+            self.create_bullet(d, u, w, x, y, player, dir);
+        }
+    }
+
+    /// 0x4762c0: where a shot from `u` meets the inner half of its target's box.
+    fn impact_point(&self, d: &Data, u: u32) -> (i16, i16) {
+        let t = self.units[u as usize].order_target_unit;
+        let [mut l, mut tp, mut r, mut b] = self.unit_box(d, t);
+        let dx = ((r as i32 - l as i32) >> 2) as i16;
+        l = l.wrapping_add(dx);
+        r = r.wrapping_sub(dx);
+        let dy = ((b as i32 - tp as i32) >> 2) as i16;
+        tp = tp.wrapping_add(dy);
+        b = b.wrapping_sub(dy);
+        let c = (((r as i32 - l as i32) / 2) as i16).wrapping_add(l);
+        let cy = (((b as i32 - tp as i32) / 2) as i16).wrapping_add(tp);
+        let me = self.unit_sprite_pos(u);
+        match super::collide::clip_segment((c, cy), me, [l, tp, r, b]) {
+            Some((_, p)) => p,
+            None => (c, cy),
+        }
+    }
+
+    /// 0x657910: weapons.dat forward offset, which `attkshiftproj` overwrites.
+    fn forward_offset(&self, d: &Data, w: u8) -> u8 {
+        self.forward_offsets.get(w as usize).copied().unwrap_or(d.dat.weapons.forward_offset[w as usize])
+    }
+
+    pub fn set_forward_offset(&mut self, d: &Data, w: u8, v: u8) {
+        if self.forward_offsets.is_empty() {
+            self.forward_offsets = d.dat.weapons.forward_offset.to_vec();
+        }
+        if let Some(o) = self.forward_offsets.get_mut(w as usize) {
+            *o = v;
+        }
+    }
+
+    /// 0x4753e0: nobrkcodeend: orders may interrupt again; start a queued one.
+    pub fn nobrk_end(&mut self, d: &Data, u: u32) {
+        let un = &mut self.units[u as usize];
+        un.status &= !super::unit::status::NO_BRK_CODE_START;
+        let s = un.sprite;
+        self.sprites[s as usize].flags &= 0x7f;
+        let un = &self.units[u as usize];
+        if un.order_queue_head != NIL && un.order_flags & 1 != 0 {
+            self.order_start(d, u);
+            self.prepare_next_order(d, u);
+        }
     }
 }

@@ -193,7 +193,7 @@ impl State {
     }
 
     /// 0x4bd0f0: line-of-sight elevation at a pixel (0 low, 1 mid, 2 high).
-    fn los_elevation(&self, x: i32, y: i32) -> u8 {
+    pub(super) fn los_elevation(&self, x: i32, y: i32) -> u8 {
         let m = &self.terrain;
         let i = (y / 32) as usize * m.width as usize + (x / 32) as usize;
         todo_port!("0x4bd0f0", "creep tile overrides (0x5993a8)");

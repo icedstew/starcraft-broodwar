@@ -357,7 +357,7 @@ pub fn run(st: &mut State, d: &Data, img: u32, nse: bool, mut distance: Option<&
             0x1b | 0x44 => {
                 if !nse {
                     if let Some(b) = st.iscript_bullet {
-                        st.bullet_hit(d, b);
+                        st.bullet_damage(d, b);
                     }
                 }
             }
@@ -429,8 +429,13 @@ pub fn run(st: &mut State, d: &Data, img: u32, nse: bool, mut distance: Option<&
             0x24 | 0x41 => {
                 p = a + 1;
                 if !nse {
-                    if let Some(u) = st.iscript_order_unit {
-                        let s = &mut st.units[u as usize].order_signal;
+                    // 0x6d11f4 is the current order unit, or the bullet being updated.
+                    let s = if let Some(u) = st.iscript_order_unit {
+                        Some(&mut st.units[u as usize].order_signal)
+                    } else {
+                        st.iscript_bullet.map(|b| &mut st.bullets.pool[b as usize].order_signal)
+                    };
+                    if let Some(s) = s {
                         if op == 0x24 { *s |= u8_(a) } else { *s &= !u8_(a) }
                     }
                 }
@@ -447,8 +452,15 @@ pub fn run(st: &mut State, d: &Data, img: u32, nse: bool, mut distance: Option<&
                 if !nse {
                     if let Some(u) = unit {
                         let t = st.units[u as usize].order_target_unit;
-                        let slot = if t == NIL || st.units[t as usize].status & super::unit::status::IN_AIR == 0 { 1 } else { 2 };
-                        st.attack_with(d, u, slot);
+                        if t == NIL || st.units[t as usize].status & super::unit::status::IN_AIR == 0 {
+                            st.attack_with(d, u, 1);
+                        } else {
+                            let w = d.dat.units.air_weapon[st.units[u as usize].unit_type as usize];
+                            st.fire_projectile(d, u, w);
+                            if d.dat.weapons.damage_factor[w as usize] == 2 {
+                                st.fire_projectile(d, u, w);
+                            }
+                        }
                     }
                 }
             }
@@ -522,12 +534,18 @@ pub fn run(st: &mut State, d: &Data, img: u32, nse: bool, mut distance: Option<&
             }
             0x2e => {
                 if !nse {
-                    todo_port!("0x1401c5db0", "nobrkcodestart");
+                    if let Some(u) = unit {
+                        st.units[u as usize].status |= super::unit::status::NO_BRK_CODE_START;
+                        let s = st.units[u as usize].sprite;
+                        st.sprites[s as usize].flags |= 0x80;
+                    }
                 }
             }
             0x2f => {
-                if !nse && unit.is_some() {
-                    todo_port!("0x1401c8c70", "nobrkcodeend");
+                if !nse {
+                    if let Some(u) = unit {
+                        st.nobrk_end(d, u);
+                    }
                 }
             }
             0x30 => {
@@ -539,14 +557,18 @@ pub fn run(st: &mut State, d: &Data, img: u32, nse: bool, mut distance: Option<&
                             i.pc = (p - 1) as u16;
                             return;
                         }
-                        todo_port!("0x1401b7670", "ignorerest without target");
+                        st.order_start(d, u);
                     }
                 }
             }
             0x31 => {
                 p = a + 1;
                 if !nse {
-                    todo_port!("0x1401b5bf0", "attkshiftproj: sets weapons.dat forward offset then attack_with 1");
+                    if let Some(u) = unit {
+                        let w = st.ground_weapon(d, u);
+                        st.set_forward_offset(d, w, u8_(a));
+                        st.attack_with(d, u, 1);
+                    }
                 }
             }
             0x32 => {
@@ -695,11 +717,4 @@ impl State {
         todo_port!("0x1401b65d0", "attackmelee damage");
     }
 
-    fn attack_with(&mut self, _d: &Data, _u: u32, _slot: u8) {
-        todo_port!("0x1401b5370", "attack_with (create bullet)");
-    }
-
-    fn bullet_hit(&mut self, _d: &Data, _b: u32) {
-        todo_port!("0x140185550", "domissiledmg / dogrddamage");
-    }
 }

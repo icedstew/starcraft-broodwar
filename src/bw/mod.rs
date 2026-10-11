@@ -5,6 +5,7 @@
 //! callees are explicit `todo_port!` markers, never approximations.
 
 pub mod attack;
+pub mod bullet;
 pub mod chk_load;
 pub mod collide;
 pub mod create;
@@ -150,6 +151,10 @@ pub struct State {
     pub force_flags: [u8; 4],
     /// 0x57f1ec: players whose vision each player shares (bit per player).
     pub player_vision: [u32; 12],
+    /// 0x657910 overrides (weapons.dat forward offsets changed by attkshiftproj).
+    pub forward_offsets: Vec<u8>,
+    /// Bullets (0x64b2e8 pool).
+    pub bullets: bullet::Bullets,
     /// 0x513a18: sight shapes per sight range.
     pub sights: Vec<vision::Sight>,
     /// 0x596865: game type; 0x596874: ally computer players.
@@ -268,6 +273,8 @@ impl State {
             force_flags: [0; 4],
             player_vision: [0; 12],
             sights: Vec::new(),
+            bullets: Default::default(),
+            forward_offsets: Vec::new(),
             game_type: 0,
             ally_computers: 0,
             dead_removal_counter: 0,

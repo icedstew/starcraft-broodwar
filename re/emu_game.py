@@ -174,6 +174,15 @@ def fog_trace(e, f):
     return f"f{f} fog {h:#x}"
 
 
+def bullet_trace(e, f):
+    out, b = [], e.r32(0x64dec4)
+    while b:
+        out.append(f"w{e.r8(b + 0x60)},st{e.r8(b + 0x4d)},{s16(e, b + 0x28)},{s16(e, b + 0x2a)},t{tgt(e, e.r32(b + 0x5c))},"
+                   f"tm{e.r8(b + 0x61)},fl{e.r8(b + 0x62)},s{int(e.r32(b + 0xc) != 0)}")
+        b = e.r32(b + 4)
+    return f"f{f} bul" + "".join(" " + x for x in out)
+
+
 def thingy_trace(e, f):
     out, t = [], e.r32(0x654874)
     while t:
@@ -242,6 +251,7 @@ def scenario(e, units, move, frames, out):
                 a = e.r32(a + 4)
             fo.write(thingy_trace(e, f) + "\n")
             fo.write(fog_trace(e, f) + "\n")
+            fo.write(bullet_trace(e, f) + "\n")
             fo.write(f"f{f} rng {e.r32(0x51ca14):#x} {e.r32(0x51ca18)}\n")
 
 

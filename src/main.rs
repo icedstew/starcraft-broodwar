@@ -175,6 +175,7 @@ fn main() -> std::io::Result<()> {
                     }
                     writeln!(t, "{}", thingy_trace(&st, f))?;
                     writeln!(t, "{}", fog_trace(&st, f))?;
+                    writeln!(t, "{}", bullet_trace(&st, f))?;
                     writeln!(t, "f{f} rng {:#x} {}", st.rng.seed, st.rng.total)?;
                 }
                 if f % 8 == 0 || f + 1 == frames {
@@ -387,6 +388,21 @@ fn main() -> std::io::Result<()> {
 }
 
 /// One line of unit state, matching re/emu_game.py's trace of 1.16.1 memory.
+fn bullet_trace(st: &bw::State, f: u32) -> String {
+    let mut out = format!("f{f} bul");
+    let mut b = st.bullets.active.head;
+    while b != bw::list::NIL {
+        let bu = &st.bullets.pool[b as usize];
+        let t = if bu.target == bw::list::NIL { "-".to_string() } else { bu.target.to_string() };
+        out += &format!(
+            " w{},st{},{},{},t{},tm{},fl{},s{}",
+            bu.weapon, bu.state, bu.fl.pos.0, bu.fl.pos.1, t, bu.remaining_time, bu.flags, (bu.sprite != bw::list::NIL) as u8
+        );
+        b = bu.link.next;
+    }
+    out
+}
+
 /// FNV-1a over the per-tile fog bytes (low byte of each tile flag).
 fn fog_trace(st: &bw::State, f: u32) -> String {
     let (w, h) = (st.terrain.width as usize, st.terrain.height as usize);
