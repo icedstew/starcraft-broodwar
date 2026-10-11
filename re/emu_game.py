@@ -164,6 +164,16 @@ def s32(e, a):
     return struct.unpack("<i", e.read(a, 4))[0]
 
 
+def thingy_trace(e, f):
+    out, t = [], e.r32(0x654874)
+    while t:
+        sp = e.r32(t + 0xc)
+        im = e.r32(sp + 0x18)
+        out.append(f"{e.r16(sp + 8)},{s16(e, sp + 0x14)},{s16(e, sp + 0x16)},{e.r16(im + 0x12)},{e.r8(im + 0x17)},{e.r16(im + 0x18)}")
+        t = e.r32(t + 4)
+    return f"f{f} th " + " ".join(out)
+
+
 def unit_trace(e, f, u):
     a = UNITS + u * 0x150
     sp = e.r32(a + 0xc)
@@ -202,6 +212,13 @@ def scenario(e, units, move, frames, out):
             e.call(0x4d94b0)
             for u in made:
                 fo.write(unit_trace(e, f, u) + "\n")
+            a = e.r32(0x628430)  # other units on the map (map-placed critters etc.)
+            while a:
+                u = (a - UNITS) // 0x150
+                if u not in made:
+                    fo.write(unit_trace(e, f, u) + "\n")
+                a = e.r32(a + 4)
+            fo.write(thingy_trace(e, f) + "\n")
             fo.write(f"f{f} rng {e.r32(0x51ca14):#x} {e.r32(0x51ca18)}\n")
 
 

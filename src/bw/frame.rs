@@ -23,8 +23,8 @@ impl State {
         }
         self.update_units(d);
         todo_port!("0x48c3d0", "update_bullets");
+        todo_port!("0x496330", "update flingies (0x63ff34)");
         self.update_thingies(d);
-        todo_port!("0x488510", "update sprite lists 0x654874/0x654868");
         self.rng.enabled = false; // 0x4dc540(0)
     }
 
@@ -410,14 +410,39 @@ impl State {
         super::list::insert_after_head(&mut self.sprites, s, &mut self.free_sprites);
     }
 
-    /// 0x496330 update_thingies.
+    /// 0x488510: update map sprites (0x654874) and fog sprites (0x654868).
     pub fn update_thingies(&mut self, d: &Data) {
         let mut t = self.active_thingies.head;
         while t != NIL {
             let next = self.thingies[t as usize].link.next;
-            todo_port!("0x4961f0", "update thingy");
-            let _ = d;
+            self.update_thingy(d, t);
             t = next;
         }
+        todo_port!("0x488350", "fog sprites (0x654868)");
+    }
+
+    /// 0x488020: one map sprite; freed once its images are gone.
+    fn update_thingy(&mut self, d: &Data, t: u32) {
+        todo_port!("0x487690/0x4877b0", "map sprite visibility from fog");
+        let s = self.thingies[t as usize].sprite;
+        if s != NIL {
+            self.update_unit_sprite(d, s);
+            if self.sprites[s as usize].images.head == NIL {
+                self.thingies[t as usize].sprite = NIL;
+            }
+        }
+        if self.thingies[t as usize].sprite == NIL {
+            super::list::remove(&mut self.thingies, t, &mut self.active_thingies);
+            super::list::insert_after_head(&mut self.thingies, t, &mut self.free_thingies);
+        }
+    }
+
+    /// 0x488550 tail: the hidden placeholder sprite 0x13e created with the pools.
+    pub fn init_thingies(&mut self, d: &Data) {
+        let Some(t) = self.create_thingy(d, 0x13e, 0, 0, 0) else { return };
+        self.marker_thingy = Some(t);
+        let s = self.thingies[t as usize].sprite;
+        self.sprites[s as usize].flags |= super::sprite::sflag::HIDDEN;
+        self.sprite_set_visibility(s, 0);
     }
 }

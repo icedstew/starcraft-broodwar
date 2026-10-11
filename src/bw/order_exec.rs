@@ -381,8 +381,51 @@ impl State {
     }
 
     /// 0x47c3c0: Critter.
-    fn order_critter(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x47c3c0", "Critter");
+    fn order_critter(&mut self, d: &Data, u: u32) {
+        match self.units[u as usize].order_state {
+            0 => {
+                let dir = self.rng.rand_between(0x30, 0, 0xff) as usize;
+                let ut = self.units[u as usize].unit_type;
+                let dist = if ut == 0x5e { self.rng.rand_between(0x30, 0xa0, 0x280) } else { 0x20 };
+                let s = self.units[u as usize].sprite as usize;
+                let (tx, ty) = crate::game::flingy::direction_table()[dir];
+                let mut p = (
+                    ((tx.wrapping_mul(dist) >> 8) as i16).wrapping_add(self.sprites[s].x),
+                    ((ty.wrapping_mul(dist) >> 8) as i16).wrapping_add(self.sprites[s].y),
+                );
+                self.clamp_unit_pos(d, ut, &mut p);
+                self.units[u as usize].order_target_pos = p;
+                self.set_move_target_xy(d, u, p);
+                self.units[u as usize].order_state = 1;
+            }
+            1 => {
+                let un = &self.units[u as usize];
+                let s = &self.sprites[un.sprite as usize];
+                if un.fl.move_target != (s.x, s.y) {
+                    return;
+                }
+                if un.unit_type == 0x5e {
+                    self.units[u as usize].order_state = 0;
+                    return;
+                }
+                if self.unit_at_move_target(u) == 2 {
+                    let un = &mut self.units[u as usize];
+                    un.main_order_timer = 0x4b;
+                    un.order_state = 2;
+                    return;
+                }
+                let v = self.rng.rand_between(0x2f, 0, 0x4b);
+                let un = &mut self.units[u as usize];
+                un.order_state = 2;
+                un.main_order_timer = if v <= 0xf { 0 } else { v as u8 };
+            }
+            2 => {
+                if self.units[u as usize].main_order_timer == 0 {
+                    self.units[u as usize].order_state = 0;
+                }
+            }
+            _ => {}
+        }
     }
 
     /// 0x464180: MedicHeal.

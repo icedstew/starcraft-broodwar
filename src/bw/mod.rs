@@ -104,6 +104,8 @@ pub struct State {
     pub thingies: Vec<Thingy>,
     pub free_thingies: List,
     pub active_thingies: List,
+    /// 0x652918: placeholder sprite 0x13e made by 0x488550.
+    pub marker_thingy: Option<u32>,
     pub units: Vec<Unit>,
     pub free_units: List,      // 0x140e77fe0 / 0x140e77fd8
     pub visible_units: List,   // 0x140e77fc8 / 0x140e78078
@@ -221,6 +223,7 @@ impl State {
             thingies,
             free_thingies,
             active_thingies: List::default(),
+            marker_thingy: None,
             units,
             free_units,
             visible_units: List::default(),

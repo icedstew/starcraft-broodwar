@@ -17,6 +17,58 @@ fn u16_at(e: &[u8], o: usize) -> u16 {
 }
 
 impl State {
+    /// 0x4cd600: THG2 section: map sprites and doodad units.
+    pub fn chk_doodads(&mut self, d: &Data, data: &[u8], modes: ScenarioModes) -> bool {
+        if data.len() % 10 != 0 {
+            return false;
+        }
+        for e in data.chunks_exact(10) {
+            let (id, x, y) = (u16_at(e, 0), u16_at(e, 2) as i16, u16_at(e, 4) as i16);
+            let mut player = e[6];
+            let flags = e[9];
+            if flags & 0x10 != 0 {
+                // 0x488210
+                self.create_thingy(d, id, x, y, player);
+                continue;
+            }
+            if matches!(id, 0xcd..=0xd0) {
+                player = 0xb;
+            }
+            if (modes.flag_59686d || modes.flag_596871 || modes.flag_596877) && player != 0xb {
+                continue;
+            }
+            if let Some(u) = self.chk_place_unit(d, id, x, y, player) {
+                if flags & 0x80 != 0 {
+                    self.disable_doodad(d, u);
+                }
+            }
+        }
+        true
+    }
+
+    /// 0x47b4b0: disable a map-placed doodad unit (THG2 flag 0x8000).
+    fn disable_doodad(&mut self, d: &Data, u: u32) {
+        let un = &self.units[u as usize];
+        if un.status & 0x400 != 0 || un.lockdown_timer != 0 || un.stasis_timer != 0 || un.maelstrom_timer != 0 {
+            return;
+        }
+        self.units[u as usize].status |= 0x400;
+        let s = self.units[u as usize].sprite;
+        self.sprite_images_run_anim(d, s, 0xf);
+        let un = &mut self.units[u as usize];
+        un.status |= 0x20_0000;
+        let t = un.unit_type;
+        if matches!(t, 0xcb | 0xd1 | 0xcd..=0xd0) {
+            self.sprites[s as usize].elevation = 1;
+        }
+        if matches!(t, 0xcb | 0xd1..=0xd5) {
+            let un = &mut self.units[u as usize];
+            un.status |= 0x300;
+            un.visibility = 0x8000_0000;
+            un.ai_action_flag = 0;
+        }
+    }
+
     /// 0x4cd7a0: UNIT section: start locations and map-placed units.
     pub fn chk_units(&mut self, d: &Data, data: &[u8], modes: ScenarioModes) -> bool {
         if data.len() % 0x24 != 0 {

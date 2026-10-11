@@ -98,6 +98,7 @@ fn main() -> std::io::Result<()> {
             let dims = chk.as_ref().map_or((64, 64), |c| c.dims());
             let mut st = bw::State::new(dims, 0, 1700);
             st.search.init(&d);
+            st.init_thingies(&d);
             if let Some(chk) = &chk {
                 let name = map::TILESETS[chk.tileset()];
                 let vf4 = casc.read(&format!("tileset/{name}.vf4"))?;
@@ -108,6 +109,9 @@ fn main() -> std::io::Result<()> {
                 let (w, h) = chk.dims();
                 let ok = st.load_terrain(&ts, w as u16, h as u16, chk.section(b"MTXM").unwrap_or(&[]));
                 println!("map {w}x{h}: {} regions (ok {ok})", st.sai.region_count);
+                if let Some(doodads) = chk.section(b"THG2") {
+                    st.chk_doodads(&d, doodads, Default::default());
+                }
                 if let Some(units) = chk.section(b"UNIT") {
                     st.chk_units(&d, units, Default::default());
                     println!("map units: {}", st.unit_count);
@@ -151,6 +155,15 @@ fn main() -> std::io::Result<()> {
                     for &u in &made {
                         writeln!(t, "{}", unit_trace(&st, f, u))?;
                     }
+                    // Other units on the map (map-placed critters etc.).
+                    let mut u = st.visible_units.head;
+                    while u != bw::list::NIL {
+                        if !made.contains(&u) {
+                            writeln!(t, "{}", unit_trace(&st, f, u))?;
+                        }
+                        u = st.units[u as usize].link.next;
+                    }
+                    writeln!(t, "{}", thingy_trace(&st, f))?;
                     writeln!(t, "f{f} rng {:#x} {}", st.rng.seed, st.rng.total)?;
                 }
                 if f % 8 == 0 || f + 1 == frames {
@@ -363,6 +376,18 @@ fn main() -> std::io::Result<()> {
 }
 
 /// One line of unit state, matching re/emu_game.py's trace of 1.16.1 memory.
+fn thingy_trace(st: &bw::State, f: u32) -> String {
+    let mut out = format!("f{f} th");
+    let mut t = st.active_thingies.head;
+    while t != bw::list::NIL {
+        let s = &st.sprites[st.thingies[t as usize].sprite as usize];
+        let im = &st.images[s.main_image as usize];
+        out += &format!(" {},{},{},{},{},{}", s.sprite_id, s.x, s.y, im.iscript.pc, im.iscript.wait, im.frameset);
+        t = st.thingies[t as usize].link.next;
+    }
+    out
+}
+
 fn unit_trace(st: &bw::State, f: u32, u: u32) -> String {
     let un = &st.units[u as usize];
     let s = &st.sprites[un.sprite as usize];
