@@ -651,9 +651,7 @@ impl State {
             return self.apply_move_checked(d, u);
         }
         self.apply_without_moving(d, u);
-        if self.units[u as usize].move_target_unit != NIL {
-            todo_port!("0x430f10", "notify move target unit of block");
-        }
+        // 0x430f10(1, move target unit) is called here but its result is unused.
         set_speeds(&mut self.units[u as usize].fl, 0);
         let sp = self.unit_sprite_pos(u);
         let un = &mut self.units[u as usize];
@@ -1126,7 +1124,8 @@ impl State {
         let sp = self.paths[p as usize].speed;
         set_speeds(&mut self.units[u as usize].fl, sp);
         self.predict(d, u);
-        if !self.unit_blocking_move(u).is_some() {
+        let blocker = self.unit_blocking_move(u);
+        let Some(b) = blocker else {
             if self.predicted_move_blocked(d, u) {
                 self.state(u, 0x17);
                 return false;
@@ -1134,7 +1133,7 @@ impl State {
             self.apply_move_checked(d, u);
             self.state(u, 0x19);
             return false;
-        }
+        };
         self.mv_stop_walking_anim(d, u);
         if !repath {
             set_speeds(&mut self.units[u as usize].fl, 0);
@@ -1156,14 +1155,14 @@ impl State {
             return false;
         }
         self.path_delete(u);
-        let dir = self.stub_4f2a70(u);
+        let dir = self.sidestep_dir(d, b, u);
         if dir < 0 {
             self.state(u, 0x18);
             return false;
         }
-        let p = self.units[u as usize].path;
-        self.paths[p as usize].collision_unit = 0;
-        self.paths[p as usize].direction = dir as u8;
+        // 0x46b6d1: 0x42f740 always nulls unit +0x100, so 1.16.1 stores the blocker
+        // handle and direction at address 0x10 / 0x1a (access violation).
+        todo_port!("0x46b6d8", "1.16.1 writes the sidestep target through a null path");
         self.state(u, 0x1f);
         false
     }
@@ -1404,10 +1403,6 @@ impl State {
         f.velocity_dir_prev == direction_to(sp.0 as i32, sp.1 as i32, f.next_waypoint.0 as i32, f.next_waypoint.1 as i32)
     }
 
-    fn stub_4f2a70(&mut self, _u: u32) -> i32 {
-        todo_port!("0x4f2a70", "free direction search");
-        -1
-    }
 
 
 }
