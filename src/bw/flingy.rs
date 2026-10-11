@@ -85,7 +85,7 @@ pub fn halt_distance(f: &Flingy, d: &Data) -> i32 {
 }
 
 /// 0x495100: turn velocity direction toward desired (+0x4b), limited by turn rate.
-fn turn_velocity(f: &mut Flingy) {
+pub fn turn_velocity(f: &mut Flingy) {
     let v = f.velocity_dir_prev;
     if f.desired_dir == v {
         set_velocity_dir(f, v);

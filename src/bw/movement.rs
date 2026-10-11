@@ -1196,7 +1196,8 @@ impl State {
     }
 
     /// 0x46b000.
-    fn mv_collision_sidestep(&mut self, _d: &Data, u: u32) -> bool {
+    /// 0x46b000: slide sideways (path +0x1a direction) past the collision unit.
+    fn mv_collision_sidestep(&mut self, d: &Data, u: u32) -> bool {
         let un = &mut self.units[u as usize];
         if un.pathing_collision_interval != 0xff {
             un.pathing_collision_interval += 1;
@@ -1204,8 +1205,86 @@ impl State {
         if self.mv_check_path_state(u, true) {
             return true;
         }
-        todo_port!("0x46b000", "sidestep loop (needs 0x4f20d0/0x4f1980)");
-        self.state(u, 0x13);
+        let p = self.units[u as usize].path;
+        let avoid = {
+            let h = self.paths[p as usize].collision_unit;
+            let o = (h & 0x7ff).wrapping_sub(1);
+            (h != 0)
+                .then_some(o)
+                .filter(|&o| {
+                    let ou = &self.units[o as usize];
+                    ou.sprite != NIL && !(ou.order == 0 && ou.order_state == 1) && ou.unique_id as u32 == h >> 11
+                })
+        };
+        let side_dir = self.paths[p as usize].direction;
+        {
+            let f = &mut self.units[u as usize].fl;
+            f.flags |= 1;
+            f.desired_dir = side_dir;
+            flingy::turn_velocity(f);
+            f.velocity_dir_prev = f.velocity_dir;
+            flingy::turn_heading(f);
+        }
+        let s = self.units[u as usize].sprite;
+        let h = self.units[u as usize].fl.heading;
+        self.sprite_images_set_direction(d, s, h);
+        if self.units[u as usize].fl.movement_type == 2 {
+            let f = &mut self.units[u as usize].fl;
+            f.speed = f.top_speed;
+        } else {
+            flingy::update_speed(&mut self.units[u as usize].fl, d);
+        }
+        let dir = self.units[u as usize].fl.velocity_dir_prev;
+        let speed = self.units[u as usize].fl.speed;
+        self.units[u as usize].fl.next_speed = speed;
+        let mut next_state = None;
+        let mut last = None;
+        if speed > 0 {
+            let mut left = speed;
+            loop {
+                let step = left.min(0x100);
+                left -= 0x100;
+                self.units[u as usize].fl.flags &= 0xfe;
+                let mut m = self.mv;
+                flingy::predict_with_dir_speed(&mut self.units[u as usize].fl, &mut m, side_dir, step);
+                self.mv = m;
+                if self.unit_blocking_move(u).is_some() || self.predicted_move_blocked(d, u) {
+                    next_state = Some(0x21);
+                    break;
+                }
+                self.apply_move_checked(d, u);
+                self.units[u as usize].fl.velocity_dir_prev = dir;
+                flingy::update_desired_dir(&mut self.units[u as usize].fl);
+                let vd = self.units[u as usize].fl.velocity_dir;
+                let mut m = self.mv;
+                flingy::predict_with_dir_speed(&mut self.units[u as usize].fl, &mut m, vd, speed);
+                self.mv = m;
+                last = self.unit_blocking_move(u);
+                if last != avoid || left <= 0 {
+                    break;
+                }
+            }
+        }
+        let f = &mut self.units[u as usize].fl;
+        f.velocity_dir = dir;
+        f.velocity_dir_prev = dir;
+        f.speed = speed;
+        f.next_speed = speed;
+        let (dx, dy) = crate::game::flingy::direction_table()[dir as usize];
+        f.velocity = ((dx * speed) >> 8, (dy * speed) >> 8);
+        if let Some(ns) = next_state {
+            self.state(u, ns);
+            return false;
+        }
+        if last.is_none() {
+            self.units[u as usize].fl.flags |= 1;
+            let p = self.units[u as usize].path;
+            if p != NIL && self.frame.wrapping_sub(self.paths[p as usize].creation_frame) < 0x96 {
+                self.state(u, 0x19);
+                return false;
+            }
+            self.state(u, 0x13);
+        }
         false
     }
 
@@ -1256,7 +1335,8 @@ impl State {
     }
 
     /// 0x46ae20.
-    fn mv_collision_turn(&mut self, _d: &Data, u: u32) -> bool {
+    /// 0x46ae20: step in the path's avoidance direction, then turn back toward the waypoint.
+    fn mv_collision_turn(&mut self, d: &Data, u: u32) -> bool {
         let un = &mut self.units[u as usize];
         if un.pathing_collision_interval != 0xff {
             un.pathing_collision_interval += 1;
@@ -1264,8 +1344,39 @@ impl State {
         if self.mv_check_path_state(u, true) {
             return true;
         }
-        todo_port!("0x46ae20", "turn-away step (needs 0x4f20d0/0x4f1980)");
-        self.state(u, 0x21);
+        let p = self.units[u as usize].path;
+        let side_dir = self.paths[p as usize].direction;
+        self.units[u as usize].fl.flags &= 0xfe;
+        let saved = self.units[u as usize].fl.velocity_dir_prev;
+        let mut m = self.mv;
+        flingy::predict_with_dir(&mut self.units[u as usize].fl, d, &mut m, side_dir);
+        self.mv = m;
+        {
+            let f = &mut self.units[u as usize].fl;
+            f.flags |= 1;
+            f.velocity_dir_prev = saved;
+            f.desired_dir = side_dir;
+            flingy::turn_velocity(f);
+        }
+        if self.unit_blocking_move(u).is_some() || self.predicted_move_blocked(d, u) {
+            self.state(u, 0x21);
+            return false;
+        }
+        self.apply_move_checked(d, u);
+        let keep = self.units[u as usize].fl.next_speed;
+        let ps = self.paths[p as usize].speed;
+        set_speeds(&mut self.units[u as usize].fl, ps);
+        let sp = self.unit_sprite_pos(u);
+        let nw = self.units[u as usize].fl.next_waypoint;
+        let dir = direction_to(sp.0 as i32, sp.1 as i32, nw.0 as i32, nw.1 as i32);
+        let mut m = self.mv;
+        flingy::predict_with_dir(&mut self.units[u as usize].fl, d, &mut m, dir);
+        self.mv = m;
+        set_speeds(&mut self.units[u as usize].fl, keep);
+        if !self.predicted_move_blocked(d, u) {
+            self.units[u as usize].fl.flags |= 1;
+            self.state(u, 0x19);
+        }
         false
     }
 
