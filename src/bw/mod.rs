@@ -27,6 +27,7 @@ pub mod sai;
 pub mod short_path;
 pub mod sprite;
 pub mod unit;
+pub mod vision;
 
 use crate::dat::Dat;
 use list::{List, NIL};
@@ -142,6 +143,17 @@ pub struct State {
     pub scanner_units: List,
     /// 0x57eee8 player type per player (2 = human).
     pub player_types: [u8; 12],
+    /// 0x57eeea (player struct +2): force 1..4.
+    pub player_force: [u8; 12],
+    /// 0x58d5b8: FORC force properties (1 random start, 2 allies, 4 allied victory, 8 shared vision).
+    pub force_flags: [u8; 4],
+    /// 0x57f1ec: players whose vision each player shares (bit per player).
+    pub player_vision: [u32; 12],
+    /// 0x513a18: sight shapes per sight range.
+    pub sights: Vec<vision::Sight>,
+    /// 0x596865: game type; 0x596874: ally computer players.
+    pub game_type: u8,
+    pub ally_computers: u8,
     /// 0x658ae4: shared countdown for 0x4000-status dead-unit removal.
     pub dead_removal_counter: u32,
     /// 0x64dec8 ring rows, 0x64dea8, 0x6957d0.
@@ -251,6 +263,12 @@ impl State {
             finder_ring: 0,
             scanner_units: List::default(),
             player_types: [0; 12],
+            player_force: [0; 12],
+            force_flags: [0; 4],
+            player_vision: [0; 12],
+            sights: Vec::new(),
+            game_type: 0,
+            ally_computers: 0,
             dead_removal_counter: 0,
             finder_rows: [[0; 0x20]; 0x20],
             finder_64dea8: 0,

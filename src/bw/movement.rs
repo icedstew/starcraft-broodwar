@@ -89,7 +89,7 @@ impl State {
         let h0 = self.units[u as usize].fl.velocity_dir_prev;
         self.movement_step(d, u);
         if self.moved_flag {
-            todo_port!("0x4e5f30", "unit vision update after moving to a new tile");
+            self.unit_reveal(d, u);
         }
         let sub = self.units[u as usize].subunit;
         let ut = self.units[u as usize].unit_type as usize;

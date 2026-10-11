@@ -164,6 +164,16 @@ def s32(e, a):
     return struct.unpack("<i", e.read(a, 4))[0]
 
 
+def fog_trace(e, f):
+    """FNV-1a over the per-tile fog bytes (low byte of each 0x6d1260 entry)."""
+    n = e.r16(0x57f1d4) * e.r16(0x57f1d6)
+    b = bytes(e.uc.mem_read(e.r32(0x6d1260), n * 4))[0::4]
+    h = 0x811c9dc5
+    for x in b:
+        h = ((h ^ x) * 0x01000193) & 0xffffffff
+    return f"f{f} fog {h:#x}"
+
+
 def thingy_trace(e, f):
     out, t = [], e.r32(0x654874)
     while t:
@@ -174,6 +184,10 @@ def thingy_trace(e, f):
     return f"f{f} th " + " ".join(out)
 
 
+def tgt(e, p):
+    return (p - UNITS) // 0x150 if p else "-"
+
+
 def unit_trace(e, f, u):
     a = UNITS + u * 0x150
     sp = e.r32(a + 0xc)
@@ -182,13 +196,15 @@ def unit_trace(e, f, u):
             f"ntw {s16(e, a + 0x1c)},{s16(e, a + 0x1e)} fl {e.r8(a + 0x20):#x} dir {e.r8(a + 0x21)} vdir {e.r8(a + 0x23)} "
             f"ddir {e.r8(a + 0x4b)} spd {s32(e, a + 0x38)} nspd {s32(e, a + 0x3c)} top {s32(e, a + 0x34)} "
             f"exact {s32(e, a + 0x2c)},{s32(e, a + 0x30)} vel {s32(e, a + 0x40)},{s32(e, a + 0x44)} "
-            f"status {e.r32(a + 0xdc):#x} path {int(e.r32(a + 0x100) != 0)} ot {e.r8(a + 0x85)} mot {e.r8(a + 0x54)}")
+            f"status {e.r32(a + 0xdc):#x} path {int(e.r32(a + 0x100) != 0)} ot {e.r8(a + 0x85)} mot {e.r8(a + 0x54)} "
+            f"hp {s32(e, a + 8)} sh {s32(e, a + 0x60)} gcd {e.r8(a + 0x55)} tgt {tgt(e, e.r32(a + 0x5c))} vis {e.r8(sp + 0xc)}")
 
 
 def scenario(e, units, move, frames, out):
     """Same steps as `scbw bwsim`: create + finish units, order Move, step frames."""
     for p in range(12):
         e.w8(0x57eee8 + p * 0x24, 2)
+    e.call(0x4c3ed0)  # alliances and shared vision at game start
     # 0x49e530 shows a placement error to the owning player (UI only): skip it.
     e.write(0x49e530, b"\xc2\x04\x00")
     made = []
@@ -204,7 +220,13 @@ def scenario(e, units, move, frames, out):
         e.w32(0x6d11c8, 0)
     if move:
         for i, u in enumerate(made):
-            mx, my = move[i % len(move)]
+            m = move[i % len(move)]
+            if m[0] == "@":  # attack made unit k (AttackUnit, order 0xa)
+                t = UNITS + made[m[1]] * 0x150
+                sp = e.r32(t + 0xc)
+                e.call(0x474c30, regs={"esi": UNITS + u * 0x150}, stack=[0xa, e.r32(sp + 0x14), t])
+                continue
+            mx, my = m
             e.call(0x474c30, regs={"esi": UNITS + u * 0x150}, stack=[6, (my << 16) | (mx & 0xffff), 0])
     with open(out, "w") as fo:
         for f in range(frames):
@@ -219,6 +241,7 @@ def scenario(e, units, move, frames, out):
                     fo.write(unit_trace(e, f, u) + "\n")
                 a = e.r32(a + 4)
             fo.write(thingy_trace(e, f) + "\n")
+            fo.write(fog_trace(e, f) + "\n")
             fo.write(f"f{f} rng {e.r32(0x51ca14):#x} {e.r32(0x51ca18)}\n")
 
 
@@ -232,7 +255,8 @@ def main():
     if len(sys.argv) > 4:
         units = [tuple(int(v) for v in u.split(",")) for u in sys.argv[4].split(";") if u]
         # "x,y" for every unit, or "x,y;x,y;..." cycled over the units.
-        move = [tuple(int(v) for v in m.split(",")) for m in sys.argv[5].split(";") if m]
+        # "@k" attacks the k-th created unit.
+        move = [("@", int(m[1:])) if m[0] == "@" else tuple(int(v) for v in m.split(",")) for m in sys.argv[5].split(";") if m]
         frames, out = int(sys.argv[6]), sys.argv[7]
         try:
             scenario(e, units, move, frames, out)

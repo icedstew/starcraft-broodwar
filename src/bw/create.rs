@@ -225,7 +225,7 @@ impl State {
         let t = self.units[u as usize].unit_type as usize;
         if d.dat.units.flags[t] & 0x10 == 0 {
             if self.sprites[s as usize].flags & super::sprite::sflag::HIDDEN == 0 {
-                todo_port!("0x4e5f30", "unit vision");
+                self.unit_reveal(d, u);
             }
             return true;
         }

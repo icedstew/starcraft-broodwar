@@ -299,6 +299,7 @@ impl super::State {
         self.map_px = (width * 32, height * 32);
         self.map_tiles = (width as usize, height as usize);
         self.terrain = m;
+        self.init_vision();
         match sai {
             Some(s) => {
                 self.sai = s;

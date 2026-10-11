@@ -118,6 +118,7 @@ fn main() -> std::io::Result<()> {
                 }
             }
             st.player_types = [2; 12];
+            st.init_alliances(Default::default());
             let mut made = Vec::new();
             for e in std::env::var("SCBW_UNITS").unwrap_or("0,320,320,0".into()).split(';').filter(|e| !e.is_empty()) {
                 let v: Vec<i32> = e.split(',').filter_map(|n| n.trim().parse().ok()).collect();
@@ -137,9 +138,18 @@ fn main() -> std::io::Result<()> {
             }
             if let Ok(m) = std::env::var("SCBW_MOVE") {
                 // "x,y" for every unit, or "x,y;x,y;..." cycled over the units.
-                let v: Vec<Vec<i16>> = m.split(';').map(|p| p.split(',').filter_map(|n| n.trim().parse().ok()).collect()).collect();
+                // "@k" attacks the k-th created unit (AttackUnit, order 0xa).
+                let v: Vec<&str> = m.split(';').filter(|p| !p.is_empty()).collect();
                 for (i, &u) in made.iter().enumerate() {
-                    let t = &v[i % v.len()];
+                    let p = v[i % v.len()];
+                    if let Some(k) = p.strip_prefix('@') {
+                        let t = made[k.parse::<usize>().unwrap_or(0)];
+                        let s = &st.sprites[st.units[t as usize].sprite as usize];
+                        let pos = (s.x, s.y);
+                        st.order_target(&d, u, 0xa, pos, t);
+                        continue;
+                    }
+                    let t: Vec<i16> = p.split(',').filter_map(|n| n.trim().parse().ok()).collect();
                     st.order_target(&d, u, 6, (t[0], t[1]), bw::list::NIL);
                 }
             }
@@ -164,6 +174,7 @@ fn main() -> std::io::Result<()> {
                         u = st.units[u as usize].link.next;
                     }
                     writeln!(t, "{}", thingy_trace(&st, f))?;
+                    writeln!(t, "{}", fog_trace(&st, f))?;
                     writeln!(t, "f{f} rng {:#x} {}", st.rng.seed, st.rng.total)?;
                 }
                 if f % 8 == 0 || f + 1 == frames {
@@ -376,6 +387,16 @@ fn main() -> std::io::Result<()> {
 }
 
 /// One line of unit state, matching re/emu_game.py's trace of 1.16.1 memory.
+/// FNV-1a over the per-tile fog bytes (low byte of each tile flag).
+fn fog_trace(st: &bw::State, f: u32) -> String {
+    let (w, h) = (st.terrain.width as usize, st.terrain.height as usize);
+    let mut x = 0x811c9dc5u32;
+    for &t in &st.terrain.tile_flags[..w * h] {
+        x = (x ^ (t & 0xff)).wrapping_mul(0x01000193);
+    }
+    format!("f{f} fog {x:#x}")
+}
+
 fn thingy_trace(st: &bw::State, f: u32) -> String {
     let mut out = format!("f{f} th");
     let mut t = st.active_thingies.head;
@@ -393,11 +414,14 @@ fn unit_trace(st: &bw::State, f: u32, u: u32) -> String {
     let s = &st.sprites[un.sprite as usize];
     let fl = &un.fl;
     format!(
-        "f{f} u{u} pos {},{} order {:#x} ost {} mv {:#x} mt {},{} nw {},{} ntw {},{} fl {:#x} dir {} vdir {} ddir {} spd {} nspd {} top {} exact {},{} vel {},{} status {:#x} path {} ot {} mot {}",
+        "f{f} u{u} pos {},{} order {:#x} ost {} mv {:#x} mt {},{} nw {},{} ntw {},{} fl {:#x} dir {} vdir {} ddir {} spd {} nspd {} top {} exact {},{} vel {},{} status {:#x} path {} ot {} mot {} hp {} sh {} gcd {} tgt {} vis {}",
         s.x, s.y, un.order, un.order_state, un.movement_state, fl.move_target.0, fl.move_target.1,
         fl.next_waypoint.0, fl.next_waypoint.1, fl.next_target_waypoint.0, fl.next_target_waypoint.1,
         fl.flags, fl.heading, fl.velocity_dir_prev, fl.desired_dir, fl.speed, fl.next_speed, fl.top_speed,
-        fl.exact.0, fl.exact.1, fl.velocity.0, fl.velocity.1, un.status, (un.path != bw::list::NIL) as u8, un.order_process_timer, un.main_order_timer
+        fl.exact.0, fl.exact.1, fl.velocity.0, fl.velocity.1, un.status, (un.path != bw::list::NIL) as u8, un.order_process_timer, un.main_order_timer,
+        un.hp, un.shields, un.ground_cooldown,
+        if un.order_target_unit == bw::list::NIL { "-".to_string() } else { un.order_target_unit.to_string() },
+        s.visibility
     )
 }
 

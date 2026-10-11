@@ -17,6 +17,90 @@ fn u16_at(e: &[u8], o: usize) -> u16 {
 }
 
 impl State {
+    /// 0x4c3ed0: alliances (0x58d634) and shared vision (0x57f1ec) at game start.
+    pub fn init_alliances(&mut self, modes: ScenarioModes) {
+        let ty = self.player_types;
+        let a = &mut self.alliances;
+        *a = [[0; 12]; 12];
+        for i in 0..8 {
+            a[i][i] = 1;
+        }
+        for p in (0..12).rev() {
+            a[11][p] = 1;
+            a[p][11] = 1;
+            if self.ally_computers == 1 && !modes.flag_596877 {
+                for q in (0..8).rev() {
+                    if q != p && ty[p] == 1 && ty[q] == 1 {
+                        a[p][q] = 2;
+                        a[q][p] = 2;
+                    }
+                }
+            }
+        }
+        for p in 0..12 {
+            self.player_vision[p] = 1 << p;
+            if ty[p] == 3 || ty[p] == 7 {
+                for q in 0..12 {
+                    self.alliances[p][q] = 1;
+                    self.alliances[q][p] = 1;
+                }
+            }
+        }
+        if !(modes.flag_59686d || modes.flag_596871 || modes.flag_596877) {
+            for f in 1..=4u8 {
+                let props = self.force_flags[f as usize - 1];
+                let v = if props & 2 == 0 { 0 } else { 1 + (props & 4 != 0) as u8 };
+                self.force_alliance(f, v);
+                self.force_vision(f, props & 8 != 0);
+            }
+        }
+        if self.game_type == 0xf {
+            for p in 0..11 {
+                for q in 0..11 {
+                    if ty[p] != 0 && ty[q] != 0 {
+                        let same = self.player_force[p] == self.player_force[q];
+                        self.alliances[p][q] = if same { 2 } else { 0 };
+                        if same {
+                            self.player_vision[p] |= 1 << q;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// 0x45ab20: set alliances between the human players of force `f`.
+    fn force_alliance(&mut self, f: u8, v: u8) {
+        for p in 0..8 {
+            if self.player_force[p] != f || self.player_types[p] != 2 {
+                continue;
+            }
+            for q in 0..8 {
+                if (v != 0 || p != q) && self.player_force[q] == f && self.player_types[q] == 2 {
+                    self.alliances[p][q] = v;
+                }
+            }
+        }
+    }
+
+    /// 0x45a9b0: share (or stop sharing) vision between the human players of force `f`.
+    fn force_vision(&mut self, f: u8, on: bool) {
+        for p in 0..8 {
+            if self.player_force[p] != f || self.player_types[p] != 2 {
+                continue;
+            }
+            for q in 0..8 {
+                if p != q && self.player_force[q] == f && self.player_types[q] == 2 {
+                    if on {
+                        self.player_vision[p] |= 1 << q;
+                    } else {
+                        self.player_vision[p] &= !(1 << q);
+                    }
+                }
+            }
+        }
+    }
+
     /// 0x4cd600: THG2 section: map sprites and doodad units.
     pub fn chk_doodads(&mut self, d: &Data, data: &[u8], modes: ScenarioModes) -> bool {
         if data.len() % 10 != 0 {
@@ -115,7 +199,7 @@ impl State {
         self.start_locations = starts;
         let mut u = self.visible_units.head;
         while u != NIL {
-            todo_port!("0x4ebe10", "sprite position / vision update for map units");
+            self.update_unit_visibility(d, u);
             u = self.units[u as usize].link.next;
         }
         true

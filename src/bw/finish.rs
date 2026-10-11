@@ -118,7 +118,7 @@ impl State {
             let mut l = self.scanner_units;
             list::insert_after_head(&mut self.units, u, &mut l);
             self.scanner_units = l;
-            todo_port!("0x4e5f30", "unit vision");
+            self.unit_reveal(d, u);
         } else if self.sprites[s as usize].flags & super::sprite::sflag::HIDDEN != 0 && t16 != 0x49 && t16 != 0x55 {
             self.show_unit(d, u);
         }
@@ -183,8 +183,8 @@ impl State {
             let ss = self.units[sub as usize].sprite;
             self.sprites[ss as usize].flags &= !super::sprite::sflag::HIDDEN;
         }
-        todo_port!("0x4e5f30", "unit vision");
-        todo_port!("0x4ebe10", "sprite position / vision update");
+        self.unit_reveal(d, u);
+        self.update_unit_visibility(d, u);
         self.finder_insert(d, u);
         if self.units[u as usize].status & status::GROUNDED_BUILDING != 0 {
             todo_port!("0x469f60", "mark building placement tiles (0x472eb0)");

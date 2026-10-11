@@ -19,7 +19,7 @@ impl State {
         self.is_100th_frame = self.counter_100 == 0;
         if self.is_100th_frame {
             todo_port!("0x49c4c0", "creep update (every 100 frames)");
-            todo_port!("0x480880", "vision reset (every 100 frames)");
+            self.vision_reset();
         }
         self.update_units(d);
         todo_port!("0x48c3d0", "update_bullets");
@@ -69,9 +69,12 @@ impl State {
             self.update_dead_unit(d, u);
             if self.units[u as usize].sprite != NIL {
                 if self.is_100th_frame && self.player_type(self.units[u as usize].player) == 2 {
-                    todo_port!("0x4806f0", "reveal dead unit's position (bit IN_AIR)");
+                    let un = &self.units[u as usize];
+                    let s = &self.sprites[un.sprite as usize];
+                    let (mask, x, y, air) = (self.player_vision[un.player as usize], s.x as i32, s.y as i32, un.status & 4 != 0);
+                    self.reveal(mask, 1, x, y, air);
                 }
-                todo_port!("0x4ebe10", "sprite position / vision update");
+                self.update_unit_visibility(d, u);
             }
             u = next;
         }
@@ -91,14 +94,14 @@ impl State {
                 let next = self.units[u as usize].link.next;
                 self.iscript_order_unit = Some(u);
                 self.iscript_unit = Some(u);
-                todo_port!("0x4e5f30", "scanner sweep vision");
+                self.unit_reveal(d, u);
                 u = next;
             }
         }
         let mut u = self.visible_units.head;
         while u != NIL {
             let next = self.units[u as usize].link.next;
-            todo_port!("0x4ebe10", "sprite position / vision update");
+            self.update_unit_visibility(d, u);
             let un = &mut self.units[u as usize];
             if un.status & 0x300 != 0 {
                 un.is_cloaked = 0;
