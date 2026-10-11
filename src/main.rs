@@ -97,7 +97,6 @@ fn main() -> std::io::Result<()> {
             let chk = std::env::var("SCBW_MAP").ok().map(|p| load_chk(&p)).transpose()?;
             let dims = chk.as_ref().map_or((64, 64), |c| c.dims());
             let mut st = bw::State::new(dims, 0, 1700);
-            st.player_types = [2; 12];
             st.search.init(&d);
             if let Some(chk) = &chk {
                 let name = map::TILESETS[chk.tileset()];
@@ -109,7 +108,12 @@ fn main() -> std::io::Result<()> {
                 let (w, h) = chk.dims();
                 let ok = st.load_terrain(&ts, w as u16, h as u16, chk.section(b"MTXM").unwrap_or(&[]));
                 println!("map {w}x{h}: {} regions (ok {ok})", st.sai.region_count);
+                if let Some(units) = chk.section(b"UNIT") {
+                    st.chk_units(&d, units, Default::default());
+                    println!("map units: {}", st.unit_count);
+                }
             }
+            st.player_types = [2; 12];
             let mut made = Vec::new();
             for e in std::env::var("SCBW_UNITS").unwrap_or("0,320,320,0".into()).split(';').filter(|e| !e.is_empty()) {
                 let v: Vec<i32> = e.split(',').filter_map(|n| n.trim().parse().ok()).collect();
@@ -143,6 +147,7 @@ fn main() -> std::io::Result<()> {
                     for &u in &made {
                         writeln!(t, "{}", unit_trace(&st, f, u))?;
                     }
+                    writeln!(t, "f{f} rng {:#x} {}", st.rng.seed, st.rng.total)?;
                 }
                 if f % 8 == 0 || f + 1 == frames {
                     for &u in &made {

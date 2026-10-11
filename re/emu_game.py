@@ -198,6 +198,7 @@ def scenario(e, units, move, frames, out):
             e.call(0x4d94b0)
             for u in made:
                 fo.write(unit_trace(e, f, u) + "\n")
+            fo.write(f"f{f} rng {e.r32(0x51ca14):#x} {e.r32(0x51ca18)}\n")
 
 
 def main():
