@@ -73,8 +73,8 @@ pub struct Unit {
     pub last_event_timer: u8,         // 0x8A
     pub last_event_color: u8,         // 0x8B
     pub rank_increase: u8,            // 0x8D
-    pub kill_count: u8,               // 0x8E
-    pub unknown_8f: u8,               // 0x8F
+    pub unknown_8e: u8,               // 0x8E
+    pub kill_count: u8,               // 0x8F (0x4759c0)
     pub last_attacking_player: u8,    // 0x90 / 0xd5 (8 = none)
     pub ai_action_flag: u8,           // 0x91 / 0xd6 (cloak/vision stagger counter in update_units)
     pub user_action_flags: u8,        // 0x92 / 0xd7
@@ -177,8 +177,8 @@ impl Default for Unit {
             last_event_timer: 0,
             last_event_color: 0,
             rank_increase: 0,
+            unknown_8e: 0,
             kill_count: 0,
-            unknown_8f: 0,
             last_attacking_player: 0,
             ai_action_flag: 0,
             user_action_flags: 0,

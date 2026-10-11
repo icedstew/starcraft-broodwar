@@ -10,6 +10,7 @@ pub mod chk_load;
 pub mod collide;
 pub mod create;
 pub mod crt;
+pub mod death;
 pub mod finder;
 pub mod finish;
 pub mod flingy;
@@ -153,6 +154,8 @@ pub struct State {
     pub player_vision: [u32; 12],
     /// 0x657910 overrides (weapons.dat forward offsets changed by attkshiftproj).
     pub forward_offsets: Vec<u8>,
+    /// 0x63ff5c: head of the units linked through +0xf0 / +0xf4.
+    pub cloak_list_head: u32,
     /// Bullets (0x64b2e8 pool).
     pub bullets: bullet::Bullets,
     /// 0x513a18: sight shapes per sight range.
@@ -274,6 +277,7 @@ impl State {
             player_vision: [0; 12],
             sights: Vec::new(),
             bullets: Default::default(),
+            cloak_list_head: NIL,
             forward_offsets: Vec::new(),
             game_type: 0,
             ally_computers: 0,

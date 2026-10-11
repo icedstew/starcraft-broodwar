@@ -131,8 +131,8 @@ impl State {
             un.last_event_timer = 0;
             un.last_event_color = 0;
             un.rank_increase = 0;
+            un.unknown_8e = 0;
             un.kill_count = 0;
-            un.unknown_8f = 0;
             // 0x110..0x12f
             un.remove_timer = 0;
             un.defense_matrix_damage = 0;

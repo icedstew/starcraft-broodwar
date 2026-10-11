@@ -234,9 +234,20 @@ impl State {
     }
 
     /// 0x477f10: approach `target`'s position (melee units turning to it), or chase it.
-    fn approach(&mut self, d: &Data, _u: u32, target: u32) {
-        let _ = (d, target);
-        todo_port!("0x477f10", "approach target");
+    fn approach(&mut self, d: &Data, u: u32, target: u32) {
+        if !(self.target_visible(target, u) && self.units[target as usize].fl.flags & 2 != 0) {
+            self.chase(d, u, target);
+            return;
+        }
+        let tp = self.unit_sprite_pos(target);
+        let h = super::flingy::halt_distance(&self.units[u as usize].fl, d) * 3;
+        let (dx, dy) = crate::game::flingy::direction_table()[self.units[target as usize].fl.velocity_dir_prev as usize];
+        let x = (dx.wrapping_mul(h) >> 16) + tp.0 as i32;
+        let y = (dy.wrapping_mul(h) >> 16) + tp.1 as i32;
+        let p = if (x as u32) < self.map_px.0 as u32 && (y as u32) < self.map_px.1 as u32 { (x as i16, y as i16) } else { tp };
+        if self.units[u as usize].recent_order_timer == 0 {
+            self.set_move_target_xy(d, u, p);
+        }
     }
 
     /// 0x478540: AttackUnit core. True when in range and ready to fire.
@@ -576,6 +587,10 @@ impl State {
         if un.player == 0xb { self.sprites[un.sprite as usize].owner as usize } else { un.player as usize }
     }
 
+    pub fn alliance_owner_pub(&self, u: u32) -> usize {
+        self.alliance_owner(u)
+    }
+
     /// 0x47b910: `t` is an enemy of `u`.
     fn is_enemy(&self, u: u32, t: u32) -> bool {
         self.alliances[self.units[u as usize].player as usize][self.alliance_owner(t)] == 0
@@ -782,5 +797,25 @@ impl State {
         let pos = if t != NIL { self.unit_sprite_pos(t) } else { (0, 0) };
         self.issue_order(d, u, order, true, pos, t, 0xe4);
         self.prepare_next_order(d, u);
+    }
+
+    /// 0x479b40: melee hit on the order target with the ground weapon.
+    pub fn attack_melee(&mut self, d: &Data, u: u32) {
+        let t = self.units[u as usize].order_target_unit;
+        if t == NIL {
+            return;
+        }
+        let w = self.ground_weapon(d, u);
+        if self.units[u as usize].status & 0x4000_0000 != 0 {
+            todo_port!("0x479730", "hallucination melee hit");
+            return;
+        }
+        let (player, dir) = (self.units[u as usize].player, self.units[u as usize].fl.heading);
+        // 0x475ec0: upgrade bonus.
+        let up = d.dat.weapons.damage_upgrade[w as usize] as usize;
+        let level = if up < 0x2e { self.players.upgrade_sc[player as usize][up] } else { self.players.upgrade_bw[player as usize][up - 0x2e] } as u32;
+        let bonus = (d.dat.weapons.damage_bonus[w as usize] as u32 * level) & 0xffff;
+        let dmg = (bonus + d.dat.weapons.damage[w as usize] as u32) << 8;
+        self.damage_unit(d, t, dmg, w, 1, dir, u, player);
     }
 }

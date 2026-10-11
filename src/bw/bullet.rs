@@ -734,15 +734,32 @@ impl State {
             self.attacked_by(d, t, source, notify);
         }
         todo_port!("0x4797b0", "no-damage game option 0x6d5a6c & 4");
-        let _ = player;
         let tu = &mut self.units[t as usize];
         if dmg < tu.hp {
             tu.hp -= dmg;
             todo_port!("0x4797b0", "damage overlays, AI strength, under-attack alert (0x48f230)");
-            let _ = notify;
+            let _ = (notify, player);
         } else {
-            todo_port!("0x4797b0", "unit death (0x475710, 0x488af0), loaded units, kill credit");
-            tu.hp = 0;
+            if self.units[t as usize].status & 0x40 != 0 || self.units[t as usize].loaded_units.iter().any(|&h| h != 0) {
+                todo_port!("0x4797b0", "loaded units die with their transport");
+            }
+            self.units[t as usize].hp = 0;
+            self.kill_unit(d, t);
+            todo_port!("0x488af0", "death and kill score counters");
+            if source != NIL && self.alliances[self.units[source as usize].player as usize][self.alliance_owner_pub(t)] == 0 {
+                // 0x4759c0
+                let mut k = source;
+                loop {
+                    let ku = &mut self.units[k as usize];
+                    if ku.kill_count != 0xff {
+                        ku.kill_count += 1;
+                    }
+                    if ku.unit_type != 0x49 || ku.connected_unit == NIL {
+                        break;
+                    }
+                    k = ku.connected_unit;
+                }
+            }
         }
     }
 }

@@ -713,8 +713,5 @@ impl State {
         false
     }
 
-    fn attack_melee(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x1401b65d0", "attackmelee damage");
-    }
 
 }

@@ -155,8 +155,7 @@ impl State {
     fn update_dead_unit(&mut self, d: &Data, u: u32) {
         let s = self.units[u as usize].sprite;
         if s != NIL && self.sprites[s as usize].flags & super::sprite::sflag::HIDDEN != 0 {
-            todo_port!("0x497b40", "remove hidden dead sprite");
-            self.units[u as usize].sprite = NIL;
+            self.free_unit_sprite(u);
         }
         let s = self.units[u as usize].sprite;
         if s != NIL {
@@ -175,7 +174,7 @@ impl State {
             return;
         }
         if self.units[u as usize].sprite == NIL {
-            todo_port!("0x49e340", "free dead unit");
+            self.free_unit(d, u);
         }
     }
 
@@ -305,8 +304,10 @@ impl State {
             return;
         }
         let ut = self.units[u as usize].unit_type as usize;
-        if (d.dat.units.flags[ut] as i32) < 0 && self.units[u as usize].hp > 0 && self.units[u as usize].hp != d.dat.units.hit_points[ut] as i32 {
-            todo_port!("0x467340", "regenerate hp (zerg)");
+        // Regenerating units (units.dat flag 0x80) heal 4/256 hp per frame.
+        if d.dat.units.flags[ut] & 0x80 != 0 && self.units[u as usize].hp > 0 && self.units[u as usize].hp != d.dat.units.hit_points[ut] as i32 {
+            let hp = self.units[u as usize].hp + 4;
+            self.set_unit_hp(d, u, hp);
         }
         todo_port!("0x4eb4b0", "energy regeneration");
         let un = &mut self.units[u as usize];

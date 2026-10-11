@@ -210,11 +210,6 @@ impl State {
         }
     }
 
-    /// 0x479480: Die.
-    fn order_die(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x479480", "Die");
-    }
-
     /// 0x4e4f40: IncompleteWarping.
     fn order_incomplete_warping(&mut self, _d: &Data, _u: u32) {
         todo_port!("0x4e4f40", "IncompleteWarping");

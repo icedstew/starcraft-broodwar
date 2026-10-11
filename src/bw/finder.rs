@@ -44,7 +44,7 @@ pub(crate) fn search(a: &[(u32, i32)], count: usize, before_equal: bool, value: 
 }
 
 #[derive(Clone, Copy)]
-enum Axis {
+pub(crate) enum Axis {
     X,
     Y,
 }
