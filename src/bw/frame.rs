@@ -356,8 +356,9 @@ impl State {
             todo_port!("0x4ea780", "hatchery larva spawning");
         }
         let un = &mut self.units[u as usize];
-        if un.secondary_order_timer == 0 {
-            un.secondary_order_timer = 0xf;
+        // Spread creep timer: union +0xcc.
+        if un.u8_at(0xcc) == 0 {
+            un.set_u8_at(0xcc, 0xf);
             todo_port!("0x414680", "spread creep step (returns whether still spreading)");
             let spreading = false;
             if !spreading {
@@ -368,7 +369,8 @@ impl State {
             let _ = d;
             return;
         }
-        un.secondary_order_timer -= 1;
+        let t = un.u8_at(0xcc);
+        un.set_u8_at(0xcc, t - 1);
     }
 
     /// Set the secondary order (clears its state like 0x1401c9840 / inline in 1.16.1).

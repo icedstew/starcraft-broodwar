@@ -74,8 +74,8 @@ pub struct Unit {
     pub last_event_color: u8,         // 0x8B
     pub rank_increase: u8,            // 0x8D
     pub kill_count: u8,               // 0x8E
-    pub last_attacking_player: u8,    // 0x8F
-    pub secondary_order_timer: u8,    // 0x90 / 0xd5
+    pub unknown_8f: u8,               // 0x8F
+    pub last_attacking_player: u8,    // 0x90 / 0xd5 (8 = none)
     pub ai_action_flag: u8,           // 0x91 / 0xd6 (cloak/vision stagger counter in update_units)
     pub user_action_flags: u8,        // 0x92 / 0xd7
     /// 0x93: bit 0 = order queued/started by command, bit 1 = random wait before pathing.
@@ -178,8 +178,8 @@ impl Default for Unit {
             last_event_color: 0,
             rank_increase: 0,
             kill_count: 0,
+            unknown_8f: 0,
             last_attacking_player: 0,
-            secondary_order_timer: 0,
             ai_action_flag: 0,
             user_action_flags: 0,
             order_flags: 0,

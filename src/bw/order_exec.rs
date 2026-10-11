@@ -482,8 +482,7 @@ impl State {
 
     /// 0x4774a0: PlayerGuard.
     fn order_player_guard(&mut self, d: &Data, u: u32) {
-        todo_port!("0x4770e0", "PlayerGuard: acquire target (returns nonzero when attacking)");
-        let found = false;
+        let found = self.attack_auto_target(d, u);
         if found || self.units[u as usize].main_order_timer != 0 {
             return;
         }

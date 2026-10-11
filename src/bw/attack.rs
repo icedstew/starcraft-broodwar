@@ -569,4 +569,218 @@ impl State {
             self.prepare_next_order(d, u);
         }
     }
+
+    /// Owner used for alliance checks (neutral units use their sprite's owner).
+    fn alliance_owner(&self, u: u32) -> usize {
+        let un = &self.units[u as usize];
+        if un.player == 0xb { self.sprites[un.sprite as usize].owner as usize } else { un.player as usize }
+    }
+
+    /// 0x47b910: `t` is an enemy of `u`.
+    fn is_enemy(&self, u: u32, t: u32) -> bool {
+        self.alliances[self.units[u as usize].player as usize][self.alliance_owner(t)] == 0
+    }
+
+    /// 0x476870: `u` can hit `target` (default: its order target) from where it is.
+    fn can_hit_now(&self, d: &Data, u: u32, target: u32) -> bool {
+        let target = if target != NIL { target } else { self.units[u as usize].order_target_unit };
+        if target == NIL {
+            return true;
+        }
+        if !self.target_visible(target, u) {
+            return false;
+        }
+        let w = self.weapon_against(d, u, target);
+        if w >= NO_WEAPON {
+            return false;
+        }
+        let min = d.dat.weapons.min_range[w as usize];
+        if min != 0 && self.box_distance_within(d, u, min, target) {
+            return false;
+        }
+        let r = self.weapon_range(d, u, w);
+        self.in_attack_range(d, u, r, target)
+    }
+
+    /// 0x4769d0: `u`, now targeting `current`, should switch to `attacker`.
+    fn should_retarget(&self, d: &Data, u: u32, current: u32, attacker: u32) -> bool {
+        if attacker == current {
+            return false;
+        }
+        if self.alliances[self.units[u as usize].player as usize][self.alliance_owner(attacker)] != 0 {
+            return false;
+        }
+        if current == NIL || !self.can_attack(d, u, current, true) || !self.is_enemy(u, current) {
+            return true;
+        }
+        self.can_hit_now(d, u, attacker) && !self.can_hit_now(d, u, current)
+    }
+
+    /// 0x476180: `u` has a weapon (including interceptors / scarabs and turrets).
+    fn is_armed(&self, d: &Data, u: u32) -> bool {
+        let un = &self.units[u as usize];
+        let t = un.unit_type;
+        let ti = t as usize;
+        let no_ground = (t == 0x67 && un.status & 0x10 == 0) || d.dat.units.ground_weapon[ti] == NO_WEAPON;
+        if !(no_ground && d.dat.units.air_weapon[ti] == NO_WEAPON) {
+            return true;
+        }
+        if matches!(t, 0x48 | 0x52) && un.u8_at(0xc9).wrapping_add(un.u8_at(0xc8)) != 0 {
+            return true;
+        }
+        if matches!(t, 0x53 | 0x51) && un.u8_at(0xc8) != 0 {
+            return true;
+        }
+        let sub = un.subunit;
+        if sub == NIL {
+            return false;
+        }
+        self.ground_weapon(d, sub) != NO_WEAPON || d.dat.units.air_weapon[self.units[sub as usize].unit_type as usize] != NO_WEAPON
+    }
+
+    /// Set the auto target (+0x7c) of `u` and its turret.
+    fn set_auto_target(&mut self, d: &Data, u: u32, t: u32) {
+        self.units[u as usize].auto_target = t;
+        let sub = self.units[u as usize].subunit;
+        if self.is_turret(d, sub) {
+            let lap = self.units[u as usize].last_attacking_player;
+            self.units[sub as usize].last_attacking_player = lap;
+            self.units[sub as usize].auto_target = t;
+        }
+    }
+
+    /// 0x4795d0: `u` was hit by `attacker`: remember it, reveal it, fight back, and
+    /// alert nearby units of the same owner.
+    pub fn attacked_by(&mut self, d: &Data, u: u32, mut attacker: u32, reveal: bool) {
+        if attacker == NIL || self.units[attacker as usize].player == self.units[u as usize].player {
+            return;
+        }
+        self.units[u as usize].last_attacking_player = self.units[attacker as usize].player;
+        if self.units[u as usize].ai != NIL && self.units[u as usize].auto_target == NIL {
+            self.set_auto_target(d, u, attacker);
+        }
+        if self.player_type(self.units[u as usize].player) == 1 {
+            todo_port!("0x43f320", "computer player reacts to the attack");
+        }
+        let p = self.units[u as usize].player;
+        if reveal && !self.cloaked_from(attacker, u) && p < 8 {
+            let a = &self.units[attacker as usize];
+            let s = &self.sprites[a.sprite as usize];
+            let (x, y, air) = (s.x as i32, s.y as i32, a.status & 4 != 0);
+            self.reveal(1 << p, 1, x, y, air);
+        }
+        if self.units[attacker as usize].status & 0x20 != 0 {
+            attacker = self.units[attacker as usize].connected_unit;
+        }
+        let current = self.units[u as usize].auto_target;
+        if self.should_retarget(d, u, current, attacker) {
+            self.fight_back(d, u, attacker);
+        }
+        if self.units[u as usize].ai == NIL {
+            let (x, y) = self.unit_sprite_pos(u);
+            let b = [(x as u16).wrapping_sub(0x60) as i16, y.wrapping_sub(0x60), (x as u16).wrapping_add(0x60) as i16, y.wrapping_add(0x60)];
+            let mut search = std::mem::replace(&mut self.search, super::collide::UnitSearch::empty());
+            let start = search.units_in_finder_box(self, b);
+            let near = search.results(start);
+            search.pop();
+            self.search = search;
+            for o in near {
+                if o != u && self.units[o as usize].player == p {
+                    self.help_ally(d, o, attacker);
+                }
+            }
+        }
+    }
+
+    /// 0x4776c0: answer an attack: target the attacker, or run if `u` can't fight it.
+    fn fight_back(&mut self, d: &Data, u: u32, attacker: u32) {
+        let un = &self.units[u as usize];
+        let t = un.unit_type;
+        if t == 0x23 {
+            return;
+        }
+        if un.status & 0x10 != 0 && un.irradiate_timer == 0 && t != 0x67 {
+            if d.dat.units.flags[t as usize] & 0x10_0000 != 0 {
+                todo_port!("0x4e97c0", "burrowed unit unburrows when attacked");
+            }
+            return;
+        }
+        let flags = d.dat.units.flags[t as usize];
+        if flags & 1 == 0 && (!self.can_attack(d, u, attacker, true) || flags & 8 != 0) {
+            todo_port!("0x4776c0", "flee from an attacker it can't fight (0x462930, 0x476a50)");
+            return;
+        }
+        self.set_auto_target(d, u, attacker);
+    }
+
+    /// 0x476e60: nearby armed unit of the same owner joins in.
+    fn help_ally(&mut self, d: &Data, o: u32, attacker: u32) {
+        let un = &self.units[o as usize];
+        let t = un.unit_type;
+        if t == 0x47 || t == 0x56 || d.dat.units.flags[t as usize] & 8 != 0 || un.status & 0x10 != 0 {
+            return;
+        }
+        if !self.is_armed(d, o) {
+            return;
+        }
+        let current = self.units[o as usize].auto_target;
+        if !self.should_retarget(d, o, current, attacker) {
+            return;
+        }
+        self.set_auto_target(d, o, attacker);
+    }
+
+    /// 0x4770e0: attack the auto target if it is still a valid enemy.
+    pub fn attack_auto_target(&mut self, d: &Data, u: u32) -> bool {
+        let t = self.units[u as usize].auto_target;
+        if t == NIL || self.units[u as usize].ai != NIL {
+            return false;
+        }
+        if self.is_enemy(u, t) && self.can_attack(d, u, t, true) {
+            self.order_attack(d, u, t, true);
+            self.units[u as usize].status |= 8;
+            return true;
+        }
+        self.units[u as usize].auto_target = NIL;
+        false
+    }
+
+    /// 0x476fc0: order `u` to attack `t` with its attack order.
+    fn order_attack(&mut self, d: &Data, u: u32, mut t: u32, mark: bool) {
+        if self.units[t as usize].unit_type == 0x49 && self.units[t as usize].connected_unit != NIL {
+            t = self.units[t as usize].connected_unit;
+        }
+        let order = d.dat.units.ai_attack_unit[self.units[u as usize].unit_type as usize];
+        self.order_with_target(d, u, order, t);
+        if mark {
+            self.units[u as usize].status |= 0x800_0000;
+            let sub = self.units[u as usize].subunit;
+            if sub != NIL {
+                self.units[sub as usize].status |= 0x800_0000;
+            }
+        }
+        let sub = self.units[u as usize].subunit;
+        if self.is_turret(d, sub) {
+            let order = d.dat.units.ai_attack_unit[self.units[sub as usize].unit_type as usize];
+            self.order_with_target(d, sub, order, t);
+            if mark {
+                self.units[sub as usize].status |= 0x800_0000;
+                let ss = self.units[sub as usize].subunit;
+                if ss != NIL {
+                    self.units[ss as usize].status |= 0x800_0000;
+                }
+            }
+        }
+        if self.units[u as usize].ai != NIL && self.units[u as usize].unit_type == 0x1e && self.units[u as usize].order != 0x63 {
+            todo_port!("0x476fc0", "AI siege tank attack handling");
+        }
+    }
+
+    /// 0x4752b0: issue `order` with `t` as target and start it.
+    fn order_with_target(&mut self, d: &Data, u: u32, order: u8, t: u32) {
+        self.units[u as usize].order_flags |= 1;
+        let pos = if t != NIL { self.unit_sprite_pos(t) } else { (0, 0) };
+        self.issue_order(d, u, order, true, pos, t, 0xe4);
+        self.prepare_next_order(d, u);
+    }
 }

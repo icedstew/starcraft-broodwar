@@ -727,12 +727,11 @@ impl State {
 
     /// 0x4797b0: take `dmg` (fp8) hp, killing the unit at 0.
     fn apply_damage(&mut self, d: &Data, t: u32, dmg: i32, source: u32, player: u8, notify: bool) {
-        let _ = d;
         if self.units[t as usize].hp == 0 {
             return;
         }
         if source != NIL {
-            todo_port!("0x4795d0", "attacked notification (retaliation)");
+            self.attacked_by(d, t, source, notify);
         }
         todo_port!("0x4797b0", "no-damage game option 0x6d5a6c & 4");
         let _ = player;

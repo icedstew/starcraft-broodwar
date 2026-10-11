@@ -132,7 +132,7 @@ impl State {
             un.last_event_color = 0;
             un.rank_increase = 0;
             un.kill_count = 0;
-            un.last_attacking_player = 0;
+            un.unknown_8f = 0;
             // 0x110..0x12f
             un.remove_timer = 0;
             un.defense_matrix_damage = 0;
@@ -270,7 +270,7 @@ impl State {
         self.iscript_unit = saved;
         let t = self.units[u as usize].unit_type as usize;
         let un = &mut self.units[u as usize];
-        un.secondary_order_timer = 8;
+        un.last_attacking_player = 8;
         un.shields = (d.dat.units.shields[t] as i32) << 8;
         let e = if ut == 0xac { 0x6400 } else { (self.max_energy(d, u) / 4) as u16 };
         self.units[u as usize].energy = e;
