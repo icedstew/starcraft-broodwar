@@ -297,10 +297,21 @@ impl State {
         }
     }
 
-    fn path_env<'a>(&'a mut self, d: &'a Data, u: u32, dims: &'a dyn Fn(u16) -> [i16; 4]) -> (Env<'a>, &'a mut super::short_path::Walker) {
+    /// Run a path search with the SAI and walker moved out of the State, so the
+    /// search can read units (0x422160) while mutating region marks.
+    pub fn with_path_env<R>(&mut self, u: u32, dims: &dyn Fn(u16) -> [i16; 4], f: impl FnOnce(&mut Env, &mut super::short_path::Walker) -> R) -> R {
+        let mut sai = std::mem::replace(&mut self.sai, super::sai::Sai::empty());
+        let mut walker = std::mem::take(&mut self.walker);
+        let mut search = std::mem::replace(&mut self.search, super::collide::UnitSearch::empty());
         let ut = self.units[u as usize].unit_type;
-        let _ = d;
-        (Env { sai: &mut self.sai, map_w: self.map_px.0, map_h: self.map_px.1, dims, unit_type: ut }, &mut self.walker)
+        let r = {
+            let mut env = Env { sai: &mut sai, st: Some(&*self), unit: Some(u), search: Some(&mut search), map_w: self.map_px.0, map_h: self.map_px.1, dims, unit_type: ut };
+            f(&mut env, &mut walker)
+        };
+        self.sai = sai;
+        self.walker = walker;
+        self.search = search;
+        r
     }
 
     /// 0x42fc10: advance along the current path or search a new one. `next` gets the
@@ -337,10 +348,7 @@ impl State {
             let s = self.units[u as usize].sprite as usize;
             let mut c = PathCtx { unit: u, start: (self.sprites[s].x, self.sprites[s].y), target, ..Default::default() };
             c.goal_unit = 0;
-            let ok = {
-                let (mut env, w) = self.path_env(d, u, &dims);
-                find_path(&mut env, w, &mut c)
-            };
+            let ok = self.with_path_env(u, &dims, |env, w| find_path(env, w, &mut c));
             if !ok || c.region_count == 0 || c.waypoint_count == 0 {
                 return false;
             }
@@ -421,6 +429,5 @@ fn continue_leg(st: &mut State, dims: &dyn Fn(u16) -> [i16; 4], u: u32, c: &mut 
     c.unk166 = 0;
     c.open_max = 0;
     c.unk16a = 0;
-    let mut env = Env { sai: &mut st.sai, map_w: st.map_px.0, map_h: st.map_px.1, dims, unit_type: ut };
-    next_leg(&mut env, &mut st.walker, c)
+    st.with_path_env(u, dims, |env, w| next_leg(env, w, c))
 }

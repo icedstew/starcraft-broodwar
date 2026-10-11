@@ -37,6 +37,76 @@ impl Default for UnitSearch {
 }
 
 impl UnitSearch {
+    /// Placeholder without allocations (for moving the search state out briefly).
+    pub fn empty() -> UnitSearch {
+        UnitSearch { buf: Vec::new(), top: 0, stack: Vec::new(), marks: Vec::new(), generation: 0, max_w: 0, max_h: 0 }
+    }
+
+    /// 0x42ff80: units whose finder boxes overlap `b` (deduplicated with a generation
+    /// mark). Returns the result start; close with `pop`.
+    pub fn units_in_finder_box(&mut self, st: &State, b: [i16; 4]) -> usize {
+        self.stack.push(self.top);
+        let start = self.top;
+        let mut out = start;
+        self.generation = self.generation.wrapping_add(1);
+        if self.generation == 0 {
+            self.generation = 1;
+        }
+        let f = &st.finder;
+        let n = f.count as i32;
+        let iy0 = super::finder::search(&f.y, f.count, true, b[1] as i32) as i32;
+        let mut iy1 = iy0;
+        while iy1 < n && f.y[iy1 as usize].1 < b[3] as i32 {
+            iy1 += 1;
+        }
+        let mut ix = if n == 0 { 0 } else { super::finder::search(&f.x, f.count, true, b[0] as i32) as i32 };
+        if iy1 > iy0 {
+            while ix < n && f.x[ix as usize].1 < b[2] as i32 {
+                let e = f.x[ix as usize].0;
+                if self.marks[e as usize] != self.generation {
+                    self.marks[e as usize] = self.generation;
+                    let fi = st.units[(e - 1) as usize].finder_index;
+                    if fi[3] >= iy0 && fi[2] < iy1 {
+                        self.put(out, e);
+                        out += 1;
+                    }
+                }
+                ix += 1;
+            }
+        }
+        self.put(out, 0);
+        self.top = out + 1;
+        start
+    }
+
+    /// 0x430be0: units a unit of `u`'s size would touch standing at `p` (filtered in
+    /// place in a 0x42ff80 search). Close with `pop`.
+    pub fn units_touching_spot(&mut self, st: &State, dims: &dyn Fn(u16) -> [i16; 4], u: u32, p: (i16, i16)) -> usize {
+        let (hw, hh) = ((self.max_w >> 1) as i16, (self.max_h >> 1) as i16);
+        let b = [p.0.wrapping_sub(hw).wrapping_sub(1), p.1.wrapping_sub(hh).wrapping_sub(1), hw.wrapping_add(p.0).wrapping_add(1), hh.wrapping_add(p.1).wrapping_add(1)];
+        let start = self.units_in_finder_box(st, b);
+        let dim = dims;
+        let [l, up, r, dn] = dim(st.units[u as usize].unit_type);
+        let mut out = start;
+        let mut i = start;
+        while self.buf[i] != 0 {
+            let c = self.buf[i] - 1;
+            let cu = &st.units[c as usize];
+            let sp = &st.sprites[cu.sprite as usize];
+            let [cl, cu_, cr, cd] = dim(cu.unit_type);
+            let left = sp.x.wrapping_sub(cl).wrapping_add((-1i16).wrapping_sub(r));
+            let right = cr.wrapping_add(sp.x).wrapping_add(l.wrapping_add(1));
+            let top = sp.y.wrapping_sub(cu_).wrapping_add((-1i16).wrapping_sub(dn));
+            let bottom = cd.wrapping_add(sp.y).wrapping_add(up.wrapping_add(1));
+            if left <= p.0 && p.0 <= right && top <= p.1 && p.1 <= bottom {
+                self.buf[out] = self.buf[i];
+                out += 1;
+            }
+            i += 1;
+        }
+        self.buf[out] = 0;
+        start
+    }
     /// 0x42fee0: reset and size from the largest units.dat box.
     pub fn init(&mut self, d: &Data) {
         *self = UnitSearch::default();
@@ -57,7 +127,7 @@ impl UnitSearch {
         self.max_h = h as u16;
     }
 
-    fn put(&mut self, i: usize, v: u32) {
+    pub(crate) fn put(&mut self, i: usize, v: u32) {
         if i >= self.buf.len() {
             // ponytail: the original overruns 0x6bb938 here; grow instead.
             self.buf.resize(i + 1, 0);

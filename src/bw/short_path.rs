@@ -3,7 +3,6 @@
 
 use super::path::{approx_distance, region_at, PathCtx};
 use super::sai::{ContourEntry, Contours, Sai};
-use crate::todo_port;
 
 /// A successor point (0x6c10ac, 8 bytes).
 #[derive(Clone, Copy, Debug, Default)]
@@ -501,7 +500,7 @@ impl Walker {
     }
 
     /// 0x422600: set up the walked box around (x, y) for the open directions in `mask`.
-    fn prepare(&mut self, c: &Contours, x: i16, y: i16, mut mask: u8, map_w: u16, map_h: u16) {
+    fn prepare(&mut self, c: &Contours, env_st: Option<(&super::State, Option<u32>)>, x: i16, y: i16, mut mask: u8, map_w: u16, map_h: u16) {
         self.succ_count = 0;
         self.box_count = 0;
         self.pos = (x, y);
@@ -536,7 +535,9 @@ impl Walker {
         self.bounds = [left, top, right, bottom];
         self.local_active = false;
         self.build_local(c);
-        todo_port!("0x422160", "units in the walked box as obstacles");
+        if let Some((st, unit)) = env_st {
+            self.add_unit_obstacles(st, unit);
+        }
         self.local_active = true;
         self.counts = self.local_counts;
         self.near[0] = self.search_back(c, 0, y, x, x, top.wrapping_sub(1));
@@ -599,6 +600,82 @@ impl Walker {
             self.add(left, y, if self.near[3].is_some() { 0x53 } else { 0xdf });
         }
         self.mask = mask;
+    }
+
+    /// 0x422160: unit boxes facing the walked box become extra contour edges.
+    fn add_unit_obstacles(&mut self, st: &super::State, unit: Option<u32>) {
+        let f = &st.finder;
+        let n = f.count as i32;
+        let xv = |i: i32| f.x[i as usize].1;
+        let yv = |i: i32| f.y[i as usize].1;
+        let d = self.dims_a;
+        let [left, top, right, bottom] = self.bounds;
+        let (x, y) = self.pos;
+        let goal = self.goal_unit;
+        let passes = |c: u32| -> bool { (goal != 0 && c + 1 == goal) || path_obstacle(st, c, unit) };
+        // (list, start search value, finder axis is y, own edge slot, flags word)
+        let add = |w: &mut Walker, k: usize, e: ContourEntry| {
+            let mut start = 0usize;
+            let mut end = w.local_counts[k].max(0) as usize;
+            w.insert_local(k, e, &mut start, &mut end);
+            w.local_counts[k] = end as i16;
+        };
+        // Top side: bottom edges of units above.
+        let mut i = super::finder::search(&f.y, f.count, true, top as i32 - d[0] as i32 - 1) as i32;
+        let lim = y.wrapping_sub(d[0]) as i32;
+        while i < n && yv(i) < lim {
+            let c = f.y[i as usize].0 - 1;
+            let fi = st.units[c as usize].finder_index;
+            if i == fi[3] {
+                let e = ContourEntry { v: [yv(i) as i16, xv(fi[0]) as i16, xv(fi[1]) as i16], dir: 0, flags: 0x3d };
+                if d[1].wrapping_add(e.v[1]) <= right && d[3].wrapping_add(e.v[2]) >= left && passes(c) {
+                    add(self, 0, e);
+                }
+            }
+            i += 1;
+        }
+        // Right side: left edges of units to the right.
+        let mut i = super::finder::search(&f.x, f.count, true, x as i32 - d[1] as i32) as i32;
+        let lim = right.wrapping_sub(d[1]).wrapping_add(1) as i32;
+        while i < n && xv(i) <= lim {
+            let c = f.x[i as usize].0 - 1;
+            let fi = st.units[c as usize].finder_index;
+            if i == fi[0] {
+                let e = ContourEntry { v: [xv(i) as i16, yv(fi[2]) as i16, yv(fi[3]) as i16], dir: 1, flags: 0x32 };
+                if d[2].wrapping_add(e.v[1]) <= bottom && d[0].wrapping_add(e.v[2]) >= top && passes(c) {
+                    add(self, 1, e);
+                }
+            }
+            i += 1;
+        }
+        // Bottom side: top edges of units below.
+        let mut i = super::finder::search(&f.y, f.count, true, y as i32 - d[2] as i32) as i32;
+        let lim = bottom.wrapping_sub(d[2]).wrapping_add(1) as i32;
+        while i < n && yv(i) <= lim {
+            let c = f.y[i as usize].0 - 1;
+            let fi = st.units[c as usize].finder_index;
+            if i == fi[2] {
+                let e = ContourEntry { v: [yv(i) as i16, xv(fi[0]) as i16, xv(fi[1]) as i16], dir: 2, flags: 0x3d };
+                if d[1].wrapping_add(e.v[1]) <= right && d[3].wrapping_add(e.v[2]) >= left && passes(c) {
+                    add(self, 2, e);
+                }
+            }
+            i += 1;
+        }
+        // Left side: right edges of units to the left.
+        let mut i = super::finder::search(&f.x, f.count, true, left as i32 - d[3] as i32 - 1) as i32;
+        let lim = x.wrapping_sub(d[3]) as i32;
+        while i < n && xv(i) < lim {
+            let c = f.x[i as usize].0 - 1;
+            let fi = st.units[c as usize].finder_index;
+            if i == fi[1] {
+                let e = ContourEntry { v: [xv(i) as i16, yv(fi[2]) as i16, yv(fi[3]) as i16], dir: 3, flags: 0x32 };
+                if d[2].wrapping_add(e.v[1]) <= bottom && d[0].wrapping_add(e.v[2]) >= top && passes(c) {
+                    add(self, 3, e);
+                }
+            }
+            i += 1;
+        }
     }
 
     fn entry(&self, k: usize, i: usize) -> ContourEntry {
@@ -1301,6 +1378,23 @@ impl Walker {
     }
 }
 
+/// 0x42df70: unit `c` counts as an obstacle for `unit`'s path search.
+pub fn path_obstacle(st: &super::State, c: u32, unit: Option<u32>) -> bool {
+    let cu = &st.units[c as usize];
+    let sp = &st.sprites[cu.sprite as usize];
+    let parked = cu.fl.move_target == (sp.x, sp.y);
+    if !(parked || st.path_avoid_unit == Some(c) || st.path_all_units) {
+        return false;
+    }
+    if (0xcd..=0xd0).contains(&cu.unit_type) || cu.pathing_flags & 1 == 0 || cu.status & 0x20_0000 != 0 {
+        return false;
+    }
+    match unit {
+        None => true,
+        Some(u) => c != u && st.units_collide(c, u),
+    }
+}
+
 /// 0x4220c0: contour offsets (+0x20, +0x30) for a unit type's box, or a square for 0x8000|r.
 pub fn contour_dims(unit_type: u16, dims: &dyn Fn(u16) -> [i16; 4]) -> ([i16; 4], [i16; 4]) {
     if unit_type < 0x8000 {
@@ -1445,6 +1539,12 @@ fn double_rounded(d: i32) -> i32 {
 
 pub struct Env<'a> {
     pub sai: &'a mut Sai,
+    /// Units, finder and path globals for unit obstacles (None: terrain only).
+    pub st: Option<&'a super::State>,
+    /// The unit searching (walker +0x3c).
+    pub unit: Option<u32>,
+    /// Unit search results (0x6bb938), moved out of the State with the SAI.
+    pub search: Option<&'a mut super::collide::UnitSearch>,
     pub map_w: u16,
     pub map_h: u16,
     /// units.dat dimensions (left, up, right, down) per unit type.
@@ -1797,7 +1897,7 @@ fn expand(env: &Env, w: &mut Walker, c: &Contours, spans: &mut Spans, n: &Node) 
     w.local_active = false;
     w.local_counts = [0; 4];
     w.goal_flag = 0;
-    w.prepare(c, n.pos.0, n.pos.1, n.mask, env.map_w, env.map_h);
+    w.prepare(c, env.st.map(|st| (st, env.unit)), n.pos.0, n.pos.1, n.mask, env.map_w, env.map_h);
     let m = w.mask;
     let _ = (m & 1 != 0 && w.walk_up_right(c))
         || (m & 2 != 0 && w.walk_down_right(c))
@@ -1977,7 +2077,45 @@ pub fn next_leg(env: &mut Env, w: &mut Walker, ctx: &mut PathCtx) -> bool {
     let direct = direct || (i == count as i32 - 1 && ctx.start_region != ctx.target_region);
     ctx.goal_unit = 0;
     if direct {
-        todo_port!("0x430be0", "goal unit at the target (unit move target / units under the goal)");
+        if let (Some(st), Some(u)) = (env.st, env.unit) {
+            let mtu = st.units[u as usize].move_target_unit;
+            let mut g = (mtu != super::list::NIL).then_some(mtu);
+            if g.is_none() {
+                if let Some(search) = env.search.as_deref_mut() {
+                    let start = search.units_touching_spot(st, env.dims, u, ctx.goal);
+                    g = search.results(start).into_iter().find(|&c| path_obstacle(st, c, Some(u)));
+                    search.pop();
+                }
+            }
+            if g.is_some_and(|g| (0xc2..=0xc7).contains(&st.units[g as usize].unit_type)) {
+                g = None;
+            }
+            if let Some(g) = g {
+                ctx.goal_unit = g + 1;
+                let gs = &st.sprites[st.units[g as usize].sprite as usize];
+                let [gl, gu, gr, gd] = (env.dims)(st.units[g as usize].unit_type);
+                let [l, up, r, dn] = (env.dims)(st.units[u as usize].unit_type);
+                let left = gs.x.wrapping_sub(gl).wrapping_add((-1i16).wrapping_sub(r));
+                let right = gr.wrapping_add(gs.x).wrapping_add(l.wrapping_add(1));
+                let top = gs.y.wrapping_sub(gu).wrapping_add((-1i16).wrapping_sub(dn));
+                let bottom = gd.wrapping_add(gs.y).wrapping_add(up.wrapping_add(1));
+                ctx.goal_box = [left, top, right, bottom];
+                let (sx, sy) = ctx.start;
+                let onx = sx == left || sx == right;
+                let ony = sy == top || sy == bottom;
+                if (onx && top <= sy && sy <= bottom) || (ony && left <= sx && sx <= right) {
+                    ctx.waypoints[0] = ctx.start;
+                    ctx.goal = ctx.start;
+                    ctx.waypoint_index = 0;
+                    ctx.waypoint_count = 1;
+                    ctx.unk1f = 0;
+                    ctx.unk1e = 1;
+                    return true;
+                }
+            }
+        }
+    }
+    if direct && ctx.goal_unit == 0 {
         ctx.goal_box = [-0x7d00; 4];
         let mut tmp = target;
         if find_open_spot(env, ctx, &mut tmp) && tmp != target {

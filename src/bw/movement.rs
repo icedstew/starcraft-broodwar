@@ -291,6 +291,21 @@ impl State {
         true
     }
 
+    /// The path's collision unit if it is still alive (0x46bc30 / 0x46bcc0 checks).
+    fn path_collision_unit(&self, u: u32) -> Option<u32> {
+        let h = self.paths[self.units[u as usize].path as usize].collision_unit;
+        if h == 0 {
+            return None;
+        }
+        let i = (h & 0x7ff) as usize;
+        let o = (i as u32).wrapping_sub(1);
+        let ou = self.units.get(o as usize)?;
+        if ou.sprite == NIL || (ou.order == 0 && ou.order_state == 1) || ou.unique_id as u32 != h >> 11 {
+            return None;
+        }
+        Some(o)
+    }
+
     /// 0x46a6b0: stop the walking animation if stuck for a few frames.
     fn mv_stop_walking_anim(&mut self, d: &Data, u: u32) {
         let un = &self.units[u as usize];
@@ -777,12 +792,13 @@ impl State {
     fn mv_get_path_again(&mut self, d: &Data, u: u32) -> bool {
         let p = self.units[u as usize].path;
         if p != NIL {
-            let _avoid = self.unit_from_handle(self.paths[p as usize].collision_unit);
+            self.path_avoid_unit = self.path_collision_unit(u);
             self.path_delete(u);
         }
         if self.needs_move(u) {
             let t = self.units[u as usize].fl.move_target;
             let ok = self.path_request(d, u, t);
+            self.path_avoid_unit = None;
             if !ok {
                 self.state(u, 0xf);
                 return true;
@@ -803,7 +819,7 @@ impl State {
             self.state(u, 0xb);
             return true;
         }
-        if !self.stub_402a90(u) {
+        if !self.facing_next_waypoint(u) {
             self.predict(d, u);
             self.unit_turn_in_place(d, u);
             return false;
@@ -828,10 +844,12 @@ impl State {
     /// 0x46bc30.
     fn mv_repath_after_collision(&mut self, d: &Data, u: u32) -> bool {
         if self.units[u as usize].path != NIL {
+            self.path_avoid_unit = self.path_collision_unit(u);
             self.path_delete(u);
         }
         let t = self.units[u as usize].fl.move_target;
         let ok = self.path_request(d, u, t);
+        self.path_avoid_unit = None;
         self.state(u, if ok { 0x19 } else { 0xf });
         true
     }
@@ -840,7 +858,9 @@ impl State {
     fn mv_repath_ignoring_units(&mut self, d: &Data, u: u32) -> bool {
         self.path_delete(u);
         let (t, tu) = (self.units[u as usize].fl.move_target, self.units[u as usize].move_target_unit);
+        self.path_all_units = true;
         let ok = self.path_request(d, u, t);
+        self.path_all_units = false;
         if ok && self.units[u as usize].status & status::UNMOVABLE == 0 {
             self.state(u, 0x14);
             return true;
@@ -1044,7 +1064,7 @@ impl State {
         };
         let created = self.paths[p as usize].creation_frame;
         if self.frame.wrapping_sub(created) < 7 && (3..=5).contains(&action) {
-            self.stop_walk_anim_if_stuck(d, u);
+            self.mv_stop_walking_anim(d, u);
             return false;
         }
         match action {
@@ -1076,20 +1096,6 @@ impl State {
         false
     }
 
-    /// 0x46a6b0: stop the walking animation of a unit stuck for a while.
-    fn stop_walk_anim_if_stuck(&mut self, d: &Data, u: u32) {
-        let un = &self.units[u as usize];
-        if un.fl.flags & 2 != 0 && un.pathing_collision_interval > 2 && un.status & 0x3000 == 0 {
-            self.units[u as usize].fl.flags &= 0xfd;
-            let s = self.units[u as usize].sprite;
-            let mut img = self.sprites[s as usize].images.head;
-            while img != NIL {
-                let next = self.images[img as usize].link.next;
-                self.image_run_anim(d, img, 0xc);
-                img = next;
-            }
-        }
-    }
 
     /// 0x46b220.
     fn mv_collision_wait(&mut self, d: &Data, u: u32) -> bool {
@@ -1132,7 +1138,7 @@ impl State {
         self.mv_stop_walking_anim(d, u);
         if !repath {
             set_speeds(&mut self.units[u as usize].fl, 0);
-            if !self.stub_402a90(u) {
+            if !self.facing_next_waypoint(u) {
                 self.unit_turn_in_place(d, u);
             }
             if self.units[u as usize].pathing_collision_interval > 0x18 {
@@ -1145,7 +1151,7 @@ impl State {
             }
             return false;
         }
-        if !self.stub_402a90(u) {
+        if !self.facing_next_waypoint(u) {
             self.unit_turn_in_place(d, u);
             return false;
         }
@@ -1239,7 +1245,7 @@ impl State {
             return false;
         }
         self.mv_stop_walking_anim(d, u);
-        if !self.stub_402a90(u) {
+        if !self.facing_next_waypoint(u) {
             self.unit_turn_in_place(d, u);
             return false;
         }
@@ -1280,9 +1286,11 @@ impl State {
         true
     }
 
-    fn stub_402a90(&mut self, _u: u32) -> bool {
-        todo_port!("0x402a90", "facing next waypoint");
-        true
+    /// 0x402a90: moving toward the next waypoint (+0x18) already.
+    fn facing_next_waypoint(&self, u: u32) -> bool {
+        let f = &self.units[u as usize].fl;
+        let sp = self.unit_sprite_pos(u);
+        f.velocity_dir_prev == direction_to(sp.0 as i32, sp.1 as i32, f.next_waypoint.0 as i32, f.next_waypoint.1 as i32)
     }
 
     fn stub_4f2a70(&mut self, _u: u32) -> i32 {

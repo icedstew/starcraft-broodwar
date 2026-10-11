@@ -81,6 +81,20 @@ pub struct Sai {
 }
 
 impl Sai {
+    /// Placeholder without allocations (for moving the SAI out of the State briefly).
+    pub fn empty() -> Sai {
+        Sai {
+            region_count: 0,
+            neighbor_cursor: 0,
+            split_cursor: None,
+            tiles: Vec::new(),
+            splits: Vec::new(),
+            regions: Vec::new(),
+            neighbor_buf: Vec::new(),
+            contours: None,
+        }
+    }
+
     pub fn new() -> Sai {
         Sai {
             region_count: 0,

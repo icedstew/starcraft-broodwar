@@ -159,6 +159,10 @@ pub struct State {
     pub walker: short_path::Walker,
     /// Unit finder (0x66ff74..).
     pub finder: finder::Finder,
+    /// 0x6bee88: unit a path request may route through (the one collided with).
+    pub path_avoid_unit: Option<u32>,
+    /// 0x6bee80: path requests treat every unit as an obstacle.
+    pub path_all_units: bool,
     /// 0x58d634: alliances [player][other] (0 = enemy).
     pub alliances: [[u8; 12]; 12],
     /// 0x58d720: start locations from the scenario.
@@ -263,6 +267,8 @@ impl State {
             search: collide::UnitSearch::default(),
             start_locations: [(0, 0); 8],
             alliances: [[0; 12]; 12],
+            path_avoid_unit: None,
+            path_all_units: false,
             melee_map_units: [0; 8],
             sai: sai::Sai::new(),
             terrain: map::GameMap::new(map_tiles.0 as u16, map_tiles.1 as u16, &map::TilesetData { vf4: Vec::new(), cv5: Vec::new() }),

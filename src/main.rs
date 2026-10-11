@@ -336,7 +336,7 @@ fn main() -> std::io::Result<()> {
                 for t in tests.chunks_exact(8) {
                     let r = |i: usize| i16::from_le_bytes([t[i], t[i + 1]]);
                     let mut ctx = bw::path::PathCtx { start: (r(0), r(2)), target: (r(4), r(6)), ..Default::default() };
-                    let mut env = bw::short_path::Env { sai: &mut sai, map_w: w as u16 * 32, map_h: h as u16 * 32, dims: &dims, unit_type };
+                    let mut env = bw::short_path::Env { sai: &mut sai, st: None, unit: None, search: None, map_w: w as u16 * 32, map_h: h as u16 * 32, dims: &dims, unit_type };
                     bw::path::find_path(&mut env, &mut walker, &mut ctx);
                     out.extend_from_slice(&ctx.layout());
                 }
