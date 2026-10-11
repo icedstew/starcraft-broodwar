@@ -479,6 +479,24 @@ impl State {
         r
     }
 
+    /// 0x4f1b70: axis-aligned direction to slide along when the predicted step is
+    /// blocked, from the blocked axis and the velocity quadrant (0xff = none).
+    pub fn slide_dir(&mut self, d: &Data, u: u32) -> u8 {
+        let s = self.units[u as usize].sprite as usize;
+        let dx = self.mv.new_pos.0 as i32 - self.sprites[s].x as i32;
+        let dy = self.mv.new_pos.1 as i32 - self.sprites[s].y as i32;
+        let q = self.units[u as usize].fl.velocity_dir >> 6;
+        let horizontal = dx != 0 && (dy == 0 || self.terrain_blocks_move(d, u, dx as i16, 0));
+        let case = if horizontal { if dx < 0 { 3 } else { 1 } } else if dy < 0 { 0 } else { 2 };
+        match (case, q) {
+            (0, 0) | (2, 1) => 0x40,
+            (0, 3) | (2, 2) => 0xc0,
+            (1, 0) | (3, 3) => 0,
+            (1, 1) | (3, 2) => 0x80,
+            _ => 0xff,
+        }
+    }
+
     /// 0x4f1980: the predicted position (0x63fed4/0x63fecc) is blocked by terrain or
     /// the map edge.
     pub fn predicted_move_blocked(&mut self, d: &Data, u: u32) -> bool {

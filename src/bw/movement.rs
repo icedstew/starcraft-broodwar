@@ -1346,8 +1346,9 @@ impl State {
             self.unit_turn_in_place(d, u);
             return false;
         }
-        todo_port!("0x4f1b70", "avoidance direction");
-        self.paths[p as usize].direction = self.units[u as usize].fl.heading;
+        let dir = self.slide_dir(d, u);
+        let p = self.units[u as usize].path;
+        self.paths[p as usize].direction = dir;
         self.state(u, 0x23);
         false
     }
