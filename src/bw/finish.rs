@@ -94,7 +94,7 @@ impl State {
         if d.dat.units.flags[t as usize] & 0x10 == 0 {
             self.finder_move(u, p.0 as i32 - old.0, p.1 as i32 - old.1);
             if self.sprites[s as usize].flags & super::sprite::sflag::HIDDEN == 0 {
-                todo_port!("0x42d9a0", "0x4e8830 region/contour update");
+                self.update_unit_overlaps(d, u);
             }
         }
     }
@@ -194,7 +194,7 @@ impl State {
         if self.units[u as usize].status & status::GROUNDED_BUILDING != 0 {
             todo_port!("0x469f60", "mark building placement tiles (0x472eb0)");
         }
-        todo_port!("0x42d9a0", "0x4e8830 region/contour update");
+        self.update_unit_overlaps(d, u);
         if self.units[u as usize].status & status::IN_AIR != 0 {
             self.repulse_init(d, u);
         }

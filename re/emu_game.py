@@ -172,7 +172,7 @@ def unit_trace(e, f, u):
             f"ntw {s16(e, a + 0x1c)},{s16(e, a + 0x1e)} fl {e.r8(a + 0x20):#x} dir {e.r8(a + 0x21)} vdir {e.r8(a + 0x23)} "
             f"ddir {e.r8(a + 0x4b)} spd {s32(e, a + 0x38)} nspd {s32(e, a + 0x3c)} top {s32(e, a + 0x34)} "
             f"exact {s32(e, a + 0x2c)},{s32(e, a + 0x30)} vel {s32(e, a + 0x40)},{s32(e, a + 0x44)} "
-            f"status {e.r32(a + 0xdc):#x} path {int(e.r32(a + 0x100) != 0)}")
+            f"status {e.r32(a + 0xdc):#x} path {int(e.r32(a + 0x100) != 0)} ot {e.r8(a + 0x85)} mot {e.r8(a + 0x54)}")
 
 
 def scenario(e, units, move, frames, out):

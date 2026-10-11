@@ -214,7 +214,7 @@ impl State {
                 todo_port!("0x469f60", "mark building placement tiles (0x472eb0)");
                 let _ = p;
             }
-            todo_port!("0x42d9a0", "0x4e8830 region/contour update for buildings");
+            self.update_unit_overlaps(d, u);
             if self.units[u as usize].status & status::IN_AIR != 0 {
                 self.repulse_init(d, u);
             }

@@ -40,7 +40,7 @@ impl State {
                 10 => self.mv_ground_idle(u),
                 0xb => self.mv_path_done(u),
                 0xc => self.mv_repath_check(d, u),
-                0xd => self.mv_repath_wait(u),
+                0xd => self.mv_repath_wait(d, u),
                 0xe => self.mv_no_path_move(d, u),
                 0xf => {
                     self.units[u as usize].pathing_collision_interval = 10;
@@ -585,7 +585,7 @@ impl State {
     }
 
     /// 0x46b360: escaping terrain.
-    fn mv_repath_wait(&mut self, u: u32) -> bool {
+    fn mv_repath_wait(&mut self, d: &Data, u: u32) -> bool {
         let path = self.units[u as usize].path;
         if path == NIL {
             self.state(u, 0xc);
@@ -609,7 +609,7 @@ impl State {
         if self.units[u as usize].path != NIL {
             self.path_delete(u);
         }
-        todo_port!("0x42d9a0", "terrain escape finished");
+        self.update_unit_overlaps(d, u);
         self.units[u as usize].status |= status::IGNORE_TILE_COLLISION;
         self.state(u, 0xc);
         false
@@ -899,8 +899,8 @@ impl State {
             self.state(u, 0xb);
             return false;
         }
-        if self.stub_42f700(u) {
-            todo_port!("0x42f720", "path wait 0x1e");
+        if self.path_wait_expired(u) {
+            self.set_path_wait(u, 0x1e);
             self.state(u, 0x1a);
         }
         false
@@ -1139,9 +1139,6 @@ impl State {
         -1
     }
 
-    fn stub_42f700(&mut self, _u: u32) -> bool {
-        false
-    }
 
 }
 

@@ -98,6 +98,7 @@ fn main() -> std::io::Result<()> {
             let dims = chk.as_ref().map_or((64, 64), |c| c.dims());
             let mut st = bw::State::new(dims, 0, 1700);
             st.player_types = [2; 12];
+            st.search.init(&d);
             if let Some(chk) = &chk {
                 let name = map::TILESETS[chk.tileset()];
                 let vf4 = casc.read(&format!("tileset/{name}.vf4"))?;
@@ -358,11 +359,11 @@ fn unit_trace(st: &bw::State, f: u32, u: u32) -> String {
     let s = &st.sprites[un.sprite as usize];
     let fl = &un.fl;
     format!(
-        "f{f} u{u} pos {},{} order {:#x} ost {} mv {:#x} mt {},{} nw {},{} ntw {},{} fl {:#x} dir {} vdir {} ddir {} spd {} nspd {} top {} exact {},{} vel {},{} status {:#x} path {}",
+        "f{f} u{u} pos {},{} order {:#x} ost {} mv {:#x} mt {},{} nw {},{} ntw {},{} fl {:#x} dir {} vdir {} ddir {} spd {} nspd {} top {} exact {},{} vel {},{} status {:#x} path {} ot {} mot {}",
         s.x, s.y, un.order, un.order_state, un.movement_state, fl.move_target.0, fl.move_target.1,
         fl.next_waypoint.0, fl.next_waypoint.1, fl.next_target_waypoint.0, fl.next_target_waypoint.1,
         fl.flags, fl.heading, fl.velocity_dir_prev, fl.desired_dir, fl.speed, fl.next_speed, fl.top_speed,
-        fl.exact.0, fl.exact.1, fl.velocity.0, fl.velocity.1, un.status, (un.path != bw::list::NIL) as u8
+        fl.exact.0, fl.exact.1, fl.velocity.0, fl.velocity.1, un.status, (un.path != bw::list::NIL) as u8, un.order_process_timer, un.main_order_timer
     )
 }
 

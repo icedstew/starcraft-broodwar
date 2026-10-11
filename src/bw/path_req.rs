@@ -239,6 +239,28 @@ impl State {
         region_at(&self.sai, s.x as i32, s.y as i32) != path.region(path.region_index as i32)
     }
 
+    /// 0x42f700: the path's wait countdown (+0x19) ran out; otherwise count it down.
+    pub fn path_wait_expired(&mut self, u: u32) -> bool {
+        let p = self.units[u as usize].path;
+        if p == super::list::NIL {
+            return false;
+        }
+        let path = &mut self.paths[p as usize];
+        if path.wait == 0 {
+            return true;
+        }
+        path.wait -= 1;
+        false
+    }
+
+    /// 0x42f720
+    pub fn set_path_wait(&mut self, u: u32, v: u8) {
+        let p = self.units[u as usize].path;
+        if p != super::list::NIL {
+            self.paths[p as usize].wait = v;
+        }
+    }
+
     /// 0x4eb130: set the next waypoint (+0x18) and next target waypoint (+0x1c).
     pub fn set_next_waypoint(&mut self, u: u32, p: (i16, i16)) {
         let f = &mut self.units[u as usize].fl;

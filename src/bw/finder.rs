@@ -22,7 +22,7 @@ impl Finder {
 
 /// 0x469b00: binary search for the insert position of `value`.
 /// `before_equal` (EDX != 0) places it before entries with the same value.
-fn search(a: &[(u32, i32)], count: usize, before_equal: bool, value: i32) -> usize {
+pub(crate) fn search(a: &[(u32, i32)], count: usize, before_equal: bool, value: i32) -> usize {
     if count == 0 {
         return 0;
     }

@@ -4,6 +4,7 @@
 //! translated from the decompiled routines (addresses noted). Unported
 //! callees are explicit `todo_port!` markers, never approximations.
 
+pub mod collide;
 pub mod create;
 pub mod crt;
 pub mod finder;
@@ -157,6 +158,8 @@ pub struct State {
     pub walker: short_path::Walker,
     /// Unit finder (0x66ff74..).
     pub finder: finder::Finder,
+    /// Unit box search results and marks (0x6bb938, 0x6bd3d0).
+    pub search: collide::UnitSearch,
     /// 0x6d5cd8: air repulse grid, 48px cells, 0xab per row.
     pub repulse: Vec<u8>,
     /// 0x59cca0: last error (stat_txt index) from unit creation and friends.
@@ -229,8 +232,8 @@ impl State {
             counter_100: 0,
             is_100th_frame: false,
             random_event_timer: 0,
-            stagger_150: 1,
-            stagger_300: 1,
+            stagger_150: 10, // 0x59cca4 = 10 (0x49f380)
+            stagger_300: 0x96, // 0x6283e8 = 0x96
             finder_ring: 0,
             scanner_units: List::default(),
             player_types: [0; 12],
@@ -250,6 +253,7 @@ impl State {
             order_count: 0,
             paths: Vec::new(),
             free_path: 0,
+            search: collide::UnitSearch::default(),
             sai: sai::Sai::new(),
             terrain: map::GameMap::new(map_tiles.0 as u16, map_tiles.1 as u16, &map::TilesetData { vf4: Vec::new(), cv5: Vec::new() }),
             walker: short_path::Walker::default(),
