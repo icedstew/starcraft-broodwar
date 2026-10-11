@@ -127,7 +127,7 @@ impl State {
             }
             self.iscript_order_unit = Some(u);
             self.iscript_unit = Some(u);
-            todo_port!("0x4ec420", "update_hidden_unit");
+            self.update_hidden_unit(d, u);
             u = next;
         }
         todo_port!("0x492eb0", "cloaked units list update");
@@ -197,6 +197,69 @@ impl State {
             self.update_unit_sprite(d, s);
             if self.sprites[s as usize].images.head == NIL {
                 self.units[u as usize].sprite = NIL;
+            }
+        }
+    }
+
+    /// 0x4ec420: update a unit that is not on the map (hidden sprite).
+    pub fn update_hidden_unit(&mut self, d: &Data, u: u32) {
+        let ut = self.units[u as usize].unit_type as usize;
+        let sub = self.units[u as usize].subunit;
+        if sub != NIL && d.dat.units.flags[ut] & 0x10 == 0 {
+            self.iscript_unit = Some(sub);
+            self.update_hidden_unit(d, sub);
+            self.iscript_unit = Some(u);
+        }
+        self.movement_step(d, u);
+        self.update_unit_timers(d, u);
+        self.execute_hidden_order(d, u);
+        match self.units[u as usize].secondary_order {
+            0x3f => todo_port!("0x466790", "TrainFighter"),
+            0x6d => todo_port!("0x491790", "Cloak"),
+            0x6e => self.set_secondary_order(u, 0x17),
+            _ => {}
+        }
+        let s = self.units[u as usize].sprite;
+        if s != NIL {
+            self.update_unit_sprite(d, s);
+            if self.sprites[s as usize].images.head == NIL {
+                self.units[u as usize].sprite = NIL;
+            }
+        }
+    }
+
+    /// 0x4ebed0: main order of a hidden unit.
+    fn execute_hidden_order(&mut self, d: &Data, u: u32) {
+        let order = self.units[u as usize].order;
+        match order {
+            0 => todo_port!("0x479480", "Die (hidden)"),
+            3 | 4 | 0x16 | 0x5c => {
+                let next = if self.units[u as usize].status & 0x20 != 0 { 5 } else { 0x17 };
+                self.order_now(d, u, next);
+            }
+            0x11 => todo_port!("0x4f3ea0", "hidden order 0x11"),
+            0x17 | 0x18 | 0xa2 | 0xaf | 0xb0 => {}
+            0x1d => todo_port!("0x4ea290", "hidden order 0x1d"),
+            0x53 => todo_port!("0x469980", "hidden order 0x53"),
+            0x61 => todo_port!("0x4f3e10", "hidden order 0x61"),
+            0x7d => todo_port!("0x464730", "hidden order 0x7d"),
+            0x96 => todo_port!("0x4671b0", "hidden order 0x96"),
+            0x97 => todo_port!("0x42e320", "hidden order 0x97"),
+            _ => {
+                let un = &mut self.units[u as usize];
+                let t = un.order_process_timer;
+                un.order_process_timer = t.wrapping_sub(1);
+                if t != 0 {
+                    return;
+                }
+                un.order_process_timer = 8;
+                match order {
+                    5 => todo_port!("0x4790a0", "hidden order 5"),
+                    0x60 => todo_port!("0x4e7b70", "hidden order 0x60"),
+                    0x9c if un.status & 0x20 != 0 => todo_port!("0x4790a0", "hidden order 0x9c"),
+                    0xa1 => todo_port!("0x4a1ef0", "hidden order 0xa1"),
+                    _ => {}
+                }
             }
         }
     }

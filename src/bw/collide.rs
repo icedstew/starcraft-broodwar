@@ -1506,3 +1506,185 @@ impl State {
         true
     }
 }
+
+impl State {
+    /// 0x49cce0: unit `c` keeps `u` from being placed over it.
+    fn placement_blocks(&self, d: &Data, c: u32, u: u32) -> bool {
+        let (cu, uu) = (&self.units[c as usize], &self.units[u as usize]);
+        if cu.sprite == super::list::NIL || (cu.order == 0 && cu.order_state == 1) {
+            return false;
+        }
+        if cu.status & 0x20_0000 != 0 || uu.status & 0x20_0000 != 0 {
+            return false;
+        }
+        let flags = &d.dat.units.flags;
+        if flags[uu.unit_type as usize] & 0x800 != 0 {
+            return cu.status & 2 != 0 || flags[cu.unit_type as usize] & 0x800 != 0;
+        }
+        match (cu.unit_type, uu.unit_type) {
+            (0x72, 8 | 0xb | 9 | 0xc | 0x3a) | (0x9b, 0x45 | 0x54) | (0xa7, 0x46 | 0x48 | 0x47 | 0x3c) => true,
+            _ => (uu.status ^ cu.status) & 4 == 0,
+        }
+    }
+
+    /// 0x4e8830 with callback 0x49cce0: first unit in `b` that blocks placing `u`.
+    fn placement_blocker(&mut self, d: &Data, u: u32, b: [i16; 4]) -> Option<u32> {
+        let start = self.units_in_box(d, b);
+        let hit = self.search.results(start).into_iter().find(|&c| self.placement_blocks(d, c, u));
+        self.search.pop();
+        hit
+    }
+
+    /// 0x49cca0: box lies on the map (bottom 0x20 pixels excluded).
+    fn box_on_map(&self, b: [i16; 4]) -> bool {
+        b[0] >= 0 && (b[2] as i32) < self.map_px.0 as i32 && b[1] >= 0 && (b[3] as i32) < self.map_px.1 as i32 - 0x20
+    }
+
+    /// 0x49d3e0: `p` if `u` fits there, else the nearest spot found by scanning rings
+    /// of growing size within `bounds` (default: 0x80 around `p`). Sets the 0x3c error
+    /// when there is none.
+    pub fn find_unit_placement(&mut self, d: &Data, u: u32, p: Pt, bounds: Option<[i16; 4]>, search_if_unfit: bool) -> Option<Pt> {
+        let mut bd = bounds.unwrap_or([p.0.wrapping_sub(0x80), p.1.wrapping_sub(0x80), p.0.wrapping_add(0x7f), p.1.wrapping_add(0x7f)]);
+        let (mw, mh) = (self.map_px.0 as i32, self.map_px.1 as i32);
+        if bd[1] < 0 {
+            bd[1] = 0;
+        }
+        if bd[3] as i32 >= mh - 0x20 {
+            bd[3] = (mh - 0x21) as i16;
+        }
+        if bd[0] < 0 {
+            bd[0] = 0;
+        }
+        if bd[2] as i32 >= mw {
+            bd[2] = (mw - 1) as i16;
+        }
+        let ut = self.units[u as usize].unit_type;
+        let b = self.unit_box_at(d, ut, p.0, p.1);
+        let blk = self.placement_blocker(d, u, b);
+        if blk.is_none() && self.box_on_map(b) {
+            if self.units[u as usize].status & 4 != 0 || self.terrain_fits(d, ut, p.0, p.1) {
+                return Some(p);
+            }
+            if !search_if_unfit {
+                self.last_error = 0x3c;
+                return None;
+            }
+        }
+        let (mut dx, mut dy) = (8i32, 8i32);
+        if let Some(k) = blk {
+            let [nl, nu, _, _] = self.unit_box_at(d, ut, 0, 0);
+            let [_, _, kr, kd] = self.unit_box_at(d, self.units[k as usize].unit_type, 0, 0);
+            dx = dx.max(-(nl as i32) + kr as i32 + 2);
+            dy = dy.max(-(nu as i32) + kd as i32 + 2);
+        }
+        loop {
+            let (sx, sy) = (dx as i16 as i32, dy as i16 as i32);
+            let (px, py) = (p.0 as i32, p.1 as i32);
+            if px - sx < bd[0] as i32 && px + sx > bd[2] as i32 && py - sy < bd[1] as i32 && py + sy > bd[3] as i32 {
+                self.last_error = 0x3c;
+                return None;
+            }
+            let x0 = p.0.wrapping_sub(dx as i16);
+            let y0 = p.1.wrapping_sub(dy as i16);
+            if let Some(r) = self.placement_ring(d, u, x0, y0, (dx * 2) as i16, (dy * 2) as i16, bd) {
+                return Some(r);
+            }
+            dx += 16;
+            dy += 16;
+        }
+    }
+
+    /// 0x49cdc0: scan the edges of the 8-aligned rect (x0, y0, w, h) clipped to
+    /// `bd`: bottom left to right, right side upward, top right to left, left side
+    /// downward, skipping past blocking units.
+    fn placement_ring(&mut self, d: &Data, u: u32, x0: i16, y0: i16, w: i16, h: i16, bd: [i16; 4]) -> Option<Pt> {
+        let ut = self.units[u as usize].unit_type;
+        let [nl, _, ur, _] = self.unit_box_at(d, ut, 0, 0);
+        let wdt = ur.wrapping_sub(nl).wrapping_add(1);
+        let bottom = h.wrapping_add(y0).wrapping_add(7) & !7;
+        let right = w.wrapping_add(x0).wrapping_add(7) & !7;
+        let (top, left) = (y0 & !7, x0 & !7);
+        let l = if left < bd[0] { bd[0] } else { left };
+        let r = if right > bd[2] { bd[2] } else { right };
+        let t = if top < bd[1] { bd[1] } else { top };
+        let b = if bottom > bd[3] { bd[3] } else { bottom };
+        let fits = |st: &mut State, x: i16, y: i16| {
+            let un = &st.units[u as usize];
+            (un.pathing_flags & 1 == 0 || st.same_group(u, (x, y)))
+                && (st.units[u as usize].status & 4 != 0 || st.terrain_fits(d, ut, x, y))
+        };
+        let align_up = |at: i16, s: i16| {
+            let m = at.wrapping_add(s) & 7;
+            if m != 0 { s.wrapping_add(8 - m) } else { s }
+        };
+        let align_down = |at: i16, s: i16| {
+            let m = at.wrapping_sub(s) & 7;
+            if m != 0 { s.wrapping_add(8 - m) } else { s }
+        };
+        let kbox = |st: &State, k: u32| {
+            let s = &st.sprites[st.units[k as usize].sprite as usize];
+            st.unit_box_at(d, st.units[k as usize].unit_type, s.x, s.y)
+        };
+        // Bottom edge, left to right.
+        let mut x = if w as i32 > (wdt as i32) * 2 { ((wdt.wrapping_add(7)) & !7).wrapping_add(l) } else { l };
+        while x <= r {
+            let bx = self.unit_box_at(d, ut, x, b);
+            let step = if !self.box_on_map(bx) {
+                8
+            } else if let Some(k) = self.placement_blocker(d, u, bx) {
+                align_up(x, kbox(self, k)[2].wrapping_sub(bx[0]).wrapping_add(1))
+            } else if fits(self, x, b) {
+                return Some((x, b));
+            } else {
+                8
+            };
+            x = x.wrapping_add(step);
+        }
+        // Right side, bottom to top.
+        let mut y = b;
+        while y >= t {
+            let bx = self.unit_box_at(d, ut, r, y);
+            let step = if !self.box_on_map(bx) {
+                8
+            } else if let Some(k) = self.placement_blocker(d, u, bx) {
+                align_down(y, bx[3].wrapping_sub(kbox(self, k)[1]).wrapping_add(1))
+            } else if fits(self, r, y) {
+                return Some((r, y));
+            } else {
+                8
+            };
+            y = y.wrapping_sub(step);
+        }
+        // Top edge, right to left.
+        let mut x = r;
+        while x >= l {
+            let bx = self.unit_box_at(d, ut, x, t);
+            let step = if !self.box_on_map(bx) {
+                8
+            } else if let Some(k) = self.placement_blocker(d, u, bx) {
+                align_down(x, bx[2].wrapping_sub(kbox(self, k)[0]).wrapping_add(1))
+            } else if fits(self, x, t) {
+                return Some((x, t));
+            } else {
+                8
+            };
+            x = x.wrapping_sub(step);
+        }
+        // Left side, top to bottom.
+        let mut y = t;
+        while y <= b {
+            let bx = self.unit_box_at(d, ut, l, y);
+            let step = if !self.box_on_map(bx) {
+                8
+            } else if let Some(k) = self.placement_blocker(d, u, bx) {
+                align_up(y, kbox(self, k)[3].wrapping_sub(bx[1]).wrapping_add(1))
+            } else if fits(self, l, y) {
+                return Some((l, y));
+            } else {
+                8
+            };
+            y = y.wrapping_add(step);
+        }
+        None
+    }
+}

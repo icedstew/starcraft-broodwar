@@ -50,7 +50,7 @@ impl State {
             return true;
         }
         let p = (self.sprites[s as usize].x, self.sprites[s as usize].y);
-        let Some(p) = self.stub_find_unit_placement(u, p) else {
+        let Some(p) = self.find_unit_placement(d, u, p, None, false) else {
             todo_port!("0x49e530", "show the placement error to the owner");
             return false;
         };
@@ -67,11 +67,6 @@ impl State {
         true
     }
 
-    /// 0x49d3e0: search for a spot the unit fits (regions + unit finder).
-    fn stub_find_unit_placement(&mut self, _u: u32, p: (i16, i16)) -> Option<(i16, i16)> {
-        todo_port!("0x49d3e0", "unit placement search (0x49cdc0)");
-        Some(p)
-    }
 
     /// 0x4eb9f0: teleport a unit.
     pub fn set_unit_position(&mut self, d: &Data, u: u32, x: i16, y: i16) {

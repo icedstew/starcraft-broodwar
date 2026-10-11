@@ -179,6 +179,8 @@ def scenario(e, units, move, frames, out):
     """Same steps as `scbw bwsim`: create + finish units, order Move, step frames."""
     for p in range(12):
         e.w8(0x57eee8 + p * 0x24, 2)
+    # 0x49e530 shows a placement error to the owning player (UI only): skip it.
+    e.write(0x49e530, b"\xc2\x04\x00")
     made = []
     for spec in units:
         t, x, y, p = spec
