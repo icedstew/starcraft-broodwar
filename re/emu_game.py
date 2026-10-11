@@ -195,6 +195,7 @@ def scenario(e, units, move, frames, out):
             e.call(0x474c30, regs={"esi": UNITS + u * 0x150}, stack=[6, (move[1] << 16) | (move[0] & 0xffff), 0])
     with open(out, "w") as fo:
         for f in range(frames):
+            e.w32(0x57f23c, e.r32(0x57f23c) + 1)  # 0x4d9670 advances the frame first
             e.call(0x4d94b0)
             for u in made:
                 fo.write(unit_trace(e, f, u) + "\n")

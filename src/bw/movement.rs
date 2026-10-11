@@ -630,8 +630,8 @@ impl State {
 
     /// 0x46b500: check unit collision for the predicted step; apply or stop.
     fn collision_step(&mut self, d: &Data, u: u32) -> bool {
-        let blocked = (self.units[u as usize].status & status::IS_NORMAL != 0 && self.stub_collides_terrain(u))
-            || self.stub_collides_units(u);
+        let blocked = (self.units[u as usize].status & status::IS_NORMAL != 0 && self.unit_blocking_move(u).is_some())
+            || self.predicted_move_blocked(d, u);
         if !blocked {
             return self.apply_move_checked(d, u);
         }
@@ -867,22 +867,48 @@ impl State {
         if self.units[u as usize].fl.movement_type == 0 {
             speed = self.units[u as usize].fl.speed;
         }
-        let terrain = self.units[u as usize].status & status::IS_NORMAL != 0 && self.stub_collides_terrain(u);
-        let units = self.stub_collides_units(u);
-        if !terrain {
-            if units {
-                let p = self.units[u as usize].path;
-                self.paths[p as usize].speed = speed;
-                self.state(u, 0x22);
-                return true;
+        let blocker = if self.units[u as usize].status & status::IS_NORMAL != 0 { self.unit_blocking_move(u) } else { None };
+        let blocked = self.predicted_move_blocked(d, u);
+        match blocker {
+            None => {
+                if blocked {
+                    let p = self.units[u as usize].path;
+                    self.paths[p as usize].speed = speed;
+                    self.state(u, 0x22);
+                    return true;
+                }
             }
-        } else {
-            todo_port!("0x46b950", "terrain-collision half-step retry (0x4f2240) -> state 0x1c");
-            let p = self.units[u as usize].path;
-            self.paths[p as usize].collision_unit = 0;
-            self.paths[p as usize].speed = speed;
-            self.state(u, 0x1c);
-            return true;
+            Some(b) => {
+                // Unit in the way: retry half and quarter steps before stopping.
+                let mut stop = true;
+                let f = &self.units[u as usize].fl;
+                if !blocked && (f.velocity.0 >= 0x20 || f.velocity.1 >= 0x20) && self.mv.moved == f.speed {
+                    let (vel, exact) = (f.velocity, f.exact);
+                    let saved = (self.mv.new_pos, self.mv.new_exact);
+                    for div in [2, 4] {
+                        let ne = (vel.0 / div + exact.0, vel.1 / div + exact.1);
+                        self.mv.new_exact = ne;
+                        self.mv.new_pos = ((ne.0 >> 8) as i16, (ne.1 >> 8) as i16);
+                        // 0x4f2240
+                        let still = self.units[u as usize].status & status::IS_NORMAL != 0 && self.unit_blocking_move(u).is_some();
+                        if !still {
+                            stop = false;
+                            break;
+                        }
+                    }
+                    if stop {
+                        (self.mv.new_pos, self.mv.new_exact) = saved;
+                    }
+                }
+                if stop {
+                    let h = self.unit_handle(b);
+                    let p = self.units[u as usize].path;
+                    self.paths[p as usize].collision_unit = h;
+                    self.paths[p as usize].speed = speed;
+                    self.state(u, 0x1c);
+                    return true;
+                }
+            }
         }
         if self.mv.new_pos != self.unit_sprite_pos(u) {
             let un = &mut self.units[u as usize];
@@ -917,13 +943,152 @@ impl State {
     }
 
     /// 0x46bf60: decide how to resolve a collision.
-    fn mv_collision_resolve(&mut self, _d: &Data, u: u32) -> bool {
+    fn mv_collision_resolve(&mut self, d: &Data, u: u32) -> bool {
         if self.mv_check_path_state(u, true) {
             return true;
         }
-        todo_port!("0x46bf60", "collision resolution (needs pathing 0x42da00/0x42d6b0/0x4f1a20/0x4f2a70)");
-        self.state(u, 0x19);
+        let un = &mut self.units[u as usize];
+        if un.pathing_collision_interval != 0xff {
+            un.pathing_collision_interval += 1;
+        }
+        let p = self.units[u as usize].path;
+        let h = self.paths[p as usize].collision_unit;
+        let other = (h != 0)
+            .then(|| (h & 0x7ff) as usize)
+            .filter(|&i| i >= 1 && i <= self.units.len())
+            .map(|i| (i - 1) as u32)
+            .filter(|&o| {
+                let ou = &self.units[o as usize];
+                ou.sprite != NIL
+                    && !(ou.order == 0 && ou.order_state == 1)
+                    && ou.unique_id as u32 == h >> 11
+                    && self.sprites[ou.sprite as usize].flags & super::sprite::sflag::HIDDEN == 0
+                    && ou.pathing_flags & 1 != 0
+                    && ou.status & 0x20_0000 == 0
+                    && o != u
+                    && self.units_collide(o, u)
+            });
+        let Some(o) = other else {
+            self.state(u, 0x19);
+            return false;
+        };
+        let mtu = self.units[u as usize].move_target_unit;
+        let action = if mtu != NIL && self.box_distance_within(d, u, 0, mtu) {
+            1
+        } else {
+            let ut = self.units[u as usize].unit_type;
+            let mt = self.units[u as usize].fl.move_target;
+            let nw = self.units[u as usize].fl.next_waypoint;
+            let ot = self.units[o as usize].fl.move_target;
+            let in_box = |st: &State, p: (i16, i16), center: (i16, i16)| st.point_in_unit_box(d, o, center, ut, p);
+            let os = self.units[o as usize].sprite as usize;
+            let opos = (self.sprites[os].x, self.sprites[os].y);
+            let facing_away = |st: &State| {
+                let us = &st.sprites[st.units[u as usize].sprite as usize];
+                let dir = crate::game::flingy::direction_to(us.x as i32, us.y as i32, opos.0 as i32, opos.1 as i32) as u32;
+                let vd = st.units[o as usize].fl.velocity_dir_prev;
+                let q: u32 = if vd < 0x20 { 0 } else if vd < 0x60 { 0x40 } else if vd < 0xa0 { 0x80 } else if vd < 0xe0 { 0xc0 } else { 0 };
+                let mut diff = q.wrapping_sub(dir) & 0xff;
+                if diff > 0x80 {
+                    diff = 0x100 - diff;
+                }
+                diff > 0x40
+            };
+            if in_box(self, mt, opos) {
+                if self.units[o as usize].pathing_collision_interval > 0x1d || in_box(self, mt, ot) {
+                    (mtu != NIL) as u32 + 2
+                } else if facing_away(self) {
+                    4
+                } else {
+                    6
+                }
+            } else if in_box(self, nw, opos) {
+                if self.units[o as usize].pathing_collision_interval > 0x1d || in_box(self, nw, ot) {
+                    3
+                } else if facing_away(self) {
+                    4
+                } else {
+                    6
+                }
+            } else {
+                let moving = self.units[o as usize].fl.flags & 2 != 0;
+                let vd = self.units[o as usize].fl.velocity_dir_prev;
+                let side_says_wait = moving
+                    && match self.blocker_side(d, o, u) {
+                        0 => vd <= 0x40 || vd >= 0xc0,
+                        1 => vd <= 0x80,
+                        2 => (0x40..=0xc0).contains(&vd),
+                        _ => vd == 0 || vd >= 0x80,
+                    };
+                if side_says_wait {
+                    6
+                } else {
+                    let ms = if self.units[o as usize].pathing_collision_interval > 2 { 0x1d } else { self.units[o as usize].movement_state };
+                    if self.unit_at_move_target(o) == 0 && moving {
+                        if ms < 0x19 {
+                            4
+                        } else if ms <= 0x1a {
+                            6
+                        } else if ms == 0x1d {
+                            if self.sidestep_dir(d, o, u) >= 0 { 7 } else { 5 }
+                        } else {
+                            4
+                        }
+                    } else if self.sidestep_dir(d, o, u) >= 0 {
+                        7
+                    } else {
+                        5
+                    }
+                }
+            }
+        };
+        let created = self.paths[p as usize].creation_frame;
+        if self.frame.wrapping_sub(created) < 7 && (3..=5).contains(&action) {
+            self.stop_walk_anim_if_stuck(d, u);
+            return false;
+        }
+        match action {
+            1 => {
+                self.unit_stop_moving(d, u);
+                self.units[u as usize].status &= !status::UNMOVABLE;
+                self.state(u, 0xb);
+            }
+            2 => {
+                self.unit_stop_moving(d, u);
+                self.state(u, 0xb);
+            }
+            3 => self.state(u, 0x17),
+            4 => self.state(u, 0x18),
+            5 => {
+                self.state(u, 0x13);
+                set_speeds(&mut self.units[u as usize].fl, 0);
+            }
+            6 => self.state(u, 0x1d),
+            7 => {
+                let h = self.unit_handle(o);
+                self.paths[p as usize].collision_unit = h;
+                let dir = self.sidestep_dir(d, o, u);
+                self.paths[p as usize].direction = dir as u8;
+                self.state(u, 0x1f);
+            }
+            _ => self.state(u, 0x1e),
+        }
         false
+    }
+
+    /// 0x46a6b0: stop the walking animation of a unit stuck for a while.
+    fn stop_walk_anim_if_stuck(&mut self, d: &Data, u: u32) {
+        let un = &self.units[u as usize];
+        if un.fl.flags & 2 != 0 && un.pathing_collision_interval > 2 && un.status & 0x3000 == 0 {
+            self.units[u as usize].fl.flags &= 0xfd;
+            let s = self.units[u as usize].sprite;
+            let mut img = self.sprites[s as usize].images.head;
+            while img != NIL {
+                let next = self.images[img as usize].link.next;
+                self.image_run_anim(d, img, 0xc);
+                img = next;
+            }
+        }
     }
 
     /// 0x46b220.
@@ -955,8 +1120,8 @@ impl State {
         let sp = self.paths[p as usize].speed;
         set_speeds(&mut self.units[u as usize].fl, sp);
         self.predict(d, u);
-        if !self.stub_collides_units_strict(u) {
-            if self.stub_collides_units(u) {
+        if !self.unit_blocking_move(u).is_some() {
+            if self.predicted_move_blocked(d, u) {
                 self.state(u, 0x17);
                 return false;
             }
@@ -1067,7 +1232,7 @@ impl State {
         let sp = self.paths[p as usize].speed;
         set_speeds(&mut self.units[u as usize].fl, sp);
         self.predict(d, u);
-        if !self.stub_collides_units(u) && !self.stub_collides_units_strict(u) {
+        if !self.predicted_move_blocked(d, u) && !self.unit_blocking_move(u).is_some() {
             self.apply_move_checked(d, u);
             self.units[u as usize].fl.flags |= mflags::TURNING;
             self.state(u, 0x19);
@@ -1102,22 +1267,8 @@ impl State {
 
 
 
-    /// 0x4f20d0: predicted position collides with terrain.
-    fn stub_collides_terrain(&mut self, _u: u32) -> bool {
-        todo_port!("0x4f20d0", "terrain collision check");
-        false
-    }
 
-    /// 0x4f1980: predicted position collides with a unit.
-    fn stub_collides_units(&mut self, _u: u32) -> bool {
-        todo_port!("0x4f1980", "unit collision check");
-        false
-    }
 
-    /// 0x4f20d0 variant used by the waiting states.
-    fn stub_collides_units_strict(&mut self, _u: u32) -> bool {
-        false
-    }
 
     fn stub_4f2de0(&mut self, _u: u32) -> bool {
         todo_port!("0x4f2de0", "unit stuck in terrain");

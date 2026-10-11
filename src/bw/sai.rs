@@ -866,6 +866,9 @@ pub struct Contours {
     pub caps: [i16; 4],
     /// +0x28..+0x30
     pub unk28: [u16; 4],
+    /// +0x20 / +0x30: contour offsets for the unit box last set by 0x4220c0.
+    pub dims_a: [i16; 4],
+    pub dims_b: [i16; 4],
 }
 
 /// 0x42c5c0

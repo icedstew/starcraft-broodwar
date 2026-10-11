@@ -141,6 +141,8 @@ fn main() -> std::io::Result<()> {
             let trace = std::env::var("SCBW_TRACE").ok().map(std::fs::File::create).transpose()?;
             let mut trace = trace.map(std::io::BufWriter::new);
             for f in 0..frames {
+                // 0x4d9670: the frame counter (0x57f23c) advances before each step.
+                st.frame += 1;
                 st.game_step(&d);
                 if let Some(t) = trace.as_mut() {
                     use std::io::Write;

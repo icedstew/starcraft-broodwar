@@ -47,6 +47,8 @@ pub struct GameMap {
     pub tile_flags: Vec<u32>,
     /// 0x5993cc: per-megatile flags derived from vf4 (0x4bcf50).
     pub megatile_flags: Vec<u32>,
+    /// 0x5993d0: the tileset's vf4 (minitile flags per megatile).
+    pub vf4: Vec<u16>,
     /// 0x6ca54c: 1024x1024 minitile map, 0x80 = unwalkable, low 4 bits = edge sides.
     pub minitiles: Vec<u8>,
 }
@@ -60,6 +62,7 @@ impl GameMap {
             megatiles: vec![0; 0x10000],
             tile_flags: vec![0; 0x10000],
             megatile_flags: megatile_flags(ts),
+            vf4: ts.vf4.clone(),
             minitiles: Vec::new(),
         }
     }

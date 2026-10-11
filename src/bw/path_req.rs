@@ -276,7 +276,7 @@ impl State {
     /// 0x475f50: set the move target, leading a moving target unit.
     fn set_move_target_lead(&mut self, d: &Data, u: u32, mut p: (i16, i16)) {
         let tu = self.units[u as usize].move_target_unit;
-        if let Some(t) = self.unit_from_handle(tu) {
+        if let Some(t) = (tu != super::list::NIL).then_some(tu) {
             if self.units[t as usize].fl.flags & 2 != 0 {
                 let hd = super::flingy::halt_distance(&self.units[u as usize].fl, d);
                 let dir = self.units[t as usize].fl.velocity_dir_prev as usize;

@@ -418,17 +418,8 @@ impl Walker {
         self.box_count += 1;
     }
 
-    /// 0x4220c0: contour offsets for a unit type's box (or a square for 0x8000|r).
     fn set_dims(&mut self, unit_type: u16, dims: &dyn Fn(u16) -> [i16; 4]) {
-        if unit_type < 0x8000 {
-            let [l, u, r, d] = dims(unit_type);
-            self.dims_a = [u, r.wrapping_neg(), d.wrapping_neg(), l];
-            self.dims_b = [u.wrapping_add(1), (-1i16).wrapping_sub(r), (-1i16).wrapping_sub(d), l.wrapping_add(1)];
-        } else {
-            let p = (unit_type & 0x7fff) as i16;
-            self.dims_a = [p, p.wrapping_neg(), p.wrapping_neg(), p];
-            self.dims_b = [p.wrapping_add(1), (-1i16).wrapping_sub(p), (-1i16).wrapping_sub(p), p.wrapping_add(1)];
-        }
+        (self.dims_a, self.dims_b) = contour_dims(unit_type, dims);
     }
 
     /// 0x421910: insert an entry into a local list sorted by v0 (then by start),
@@ -1307,6 +1298,17 @@ impl Walker {
         }
         self.push_box(bx);
         false
+    }
+}
+
+/// 0x4220c0: contour offsets (+0x20, +0x30) for a unit type's box, or a square for 0x8000|r.
+pub fn contour_dims(unit_type: u16, dims: &dyn Fn(u16) -> [i16; 4]) -> ([i16; 4], [i16; 4]) {
+    if unit_type < 0x8000 {
+        let [l, u, r, d] = dims(unit_type);
+        ([u, r.wrapping_neg(), d.wrapping_neg(), l], [u.wrapping_add(1), (-1i16).wrapping_sub(r), (-1i16).wrapping_sub(d), l.wrapping_add(1)])
+    } else {
+        let p = (unit_type & 0x7fff) as i16;
+        ([p, p.wrapping_neg(), p.wrapping_neg(), p], [p.wrapping_add(1), (-1i16).wrapping_sub(p), (-1i16).wrapping_sub(p), p.wrapping_add(1)])
     }
 }
 

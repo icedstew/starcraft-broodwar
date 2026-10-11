@@ -159,6 +159,8 @@ pub struct State {
     pub walker: short_path::Walker,
     /// Unit finder (0x66ff74..).
     pub finder: finder::Finder,
+    /// 0x58d634: alliances [player][other] (0 = enemy).
+    pub alliances: [[u8; 12]; 12],
     /// 0x58d720: start locations from the scenario.
     pub start_locations: [(i16, i16); 8],
     /// 0x59bda8: per-player "use map-placed units" setting.
@@ -260,6 +262,7 @@ impl State {
             free_path: 0,
             search: collide::UnitSearch::default(),
             start_locations: [(0, 0); 8],
+            alliances: [[0; 12]; 12],
             melee_map_units: [0; 8],
             sai: sai::Sai::new(),
             terrain: map::GameMap::new(map_tiles.0 as u16, map_tiles.1 as u16, &map::TilesetData { vf4: Vec::new(), cv5: Vec::new() }),

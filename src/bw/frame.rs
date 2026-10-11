@@ -26,8 +26,6 @@ impl State {
         self.update_thingies(d);
         todo_port!("0x488510", "update sprite lists 0x654874/0x654868");
         self.rng.enabled = false; // 0x4dc540(0)
-        // Not in 0x4d94b0: the frame counter belongs to the caller's game loop.
-        self.frame += 1;
     }
 
     /// 0x47e410: random event timer (draws from the RNG inside 0x47e130).
