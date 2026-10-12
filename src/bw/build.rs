@@ -131,7 +131,7 @@ impl State {
     }
 
     /// 0x4734b0: a unit of type `t` on the same tile as (x, y) among the units at (x, y).
-    fn unit_of_type_at(&mut self, t: u16, x: i16, y: i16) -> u32 {
+    pub(super) fn unit_of_type_at(&mut self, t: u16, x: i16, y: i16) -> u32 {
         let found = self.units_at_point(x, y);
         let (tx, ty) = (x as i32 / 32, y as i32 / 32);
         found
@@ -473,8 +473,7 @@ impl State {
         let t = un.build_queue[slot];
         let (pos, player) = (un.order_target_pos, un.player);
         let b = if t == 0x6e {
-            todo_port!("0x4678a0", "refinery: take over the geyser");
-            None
+            self.take_over_geyser(d, u, t)
         } else {
             self.create_unit(d, t, pos.0, pos.1, player)
         };

@@ -233,7 +233,7 @@ impl State {
     }
 
     /// 0x49ecf0: flingy, sprite, hp/shields/energy, status from units.dat.
-    fn initialize_unit_base(&mut self, d: &Data, u: u32, ut: u16, x: i16, y: i16, player: u8) -> bool {
+    pub(super) fn initialize_unit_base(&mut self, d: &Data, u: u32, ut: u16, x: i16, y: i16, player: u8) -> bool {
         let saved = self.iscript_unit;
         self.iscript_unit = Some(u);
         let fid = d.dat.units.flingy[ut as usize] as u16;

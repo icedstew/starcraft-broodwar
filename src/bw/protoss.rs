@@ -53,8 +53,7 @@ impl State {
                 let t = un.build_queue[slot];
                 let (pos, player) = (un.order_target_pos, un.player);
                 let b = if t == 0x9d {
-                    todo_port!("0x4678a0", "assimilator: take over the geyser");
-                    None
+                    self.take_over_geyser(d, u, t)
                 } else {
                     self.create_unit(d, t, pos.0, pos.1, player)
                 };
@@ -66,7 +65,8 @@ impl State {
                 let s = self.units[b as usize].sprite;
                 self.replace_sprite_images(d, s, WARP_TEXTURE, 0);
                 if t == 0x9d {
-                    todo_port!("0x498d70", "assimilator overlay image 0x158");
+                    let s = self.units[b as usize].sprite;
+                    self.add_image_below_main(d, s, 0x158);
                 }
                 self.units[u as usize].order_target_unit = b;
                 if self.player_type(player) == 1 {

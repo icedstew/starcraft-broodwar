@@ -37,6 +37,7 @@ pub mod sai;
 pub mod short_path;
 pub mod sprite;
 pub mod train;
+pub mod transform;
 pub mod unit;
 pub mod vision;
 

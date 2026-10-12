@@ -408,6 +408,16 @@ impl State {
         Some(new)
     }
 
+    /// 0x498d70: image `image_id` right below sprite `s`'s main image (outside iscript,
+    /// so no hallucination / cloak inheritance).
+    pub fn add_image_below_main(&mut self, d: &Data, s: u32, image_id: u16) -> Option<u32> {
+        let main = self.sprites[s as usize].main_image;
+        let saved = self.iscript_unit.take();
+        let r = self.create_overlay(d, main, image_id, 0, 0, false);
+        self.iscript_unit = saved;
+        r
+    }
+
     /// 0x14019fb00 create_thingy: a free-standing sprite (dust, effects).
     pub fn create_thingy(&mut self, d: &Data, sprite_id: u16, x: i16, y: i16, owner: u8) -> Option<u32> {
         let t = pop(&mut self.thingies, &mut self.free_thingies)?;
