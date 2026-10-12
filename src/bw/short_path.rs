@@ -1938,9 +1938,14 @@ fn set_waypoints(ctx: &mut PathCtx, list: &[(i16, i16)]) {
 /// 0x422a90: spiral outward (8 px steps) for a spot where the unit's box covers no
 /// unwalkable region tile. Updates `pos`; false if none within 4 rings.
 fn find_open_spot(env: &Env, ctx: &PathCtx, pos: &mut (i16, i16)) -> bool {
+    open_spot(env.sai, env.map_w, env.map_h, ctx.dims, pos)
+}
+
+/// 0x422a90 with explicit box extents (-left, -up, right, down).
+pub fn open_spot(sai: &Sai, map_w: u16, map_h: u16, dims: [i16; 4], pos: &mut (i16, i16)) -> bool {
     const DX: [i16; 4] = [1, 0, -1, 0];
     const DY: [i16; 4] = [0, 1, 0, -1];
-    let [nl, nu, r, d] = ctx.dims;
+    let [nl, nu, r, d] = dims;
     let mut ring = 1;
     loop {
         for dir in 0..4 {
@@ -1949,7 +1954,7 @@ fn find_open_spot(env: &Env, ctx: &PathCtx, pos: &mut (i16, i16)) -> bool {
                 let y0 = nu.wrapping_add(pos.1);
                 let y1 = d.wrapping_add(pos.1);
                 let x1 = pos.0.wrapping_add(r);
-                if (x0 as u16) < env.map_w && (y0 as u16) < env.map_h && (x1 as u16) < env.map_w && (y1 as u16) < env.map_h {
+                if (x0 as u16) < map_w && (y0 as u16) < map_h && (x1 as u16) < map_w && (y1 as u16) < map_h {
                     let (tx0, ty0) = (x0 as i32 / 32, y0 as i32 / 32);
                     let (tx1, ty1) = (x1 as i32 / 32, y1 as i32 / 32);
                     let mut ok = true;
@@ -1964,8 +1969,8 @@ fn find_open_spot(env: &Env, ctx: &PathCtx, pos: &mut (i16, i16)) -> bool {
                         }
                         let mut c = tx1 - tx0;
                         while ok && c >= 0 {
-                            let v = env.sai.tiles[(ty * 256 + tx0 + c) as usize];
-                            if v < 0x2000 && env.sai.regions[v as usize].flags == super::sai::UNWALKABLE {
+                            let v = sai.tiles[(ty * 256 + tx0 + c) as usize];
+                            if v < 0x2000 && sai.regions[v as usize].flags == super::sai::UNWALKABLE {
                                 ok = false;
                             }
                             c -= 1;

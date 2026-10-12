@@ -8,6 +8,7 @@ pub mod attack;
 pub mod build;
 pub mod bullet;
 pub mod chk_load;
+pub mod command;
 pub mod collide;
 pub mod create;
 pub mod crt;

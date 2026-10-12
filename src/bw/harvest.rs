@@ -192,7 +192,7 @@ impl State {
     }
 
     /// 0x468930: `t` is a completed gas building owned by `u`'s player.
-    fn is_refinery_of(&self, t: u32, u: u32) -> bool {
+    pub(super) fn is_refinery_of(&self, t: u32, u: u32) -> bool {
         let tu = &self.units[t as usize];
         tu.status & 1 != 0 && matches!(tu.unit_type, 0x6e | 0x9d | 0x95) && tu.player == self.units[u as usize].player
     }
@@ -694,7 +694,7 @@ impl State {
 
     /// 0x401cf0: `t` accepts resources (completed resource depot, or a hatchery
     /// morphing on).
-    fn is_drop_off(&self, d: &Data, t: u32) -> bool {
+    pub(super) fn is_drop_off(&self, d: &Data, t: u32) -> bool {
         let tu = &self.units[t as usize];
         let ok = tu.status & 1 != 0 || matches!(tu.unit_type, 0x85 | 0x84) || (tu.unit_type == 0x83 && self.morphing_zerg_building(t));
         ok && tu.status & 2 != 0 && d.dat.units.flags[tu.unit_type as usize] & 0x1000 != 0

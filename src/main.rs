@@ -144,8 +144,37 @@ fn main() -> std::io::Result<()> {
                 // "x,y" for every unit, or "x,y;x,y;..." cycled over the units.
                 // "@k" attacks the k-th created unit (AttackUnit, order 0xa).
                 let v: Vec<&str> = m.split(';').filter(|p| !p.is_empty()).collect();
+                // Group commands: "R<x>,<y>[q]" / "R@k[q]" right-click, "T<order>:<x>,<y>[q]" /
+                // "T<order>:@k[q]" targeted order, with every created player-0 unit selected.
+                let sel: Vec<u32> = made.iter().copied().filter(|&u| st.units[u as usize].player == 0).take(12).collect();
+                for p in v.iter().filter(|p| p.starts_with(['R', 'T'])) {
+                    let q = p.ends_with('q');
+                    let mut body = p[1..].trim_end_matches('q');
+                    let mut order = 0u8;
+                    if p.starts_with('T') {
+                        let (o, b) = body.split_once(':').unwrap_or(("0", body));
+                        order = o.strip_prefix("0x").map_or_else(|| o.parse().unwrap_or(0), |h| u8::from_str_radix(h, 16).unwrap_or(0));
+                        body = b;
+                    }
+                    let (pos, t) = if let Some(k) = body.strip_prefix('@') {
+                        let t = made[k.parse::<usize>().unwrap_or(0)];
+                        let s = &st.sprites[st.units[t as usize].sprite as usize];
+                        ((s.x, s.y), t)
+                    } else {
+                        let xy: Vec<i16> = body.split(',').filter_map(|n| n.parse().ok()).collect();
+                        ((xy[0], xy[1]), bw::list::NIL)
+                    };
+                    if p.starts_with('R') {
+                        st.command_right_click(&d, 0, &sel, pos, t, 0xe4, q);
+                    } else {
+                        st.command_targeted_order(&d, 0, &sel, pos, t, 0xe4, order, q);
+                    }
+                }
                 for (i, &u) in made.iter().enumerate() {
                     let p = v[i % v.len()];
+                    if p.starts_with(['R', 'T']) {
+                        continue;
+                    }
                     if let Some(t) = p.strip_prefix('t') {
                         // "t<type>[x<count>]"
                         let (t, n) = t.split_once('x').map_or((t, 1), |(a, b)| (a, b.parse().unwrap_or(1)));

@@ -232,8 +232,35 @@ def scenario(e, units, move, frames, out):
             made.append((u - UNITS) // 0x150)
         e.w32(0x6d11c8, 0)
     if move:
+        # Group commands ("R..." right-click, "T..." targeted order) go through the
+        # command receivers with every created player-0 unit selected.
+        sel = [u for u in made if e.r8(UNITS + u * 0x150 + 0x4c) == 0][:12]
+        pkt = e.alloc(16)
+        for m in move:
+            if m[0] not in ("R", "T"):
+                continue
+            for k in range(12):
+                e.w32(0x6284e8 + k * 4, UNITS + sel[k] * 0x150 if k < len(sel) else 0)
+            e.w32(0x512678, 0)
+            e.w32(0x51267c, 0)
+            x, y, k, q = m[-4], m[-3], m[-2], m[-1]
+            h = 0
+            if k is not None:
+                t = made[k]
+                h = (e.r8(UNITS + t * 0x150 + 0xa5) << 11) | (t + 1)
+                sp = e.r32(UNITS + t * 0x150 + 0xc)
+                x, y = s16(e, sp + 0x14), s16(e, sp + 0x16)
+            b = bytes([0x14 if m[0] == "R" else 0x15]) + struct.pack("<HHHH", x & 0xffff, y & 0xffff, h, 0xe4)
+            if m[0] == "R":
+                e.write(pkt, b + bytes([q]))
+                e.call(0x4c2370, regs={"eax": pkt})
+            else:
+                e.write(pkt, b + bytes([m[1], q]))
+                e.call(0x4c2320, regs={"eax": pkt})
         for i, u in enumerate(made):
             m = move[i % len(move)]
+            if m[0] in ("R", "T"):
+                continue
             if m[0] == "t":  # train unit type m[1] (0x4c1c20 without the selection checks)
                 a = UNITS + u * 0x150
                 for _ in range(m[2]):
@@ -309,6 +336,18 @@ def main():
             if m[0] == "t":  # "t<type>[x<count>]"
                 t, _, n = m[1:].partition("x")
                 return ("t", int(t, 0), int(n) if n else 1)
+            if m[0] in "RT":  # "R<x>,<y>[q]" / "R@k[q]", "T<order>:<x>,<y>[q]" / "T<order>:@k[q]"
+                q = 1 if m.endswith("q") else 0
+                body = m[1:].rstrip("q")
+                o = None
+                if m[0] == "T":
+                    o, body = body.split(":")
+                    o = int(o, 0)
+                if body[0] == "@":
+                    xy, k = (0, 0), int(body[1:])
+                else:
+                    xy, k = tuple(int(v) for v in body.split(",")), None
+                return (m[0], o, xy[0], xy[1], k, q) if o is not None else (m[0], xy[0], xy[1], k, q)
             if m[0] == "b":  # "b<order>:<type>:<tx>,<ty>"
                 o, t, xy = m[1:].split(":")
                 return ("b", int(o, 0), int(t, 0), tuple(int(v) for v in xy.split(",")))
