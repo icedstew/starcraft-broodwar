@@ -774,13 +774,38 @@ impl State {
     }
 
     /// inline: InitCreepGrowth.
-    fn order_init_creep_growth(&mut self, _d: &Data, _u: u32) {
-        todo_port!("inline", "InitCreepGrowth");
+    fn order_init_creep_growth(&mut self, d: &Data, u: u32) {
+        self.creep_growth_order(d, u, 0x66);
+    }
+
+    /// Inline in 0x4ec4d0 (orders 0x65 / 0x67): go idle and set the creep
+    /// secondary order.
+    fn creep_growth_order(&mut self, d: &Data, u: u32, secondary: u8) {
+        self.units[u as usize].order_flags |= 1;
+        if self.units[u as usize].ai == super::list::NIL {
+            let idle = d.dat.units.ai_return_to_idle[self.units[u as usize].unit_type as usize];
+            self.issue_order(d, u, idle, true, (0, 0), super::list::NIL, 0xe4);
+        } else if self.units[u as usize].order != 0 {
+            loop {
+                let t = self.units[u as usize].order_queue_tail;
+                if t == super::list::NIL {
+                    break;
+                }
+                let o = self.orders[t as usize].order;
+                if d.dat.orders.interruptible[o as usize] == 0 && o != 0x9c {
+                    break;
+                }
+                self.order_remove(d, u, t);
+            }
+            self.order_queue_append(d, u, 0x9c, 0xe4, (0, 0), super::list::NIL);
+        }
+        self.prepare_next_order(d, u);
+        self.set_secondary_order(u, secondary);
     }
 
     /// inline: StoppingCreepGrowth.
-    fn order_stopping_creep_growth(&mut self, _d: &Data, _u: u32) {
-        todo_port!("inline", "StoppingCreepGrowth");
+    fn order_stopping_creep_growth(&mut self, d: &Data, u: u32) {
+        self.creep_growth_order(d, u, 0x17);
     }
 
     /// 0x478d10: HoldPosition.

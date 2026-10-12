@@ -30,6 +30,7 @@ pub mod rng;
 pub mod sai;
 pub mod short_path;
 pub mod sprite;
+pub mod train;
 pub mod unit;
 pub mod vision;
 
@@ -155,6 +156,8 @@ pub struct State {
     pub player_vision: [u32; 12],
     /// 0x657910 overrides (weapons.dat forward offsets changed by attkshiftproj).
     pub forward_offsets: Vec<u8>,
+    /// 0x6d5a6c: game option flags (2 = fast build, 4 = no damage, 0x20000 = unlimited supply).
+    pub game_options: u32,
     /// 0x63ff5c: head of the units linked through +0xf0 / +0xf4.
     pub cloak_list_head: u32,
     /// Bullets (0x64b2e8 pool).
@@ -279,6 +282,7 @@ impl State {
             sights: Vec::new(),
             bullets: Default::default(),
             cloak_list_head: NIL,
+            game_options: 0,
             forward_offsets: Vec::new(),
             game_type: 0,
             ally_computers: 0,

@@ -215,6 +215,9 @@ def scenario(e, units, move, frames, out):
     for p in range(12):
         e.w8(0x57eee8 + p * 0x24, 2)
     e.call(0x4c3ed0)  # alliances and shared vision at game start
+    for p in range(8):  # starting money for training/building scenarios
+        e.w32(0x57f0f0 + p * 4, 10000)
+        e.w32(0x57f120 + p * 4, 10000)
     # 0x49e530 shows a placement error to the owning player (UI only): skip it.
     e.write(0x49e530, b"\xc2\x04\x00")
     made = []
@@ -231,6 +234,12 @@ def scenario(e, units, move, frames, out):
     if move:
         for i, u in enumerate(made):
             m = move[i % len(move)]
+            if m[0] == "t":  # train unit type m[1] (0x4c1c20 without the selection checks)
+                a = UNITS + u * 0x150
+                for _ in range(m[2]):
+                    if m[1] < 0x6a and e.call(0x467250, regs={"edi": a}, stack=[m[1]]):
+                        e.call(0x4743d0, regs={"eax": a, "ecx": 0x26})
+                continue
             if m[0] == "o" and m[2][0] == "@":  # order m[1] targeting created unit k
                 t = UNITS + made[m[2][1]] * 0x150
                 sp = e.r32(t + 0xc)
@@ -288,6 +297,9 @@ def main():
         def parse(m):
             if m[0] == "@":
                 return ("@", int(m[1:]))
+            if m[0] == "t":  # "t<type>[x<count>]"
+                t, _, n = m[1:].partition("x")
+                return ("t", int(t, 0), int(n) if n else 1)
             if m[0] == "o":
                 o, xy = m[1:].split(":")
                 if xy[0] == "@":

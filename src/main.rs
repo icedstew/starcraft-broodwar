@@ -119,6 +119,10 @@ fn main() -> std::io::Result<()> {
             }
             st.player_types = [2; 12];
             st.init_alliances(Default::default());
+            for p in 0..8 {
+                st.players.minerals[p] = 10000;
+                st.players.gas[p] = 10000;
+            }
             let mut made = Vec::new();
             for e in std::env::var("SCBW_UNITS").unwrap_or("0,320,320,0".into()).split(';').filter(|e| !e.is_empty()) {
                 let v: Vec<i32> = e.split(',').filter_map(|n| n.trim().parse().ok()).collect();
@@ -142,6 +146,15 @@ fn main() -> std::io::Result<()> {
                 let v: Vec<&str> = m.split(';').filter(|p| !p.is_empty()).collect();
                 for (i, &u) in made.iter().enumerate() {
                     let p = v[i % v.len()];
+                    if let Some(t) = p.strip_prefix('t') {
+                        // "t<type>[x<count>]"
+                        let (t, n) = t.split_once('x').map_or((t, 1), |(a, b)| (a, b.parse().unwrap_or(1)));
+                        let t: u16 = t.parse().unwrap_or(0);
+                        for _ in 0..n {
+                            st.command_train(&d, u, t);
+                        }
+                        continue;
+                    }
                     if let Some(rest) = p.strip_prefix('o') {
                         let (o, xy) = rest.split_once(':').unwrap_or(("0", "0,0"));
                         let o = if let Some(h) = o.strip_prefix("0x") { u8::from_str_radix(h, 16).unwrap_or(0) } else { o.parse().unwrap_or(0) };

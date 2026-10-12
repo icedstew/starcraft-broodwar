@@ -338,7 +338,7 @@ impl State {
         }
         match un.secondary_order {
             0x25 => todo_port!("0x4e6790", "BuildAddon"),
-            0x26 => todo_port!("0x468420", "Train"),
+            0x26 => self.secondary_train(d, u),
             0x3f => todo_port!("0x466790", "TrainFighter"),
             0x44 => todo_port!("0x4932d0", "ShieldBattery"),
             0x4e => todo_port!("0x4ea780", "SpawningLarva"),

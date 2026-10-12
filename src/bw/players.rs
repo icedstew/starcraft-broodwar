@@ -7,6 +7,8 @@ pub struct Players {
     pub gas: [i32; 12],
     pub minerals_gathered: [i32; 12],
     pub gas_gathered: [i32; 12],
+    /// 0x5821a4 / 0x582234 / 0x5822c4: supply caps (zerg, terran, protoss).
+    pub supply_max: [[i32; 12]; 3],
     /// 0x58d2b0: upgrade levels 0..46, [player][upgrade].
     pub upgrade_sc: [[u8; 46]; 12],
     /// 0x58f32c: Brood War upgrade levels 46..61.
@@ -43,6 +45,7 @@ impl Default for Players {
             gas: [0; 12],
             minerals_gathered: [0; 12],
             gas_gathered: [0; 12],
+            supply_max: [[400; 12]; 3],
             upgrade_sc: [[0; 46]; 12],
             upgrade_bw: [[0; 15]; 12],
             upgrade_in_progress: [[0; 8]; 12],
