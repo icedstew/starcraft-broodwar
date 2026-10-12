@@ -299,6 +299,13 @@ fn main() -> std::io::Result<()> {
                     }
                 }
             }
+            if let Some(m) = std::env::var("SCBW_MINERALS").ok().and_then(|v| v.parse().ok()) {
+                let me = scene.local_player() as usize;
+                scene.st.players.minerals[me] = m;
+            }
+            // Vision is computed by the first frame; selection and commands see only
+            // visible units.
+            scene.step();
             if let Some(n) = args.get(6).and_then(|v| v.parse::<usize>().ok()) {
                 // Debug: select up to n of the local player's units in view.
                 let me = scene.local_player();
@@ -306,8 +313,6 @@ fn main() -> std::io::Result<()> {
                 sel.truncate(n.min(12));
                 scene.selected = sel;
             }
-            // Vision is computed by the first frame; commands pick only visible units.
-            scene.step();
             // Debug: SCBW_MOVE=x,y right-clicks there with the selection before stepping.
             if let Some((mx, my)) = std::env::var("SCBW_MOVE").ok().and_then(|v| {
                 let (a, b) = v.split_once(',')?;
@@ -315,9 +320,30 @@ fn main() -> std::io::Result<()> {
             }) {
                 scene.right_click((mx, my), false);
             }
-            if let Some(m) = std::env::var("SCBW_MINERALS").ok().and_then(|v| v.parse().ok()) {
-                let me = scene.local_player() as usize;
-                scene.st.players.minerals[me] = m;
+            // Debug: SCBW_TRAIN=type trains with the first selected unit; SCBW_BUILD=type,x,y
+            // builds with it.
+            if let Some(t) = std::env::var("SCBW_TRAIN").ok().and_then(|v| v.parse::<u16>().ok()) {
+                scene.selected.retain(|&u| scene.st.units[u as usize].status & 2 != 0);
+                scene.command(|st, d, me, sel| {
+                    if let Some(&u) = sel.first() {
+                        eprintln!("train check {:?}", st.can_make_unit(d, u, t, me));
+                    }
+                    st.command_train_sel(d, me, sel, t)
+                });
+            }
+            if let Some((t, bx, by)) = std::env::var("SCBW_BUILD").ok().and_then(|v| {
+                let n: Vec<i32> = v.split(',').filter_map(|x| x.parse().ok()).collect();
+                Some((*n.first()? as u16, *n.get(1)?, *n.get(2)?))
+            }) {
+                scene.selected.retain(|&u| scene.st.units[u as usize].unit_type == 7);
+                scene.selected.truncate(1);
+                let (tx, ty) = scene.build_tile(t, (bx, by));
+                scene.command(|st, d, me, sel| {
+                    if let Some(&u) = sel.first() {
+                        eprintln!("build {tx},{ty} make {:?} order {:?} place {}", st.can_make_unit(d, u, t, me), st.can_issue_order(d, u, 0x1e, me), st.placement_check(d, u, me, tx, ty, t, 1, false, false, false));
+                    }
+                });
+                scene.build(t, (bx, by));
             }
             for f in 0..frames {
                 scene.step();

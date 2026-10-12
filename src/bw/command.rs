@@ -145,6 +145,106 @@ const ORDER_REQS: &[(u8, &[u16])] = &[
     (0xb6, &[0xff02, 0x3f]),
 ];
 
+/// Unit types' build/train requirement lists (0x514178, read by 0x46e100 / 0x46e1c0);
+/// types not listed can't be made. Same opcodes as ORDER_REQS plus 0xff03 x (x
+/// completed or in production), 0xff04 x (has addon x), 0xff05 is a building, 0xff07
+/// not researching/upgrading, 0xff08 not building something, 0xff0b not constructing,
+/// 0xff0c no addon, 0xff0e hangar not full, 0xff10 silo empty, 0xff11 not in a
+/// transport, 0xff24 Brood War, 0xff25 x tech x researched.
+const UNIT_REQS: &[(u8, &[u16])] = &[
+    (0x00, &[0xff02, 0x6f, 0xff08, 0xff05]),
+    (0x01, &[0xff02, 0x6f, 0xff08, 0xff05, 0x75, 0x70]),
+    (0x02, &[0xff02, 0x71, 0xff05, 0xff08]),
+    (0x03, &[0xff02, 0x71, 0xff05, 0xff08, 0x7b]),
+    (0x05, &[0xff02, 0x71, 0xff05, 0xff08, 0xff04, 0x78]),
+    (0x07, &[0xff02, 0x6a, 0xff08, 0xff05]),
+    (0x08, &[0xff02, 0x72, 0xff08, 0xff05]),
+    (0x09, &[0xff02, 0x72, 0xff08, 0xff05, 0xff04, 0x73, 0x74]),
+    (0x0b, &[0xff02, 0x72, 0xff08, 0xff05, 0xff04, 0x73]),
+    (0x0c, &[0xff02, 0x72, 0xff08, 0xff05, 0xff04, 0x73, 0x76]),
+    (0x20, &[0xff02, 0x6f, 0xff08, 0xff05, 0x70]),
+    (0x0e, &[0xff02, 0x6c, 0xff10, 0xff07]),
+    (0x22, &[0xff24, 0xff02, 0x6f, 0xff08, 0xff05, 0x70]),
+    (0x3a, &[0xff24, 0xff02, 0x72, 0xff08, 0xff05, 0xff04, 0x73, 0x7b]),
+    (0x25, &[0xff02, 0x23, 0x8e]),
+    (0x26, &[0xff02, 0x23, 0x87]),
+    (0x27, &[0xff02, 0x23, 0x8c]),
+    (0x29, &[0xff02, 0x23]),
+    (0x2a, &[0xff02, 0x23]),
+    (0x2b, &[0xff02, 0x23, 0x8d, 0xff01, 0xff03, 0x89]),
+    (0x2c, &[0xff02, 0x2b, 0x89]),
+    (0x2d, &[0xff02, 0x23, 0x8a]),
+    (0x2e, &[0xff02, 0x23, 0x88]),
+    (0x2f, &[0xff02, 0x23, 0x8d, 0xff01, 0xff03, 0x89]),
+    (0x32, &[0xff02, 0x82, 0xff05]),
+    (0x3e, &[0xff24, 0xff02, 0x2b, 0x89]),
+    (0x67, &[0xff24, 0xff02, 0x26, 0xff25, 0x20]),
+    (0x40, &[0xff02, 0x9a, 0xff08]),
+    (0x41, &[0xff02, 0xa0]),
+    (0x42, &[0xff02, 0xa0, 0xa4]),
+    (0x43, &[0xff02, 0xa0, 0xa5]),
+    (0x45, &[0xff02, 0x9b]),
+    (0x46, &[0xff02, 0xa7]),
+    (0x47, &[0xff02, 0xa7, 0xaa]),
+    (0x48, &[0xff02, 0xa7, 0xa9]),
+    (0x49, &[0xff02, 0x48, 0xff01, 0xff02, 0x52, 0xff0e]),
+    (0x53, &[0xff02, 0x9b, 0xab]),
+    (0x55, &[0xff02, 0x53, 0xff01, 0xff02, 0x51, 0xff0e]),
+    (0x54, &[0xff02, 0x9b, 0x9f]),
+    (0x3c, &[0xff24, 0xff02, 0xa7]),
+    (0x3d, &[0xff24, 0xff02, 0xa0, 0xa5]),
+    (0x6a, &[0xff02, 0x7, 0xff0b]),
+    (0x6b, &[0xff02, 0x6a, 0xff0c, 0xff07, 0x70]),
+    (0x6c, &[0xff02, 0x6a, 0xff0c, 0xff07, 0x75]),
+    (0x6d, &[0xff02, 0x7, 0xff0b]),
+    (0x6e, &[0xff02, 0x7, 0xff0b]),
+    (0x6f, &[0xff02, 0x7, 0xff0b, 0x6a]),
+    (0x70, &[0xff02, 0x7, 0xff0b, 0x6f]),
+    (0x71, &[0xff02, 0x7, 0xff0b, 0x6f]),
+    (0x72, &[0xff02, 0x7, 0xff0b, 0x71]),
+    (0x73, &[0xff02, 0x72, 0xff0c, 0xff07]),
+    (0x74, &[0xff02, 0x7, 0xff0b, 0x72]),
+    (0x75, &[0xff02, 0x74, 0xff0c, 0xff07]),
+    (0x76, &[0xff02, 0x74, 0xff0c, 0xff07]),
+    (0x78, &[0xff02, 0x71, 0xff0c, 0xff07]),
+    (0x7a, &[0xff02, 0x7, 0xff0b, 0x6a]),
+    (0x7b, &[0xff02, 0x7, 0xff0b, 0x71]),
+    (0x7c, &[0xff02, 0x7, 0xff0b, 0x7a]),
+    (0x7d, &[0xff02, 0x7, 0xff0b, 0x6f]),
+    (0x83, &[0xff02, 0x29, 0xff11]),
+    (0x84, &[0xff02, 0x83, 0x8e, 0xff07]),
+    (0x85, &[0xff02, 0x84, 0x8a, 0xff07]),
+    (0x8e, &[0xff02, 0x29, 0xff11, 0x83, 0xff01, 0xff03, 0x84, 0xff01, 0xff03, 0x85]),
+    (0x87, &[0xff02, 0x29, 0xff11, 0x8e]),
+    (0x88, &[0xff02, 0x29, 0xff11, 0x85]),
+    (0x89, &[0xff02, 0x8d, 0xff07, 0x85]),
+    (0x8a, &[0xff02, 0x29, 0xff11, 0x84, 0xff01, 0xff03, 0x85]),
+    (0x8b, &[0xff02, 0x29, 0xff11, 0x83, 0xff01, 0xff03, 0x84, 0xff01, 0xff03, 0x85]),
+    (0x8c, &[0xff02, 0x29, 0xff11, 0x85]),
+    (0x8d, &[0xff02, 0x29, 0xff11, 0x84, 0xff01, 0xff03, 0x85]),
+    (0x86, &[0xff02, 0x29, 0xff11, 0x85]),
+    (0x8f, &[0xff02, 0x29, 0xff11]),
+    (0x90, &[0xff02, 0x8f, 0x8b]),
+    (0x92, &[0xff02, 0x8f, 0x8e]),
+    (0x95, &[0xff02, 0x29]),
+    (0x9a, &[0xff02, 0x40]),
+    (0x9b, &[0xff02, 0x40, 0xa4]),
+    (0x9c, &[0xff02, 0x40]),
+    (0x9d, &[0xff02, 0x40]),
+    (0x9f, &[0xff02, 0x40, 0x9b]),
+    (0xa0, &[0xff02, 0x40, 0x9a]),
+    (0xa2, &[0xff02, 0x40, 0xa6]),
+    (0xa3, &[0xff02, 0x40, 0xa4]),
+    (0xa4, &[0xff02, 0x40, 0xa0]),
+    (0xa5, &[0xff02, 0x40, 0xa3]),
+    (0xa6, &[0xff02, 0x40, 0x9a]),
+    (0xa7, &[0xff02, 0x40, 0xa4]),
+    (0xa9, &[0xff02, 0x40, 0xa7]),
+    (0xaa, &[0xff02, 0x40, 0xa7, 0xa5]),
+    (0xab, &[0xff02, 0x40, 0x9b]),
+    (0xac, &[0xff02, 0x40, 0xa0]),
+];
+
 /// 0x49ab00 ignores these orders (they arrive through other commands).
 fn targeted_ignored(order: u8) -> bool {
     matches!(order, 0 | 0xf | 0x14 | 0x19 | 0x1d..=0x21 | 0x24 | 0x2e | 0x47..=0x49 | 0x50..=0x53 | 0x55..=0x59 | 0x9b)
@@ -309,6 +409,196 @@ impl State {
             return Err(0x16);
         }
         Ok(1)
+    }
+
+    /// 0x46e1c0: `player` may make unit type `t` with `u` (Err holds the error code).
+    pub fn can_make_unit(&self, d: &Data, u: u32, t: u16, player: u8) -> Result<(), u8> {
+        let un = &self.units[u as usize];
+        if t > 0xe3 {
+            return Err(0x10);
+        }
+        if player != un.player {
+            return Err(1);
+        }
+        if un.status & 1 == 0 {
+            return Err(0x14);
+        }
+        if self.disabled(u) {
+            return Err(10);
+        }
+        todo_port!("0x46e1c0", "per-player unit availability (0x57f27c, map PUNI)");
+        // 0x401e70(4): the last queue slot is taken by a unit.
+        if un.build_queue[(un.build_queue_slot as usize + 4) % 5] < 0x6a {
+            return Err(3);
+        }
+        if un.status & 0x4000_0000 != 0 {
+            return Err(0x16);
+        }
+        let Some(&(_, req)) = UNIT_REQS.iter().find(|(o, _)| *o as u16 == t) else {
+            return Err(0x17);
+        };
+        let completed = |t: u16| self.players.completed_counts.get(t as usize).map_or(0, |c| c[player as usize]);
+        let all = |t: u16| self.players.unit_counts.get(t as usize).map_or(0, |c| c[player as usize]);
+        let cheat = self.game_options & 0x2000 != 0;
+        let (mut first, mut wrong_unit) = (true, false);
+        let mut i = 0;
+        while i < req.len() {
+            let mut none_built = true;
+            let mut count = 0;
+            loop {
+                match req[i] {
+                    0xff02 => {
+                        i += 1;
+                        let x = req[i];
+                        if completed(x) != 0 {
+                            none_built = false;
+                        }
+                        if x == un.unit_type {
+                            wrong_unit = false;
+                            first = false;
+                            count += 1;
+                        } else if first {
+                            wrong_unit = true;
+                        }
+                    }
+                    0xff03 => {
+                        i += 1;
+                        count += completed(req[i]) + all(req[i]);
+                    }
+                    0xff04 => {
+                        if cheat {
+                            i += 1;
+                            count += 1;
+                        } else {
+                            let addon = un.ptr_at(0xc0);
+                            i += 1;
+                            if addon == NIL || self.units[addon as usize].unit_type != req[i] {
+                                return Err(if wrong_unit { 0 } else { 4 });
+                            }
+                            count += 1;
+                        }
+                    }
+                    0xff05 => {
+                        if un.status & 2 == 0 {
+                            return Err(7);
+                        }
+                        count += 1;
+                    }
+                    0xff07 => {
+                        if self.busy_building(u) || un.u8_at(0xc8) != 0x2c || un.u8_at(0xc9) != 0x3d {
+                            return Err(5);
+                        }
+                        count += 1;
+                    }
+                    0xff08 => {
+                        if self.busy_building(u) {
+                            return Err(5);
+                        }
+                        count += 1;
+                    }
+                    0xff0b => {
+                        if un.unit_type == 7 && un.order == 0x21 {
+                            return Err(5);
+                        }
+                        count += 1;
+                    }
+                    0xff0c => {
+                        if un.ptr_at(0xc0) != NIL {
+                            return Err(if wrong_unit { 0 } else { 4 });
+                        }
+                        count += 1;
+                    }
+                    0xff0e => {
+                        // 0x465270 / 0x4653d0: queued interceptors or scarabs plus those
+                        // already in the hangar against its capacity.
+                        let queued = un.build_queue.iter().filter(|&&q| q == 0x49 || q == 0x55).count() as u8;
+                        let have = match un.unit_type {
+                            0x48 | 0x52 => Some(queued.wrapping_add(un.u8_at(0xc9)).wrapping_add(un.u8_at(0xc8))),
+                            0x53 | 0x51 => Some(queued.wrapping_add(un.u8_at(0xc8))),
+                            _ => None,
+                        };
+                        let have = have.unwrap_or(0xff);
+                        let flags40 = d.dat.units.flags[un.unit_type as usize] & 0x40 != 0;
+                        let p = player as usize;
+                        let cap = match un.unit_type {
+                            0x48 | 0x52 if flags40 => 8,
+                            0x48 | 0x52 => if self.players.upgrade_sc[p][0x2b] != 0 { 8 } else { 4 },
+                            0x53 | 0x51 if flags40 => 10,
+                            0x53 | 0x51 => if self.players.upgrade_sc[p][0x24] != 0 { 10 } else { 5 },
+                            _ => 0,
+                        };
+                        if cap <= have {
+                            return Err(3);
+                        }
+                        count += 1;
+                    }
+                    0xff10 => {
+                        if un.u16_at(0xd0) as u32 | (un.u16_at(0xd2) as u32) << 16 != 0 {
+                            return Err(3);
+                        }
+                        count += 1;
+                    }
+                    0xff11 => {
+                        if un.status & 0x10 != 0 {
+                            return Err(5);
+                        }
+                        count += 1;
+                    }
+                    0xff22 => return Err(0x15),
+                    0xff23 => return Err(0x17),
+                    0xff24 => {
+                        if !self.is_expansion {
+                            return Err(0x1a);
+                        }
+                        count += 1;
+                    }
+                    0xff25 => {
+                        i += 1;
+                        if !self.tech_researched(player, req[i]) && self.game_options & 0x1000 == 0 {
+                            return Err(9);
+                        }
+                        count += 1;
+                    }
+                    0xff26 => {
+                        if un.status & 0x10 == 0 {
+                            return Err(5);
+                        }
+                        count += 1;
+                    }
+                    0xff00..=0xffff => {
+                        todo_port!("0x46e1c0", "unit requirement opcode not in the table");
+                        count += 1;
+                    }
+                    x => count += completed(x) + cheat as i32,
+                }
+                if req.get(i + 1) != Some(&0xff01) {
+                    break;
+                }
+                i += 2;
+            }
+            if count == 0 && none_built {
+                return Err(8);
+            }
+            i += 1;
+        }
+        if wrong_unit {
+            return Err(0x19);
+        }
+        Ok(())
+    }
+
+    /// 0x4e66b0 / 0x4e4c40: a building still constructing what it is making.
+    fn busy_building(&self, u: u32) -> bool {
+        let un = &self.units[u as usize];
+        let incomplete = |c: u32| c != NIL && self.units[c as usize].status & 1 == 0;
+        un.status & 2 != 0 && ((un.secondary_order == 0x25 && incomplete(un.current_build_unit)) || (un.order == 0x1f && incomplete(un.order_target_unit)))
+    }
+
+    /// 0x4ce850: tech `t` researched by `player`.
+    fn tech_researched(&self, player: u8, t: u16) -> bool {
+        todo_port!("0x4ce850", "researched tech tables (0x58cf44 / 0x58f128)");
+        let _ = (player, t);
+        false
     }
 
     /// 0x4754f0: give `u` an order from a command, queued (shift) when the order allows.
@@ -971,8 +1261,9 @@ impl State {
     pub fn command_train_sel(&mut self, d: &Data, player: u8, sel: &[u32], t: u16) {
         let units = self.live_selection(sel);
         let [u] = units[..] else { return };
-        if self.can_issue_order(d, u, 0x26, player).is_ok() {
+        if t < 0x6a && self.can_make_unit(d, u, t, player).is_ok() {
             self.command_train(d, u, t);
+            // 0x4c36c0: UI refresh.
         }
     }
 
@@ -984,11 +1275,17 @@ impl State {
         if tx as u16 >= self.terrain.width || ty as u16 >= self.terrain.height {
             return;
         }
-        // 0x48dbd0: the builder may take `order` for `t`.
-        if self.can_issue_order(d, u, order, player).is_err() {
-            return;
+        // 0x48dbd0
+        let ok = match order {
+            0x19 | 0x1e | 0x1f | 0x20 | 0x24 => self.can_make_unit(d, u, t, player).is_ok(),
+            0x9b | 0x2e | 0x47 => {
+                todo_port!("0x48dbd0", "nydus exit / addon / beacon builds");
+                false
+            }
+            _ => false,
+        };
+        if ok && self.can_issue_order(d, u, order, player).is_ok() {
+            self.command_build(d, u, order, tx, ty, t);
         }
-        todo_port!("0x48dbd0", "unit type build requirements (0x514178)");
-        self.command_build(d, u, order, tx, ty, t);
     }
 }
