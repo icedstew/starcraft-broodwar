@@ -196,8 +196,8 @@ impl State {
     pub(super) fn los_elevation(&self, x: i32, y: i32) -> u8 {
         let m = &self.terrain;
         let i = (y / 32) as usize * m.width as usize + (x / 32) as usize;
-        todo_port!("0x4bd0f0", "creep tile overrides (0x5993a8)");
-        let mega = (m.megatiles[i] & 0x7fff) as usize;
+        let raw = if m.creep_saved[i] != 0 { m.creep_saved[i] } else { m.mtxm[i] };
+        let mega = m.tileset.megatile(raw) as usize;
         let f = m.vf4.get(mega * 16 + (((y >> 3) & 3) * 4 + ((x >> 3) & 3)) as usize).copied().unwrap_or(0);
         if f & 4 != 0 { 2 } else { ((f >> 1) & 1) as u8 }
     }

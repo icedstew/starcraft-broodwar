@@ -18,7 +18,7 @@ impl State {
         self.counter_100 -= 1;
         self.is_100th_frame = self.counter_100 == 0;
         if self.is_100th_frame {
-            todo_port!("0x49c4c0", "creep update (every 100 frames)");
+            self.creep_update_100();
             self.vision_reset();
         }
         self.update_units(d);
@@ -350,28 +350,25 @@ impl State {
         }
     }
 
-    /// Secondary order SpreadCreep (0x66), inlined in 0x4ec170.
+    /// 0x4ea880: secondary order SpreadCreep (0x66); hatcheries also spawn larvae.
     fn secondary_spread_creep(&mut self, d: &Data, u: u32) {
         let ut = self.units[u as usize].unit_type;
         if matches!(ut, 0x83..=0x85) {
             todo_port!("0x4ea780", "hatchery larva spawning");
         }
-        let un = &mut self.units[u as usize];
         // Spread creep timer: union +0xcc.
-        if un.u8_at(0xcc) == 0 {
-            un.set_u8_at(0xcc, 0xf);
-            todo_port!("0x414680", "spread creep step (returns whether still spreading)");
-            let spreading = false;
-            if !spreading {
-                let hatch = matches!(ut, 0x83..=0x85);
-                let next = if hatch { 0x4e } else { 0x17 };
-                self.set_secondary_order(u, next);
-            }
-            let _ = d;
+        let t = self.units[u as usize].u8_at(0xcc);
+        if t != 0 {
+            self.units[u as usize].set_u8_at(0xcc, t - 1);
             return;
         }
-        let t = un.u8_at(0xcc);
-        un.set_u8_at(0xcc, t - 1);
+        self.units[u as usize].set_u8_at(0xcc, 0xf);
+        let (x, y) = self.unit_sprite_pos(u);
+        // Every spreader spreads like a hive.
+        if self.spread_creep(d, 0x85, x as i32, y as i32) == 0 {
+            let next = if matches!(ut, 0x83..=0x85) { 0x4e } else { 0x17 };
+            self.set_secondary_order(u, next);
+        }
     }
 
     /// Set the secondary order (clears its state like 0x1401c9840 / inline in 1.16.1).

@@ -184,6 +184,18 @@ fn main() -> std::io::Result<()> {
                     }
                     writeln!(t, "{}", thingy_trace(&st, f))?;
                     writeln!(t, "{}", fog_trace(&st, f))?;
+                    if f % 25 == 0 {
+                        writeln!(t, "{}", tile_trace(&st, f))?;
+                    }
+                    if let Ok(p) = std::env::var("SCBW_TILEDUMP") {
+                        if f.to_string() == std::env::var("SCBW_TILEDUMP_AT").unwrap_or("0".into()) {
+                            let m = &st.terrain;
+                            let n = m.width as usize * m.height as usize;
+                            let mut out: Vec<u8> = m.mtxm[..n].iter().flat_map(|v| v.to_le_bytes()).collect();
+                            out.extend(m.tile_flags[..n].iter().flat_map(|v| v.to_le_bytes()));
+                            std::fs::write(p + ".rust", out)?;
+                        }
+                    }
                     writeln!(t, "{}", bullet_trace(&st, f))?;
                     let r: Vec<String> = (0..2).map(|p| format!("{},{}", st.players.minerals[p], st.players.gas[p])).collect();
                     writeln!(t, "f{f} res {}", r.join(" "))?;
@@ -467,6 +479,19 @@ fn fog_trace(st: &bw::State, f: u32) -> String {
         x = (x ^ (t & 0xff)).wrapping_mul(0x01000193);
     }
     format!("f{f} fog {x:#x}")
+}
+
+fn tile_trace(st: &bw::State, f: u32) -> String {
+    let m = &st.terrain;
+    let mut x = 0x811c9dc5u32;
+    for i in 0..m.width as usize * m.height as usize {
+        let [a, b] = m.mtxm[i].to_le_bytes();
+        let [_, _, c, e] = m.tile_flags[i].to_le_bytes();
+        for v in [a, b, c, e] {
+            x = (x ^ v as u32).wrapping_mul(0x01000193);
+        }
+    }
+    format!("f{f} tile {x:#x}")
 }
 
 fn thingy_trace(st: &bw::State, f: u32) -> String {

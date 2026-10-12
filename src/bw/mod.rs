@@ -12,6 +12,7 @@ pub mod chk_load;
 pub mod command;
 pub mod collide;
 pub mod create;
+pub mod creep;
 pub mod crt;
 pub mod death;
 pub mod finder;
@@ -215,6 +216,10 @@ pub struct State {
     pub last_error: u16,
     /// 0x57f0b0: local player's vision mask.
     pub local_vision_mask: u8,
+    /// MSVC `rand` state (`_holdrand`), seeded with the game seed by 0x4a2c20.
+    pub crt_seed: u32,
+    /// 0x57f1d0 / 0x57f1d2: screen position in tiles (UI; read by 0x49c4c0).
+    pub screen_tile: (u16, u16),
     /// 0x58f440: playing Brood War (expansion) rules.
     pub is_expansion: bool,
     pub players: players::Players,
@@ -308,6 +313,8 @@ impl State {
             repulse: vec![0; 0xab * 0xab],
             last_error: 0,
             local_vision_mask: 1,
+            crt_seed: 1,
+            screen_tile: (0, 0),
             is_expansion: true,
             players: players::Players::default(),
             psi: psi::Psi { providers: list::NIL, ..Default::default() },

@@ -2,6 +2,7 @@
 //! minitile walkability map used by region creation (sai_ContoursCreate.cpp).
 
 /// Tileset files the game reads (Tileset\<name>.vf4 / .cv5).
+#[derive(Clone, Default)]
 pub struct TilesetData {
     /// .vf4: 16 minitile flag words per megatile (0x5993d0).
     pub vf4: Vec<u16>,
@@ -51,6 +52,9 @@ pub struct GameMap {
     pub vf4: Vec<u16>,
     /// 0x6ca54c: 1024x1024 minitile map, 0x80 = unwalkable, low 4 bits = edge sides.
     pub minitiles: Vec<u8>,
+    /// 0x5993a8: the tile under each creep tile (0 = none).
+    pub creep_saved: Vec<u16>,
+    pub tileset: TilesetData,
 }
 
 impl GameMap {
@@ -64,6 +68,8 @@ impl GameMap {
             megatile_flags: megatile_flags(ts),
             vf4: ts.vf4.clone(),
             minitiles: Vec::new(),
+            creep_saved: vec![0; 0x10000],
+            tileset: ts.clone(),
         }
     }
 

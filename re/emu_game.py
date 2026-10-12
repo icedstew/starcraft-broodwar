@@ -175,6 +175,18 @@ def fog_trace(e, f):
     return f"f{f} fog {h:#x}"
 
 
+def tile_trace(e, f):
+    """FNV-1a over the tile map (0x5993c4, creep) and the high half of the tile flags."""
+    n = e.r16(0x57f1d4) * e.r16(0x57f1d6)
+    m = bytes(e.uc.mem_read(e.r32(0x5993c4), n * 2))
+    fl = bytes(e.uc.mem_read(e.r32(0x6d1260), n * 4))
+    h = 0x811c9dc5
+    for i in range(n):
+        for x in (m[i * 2], m[i * 2 + 1], fl[i * 4 + 2], fl[i * 4 + 3]):
+            h = ((h ^ x) * 0x01000193) & 0xffffffff
+    return f"f{f} tile {h:#x}"
+
+
 def bullet_trace(e, f):
     out, b = [], e.r32(0x64dec4)
     while b:
@@ -249,6 +261,12 @@ def scenario(e, units, move, frames, out):
         e.w32(0x57f120 + p * 4, 10000)
     # 0x49e530 shows a placement error to the owning player (UI only): skip it.
     e.write(0x49e530, b"\xc2\x04\x00")
+    # __getptd (0x4059e4) reads TLS: return one static per-thread block instead, with
+    # MSVC's initial rand state (_holdrand at +0x14 = 1).
+    e.w32(0x57f0b0, 1)  # local player 0's vision mask
+    ptd = e.alloc(0x8c)
+    e.w32(ptd + 0x14, 1)
+    e.write(0x4059e4, b"\xb8" + struct.pack("<I", ptd) + b"\xc3")
     melee = os.environ.get("SCBW_MELEE")
     if melee:  # "race,race,...": those players start a melee game (0x49da40, mode 2)
         races = [int(r) for r in melee.split(",")]
@@ -359,6 +377,12 @@ def scenario(e, units, move, frames, out):
                 a = e.r32(a + 4)
             fo.write(thingy_trace(e, f) + "\n")
             fo.write(fog_trace(e, f) + "\n")
+            if f % 25 == 0:
+                fo.write(tile_trace(e, f) + "\n")
+            if os.environ.get("SCBW_TILEDUMP") and f == int(os.environ.get("SCBW_TILEDUMP_AT", "0")):
+                n = e.r16(0x57f1d4) * e.r16(0x57f1d6)
+                with open(os.environ["SCBW_TILEDUMP"] + ".emu", "wb") as td:
+                    td.write(bytes(e.uc.mem_read(e.r32(0x5993c4), n * 2)) + bytes(e.uc.mem_read(e.r32(0x6d1260), n * 4)))
             fo.write(bullet_trace(e, f) + "\n")
             fo.write(f"f{f} res " + " ".join(f"{e.r32(0x57f0f0 + p * 4)},{e.r32(0x57f120 + p * 4)}" for p in range(2)) + "\n")
             fo.write(f"f{f} rng {e.r32(0x51ca14):#x} {e.r32(0x51ca18)}\n")

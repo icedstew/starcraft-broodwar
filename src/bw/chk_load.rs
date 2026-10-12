@@ -286,7 +286,8 @@ impl State {
         let Some(u) = self.start_unit(d, t, x as i16, y as i16, p) else { return };
         let ut = self.units[u as usize].unit_type;
         if matches!(ut, 0x84 | 0x85 | 0x90 | 0x92 | 0x83 | 0x8f) || d.dat.units.flags[ut as usize] & 0x2_0000 != 0 {
-            todo_port!("0x4148f0", "creep under the starting hatchery");
+            let (x, y) = self.unit_sprite_pos(u);
+            self.spread_creep_instantly(d, ut, x as i32, y as i32);
             todo_port!("0x49d660", "the hatchery's two starting larvae");
         }
     }
@@ -315,7 +316,8 @@ impl State {
         };
         let t = self.units[u as usize].unit_type;
         if matches!(t, 0x84 | 0x85 | 0x90 | 0x92 | 0x83 | 0x8f) || d.dat.units.flags[t as usize] & 0x20000 != 0 {
-            todo_port!("0x4148f0", "spread creep under map-placed zerg buildings");
+            let (x, y) = self.unit_sprite_pos(u);
+            self.spread_creep_instantly(d, t, x as i32, y as i32);
         }
         self.finish_unit_pre(d, u);
         if self.place_unit(d, u) {
