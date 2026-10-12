@@ -404,6 +404,27 @@ impl State {
         pick
     }
 
+    pub(super) fn release_mineral_pub(&mut self, d: &Data, u: u32, m: u32) {
+        self.release_mineral(d, u, m);
+    }
+
+    /// 0x4686d0: take `u` off resource `r`'s wait list.
+    pub(super) fn leave_wait_list(&mut self, u: u32, r: u32) {
+        let (prev, next) = (self.units[u as usize].ptr_at(0xd4), self.units[u as usize].ptr_at(0xd8));
+        if prev == NIL {
+            self.units[r as usize].set_ptr_at(0xd4, next);
+        } else {
+            self.units[prev as usize].set_ptr_at(0xd8, next);
+        }
+        if next != NIL {
+            self.units[next as usize].set_ptr_at(0xd4, prev);
+        }
+        let un = &mut self.units[u as usize];
+        un.set_ptr_at(0xd4, NIL);
+        un.set_ptr_at(0xd8, NIL);
+        un.set_ptr_at(0xd0, NIL);
+    }
+
     /// 0x468e40: stop gathering from `m` and hand it to the next waiting worker.
     fn release_mineral(&mut self, d: &Data, u: u32, m: u32) {
         let un = &mut self.units[u as usize];
@@ -697,7 +718,7 @@ impl State {
             let iy = super::finder::search(&self.finder.y, self.finder.count, true, y as i32) as i32;
             (ix, iy, ix - 1, iy - 1)
         };
-        todo_port!("0x441310", "map box 0x6284a0 assumed (0, 0, map width, map height)");
+        // 0x6284a0: map box (0x49bb90).
         let b = [0, 0, self.map_px.0 as i16, self.map_px.1 as i16];
         self.nearest_unit(b, u, (x, y), [ix_desc, iy_desc, ix_asc, iy_asc], &mut |st: &mut State, c: u32| {
             st.is_drop_off(d, c)
@@ -758,7 +779,7 @@ impl State {
     }
 
     /// 0x442e80: mineral field `m` is a candidate for worker `u`.
-    fn mineral_usable(&self, d: &Data, m: u32, u: u32, center_elev: u8, radius: i32) -> bool {
+    fn mineral_usable(&mut self, d: &Data, m: u32, u: u32, center_elev: u8, radius: i32) -> bool {
         let _ = d;
         if !is_mineral(self.units[m as usize].unit_type) || self.mineral_enclosed(d, m) {
             return false;
@@ -778,14 +799,44 @@ impl State {
         self.path_distance(m, up) <= radius * 2
     }
 
-    /// 0x42fa30: distance from `m` to `p` (path length for ground units).
-    fn path_distance(&self, m: u32, p: (i16, i16)) -> i32 {
+    /// 0x42fa30: distance from `m` to `p` (along the region path for ground units).
+    fn path_distance(&mut self, m: u32, p: (i16, i16)) -> i32 {
+        let mp = self.unit_sprite_pos(m);
+        let straight = |a: (i16, i16), b: (i16, i16)| super::path::approx_distance(a.0 as i32, b.0 as i32, a.1 as i32, b.1 as i32) as i32;
         if self.units[m as usize].pathing_flags & 1 == 0 {
-            let mp = self.unit_sprite_pos(m);
-            return super::path::approx_distance(mp.0 as i32, p.0 as i32, mp.1 as i32, p.1 as i32) as i32;
+            return straight(mp, p);
         }
-        todo_port!("0x42fa30", "region path distance for ground units");
-        0x7ffe
+        if !self.same_group(m, p) {
+            return 0x7fff;
+        }
+        let mut ctx = super::path::PathCtx { unit: m, start: mp, target: p, goal: p, ..Default::default() };
+        ctx.start_region = super::path::region_at(&self.sai, mp.0 as i32, mp.1 as i32);
+        ctx.target_region = super::path::region_at(&self.sai, p.0 as i32, p.1 as i32);
+        if ctx.start_region == ctx.target_region {
+            return straight(mp, p);
+        }
+        let mut sai = std::mem::replace(&mut self.sai, super::sai::Sai::empty());
+        let ok = super::path::find_region_path(&mut sai, &mut ctx);
+        self.sai = sai;
+        if !ok {
+            return 0x7ffe;
+        }
+        if ctx.region_count <= 2 {
+            // 0x42f8f0
+            return straight(mp, ctx.target);
+        }
+        let center = |st: &State, r: u16| {
+            let c = st.sai.regions[r as usize].center;
+            ((c.0 >> 8) as i16, (c.1 >> 8) as i16)
+        };
+        let mut prev = center(self, ctx.regions[0]);
+        let mut sum = 0;
+        for i in 1..ctx.region_count as usize {
+            let c = center(self, ctx.regions[i]);
+            sum += straight(prev, c);
+            prev = c;
+        }
+        sum
     }
 
     /// 0x473560: every tile around the mineral's box is marked 0x8000000.
@@ -925,5 +976,157 @@ impl State {
                 return result;
             }
         }
+    }
+
+    /// 0x469000: WaitForGas.
+    pub fn order_wait_for_gas(&mut self, d: &Data, u: u32) {
+        let t = self.units[u as usize].order_target_unit;
+        if t == NIL || !self.is_refinery_of(t, u) || self.carries_powerup(u) {
+            self.drop_harvest_for_powerup(d, u);
+            return;
+        }
+        if self.units[u as usize].order_state == 0 {
+            self.wait_for_mineral(d, u, t);
+        }
+    }
+
+    /// 0x469980: HarvestGas: go inside the refinery, then come out with gas.
+    pub fn order_harvest_gas(&mut self, d: &Data, u: u32) {
+        let t = self.units[u as usize].order_target_unit;
+        let s = self.units[u as usize].sprite;
+        let inside = self.sprites[s as usize].flags & super::sprite::sflag::HIDDEN != 0;
+        if !inside && (t == NIL || !self.is_refinery_of(t, u) || self.carries_powerup(u)) {
+            self.unit_halt(d, u);
+            let un = &mut self.units[u as usize];
+            if un.fl.next_target_waypoint != un.fl.move_target {
+                un.fl.next_target_waypoint = un.fl.move_target;
+            }
+            self.order_next_or_idle(d, u);
+            if self.units[u as usize].u8_at(0xce) != 0 {
+                let g = self.units[u as usize].ptr_at(0xd0);
+                self.release_mineral(d, u, g);
+            }
+            return;
+        }
+        self.harvest_mark(d, u);
+        match self.units[u as usize].order_state {
+            0 => {
+                self.enter_building(d, u);
+                let un = &mut self.units[u as usize];
+                un.order_state = 5;
+                un.main_order_timer = 0x25;
+            }
+            5 if self.units[u as usize].main_order_timer == 0 => {
+                let mut dir = self.units[u as usize].fl.heading;
+                let Some(p) = self.gas_exit_spot(d, u, t, &mut dir) else {
+                    self.units[u as usize].main_order_timer = 0x12;
+                    return;
+                };
+                self.set_heading_now(d, u, dir);
+                self.set_unit_position(d, u, p.0, p.1);
+                self.show_unit(d, u);
+                if t != NIL {
+                    self.gather(d, u, t);
+                }
+                if self.units[u as usize].u8_at(0xce) != 0 {
+                    let g = self.units[u as usize].ptr_at(0xd0);
+                    self.release_mineral(d, u, g);
+                }
+                self.remove_queued(d, u, 0x97);
+                if self.units[u as usize].order_queue_head == NIL {
+                    let o = if self.units[u as usize].resource_type & 1 != 0 { 0x54 } else { d.dat.units.ai_return_to_idle[self.units[u as usize].unit_type as usize] };
+                    self.issue_order(d, u, o, false, (0, 0), NIL, 0xe4);
+                }
+                self.queue_front(d, u, 0x97, (0, 0), NIL);
+                self.order_next_or_idle(d, u);
+            }
+            _ => {}
+        }
+    }
+
+    /// 0x493ca0(1): a worker goes inside a refinery (hidden, off the map).
+    fn enter_building(&mut self, d: &Data, u: u32) {
+        let s = self.units[u as usize].sprite;
+        if self.sprites[s as usize].flags & super::sprite::sflag::HIDDEN != 0 {
+            return;
+        }
+        self.clear_references_pub(d, u);
+        self.untarget_bullets_pub(u);
+        self.finder_remove(u);
+        if self.units[u as usize].status & 2 != 0 {
+            todo_port!("0x469ec0", "free the building's tiles");
+        }
+        if self.units[u as usize].status & 4 != 0 {
+            todo_port!("0x4533d0", "air unit repulse grid");
+        }
+        let mut l = self.visible_units;
+        super::list::remove(&mut self.units, u, &mut l);
+        self.visible_units = l;
+        let mut l = self.hidden_units;
+        super::list::insert_after_head(&mut self.units, u, &mut l);
+        self.hidden_units = l;
+        self.sprites[s as usize].flags |= super::sprite::sflag::HIDDEN;
+        self.sprite_set_visibility(s, 0);
+        let sub = self.units[u as usize].subunit;
+        if sub != NIL && d.dat.units.flags[self.units[sub as usize].unit_type as usize] & 0x10 != 0 {
+            let ss = self.units[sub as usize].sprite;
+            self.sprites[ss as usize].flags |= super::sprite::sflag::HIDDEN;
+            self.sprite_set_visibility(ss, 0);
+        }
+        self.path_delete(u);
+        self.units[u as usize].movement_state = 0;
+        let low = (self.sprites[s as usize].elevation < 0xc) as u8;
+        let pf = &mut self.units[u as usize].pathing_flags;
+        *pf = (*pf & !1) | low;
+    }
+
+    /// 0x468b00: where a worker leaves the refinery `r`: on the side facing the
+    /// nearest drop-off.
+    fn gas_exit_spot(&mut self, d: &Data, u: u32, r: u32, dir: &mut u8) -> Option<(i16, i16)> {
+        let depot = self.find_drop_off(d, u);
+        if depot != NIL && r != NIL {
+            let rp = self.unit_sprite_pos(r);
+            let dp = self.unit_sprite_pos(depot);
+            let a = crate::game::flingy::direction_to(rp.0 as i32, rp.1 as i32, dp.0 as i32, dp.1 as i32);
+            *dir = a;
+            let (tx, ty) = crate::game::flingy::direction_table()[a.wrapping_add(0xc0) as usize];
+            let (ox, oy) = (((tx << 5) >> 8) as i16, ((ty << 5) >> 8) as i16);
+            let p_ref = (rp.0.wrapping_add(ox), rp.1.wrapping_add(oy));
+            let p_dep = (dp.0.wrapping_add(ox), dp.1.wrapping_add(oy));
+            let ub = self.unit_box_at(d, self.units[u as usize].unit_type, 0, 0);
+            let rb = self.unit_box(d, r);
+            let b = [
+                rb[0].wrapping_add(-1i16.wrapping_sub(ub[2])),
+                rb[1].wrapping_add(-1i16.wrapping_sub(ub[3])),
+                rb[2].wrapping_sub(ub[0]).wrapping_add(1),
+                rb[3].wrapping_sub(ub[1]).wrapping_add(1),
+            ];
+            let p = match super::collide::clip_segment(p_ref, p_dep, b) {
+                Some((_, q)) => q,
+                None => p_dep,
+            };
+            if let Some(o) = self.find_unit_placement(d, u, p, Some(b), true) {
+                return Some(o);
+            }
+            return self.find_unit_placement(d, u, p, None, true);
+        }
+        let p = self.unit_sprite_pos(u);
+        self.find_unit_placement(d, u, p, None, true)
+    }
+
+    /// 0x495f20: face `dir` immediately.
+    fn set_heading_now(&mut self, d: &Data, u: u32, dir: u8) {
+        let sp = self.unit_sprite_pos(u);
+        let f = &mut self.units[u as usize].fl;
+        f.velocity_dir_prev = dir;
+        f.heading = dir;
+        f.velocity_dir = dir;
+        let (tx, ty) = crate::game::flingy::direction_table()[dir as usize];
+        f.velocity = ((tx * f.speed) >> 8, (ty * f.speed) >> 8);
+        if f.next_target_waypoint != sp {
+            f.next_target_waypoint = sp;
+        }
+        let s = self.units[u as usize].sprite;
+        self.sprite_images_set_direction(d, s, dir);
     }
 }

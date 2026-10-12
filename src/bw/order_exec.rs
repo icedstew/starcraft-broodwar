@@ -312,13 +312,21 @@ impl State {
     }
 
     /// 0x468e80: Harvest3.
-    fn order_harvest3(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x468e80", "Harvest3");
+    fn order_harvest3(&mut self, d: &Data, u: u32) {
+        if self.units[u as usize].u8_at(0xce) != 0 {
+            let g = self.units[u as usize].ptr_at(0xd0);
+            self.release_mineral_pub(d, u, g);
+        }
+        self.order_next_or_idle(d, u);
     }
 
     /// 0x468ed0: Harvest4.
-    fn order_harvest4(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x468ed0", "Harvest4");
+    fn order_harvest4(&mut self, d: &Data, u: u32) {
+        let r = self.units[u as usize].ptr_at(0xd0);
+        if r != super::list::NIL {
+            self.leave_wait_list(u, r);
+        }
+        self.order_next_or_idle(d, u);
     }
 
     /// 0x493920: Interrupted.
@@ -724,15 +732,7 @@ impl State {
     }
 
 
-    /// 0x469000: WaitForGas.
-    fn order_wait_for_gas(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x469000", "WaitForGas");
-    }
 
-    /// 0x469980: HarvestGas.
-    fn order_harvest_gas(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x469980", "HarvestGas");
-    }
 
 
 

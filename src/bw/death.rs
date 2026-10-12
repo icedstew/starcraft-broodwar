@@ -167,6 +167,14 @@ impl State {
         self.units[u as usize].loaded_units = [0; 8];
     }
 
+    pub(super) fn clear_references_pub(&mut self, d: &Data, dead: u32) {
+        self.clear_references(d, dead);
+    }
+
+    pub(super) fn untarget_bullets_pub(&mut self, u: u32) {
+        self.untarget_bullets(u);
+    }
+
     /// 0x49eb70(1): every unit forgets `dead` (and the UI drops it).
     fn clear_references(&mut self, d: &Data, dead: u32) {
         let mut o = self.visible_units.head;

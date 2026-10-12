@@ -100,6 +100,7 @@ def game_init(e, f, md):
     e.w16(0x57f1dc, rd("tileset")[0])
     e.w16(0x628450, w * 32)
     e.w16(0x6284b4, h * 32)
+    e.call(0x49bb90)  # map pixel size and the map box 0x6284a0
     chk = rd("chk")
     p = e.alloc(len(chk))
     e.write(p, chk)
