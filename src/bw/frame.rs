@@ -341,7 +341,7 @@ impl State {
             0x26 => self.secondary_train(d, u),
             0x3f => todo_port!("0x466790", "TrainFighter"),
             0x44 => todo_port!("0x4932d0", "ShieldBattery"),
-            0x4e => todo_port!("0x4ea780", "SpawningLarva"),
+            0x4e => self.hatchery_spawn_larva(d, u),
             0x66 => self.secondary_spread_creep(d, u),
             0x6d => todo_port!("0x491790", "Cloak"),
             0x6e => todo_port!("0x4633e0", "Decloak"),
@@ -354,7 +354,7 @@ impl State {
     fn secondary_spread_creep(&mut self, d: &Data, u: u32) {
         let ut = self.units[u as usize].unit_type;
         if matches!(ut, 0x83..=0x85) {
-            todo_port!("0x4ea780", "hatchery larva spawning");
+            self.hatchery_spawn_larva(d, u);
         }
         // Spread creep timer: union +0xcc.
         let t = self.units[u as usize].u8_at(0xcc);

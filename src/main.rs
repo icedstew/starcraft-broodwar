@@ -135,6 +135,10 @@ fn main() -> std::io::Result<()> {
                 st.rng.enabled = true;
                 st.melee_start_units(&d, 2);
                 st.rng.enabled = false;
+                if std::env::var("SCBW_RNGDBG").is_ok() {
+                    let sites: Vec<_> = st.rng.per_site.iter().enumerate().filter(|(_, c)| **c != 0).collect();
+                    eprintln!("melee rng sites {sites:?} total {}", st.rng.total);
+                }
             }
             let mut made = Vec::new();
             for e in std::env::var("SCBW_UNITS").unwrap_or("0,320,320,0".into()).split(';').filter(|e| !e.is_empty()) {
@@ -562,7 +566,17 @@ fn apply_moves(st: &mut bw::State, d: &bw::Data, made: &[u32], m: &str) {
     }
     // Group commands: "R<x>,<y>[q]" / "R@k[q]" right-click, "T<order>:<x>,<y>[q]" /
     // "T<order>:@k[q]" targeted order, with every created player-0 unit selected.
-    let sel: Vec<u32> = made.iter().copied().filter(|&u| st.units[u as usize].player == 0).take(12).collect();
+    let mut sel: Vec<u32> = made.iter().copied().filter(|&u| st.units[u as usize].player == 0).take(12).collect();
+    if made.is_empty() {
+        // Melee start: player 0's workers.
+        sel = (0..st.units.len() as u32)
+            .filter(|&u| {
+                let un = &st.units[u as usize];
+                un.sprite != bw::list::NIL && un.player == 0 && matches!(un.unit_type, 7 | 0x29 | 0x40)
+            })
+            .take(12)
+            .collect();
+    }
     for p in v.iter().filter(|p| p.starts_with(['R', 'T'])) {
         let q = p.ends_with('q');
         let mut body = p[1..].trim_end_matches('q');

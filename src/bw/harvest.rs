@@ -685,7 +685,7 @@ impl State {
                 self.order_done_or_next(d, u);
                 self.deliver(u);
                 if matches!(self.units[t as usize].unit_type, 0x83..=0x85) {
-                    todo_port!("0x4e92b0", "hatchery larva wobble counters");
+                    self.hatchery_note_delivery(d, t, u);
                 }
             }
             _ => {}

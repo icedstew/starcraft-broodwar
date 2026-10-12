@@ -288,7 +288,8 @@ impl State {
         if matches!(ut, 0x84 | 0x85 | 0x90 | 0x92 | 0x83 | 0x8f) || d.dat.units.flags[ut as usize] & 0x2_0000 != 0 {
             let (x, y) = self.unit_sprite_pos(u);
             self.spread_creep_instantly(d, ut, x as i32, y as i32);
-            todo_port!("0x49d660", "the hatchery's two starting larvae");
+            self.spawn_larva(d, u);
+            self.spawn_larva(d, u);
         }
     }
 

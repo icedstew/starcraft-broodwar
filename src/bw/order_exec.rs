@@ -706,10 +706,6 @@ impl State {
         todo_port!("0x463ac0", "LiftingOff");
     }
 
-    /// 0x4e9f90: Larva.
-    fn order_larva(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x4e9f90", "Larva");
-    }
 
 
 

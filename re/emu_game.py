@@ -277,6 +277,8 @@ def scenario(e, units, move, frames, out):
         e.w32(0x6d11c8, 1)
         e.call(0x49da40)
         e.w32(0x6d11c8, 0)
+        if os.environ.get("SCBW_RNGDBG"):
+            print("melee rng total", e.r32(0x51ca18))
     made = []
     for spec in units:
         t, x, y, p = spec
@@ -293,6 +295,9 @@ def scenario(e, units, move, frames, out):
             # Group commands ("R..." right-click, "T..." targeted order) go through the
             # command receivers with every created player-0 unit selected.
             sel = [u for u in made if e.r8(UNITS + u * 0x150 + 0x4c) == 0][:12]
+            if not made:  # melee start: player 0's workers
+                sel = [u for u in range(1700) if e.r32(UNITS + u * 0x150 + 0xc) and e.r8(UNITS + u * 0x150 + 0x4c) == 0
+                       and e.r16(UNITS + u * 0x150 + 0x64) in (7, 0x29, 0x40)][:12]
             pkt = e.alloc(16)
             for m in move:
                 if m[0] not in ("R", "T"):

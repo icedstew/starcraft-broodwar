@@ -30,6 +30,7 @@ pub mod players;
 pub mod protoss;
 pub mod psi;
 pub mod requirements;
+pub mod larva;
 pub mod list;
 pub mod map;
 pub mod load;
