@@ -9,8 +9,15 @@ Pure Rust, no platform-specific code: builds for any target Rust supports.
 
 ## Usage
 
-    cargo run --release -- view "/path/to/StarCraft/Maps/(4)Blood Bath.scm"   # arrows/WASD scroll, Esc quits
+    cargo run --release -- view "/path/to/StarCraft/Maps/(4)Blood Bath.scm"   # play a melee start
     cargo run --release -- render "/path/to/map.scm" out.png                  # full-map terrain PNG
+
+`view` runs the faithful engine below. Melee maps start you (slot 0, `SCBW_RACE` =
+terran/protoss/zerg, default terran) with a town hall and four workers; other start
+locations get idle computer players. Controls: left-click / drag selects, right-click
+moves, attacks, gathers or sets rallies (Shift queues), the command card and hotkeys
+M/A/S/H/P/G/C issue Move, Attack, Stop, Hold, Patrol, Gather and Return Cargo, and the
+Build menu places buildings; arrows or the screen edge scroll, Esc quits.
 
 Set `SCBW_INSTALL` to the directory containing `.build.info` and `Data/` (defaults to the Lutris/Wine path).
 
@@ -25,7 +32,7 @@ Set `SCBW_INSTALL` to the directory containing `.build.info` and `Data/` (defaul
 - `src/replay.rs` – replay parsing
 - `src/view.rs`, `src/ui.rs`, `src/audio.rs` – map viewer, HUD, sound
 - `src/bw/` – faithful engine port (see below)
-- `src/game/` – older approximate game layer, being replaced by `src/bw/`
+- `src/game/` – older approximate game layer (only the button tables are still used)
 - `re/` – reverse-engineering tools and notes (see re/NOTES.md)
 
 ## Faithful engine (`src/bw/`)
@@ -44,11 +51,20 @@ address. Ported so far:
   waypoint search with contour walkers, path pool and path requests, units as
   path obstacles.
 - Movement: flingy predict/apply, movement state machine, unit/terrain collision,
-  collision resolution, sidestepping, predicted-blocker search, slide direction.
+  collision resolution, sidestepping, predicted-blocker search, slide direction,
+  unstacking.
+- Vision and fog of war, map sprites (THG2 doodads).
+- Combat: AttackUnit, auto-targeting and target priorities, weapons and bullets,
+  damage, retaliation, death.
+- Economy: worker mining and gas, training (build queue, supply, costs), Terran
+  construction (placement checks, PlaceBuilding, ConstructingBuilding).
+- Commands as the game receives them: right-click actions, targeted orders with
+  group formation, stop, hold, return cargo, train, build, with order and unit
+  requirement checks and Shift-queueing.
+- Melee starting units.
 
-Not yet: placement ring search for overlapping spawns, unstacking units stuck in
-terrain, doodads (THG2), the rest of game init, combat and bullets, remaining
-orders, triggers, AI, networking.
+Not yet: Protoss/Zerg building, zerg larvae and creep, add-ons, research and
+upgrades, spells, transports, triggers, AI, networking.
 
 ## Verification
 
@@ -58,9 +74,10 @@ byte for byte with the Rust port.
 
 - Tile flags, minitiles, SAI regions and contours: exact on 40 maps.
 - Region A* and full path searches: 8,000 searches exact.
-- Whole game: `re/emu_game.py` runs 1.16.1 game init and frames; unit traces match
-  `scbw bwsim` frame for frame in eight movement scenarios (up to 12 units, head-on,
-  crossing, converging groups, marines/zerglings/zealots, 300–500 frames).
+- Whole game: `re/emu_game.py` runs 1.16.1 game init and frames; unit, sprite, fog,
+  bullet and resource traces match `scbw bwsim` frame for frame in 42 scenarios:
+  group movement, fights, mining and gas, training, construction, player commands
+  and melee starts.
 
 The 1.16.1 executable and decompiler output are not part of this repository.
 
@@ -68,9 +85,9 @@ The 1.16.1 executable and decompiler output are not part of this repository.
 
 Working: asset loading (CASC, MPQ maps, replays), terrain, sprites/iscript animation,
 shadows/remaps/player colors, console HUD, minimap, cursor, selection, sound/music;
-faithful engine core, pathing and ground movement (above).
+`view` plays on the faithful engine: move, fight, mine, train and build (Terran).
 
-Not yet: combat, command card, triggers, AI, networking.
+Not yet: see the engine list above.
 
 ## Commands
 
@@ -79,8 +96,12 @@ Not yet: combat, command card, triggers, AI, networking.
 - `render <map> out.png` – full-map terrain PNG
 - `rep <file.rep>`, `dat`, `units`, `ls`, `extract <path> <out>`, `walk`, `path`
 - `bwsim <frames>` – run the faithful engine headless. Env: `SCBW_MAP` (map file),
-  `SCBW_UNITS="type,x,y,player;..."`, `SCBW_MOVE="x,y"` or `"x,y;x,y;..."` (per unit,
-  cycled), `SCBW_TRACE=<file>` (per-frame unit trace).
+  `SCBW_UNITS="type,x,y,player;..."`, `SCBW_MOVE` (`;`-separated, cycled over the
+  created units: `x,y` move, `@k` attack unit k, `o<order>:<x>,<y>` / `o<order>:@k`,
+  `t<type>[x<n>]` train, `b<order>:<type>:<tx>,<ty>` build; group commands with all
+  player-0 units selected: `R<x>,<y>` / `R@k` right-click, `T<order>:...` targeted
+  order, `q` suffix queues), `SCBW_MELEE=race,...` (melee start),
+  `SCBW_TRACE=<file>` (per-frame trace).
 - `mapdump <map> <dir>` – dump tile flags, minitiles, SAI and contours for diffing.
 - `export <dir> <paths...>` – copy CASC data (e.g. `arr/ scripts/ unit/`) for the
   emulator harness.
