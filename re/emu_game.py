@@ -240,6 +240,15 @@ def scenario(e, units, move, frames, out):
                     if m[1] < 0x6a and e.call(0x467250, regs={"edi": a}, stack=[m[1]]):
                         e.call(0x4743d0, regs={"eax": a, "ecx": 0x26})
                 continue
+            if m[0] == "b":  # build type m[2] at tile m[3] with order m[1] (0x48e010 without the UI)
+                a = UNITS + u * 0x150
+                tx, ty = m[3]
+                ok = e.call(0x473fb0, stack=[a, e.r8(a + 0x4c), tx, ty, m[2], 1, 0, 0, 0])
+                if ok == 0:
+                    pw, ph = s16(e, 0x662860 + m[2] * 4), s16(e, 0x662862 + m[2] * 4)
+                    x, y = int(pw / 2) + tx * 32, int(ph / 2) + ty * 32
+                    e.call(0x48de70, regs={"eax": a}, stack=[m[1], ((y & 0xffff) << 16) | (x & 0xffff), m[2]])
+                continue
             if m[0] == "o" and m[2][0] == "@":  # order m[1] targeting created unit k
                 t = UNITS + made[m[2][1]] * 0x150
                 sp = e.r32(t + 0xc)
@@ -300,6 +309,9 @@ def main():
             if m[0] == "t":  # "t<type>[x<count>]"
                 t, _, n = m[1:].partition("x")
                 return ("t", int(t, 0), int(n) if n else 1)
+            if m[0] == "b":  # "b<order>:<type>:<tx>,<ty>"
+                o, t, xy = m[1:].split(":")
+                return ("b", int(o, 0), int(t, 0), tuple(int(v) for v in xy.split(",")))
             if m[0] == "o":
                 o, xy = m[1:].split(":")
                 if xy[0] == "@":

@@ -155,6 +155,14 @@ fn main() -> std::io::Result<()> {
                         }
                         continue;
                     }
+                    if let Some(rest) = p.strip_prefix('b') {
+                        // "b<order>:<type>:<tx>,<ty>"
+                        let f: Vec<i32> = rest.split([':', ',']).map(|n| n.strip_prefix("0x").map_or_else(|| n.parse().unwrap_or(0), |h| i32::from_str_radix(h, 16).unwrap_or(0))).collect();
+                        if let [o, t, tx, ty] = f[..] {
+                            st.command_build(&d, u, o as u8, tx as i16, ty as i16, t as u16);
+                        }
+                        continue;
+                    }
                     if let Some(rest) = p.strip_prefix('o') {
                         let (o, xy) = rest.split_once(':').unwrap_or(("0", "0,0"));
                         let o = if let Some(h) = o.strip_prefix("0x") { u8::from_str_radix(h, 16).unwrap_or(0) } else { o.parse().unwrap_or(0) };

@@ -89,7 +89,8 @@ impl State {
             // 0x46a560
             self.finder_remove(u);
             if self.units[u as usize].status & 2 != 0 {
-                todo_port!("0x469ec0", "free the building's tiles");
+                let p = self.unit_sprite_pos(u);
+                self.mark_building_tiles(d, u, p, false);
             }
             if self.units[u as usize].status & 4 != 0 {
                 todo_port!("0x4533d0", "air unit repulse grid");

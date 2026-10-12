@@ -94,7 +94,7 @@ impl State {
     }
 
     /// 0x4eb980: move to unit `t` and aim at it.
-    fn move_to_unit_aim(&mut self, d: &Data, u: u32, t: u32) -> bool {
+    pub(super) fn move_to_unit_aim(&mut self, d: &Data, u: u32, t: u32) -> bool {
         let r = self.move_to_unit(d, u, t);
         let p = self.unit_sprite_pos(t);
         let f = &mut self.units[u as usize].fl;
@@ -1054,7 +1054,8 @@ impl State {
         self.untarget_bullets_pub(u);
         self.finder_remove(u);
         if self.units[u as usize].status & 2 != 0 {
-            todo_port!("0x469ec0", "free the building's tiles");
+            let p = self.unit_sprite_pos(u);
+            self.mark_building_tiles(d, u, p, false);
         }
         if self.units[u as usize].status & 4 != 0 {
             todo_port!("0x4533d0", "air unit repulse grid");

@@ -211,14 +211,13 @@ impl State {
             self.finder_insert(d, u);
             if self.units[u as usize].status & status::GROUNDED_BUILDING != 0 {
                 let p = (self.sprites[s as usize].x, self.sprites[s as usize].y);
-                todo_port!("0x469f60", "mark building placement tiles (0x472eb0)");
-                let _ = p;
+                self.mark_building_tiles(d, u, p, true);
             }
             self.update_unit_overlaps(d, u);
             if self.units[u as usize].status & status::IN_AIR != 0 {
                 self.repulse_init(d, u);
             }
-            todo_port!("0x4e65e0", "unit sprite draw setup (construction image / cloak)");
+            self.reset_unit_image(d, u, true);
             self.sprite_set_visibility(s, 0);
         }
         self.units[u as usize].visibility = 0xffff_ffff;

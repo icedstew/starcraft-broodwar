@@ -5,6 +5,7 @@
 //! callees are explicit `todo_port!` markers, never approximations.
 
 pub mod attack;
+pub mod build;
 pub mod bullet;
 pub mod chk_load;
 pub mod collide;
@@ -198,6 +199,8 @@ pub struct State {
     pub melee_map_units: [u8; 8],
     /// Unit box search results and marks (0x6bb938, 0x6bd3d0).
     pub search: collide::UnitSearch,
+    /// 0x6408f8: building placement result grids (build::placement_check).
+    pub placement: Vec<u8>,
     /// 0x6d5cd8: air repulse grid, 48px cells, 0xab per row.
     pub repulse: Vec<u8>,
     /// 0x59cca0: last error (stat_txt index) from unit creation and friends.
@@ -303,6 +306,7 @@ impl State {
             paths: Vec::new(),
             free_path: 0,
             search: collide::UnitSearch::default(),
+            placement: vec![0; build::PLACEMENT_SLOTS * 0x30],
             start_locations: [(0, 0); 8],
             alliances: [[0; 12]; 12],
             path_avoid_unit: None,

@@ -792,7 +792,7 @@ impl State {
     }
 
     /// 0x4752b0: issue `order` with `t` as target and start it.
-    fn order_with_target(&mut self, d: &Data, u: u32, order: u8, t: u32) {
+    pub(super) fn order_with_target(&mut self, d: &Data, u: u32, order: u8, t: u32) {
         self.units[u as usize].order_flags |= 1;
         let pos = if t != NIL { self.unit_sprite_pos(t) } else { (0, 0) };
         self.issue_order(d, u, order, true, pos, t, 0xe4);

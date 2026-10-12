@@ -241,19 +241,9 @@ impl State {
         todo_port!("0x45e090", "DroneBuild");
     }
 
-    /// 0x467fd0: PlaceBuilding.
-    fn order_place_building(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x467fd0", "PlaceBuilding");
-    }
-
     /// 0x4e4d00: PlaceProtossBuilding.
     fn order_place_protoss_building(&mut self, _d: &Data, _u: u32) {
         todo_port!("0x4e4d00", "PlaceProtossBuilding");
-    }
-
-    /// 0x467a70: ConstructingBuilding.
-    fn order_constructing_building(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x467a70", "ConstructingBuilding");
     }
 
     /// 0x4673d0: Repair.
@@ -269,11 +259,6 @@ impl State {
     /// 0x45dea0: ZergUnitMorph.
     fn order_zerg_unit_morph(&mut self, _d: &Data, _u: u32) {
         todo_port!("0x45dea0", "ZergUnitMorph");
-    }
-
-    /// 0x467760: IncompleteBuilding.
-    fn order_incomplete_building(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x467760", "IncompleteBuilding");
     }
 
     /// 0x45d500: IncompleteMorphing.
@@ -365,8 +350,23 @@ impl State {
     }
 
     /// 0x4671b0: ResetCollision.
-    fn order_reset_collision(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x4671b0", "ResetCollision");
+    fn order_reset_collision(&mut self, d: &Data, u: u32) {
+        let s = self.units[u as usize].sprite;
+        let ut = self.units[u as usize].unit_type as usize;
+        self.sprites[s as usize].elevation = d.dat.units.elevation[ut];
+        let st = &mut self.units[u as usize].status;
+        *st = (*st & 0xff5f_ffff) | 0x10_0000;
+        self.update_unit_overlaps(d, u);
+        self.path_delete(u);
+        self.units[u as usize].movement_state = 0;
+        let low = (self.sprites[s as usize].elevation < 0xc) as u8;
+        let pf = &mut self.units[u as usize].pathing_flags;
+        *pf = (*pf & !1) | low;
+        if self.units[u as usize].order_queue_head == super::list::NIL {
+            let idle = d.dat.units.ai_return_to_idle[ut];
+            self.issue_order(d, u, idle, false, (0, 0), super::list::NIL, 0xe4);
+        }
+        self.order_next_or_idle(d, u);
     }
 
     /// 0x42e320: ResetHarvestCollision.

@@ -37,7 +37,7 @@ impl State {
             let un = &mut self.units[u as usize];
             un.parasite_flags = 0;
             un.is_blind = 0;
-            todo_port!("0x4e65e0", "unit sprite draw setup (construction image / cloak)");
+            self.reset_unit_image(d, u, false);
             let s = self.units[u as usize].sprite;
             self.sprite_images_run_anim(d, s, 0x10);
         }
@@ -187,7 +187,8 @@ impl State {
         self.update_unit_visibility(d, u);
         self.finder_insert(d, u);
         if self.units[u as usize].status & status::GROUNDED_BUILDING != 0 {
-            todo_port!("0x469f60", "mark building placement tiles (0x472eb0)");
+            let p = (self.sprites[s as usize].x, self.sprites[s as usize].y);
+            self.mark_building_tiles(d, u, p, true);
         }
         self.update_unit_overlaps(d, u);
         if self.units[u as usize].status & status::IN_AIR != 0 {

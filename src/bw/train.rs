@@ -44,7 +44,7 @@ impl State {
     }
 
     /// 0x42cf70: enough supply to make `t`.
-    fn supply_ok(&self, d: &Data, p: usize, t: u16) -> bool {
+    pub(super) fn supply_ok(&self, d: &Data, p: usize, t: u16) -> bool {
         let flags = d.dat.units.flags[t as usize];
         let mut req = d.dat.units.supply_required[t as usize] as i32;
         if flags & 0x400 != 0 {
@@ -121,7 +121,7 @@ impl State {
     }
 
     /// 0x42cec0: refund `t`.
-    fn refund(&mut self, d: &Data, p: usize, t: u16) {
+    pub(super) fn refund(&mut self, d: &Data, p: usize, t: u16) {
         self.players.minerals[p] += d.dat.units.mineral_cost[t as usize] as i32;
         self.players.gas[p] += d.dat.units.gas_cost[t as usize] as i32;
     }
@@ -274,7 +274,7 @@ impl State {
     }
 
     /// 0x468280: cancel a unit under construction (refund and remove).
-    fn cancel_unit(&mut self, d: &Data, c: u32) {
+    pub(super) fn cancel_unit(&mut self, d: &Data, c: u32) {
         let _ = d;
         todo_port!("0x468280", "cancel a unit under construction");
         let _ = c;
