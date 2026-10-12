@@ -220,6 +220,16 @@ def scenario(e, units, move, frames, out):
         e.w32(0x57f120 + p * 4, 10000)
     # 0x49e530 shows a placement error to the owning player (UI only): skip it.
     e.write(0x49e530, b"\xc2\x04\x00")
+    melee = os.environ.get("SCBW_MELEE")
+    if melee:  # "race,race,...": those players start a melee game (0x49da40, mode 2)
+        races = [int(r) for r in melee.split(",")]
+        for p in range(8):
+            e.w8(0x57eee8 + p * 0x24, 2 if p < len(races) else 0)
+            e.w8(0x57eee8 + p * 0x24 + 1, races[p] if p < len(races) else 0)
+        e.w8(0x596871, 2)
+        e.w32(0x6d11c8, 1)
+        e.call(0x49da40)
+        e.w32(0x6d11c8, 0)
     made = []
     for spec in units:
         t, x, y, p = spec

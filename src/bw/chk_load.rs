@@ -205,6 +205,90 @@ impl State {
         true
     }
 
+    /// Create a unit and finish it as the start-of-game code does (0x4a09d0, 0x4a01f0,
+    /// 0x49ec30, 0x49fa40).
+    fn start_unit(&mut self, d: &Data, t: u16, x: i16, y: i16, p: u8) -> Option<u32> {
+        let u = self.create_unit(d, t, x, y, p)?;
+        self.finish_unit_pre(d, u);
+        if self.place_unit(d, u) {
+            self.finish_unit_post(d, u);
+        }
+        Some(u)
+    }
+
+    /// 0x49da40: melee starting units (`mode` = 0x596871: 1 workers only, 2 town hall
+    /// and workers) for every human and computer player at its start location.
+    pub fn melee_start_units(&mut self, d: &Data, mode: u8) {
+        for p in (0..8u8).rev() {
+            let ty = self.player_type(p);
+            if ty != 2 && ty != 1 {
+                continue;
+            }
+            let race = self.player_races[p as usize];
+            if mode == 2 {
+                self.start_town_hall(d, race, p);
+                if race == 0 {
+                    self.start_overlord(d, p);
+                }
+            } else if mode != 1 {
+                continue;
+            }
+            let worker = match race {
+                0 => 0x29,
+                1 => 7,
+                2 => 0x40,
+                _ => 0xe4,
+            };
+            let (x, y) = self.start_locations[p as usize];
+            for _ in 0..4 {
+                self.start_unit(d, worker, x, y, p);
+            }
+        }
+    }
+
+    /// 0x49d7c0: the town hall on the start location's tile grid; units in its way die.
+    fn start_town_hall(&mut self, d: &Data, race: u8, p: u8) {
+        let t: u16 = match race {
+            0 => 0x83,
+            1 => 0x6a,
+            2 => 0x9a,
+            _ => 0xe4,
+        };
+        let v = d.dat.units.placement_box[t as usize];
+        let (w2, h2) = ((v as i16 as i32 / 2) as u16, ((v >> 16) as i16 as i32 / 2) as u16);
+        let (sx, sy) = self.start_locations[p as usize];
+        let x = ((sx as u16).wrapping_sub(w2) & 0xffe0).wrapping_add(w2);
+        let y = ((sy as u16).wrapping_sub(h2) & 0xffe0).wrapping_add(h2);
+        let b = [x.wrapping_sub(w2) as i16, y.wrapping_sub(h2) as i16, w2.wrapping_add(x).wrapping_sub(1) as i16, h2.wrapping_add(y).wrapping_sub(1) as i16];
+        // 0x4e8830 with 0x49d640: kill everything overlapping the town hall.
+        let start = self.units_in_box(d, b);
+        let found = self.search.results(start);
+        self.search.pop();
+        for u in found {
+            self.units[u as usize].order_flags |= 4;
+            self.kill_unit(d, u);
+        }
+        let Some(u) = self.start_unit(d, t, x as i16, y as i16, p) else { return };
+        let ut = self.units[u as usize].unit_type;
+        if matches!(ut, 0x84 | 0x85 | 0x90 | 0x92 | 0x83 | 0x8f) || d.dat.units.flags[ut as usize] & 0x2_0000 != 0 {
+            todo_port!("0x4148f0", "creep under the starting hatchery");
+            todo_port!("0x49d660", "the hatchery's two starting larvae");
+        }
+    }
+
+    /// 0x49d6c0: a zerg player's overlord, one hatchery size toward the map centre.
+    fn start_overlord(&mut self, d: &Data, p: u8) {
+        let v = d.dat.units.dimensions[0x83];
+        let [l, u, r, dn] = [v as i16, (v >> 16) as i16, (v >> 32) as i16, (v >> 48) as i16];
+        let dx = l.wrapping_add(r).wrapping_add(1) as i32;
+        let dy = dn.wrapping_add(u).wrapping_add(1) as i32;
+        let (sx, sy) = self.start_locations[p as usize];
+        let (sx, sy) = (sx as i32, sy as i32);
+        let x = if sx < (self.map_px.0 >> 1) as i32 { sx + dx } else { sx - dx };
+        let y = if sy < (self.map_px.1 >> 1) as i32 { sy + dy } else { sy - dy };
+        self.start_unit(d, 0x2a, x as i16, y as i16, p);
+    }
+
     /// 0x4cd360: create and finish a map-placed unit.
     fn chk_place_unit(&mut self, d: &Data, ty: u16, x: i16, y: i16, player: u8) -> Option<u32> {
         if d.dat.units.staredit_availability[ty as usize] & 0x200 != 0 && !self.is_expansion {

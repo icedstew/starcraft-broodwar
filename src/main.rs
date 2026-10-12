@@ -123,6 +123,17 @@ fn main() -> std::io::Result<()> {
                 st.players.minerals[p] = 10000;
                 st.players.gas[p] = 10000;
             }
+            if let Ok(m) = std::env::var("SCBW_MELEE") {
+                // "race,race,...": those players start a melee game (0x49da40, mode 2).
+                let races: Vec<u8> = m.split(',').filter_map(|r| r.parse().ok()).collect();
+                for p in 0..8 {
+                    st.player_types[p] = if p < races.len() { 2 } else { 0 };
+                    st.player_races[p] = races.get(p).copied().unwrap_or(0);
+                }
+                st.rng.enabled = true;
+                st.melee_start_units(&d, 2);
+                st.rng.enabled = false;
+            }
             let mut made = Vec::new();
             for e in std::env::var("SCBW_UNITS").unwrap_or("0,320,320,0".into()).split(';').filter(|e| !e.is_empty()) {
                 let v: Vec<i32> = e.split(',').filter_map(|n| n.trim().parse().ok()).collect();

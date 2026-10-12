@@ -150,6 +150,8 @@ pub struct State {
     pub scanner_units: List,
     /// 0x57eee8 player type per player (2 = human).
     pub player_types: [u8; 12],
+    /// 0x57eee9 (player struct +9): race (0 zerg, 1 terran, 2 protoss).
+    pub player_races: [u8; 12],
     /// 0x57eeea (player struct +2): force 1..4.
     pub player_force: [u8; 12],
     /// 0x58d5b8: FORC force properties (1 random start, 2 allies, 4 allied victory, 8 shared vision).
@@ -280,6 +282,7 @@ impl State {
             finder_ring: 0,
             scanner_units: List::default(),
             player_types: [0; 12],
+            player_races: [0; 12],
             player_force: [0; 12],
             force_flags: [0; 4],
             player_vision: [0; 12],
