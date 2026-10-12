@@ -32,7 +32,7 @@ Set `SCBW_INSTALL` to the directory containing `.build.info` and `Data/` (defaul
 - `src/replay.rs` – replay parsing
 - `src/view.rs`, `src/ui.rs`, `src/audio.rs` – map viewer, HUD, sound
 - `src/bw/` – faithful engine port (see below)
-- `src/game/` – older approximate game layer (only the button tables are still used)
+- `src/game/` – older approximate game layer (still used for the command card button tables and the `walk`/`path` debug commands)
 - `re/` – reverse-engineering tools and notes (see re/NOTES.md)
 
 ## Faithful engine (`src/bw/`)
