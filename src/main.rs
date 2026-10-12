@@ -145,6 +145,13 @@ fn main() -> std::io::Result<()> {
                     if let Some(rest) = p.strip_prefix('o') {
                         let (o, xy) = rest.split_once(':').unwrap_or(("0", "0,0"));
                         let o = if let Some(h) = o.strip_prefix("0x") { u8::from_str_radix(h, 16).unwrap_or(0) } else { o.parse().unwrap_or(0) };
+                        if let Some(k) = xy.strip_prefix('@') {
+                            let t = made[k.parse::<usize>().unwrap_or(0)];
+                            let s = &st.sprites[st.units[t as usize].sprite as usize];
+                            let pos = (s.x, s.y);
+                            st.order_target(&d, u, o, pos, t);
+                            continue;
+                        }
                         let v: Vec<i16> = xy.split(',').filter_map(|n| n.trim().parse().ok()).collect();
                         let mut t = bw::list::NIL;
                         let mut a = st.visible_units.head;

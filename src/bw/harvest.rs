@@ -1096,8 +1096,8 @@ impl State {
             let ub = self.unit_box_at(d, self.units[u as usize].unit_type, 0, 0);
             let rb = self.unit_box(d, r);
             let b = [
-                rb[0].wrapping_add(-1i16.wrapping_sub(ub[2])),
-                rb[1].wrapping_add(-1i16.wrapping_sub(ub[3])),
+                rb[0].wrapping_sub(1).wrapping_sub(ub[2]),
+                rb[1].wrapping_sub(1).wrapping_sub(ub[3]),
                 rb[2].wrapping_sub(ub[0]).wrapping_add(1),
                 rb[3].wrapping_sub(ub[1]).wrapping_add(1),
             ];

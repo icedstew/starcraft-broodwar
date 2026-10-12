@@ -231,6 +231,11 @@ def scenario(e, units, move, frames, out):
     if move:
         for i, u in enumerate(made):
             m = move[i % len(move)]
+            if m[0] == "o" and m[2][0] == "@":  # order m[1] targeting created unit k
+                t = UNITS + made[m[2][1]] * 0x150
+                sp = e.r32(t + 0xc)
+                e.call(0x474c30, regs={"esi": UNITS + u * 0x150}, stack=[m[1], e.r32(sp + 0x14), t])
+                continue
             if m[0] == "o":  # order m[1] targeting the unit at position m[2]
                 t = UNITS
                 a = e.r32(0x628430)
@@ -285,6 +290,8 @@ def main():
                 return ("@", int(m[1:]))
             if m[0] == "o":
                 o, xy = m[1:].split(":")
+                if xy[0] == "@":
+                    return ("o", int(o, 0), ("@", int(xy[1:])))
                 return ("o", int(o, 0), tuple(int(v) for v in xy.split(",")))
             return tuple(int(v) for v in m.split(","))
         move = [parse(m) for m in sys.argv[5].split(";") if m]
