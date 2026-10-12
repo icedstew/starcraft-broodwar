@@ -89,6 +89,18 @@ shadows/remaps/player colors, console HUD, minimap, cursor, selection, sound/mus
 
 Not yet: see the engine list above.
 
+### Port coverage
+
+Share of the 4,644 1.16.1 functions that are ported. A function counts as ported when
+`src/` has a `/// 0x...` doc comment with its address, and as todo when only a
+`todo_port!` names it. The input is a Ghidra export of StarCraft.exe, which is not
+part of this repo:
+
+```sh
+python3 -I re/coverage.py <decomp.c> . | tail -5      # summary: in scope / reachable from game_step
+python3 -I re/coverage.py <decomp.c> . --html cov.html  # per source file, as HTML
+```
+
 ## Commands
 
 - `view <map|chk|rep>` – map viewer
