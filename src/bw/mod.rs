@@ -26,6 +26,8 @@ pub mod orders;
 pub mod path;
 pub mod path_req;
 pub mod players;
+pub mod protoss;
+pub mod psi;
 pub mod requirements;
 pub mod list;
 pub mod map;
@@ -215,6 +217,7 @@ pub struct State {
     /// 0x58f440: playing Brood War (expansion) rules.
     pub is_expansion: bool,
     pub players: players::Players,
+    pub psi: psi::Psi,
     /// COrder pool (0x6416a0), free list (0x64b2e0) and live count (0x641698).
     pub orders: Vec<orders::Order>,
     pub free_orders: List,
@@ -306,6 +309,7 @@ impl State {
             local_vision_mask: 1,
             is_expansion: true,
             players: players::Players::default(),
+            psi: psi::Psi { providers: list::NIL, ..Default::default() },
             orders,
             free_orders,
             order_count: 0,

@@ -210,6 +210,35 @@ def unit_trace(e, f, u):
             f"hp {s32(e, a + 8)} sh {s32(e, a + 0x60)} gcd {e.r8(a + 0x55)} tgt {tgt(e, e.r32(a + 0x5c))} vis {e.r8(sp + 0xc)}")
 
 
+def parse_move(m):
+    if m[0] == "@":
+        return ("@", int(m[1:]))
+    if m[0] == "t":  # "t<type>[x<count>]"
+        t, _, n = m[1:].partition("x")
+        return ("t", int(t, 0), int(n) if n else 1)
+    if m[0] in "RT":  # "R<x>,<y>[q]" / "R@k[q]", "T<order>:<x>,<y>[q]" / "T<order>:@k[q]"
+        q = 1 if m.endswith("q") else 0
+        body = m[1:].rstrip("q")
+        o = None
+        if m[0] == "T":
+            o, body = body.split(":")
+            o = int(o, 0)
+        if body[0] == "@":
+            xy, k = (0, 0), int(body[1:])
+        else:
+            xy, k = tuple(int(v) for v in body.split(",")), None
+        return (m[0], o, xy[0], xy[1], k, q) if o is not None else (m[0], xy[0], xy[1], k, q)
+    if m[0] == "b":  # "b<order>:<type>:<tx>,<ty>"
+        o, t, xy = m[1:].split(":")
+        return ("b", int(o, 0), int(t, 0), tuple(int(v) for v in xy.split(",")))
+    if m[0] == "o":
+        o, xy = m[1:].split(":")
+        if xy[0] == "@":
+            return ("o", int(o, 0), ("@", int(xy[1:])))
+        return ("o", int(o, 0), tuple(int(v) for v in xy.split(",")))
+    return tuple(int(v) for v in m.split(","))
+
+
 def scenario(e, units, move, frames, out):
     """Same steps as `scbw bwsim`: create + finish units, order Move, step frames."""
     for p in range(12):
@@ -241,76 +270,83 @@ def scenario(e, units, move, frames, out):
                 e.call(0x49fa40, regs={"eax": u})
             made.append((u - UNITS) // 0x150)
         e.w32(0x6d11c8, 0)
-    if move:
-        # Group commands ("R..." right-click, "T..." targeted order) go through the
-        # command receivers with every created player-0 unit selected.
-        sel = [u for u in made if e.r8(UNITS + u * 0x150 + 0x4c) == 0][:12]
-        pkt = e.alloc(16)
-        for m in move:
-            if m[0] not in ("R", "T"):
-                continue
-            for k in range(12):
-                e.w32(0x6284e8 + k * 4, UNITS + sel[k] * 0x150 if k < len(sel) else 0)
-            e.w32(0x512678, 0)
-            e.w32(0x51267c, 0)
-            x, y, k, q = m[-4], m[-3], m[-2], m[-1]
-            h = 0
-            if k is not None:
-                t = made[k]
-                h = (e.r8(UNITS + t * 0x150 + 0xa5) << 11) | (t + 1)
-                sp = e.r32(UNITS + t * 0x150 + 0xc)
-                x, y = s16(e, sp + 0x14), s16(e, sp + 0x16)
-            b = bytes([0x14 if m[0] == "R" else 0x15]) + struct.pack("<HHHH", x & 0xffff, y & 0xffff, h, 0xe4)
-            if m[0] == "R":
-                e.write(pkt, b + bytes([q]))
-                e.call(0x4c2370, regs={"eax": pkt})
-            else:
-                e.write(pkt, b + bytes([m[1], q]))
-                e.call(0x4c2320, regs={"eax": pkt})
-        for i, u in enumerate(made):
-            m = move[i % len(move)]
-            if m[0] in ("R", "T"):
-                continue
-            if m[0] == "t":  # train unit type m[1] (0x4c1c20 without the selection checks)
-                a = UNITS + u * 0x150
-                for _ in range(m[2]):
-                    if m[1] < 0x6a and e.call(0x467250, regs={"edi": a}, stack=[m[1]]):
-                        e.call(0x4743d0, regs={"eax": a, "ecx": 0x26})
-                continue
-            if m[0] == "b":  # build type m[2] at tile m[3] with order m[1] (0x48e010 without the UI)
-                a = UNITS + u * 0x150
-                tx, ty = m[3]
-                ok = e.call(0x473fb0, stack=[a, e.r8(a + 0x4c), tx, ty, m[2], 1, 0, 0, 0])
-                if ok == 0:
-                    pw, ph = s16(e, 0x662860 + m[2] * 4), s16(e, 0x662862 + m[2] * 4)
-                    x, y = int(pw / 2) + tx * 32, int(ph / 2) + ty * 32
-                    e.call(0x48de70, regs={"eax": a}, stack=[m[1], ((y & 0xffff) << 16) | (x & 0xffff), m[2]])
-                continue
-            if m[0] == "o" and m[2][0] == "@":  # order m[1] targeting created unit k
-                t = UNITS + made[m[2][1]] * 0x150
-                sp = e.r32(t + 0xc)
-                e.call(0x474c30, regs={"esi": UNITS + u * 0x150}, stack=[m[1], e.r32(sp + 0x14), t])
-                continue
-            if m[0] == "o":  # order m[1] targeting the unit at position m[2]
-                t = UNITS
-                a = e.r32(0x628430)
-                while a:
-                    sp = e.r32(a + 0xc)
-                    if (s16(e, sp + 0x14), s16(e, sp + 0x16)) == m[2]:
-                        t = a
-                    a = e.r32(a + 4)
-                sp = e.r32(t + 0xc)
-                e.call(0x474c30, regs={"esi": UNITS + u * 0x150}, stack=[m[1], e.r32(sp + 0x14), t])
-                continue
-            if m[0] == "@":  # attack made unit k (AttackUnit, order 0xa)
-                t = UNITS + made[m[1]] * 0x150
-                sp = e.r32(t + 0xc)
-                e.call(0x474c30, regs={"esi": UNITS + u * 0x150}, stack=[0xa, e.r32(sp + 0x14), t])
-                continue
-            mx, my = m
-            e.call(0x474c30, regs={"esi": UNITS + u * 0x150}, stack=[6, (my << 16) | (mx & 0xffff), 0])
+    def apply_moves(move):
+        if move:
+            # Group commands ("R..." right-click, "T..." targeted order) go through the
+            # command receivers with every created player-0 unit selected.
+            sel = [u for u in made if e.r8(UNITS + u * 0x150 + 0x4c) == 0][:12]
+            pkt = e.alloc(16)
+            for m in move:
+                if m[0] not in ("R", "T"):
+                    continue
+                for k in range(12):
+                    e.w32(0x6284e8 + k * 4, UNITS + sel[k] * 0x150 if k < len(sel) else 0)
+                e.w32(0x512678, 0)
+                e.w32(0x51267c, 0)
+                x, y, k, q = m[-4], m[-3], m[-2], m[-1]
+                h = 0
+                if k is not None:
+                    t = made[k]
+                    h = (e.r8(UNITS + t * 0x150 + 0xa5) << 11) | (t + 1)
+                    sp = e.r32(UNITS + t * 0x150 + 0xc)
+                    x, y = s16(e, sp + 0x14), s16(e, sp + 0x16)
+                b = bytes([0x14 if m[0] == "R" else 0x15]) + struct.pack("<HHHH", x & 0xffff, y & 0xffff, h, 0xe4)
+                if m[0] == "R":
+                    e.write(pkt, b + bytes([q]))
+                    e.call(0x4c2370, regs={"eax": pkt})
+                else:
+                    e.write(pkt, b + bytes([m[1], q]))
+                    e.call(0x4c2320, regs={"eax": pkt})
+            for i, u in enumerate(made):
+                m = move[i % len(move)]
+                if m[0] in ("R", "T"):
+                    continue
+                if m[0] == "t":  # train unit type m[1] (0x4c1c20 without the selection checks)
+                    a = UNITS + u * 0x150
+                    for _ in range(m[2]):
+                        if m[1] < 0x6a and e.call(0x467250, regs={"edi": a}, stack=[m[1]]):
+                            e.call(0x4743d0, regs={"eax": a, "ecx": 0x26})
+                    continue
+                if m[0] == "b":  # build type m[2] at tile m[3] with order m[1] (0x48e010 without the UI)
+                    a = UNITS + u * 0x150
+                    tx, ty = m[3]
+                    ok = e.call(0x473fb0, stack=[a, e.r8(a + 0x4c), tx, ty, m[2], 1, 0, 0, 0])
+                    if ok == 0:
+                        pw, ph = s16(e, 0x662860 + m[2] * 4), s16(e, 0x662862 + m[2] * 4)
+                        x, y = int(pw / 2) + tx * 32, int(ph / 2) + ty * 32
+                        e.call(0x48de70, regs={"eax": a}, stack=[m[1], ((y & 0xffff) << 16) | (x & 0xffff), m[2]])
+                    continue
+                if m[0] == "o" and m[2][0] == "@":  # order m[1] targeting created unit k
+                    t = UNITS + made[m[2][1]] * 0x150
+                    sp = e.r32(t + 0xc)
+                    e.call(0x474c30, regs={"esi": UNITS + u * 0x150}, stack=[m[1], e.r32(sp + 0x14), t])
+                    continue
+                if m[0] == "o":  # order m[1] targeting the unit at position m[2]
+                    t = UNITS
+                    a = e.r32(0x628430)
+                    while a:
+                        sp = e.r32(a + 0xc)
+                        if (s16(e, sp + 0x14), s16(e, sp + 0x16)) == m[2]:
+                            t = a
+                        a = e.r32(a + 4)
+                    sp = e.r32(t + 0xc)
+                    e.call(0x474c30, regs={"esi": UNITS + u * 0x150}, stack=[m[1], e.r32(sp + 0x14), t])
+                    continue
+                if m[0] == "@":  # attack made unit k (AttackUnit, order 0xa)
+                    t = UNITS + made[m[1]] * 0x150
+                    sp = e.r32(t + 0xc)
+                    e.call(0x474c30, regs={"esi": UNITS + u * 0x150}, stack=[0xa, e.r32(sp + 0x14), t])
+                    continue
+                mx, my = m
+                e.call(0x474c30, regs={"esi": UNITS + u * 0x150}, stack=[6, (my << 16) | (mx & 0xffff), 0])
+
+    apply_moves(move)
+    move2, at = os.environ.get("SCBW_MOVE2"), int(os.environ.get("SCBW_AT", "0"))
+    move2 = [parse_move(m) for m in move2.split(";") if m] if move2 else None
     with open(out, "w") as fo:
         for f in range(frames):
+            if move2 and f == at:
+                apply_moves(move2)
             e.w32(0x57f23c, e.r32(0x57f23c) + 1)  # 0x4d9670 advances the frame first
             e.call(0x4d94b0)
             for u in made:
@@ -340,34 +376,7 @@ def main():
         # "x,y" for every unit, or "x,y;x,y;..." cycled over the units.
         # "@k" attacks the k-th created unit.
         # "o<order>:<x>,<y>" orders the unit at (x, y) as target.
-        def parse(m):
-            if m[0] == "@":
-                return ("@", int(m[1:]))
-            if m[0] == "t":  # "t<type>[x<count>]"
-                t, _, n = m[1:].partition("x")
-                return ("t", int(t, 0), int(n) if n else 1)
-            if m[0] in "RT":  # "R<x>,<y>[q]" / "R@k[q]", "T<order>:<x>,<y>[q]" / "T<order>:@k[q]"
-                q = 1 if m.endswith("q") else 0
-                body = m[1:].rstrip("q")
-                o = None
-                if m[0] == "T":
-                    o, body = body.split(":")
-                    o = int(o, 0)
-                if body[0] == "@":
-                    xy, k = (0, 0), int(body[1:])
-                else:
-                    xy, k = tuple(int(v) for v in body.split(",")), None
-                return (m[0], o, xy[0], xy[1], k, q) if o is not None else (m[0], xy[0], xy[1], k, q)
-            if m[0] == "b":  # "b<order>:<type>:<tx>,<ty>"
-                o, t, xy = m[1:].split(":")
-                return ("b", int(o, 0), int(t, 0), tuple(int(v) for v in xy.split(",")))
-            if m[0] == "o":
-                o, xy = m[1:].split(":")
-                if xy[0] == "@":
-                    return ("o", int(o, 0), ("@", int(xy[1:])))
-                return ("o", int(o, 0), tuple(int(v) for v in xy.split(",")))
-            return tuple(int(v) for v in m.split(","))
-        move = [parse(m) for m in sys.argv[5].split(";") if m]
+        move = [parse_move(m) for m in sys.argv[5].split(";") if m]
         frames, out = int(sys.argv[6]), sys.argv[7]
         try:
             scenario(e, units, move, frames, out)

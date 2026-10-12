@@ -108,6 +108,9 @@ pub struct Unit {
     pub next_burrowed: u32,           // 0xF4
     pub rally_pos: (i16, i16),        // 0xF8
     pub rally_unit: u32,              // 0xFC
+    /// +0xf8 / +0xfc for psi providers (a union with the rally fields): provider list links.
+    pub psi_prev: u32,
+    pub psi_next: u32,
     pub path: u32,                    // 0x100
     pub pathing_collision_interval: u8, // 0x104
     pub pathing_flags: u8,            // 0x105
@@ -210,6 +213,8 @@ impl Default for Unit {
             next_burrowed: NIL,
             rally_pos: (0, 0),
             rally_unit: NIL,
+            psi_prev: NIL,
+            psi_next: NIL,
             path: NIL,
             pathing_collision_interval: 0,
             pathing_flags: 0,

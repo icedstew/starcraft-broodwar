@@ -99,6 +99,7 @@ fn main() -> std::io::Result<()> {
             let mut st = bw::State::new(dims, 0, 1700);
             st.search.init(&d);
             st.init_tech_defaults(&d);
+            st.init_psi(&l.psi_grp);
             st.init_thingies(&d);
             if let Some(chk) = &chk {
                 let name = map::TILESETS[chk.tileset()];
@@ -153,96 +154,18 @@ fn main() -> std::io::Result<()> {
                 }
             }
             if let Ok(m) = std::env::var("SCBW_MOVE") {
-                // "x,y" for every unit, or "x,y;x,y;..." cycled over the units.
-                // "@k" attacks the k-th created unit (AttackUnit, order 0xa).
-                let v: Vec<&str> = m.split(';').filter(|p| !p.is_empty()).collect();
-                // Group commands: "R<x>,<y>[q]" / "R@k[q]" right-click, "T<order>:<x>,<y>[q]" /
-                // "T<order>:@k[q]" targeted order, with every created player-0 unit selected.
-                let sel: Vec<u32> = made.iter().copied().filter(|&u| st.units[u as usize].player == 0).take(12).collect();
-                for p in v.iter().filter(|p| p.starts_with(['R', 'T'])) {
-                    let q = p.ends_with('q');
-                    let mut body = p[1..].trim_end_matches('q');
-                    let mut order = 0u8;
-                    if p.starts_with('T') {
-                        let (o, b) = body.split_once(':').unwrap_or(("0", body));
-                        order = o.strip_prefix("0x").map_or_else(|| o.parse().unwrap_or(0), |h| u8::from_str_radix(h, 16).unwrap_or(0));
-                        body = b;
-                    }
-                    let (pos, t) = if let Some(k) = body.strip_prefix('@') {
-                        let t = made[k.parse::<usize>().unwrap_or(0)];
-                        let s = &st.sprites[st.units[t as usize].sprite as usize];
-                        ((s.x, s.y), t)
-                    } else {
-                        let xy: Vec<i16> = body.split(',').filter_map(|n| n.parse().ok()).collect();
-                        ((xy[0], xy[1]), bw::list::NIL)
-                    };
-                    if p.starts_with('R') {
-                        st.command_right_click(&d, 0, &sel, pos, t, 0xe4, q);
-                    } else {
-                        st.command_targeted_order(&d, 0, &sel, pos, t, 0xe4, order, q);
-                    }
-                }
-                for (i, &u) in made.iter().enumerate() {
-                    let p = v[i % v.len()];
-                    if p.starts_with(['R', 'T']) {
-                        continue;
-                    }
-                    if let Some(t) = p.strip_prefix('t') {
-                        // "t<type>[x<count>]"
-                        let (t, n) = t.split_once('x').map_or((t, 1), |(a, b)| (a, b.parse().unwrap_or(1)));
-                        let t: u16 = t.parse().unwrap_or(0);
-                        for _ in 0..n {
-                            st.command_train(&d, u, t);
-                        }
-                        continue;
-                    }
-                    if let Some(rest) = p.strip_prefix('b') {
-                        // "b<order>:<type>:<tx>,<ty>"
-                        let f: Vec<i32> = rest.split([':', ',']).map(|n| n.strip_prefix("0x").map_or_else(|| n.parse().unwrap_or(0), |h| i32::from_str_radix(h, 16).unwrap_or(0))).collect();
-                        if let [o, t, tx, ty] = f[..] {
-                            st.command_build(&d, u, o as u8, tx as i16, ty as i16, t as u16);
-                        }
-                        continue;
-                    }
-                    if let Some(rest) = p.strip_prefix('o') {
-                        let (o, xy) = rest.split_once(':').unwrap_or(("0", "0,0"));
-                        let o = if let Some(h) = o.strip_prefix("0x") { u8::from_str_radix(h, 16).unwrap_or(0) } else { o.parse().unwrap_or(0) };
-                        if let Some(k) = xy.strip_prefix('@') {
-                            let t = made[k.parse::<usize>().unwrap_or(0)];
-                            let s = &st.sprites[st.units[t as usize].sprite as usize];
-                            let pos = (s.x, s.y);
-                            st.order_target(&d, u, o, pos, t);
-                            continue;
-                        }
-                        let v: Vec<i16> = xy.split(',').filter_map(|n| n.trim().parse().ok()).collect();
-                        let mut t = bw::list::NIL;
-                        let mut a = st.visible_units.head;
-                        while a != bw::list::NIL {
-                            let s = &st.sprites[st.units[a as usize].sprite as usize];
-                            if (s.x, s.y) == (v[0], v[1]) {
-                                t = a;
-                            }
-                            a = st.units[a as usize].link.next;
-                        }
-                        let pos = (v[0], v[1]);
-                        st.order_target(&d, u, o, pos, t);
-                        continue;
-                    }
-                    if let Some(k) = p.strip_prefix('@') {
-                        let t = made[k.parse::<usize>().unwrap_or(0)];
-                        let s = &st.sprites[st.units[t as usize].sprite as usize];
-                        let pos = (s.x, s.y);
-                        st.order_target(&d, u, 0xa, pos, t);
-                        continue;
-                    }
-                    let t: Vec<i16> = p.split(',').filter_map(|n| n.trim().parse().ok()).collect();
-                    st.order_target(&d, u, 6, (t[0], t[1]), bw::list::NIL);
-                }
+                apply_moves(&mut st, &d, &made, &m);
             }
+            // SCBW_MOVE2 is applied the same way before frame SCBW_AT.
+            let move2 = std::env::var("SCBW_MOVE2").ok();
+            let at: u32 = std::env::var("SCBW_AT").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
             let frames: u32 = args.get(1).and_then(|f| f.parse().ok()).unwrap_or(48);
             let trace = std::env::var("SCBW_TRACE").ok().map(std::fs::File::create).transpose()?;
             let mut trace = trace.map(std::io::BufWriter::new);
             for f in 0..frames {
+                if let (Some(m), true) = (&move2, f == at) {
+                    apply_moves(&mut st, &d, &made, m);
+                }
                 // 0x4d9670: the frame counter (0x57f23c) advances before each step.
                 st.frame += 1;
                 st.game_step(&d);
@@ -602,4 +525,96 @@ fn write_png_rgb(path: &str, w: usize, h: usize, px: &[u32]) -> std::io::Result<
     let rgb: Vec<u8> = px.iter().flat_map(|&p| [(p >> 16) as u8, (p >> 8) as u8, p as u8]).collect();
     enc.write_header()?.write_image_data(&rgb)?;
     Ok(())
+}
+
+/// Apply a bwsim SCBW_MOVE spec to the created units (see `bwsim`).
+fn apply_moves(st: &mut bw::State, d: &bw::Data, made: &[u32], m: &str) {
+    // "x,y" for every unit, or "x,y;x,y;..." cycled over the units.
+    // "@k" attacks the k-th created unit (AttackUnit, order 0xa).
+    let v: Vec<&str> = m.split(';').filter(|p| !p.is_empty()).collect();
+    if v.is_empty() {
+        return;
+    }
+    // Group commands: "R<x>,<y>[q]" / "R@k[q]" right-click, "T<order>:<x>,<y>[q]" /
+    // "T<order>:@k[q]" targeted order, with every created player-0 unit selected.
+    let sel: Vec<u32> = made.iter().copied().filter(|&u| st.units[u as usize].player == 0).take(12).collect();
+    for p in v.iter().filter(|p| p.starts_with(['R', 'T'])) {
+        let q = p.ends_with('q');
+        let mut body = p[1..].trim_end_matches('q');
+        let mut order = 0u8;
+        if p.starts_with('T') {
+            let (o, b) = body.split_once(':').unwrap_or(("0", body));
+            order = o.strip_prefix("0x").map_or_else(|| o.parse().unwrap_or(0), |h| u8::from_str_radix(h, 16).unwrap_or(0));
+            body = b;
+        }
+        let (pos, t) = if let Some(k) = body.strip_prefix('@') {
+            let t = made[k.parse::<usize>().unwrap_or(0)];
+            let s = &st.sprites[st.units[t as usize].sprite as usize];
+            ((s.x, s.y), t)
+        } else {
+            let xy: Vec<i16> = body.split(',').filter_map(|n| n.parse().ok()).collect();
+            ((xy[0], xy[1]), bw::list::NIL)
+        };
+        if p.starts_with('R') {
+            st.command_right_click(&d, 0, &sel, pos, t, 0xe4, q);
+        } else {
+            st.command_targeted_order(&d, 0, &sel, pos, t, 0xe4, order, q);
+        }
+    }
+    for (i, &u) in made.iter().enumerate() {
+        let p = v[i % v.len()];
+        if p.starts_with(['R', 'T']) {
+            continue;
+        }
+        if let Some(t) = p.strip_prefix('t') {
+            // "t<type>[x<count>]"
+            let (t, n) = t.split_once('x').map_or((t, 1), |(a, b)| (a, b.parse().unwrap_or(1)));
+            let t: u16 = t.parse().unwrap_or(0);
+            for _ in 0..n {
+                st.command_train(&d, u, t);
+            }
+            continue;
+        }
+        if let Some(rest) = p.strip_prefix('b') {
+            // "b<order>:<type>:<tx>,<ty>"
+            let f: Vec<i32> = rest.split([':', ',']).map(|n| n.strip_prefix("0x").map_or_else(|| n.parse().unwrap_or(0), |h| i32::from_str_radix(h, 16).unwrap_or(0))).collect();
+            if let [o, t, tx, ty] = f[..] {
+                st.command_build(&d, u, o as u8, tx as i16, ty as i16, t as u16);
+            }
+            continue;
+        }
+        if let Some(rest) = p.strip_prefix('o') {
+            let (o, xy) = rest.split_once(':').unwrap_or(("0", "0,0"));
+            let o = if let Some(h) = o.strip_prefix("0x") { u8::from_str_radix(h, 16).unwrap_or(0) } else { o.parse().unwrap_or(0) };
+            if let Some(k) = xy.strip_prefix('@') {
+                let t = made[k.parse::<usize>().unwrap_or(0)];
+                let s = &st.sprites[st.units[t as usize].sprite as usize];
+                let pos = (s.x, s.y);
+                st.order_target(&d, u, o, pos, t);
+                continue;
+            }
+            let v: Vec<i16> = xy.split(',').filter_map(|n| n.trim().parse().ok()).collect();
+            let mut t = bw::list::NIL;
+            let mut a = st.visible_units.head;
+            while a != bw::list::NIL {
+                let s = &st.sprites[st.units[a as usize].sprite as usize];
+                if (s.x, s.y) == (v[0], v[1]) {
+                    t = a;
+                }
+                a = st.units[a as usize].link.next;
+            }
+            let pos = (v[0], v[1]);
+            st.order_target(&d, u, o, pos, t);
+            continue;
+        }
+        if let Some(k) = p.strip_prefix('@') {
+            let t = made[k.parse::<usize>().unwrap_or(0)];
+            let s = &st.sprites[st.units[t as usize].sprite as usize];
+            let pos = (s.x, s.y);
+            st.order_target(&d, u, 0xa, pos, t);
+            continue;
+        }
+        let t: Vec<i16> = p.split(',').filter_map(|n| n.trim().parse().ok()).collect();
+        st.order_target(&d, u, 6, (t[0], t[1]), bw::list::NIL);
+    }
 }

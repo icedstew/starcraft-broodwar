@@ -211,19 +211,9 @@ impl State {
         }
     }
 
-    /// 0x4e4f40: IncompleteWarping.
-    fn order_incomplete_warping(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x4e4f40", "IncompleteWarping");
-    }
-
     /// 0x464d10: NukeTrack.
     fn order_nuke_track(&mut self, _d: &Data, _u: u32) {
         todo_port!("0x464d10", "NukeTrack");
-    }
-
-    /// 0x4e4c70: WarpIn.
-    fn order_warp_in(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x4e4c70", "WarpIn");
     }
 
     /// 0x4777f0: TurretGuard.
@@ -239,11 +229,6 @@ impl State {
     /// 0x45e090: DroneBuild.
     fn order_drone_build(&mut self, _d: &Data, _u: u32) {
         todo_port!("0x45e090", "DroneBuild");
-    }
-
-    /// 0x4e4d00: PlaceProtossBuilding.
-    fn order_place_protoss_building(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x4e4d00", "PlaceProtossBuilding");
     }
 
     /// 0x4673d0: Repair.
@@ -641,11 +626,6 @@ impl State {
         todo_port!("inline", "InfestingCommandCenter");
     }
 
-    /// 0x4e4f20: CreateProtossBuilding.
-    fn order_create_protoss_building(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x4e4f20", "CreateProtossBuilding");
-    }
-
     /// 0x4e6880: PlaceAddon.
     fn order_place_addon(&mut self, _d: &Data, _u: u32) {
         todo_port!("0x4e6880", "PlaceAddon");
@@ -977,11 +957,6 @@ impl State {
     /// 0x478490: ComputerReturn.
     fn order_computer_return(&mut self, _d: &Data, _u: u32) {
         todo_port!("0x478490", "ComputerReturn");
-    }
-
-    /// 0x493f70: InitializePsiProvider.
-    fn order_initialize_psi_provider(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x493f70", "InitializePsiProvider");
     }
 
     /// 0x47bf80: HiddenGun.

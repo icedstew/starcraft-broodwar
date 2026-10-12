@@ -148,7 +148,16 @@ impl State {
                 }
             }
             0xb0..=0xb2 => todo_port!("0x468770", "mineral field removal"),
-            0xe | 0x49 | 0x55 | 0x6c | 0x86 | 0x9c => todo_port!("0x49f4a0", "special unit removal"),
+            0x9c => {
+                let s = self.units[u as usize].ptr_at(0xd0);
+                if s != NIL {
+                    self.free_sprite_images(s);
+                    self.units[u as usize].set_ptr_at(0xd0, NIL);
+                }
+                self.remove_psi_provider(u);
+                self.psi.dirty = true;
+            }
+            0xe | 0x49 | 0x55 | 0x6c | 0x86 => todo_port!("0x49f4a0", "special unit removal"),
             _ => {
                 todo_port!("0x4688b0", "resource container check");
             }
@@ -326,6 +335,12 @@ impl State {
         if s == NIL {
             return;
         }
+        self.free_sprite_images(s);
+        self.units[u as usize].sprite = NIL;
+    }
+
+    /// 0x497b40: free a sprite and its images.
+    pub fn free_sprite_images(&mut self, s: u32) {
         let mut i = self.sprites[s as usize].images.head;
         while i != NIL {
             let next = self.images[i as usize].link.next;
@@ -333,7 +348,6 @@ impl State {
             i = next;
         }
         self.free_sprite(s);
-        self.units[u as usize].sprite = NIL;
     }
 
     /// 0x49e340: return a dead unit to the free list.

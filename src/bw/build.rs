@@ -73,7 +73,11 @@ impl State {
                 break 'fail self.gas_spot_check(d, tx as i32, ty as i32, player, a7);
             }
             if flags & 0x8_0000 != 0 {
-                todo_port!("0x473920", "psi field placement (0x4936b0)");
+                // 0x473920: the building's centre must be powered.
+                let (pw, ph) = placement(d, t);
+                if !self.psi_powered(d, t, pw / 2 + tx as i32 * 32, ph / 2 + ty as i32 * 32, player) {
+                    break 'fail 6;
+                }
             }
             let terrain = if u != NIL && self.units[u as usize].unit_type == 0x86 {
                 todo_port!("0x473150", "nydus exit placement");
@@ -372,13 +376,13 @@ impl State {
     }
 
     /// 0x401240: `u`'s exact position is within `dist` of `p`.
-    fn within(&self, u: u32, p: (i16, i16), dist: u32) -> bool {
+    pub(super) fn within(&self, u: u32, p: (i16, i16), dist: u32) -> bool {
         let e = self.units[u as usize].fl.exact;
         super::path::approx_distance(e.0, (p.0 as i32) << 8, e.1, (p.1 as i32) << 8) >> 8 <= dist
     }
 
     /// 0x4eb9c0: move to `p`, facing it.
-    fn move_to_facing(&mut self, d: &Data, u: u32, p: (i16, i16)) -> bool {
+    pub(super) fn move_to_facing(&mut self, d: &Data, u: u32, p: (i16, i16)) -> bool {
         let r = self.set_move_target_xy(d, u, p);
         let f = &mut self.units[u as usize].fl;
         if f.next_target_waypoint != p {
@@ -388,7 +392,7 @@ impl State {
     }
 
     /// 0x467030: check placement again and pay for the building.
-    fn pay_for_building(&mut self, d: &Data, u: u32) -> bool {
+    pub(super) fn pay_for_building(&mut self, d: &Data, u: u32) -> bool {
         let un = &self.units[u as usize];
         let t = un.build_queue[un.build_queue_slot as usize];
         let p = un.player;
@@ -413,7 +417,7 @@ impl State {
         true
     }
 
-    fn idle_order_of(&self, d: &Data, u: u32) -> u8 {
+    pub(super) fn idle_order_of(&self, d: &Data, u: u32) -> u8 {
         d.dat.units.ai_return_to_idle[self.units[u as usize].unit_type as usize]
     }
 
@@ -493,7 +497,7 @@ impl State {
     }
 
     /// Run `anim` on every image of `u`'s sprite (0x4d8470 per image).
-    fn unit_anim(&mut self, d: &Data, u: u32, anim: u8) {
+    pub(super) fn unit_anim(&mut self, d: &Data, u: u32, anim: u8) {
         let s = self.units[u as usize].sprite;
         self.sprite_images_run_anim(d, s, anim);
     }
@@ -700,7 +704,7 @@ impl State {
 
     /// 0x499bb0: replace every image of sprite `s` with a new main image `img`.
     /// Selection circles / health bars (UI-only images) are not modelled.
-    fn replace_sprite_images(&mut self, d: &Data, s: u32, img: u16, heading: u8) {
+    pub(super) fn replace_sprite_images(&mut self, d: &Data, s: u32, img: u16, heading: u8) {
         let mut i = self.sprites[s as usize].images.head;
         while i != NIL {
             let next = self.images[i as usize].link.next;

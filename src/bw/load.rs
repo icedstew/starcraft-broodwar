@@ -12,6 +12,8 @@ pub struct Loaded {
     pub grp: Vec<(u16, u16, u16)>,
     /// LO files: [attack, damage, special, landing, liftoff][image id].
     pub lo: [Vec<Option<Vec<u8>>>; 5],
+    /// GRP of the psi field image (its frame is the pylon power shape).
+    pub psi_grp: Vec<u8>,
 }
 
 impl Loaded {
@@ -35,7 +37,8 @@ impl Loaded {
             .collect();
         let cols = [&im.attack_overlay, &im.damage_overlay, &im.special_overlay, &im.landing_dust, &im.liftoff_dust];
         let lo = cols.map(|c| (0..n).map(|i| if c[i] == 0 { None } else { file(c[i]) }).collect());
-        Ok(Loaded { dat, iscript, grp, lo })
+        let psi_grp = file(im.grp[super::psi::PSI_FIELD_IMAGE as usize]).unwrap_or_default();
+        Ok(Loaded { dat, iscript, grp, lo, psi_grp })
     }
 
     pub fn grp_size(&self, image: u16) -> (u16, u16, u16) {

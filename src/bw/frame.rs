@@ -134,7 +134,7 @@ impl State {
             u = next;
         }
         todo_port!("0x492eb0", "cloaked units list update");
-        todo_port!("0x493790", "psi power update");
+        self.update_power(d);
         // 0x64dec8: 32 rows of 32 dwords; advance the ring and clear the new row.
         self.finder_ring = (self.finder_ring + 1) % 0x20;
         self.finder_rows[self.finder_ring as usize] = [0; 0x20];
@@ -399,11 +399,74 @@ impl State {
         }
     }
 
-    /// Image update function pointer (CImage +0x38), selected by draw function.
-    fn image_update_hook(&mut self, _d: &Data, img: u32) {
+    /// Image update function pointer (CImage +0x38, table 0x512514 by draw function):
+    /// 2 / 5 cloaking (0x4d5d70), 4 / 7 decloaking (0x4d5d10), 0x11 warp fade
+    /// (0x4d8590); the rest do nothing (0x4d55f0). +0x30 / +0x31 (low bytes of
+    /// `coloring`) are the fade level and its timer.
+    fn image_update_hook(&mut self, d: &Data, img: u32) {
         let m = self.images[img as usize].modifier;
-        if m != 0 && m != 9 && m != 10 && m != 0xe {
-            todo_port!("image update hooks", "cloak/hallucination/warp per-modifier update functions");
+        let c = self.images[img as usize].coloring;
+        let (lvl, t) = (c as u8, (c >> 8) as u8);
+        let set = |st: &mut State, lvl: u8, t: u8| {
+            let i = &mut st.images[img as usize];
+            i.coloring = (i.coloring & !0xffff) | lvl as u64 | (t as u64) << 8;
+        };
+        match m {
+            2 | 5 => {
+                if t != 0 {
+                    return set(self, lvl, t - 1);
+                }
+                let lvl = lvl.wrapping_add(1);
+                set(self, lvl, 3);
+                if lvl >= 8 {
+                    // 0x4d58b0: next draw function (cloaked).
+                    self.images[img as usize].modifier = m + 1;
+                    if let Some(u) = self.iscript_unit {
+                        self.units[u as usize].status |= 0x300;
+                    }
+                }
+                self.images[img as usize].flags |= super::sprite::iflag::REDRAW;
+            }
+            4 | 7 => {
+                if t != 0 {
+                    return set(self, lvl, t - 1);
+                }
+                set(self, lvl.wrapping_sub(1), 3);
+                if lvl == 0 {
+                    self.images[img as usize].modifier = 0;
+                    if let Some(u) = self.iscript_unit {
+                        self.units[u as usize].status &= !0x300;
+                    }
+                }
+                self.images[img as usize].flags |= super::sprite::iflag::REDRAW;
+            }
+            0x11 => {
+                // 0x4d8590: warp fade.
+                if t != 0 {
+                    return set(self, lvl, t - 1);
+                }
+                set(self, lvl, 2);
+                if lvl < 0x3f {
+                    set(self, lvl + 1, 2);
+                    self.images[img as usize].flags |= super::sprite::iflag::REDRAW;
+                    return;
+                }
+                if self.images[img as usize].iscript.anim != 1 {
+                    let header = self.images[img as usize].iscript.header as usize;
+                    let pc = d.iscript_u16(header + 10);
+                    let st = &mut self.images[img as usize].iscript;
+                    st.anim = 1;
+                    st.pc = pc;
+                    st.wait = 0;
+                    st.ret = 0;
+                    super::iscript::run(self, d, img, false, None);
+                }
+                if let Some(u) = self.iscript_order_unit {
+                    self.units[u as usize].order_signal |= 1;
+                }
+                self.images[img as usize].flags |= super::sprite::iflag::REDRAW;
+            }
+            _ => {}
         }
     }
 

@@ -1462,9 +1462,11 @@ impl State {
         self.path_all_units = false;
         search.pop();
         self.search = search;
+        // 0x4f16c0 is called with 1 here too: segments are clipped to the inside of
+        // each obstacle's touch box (the blocker's own box contains its edges).
         for c in found {
             let rc = self.touch_box(d, c, u);
-            clip_segments(&mut segs, rc, false);
+            clip_segments(&mut segs, rc, true);
         }
         let mut best = 9999i32;
         let mut spot = pos;
