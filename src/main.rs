@@ -98,6 +98,7 @@ fn main() -> std::io::Result<()> {
             let dims = chk.as_ref().map_or((64, 64), |c| c.dims());
             let mut st = bw::State::new(dims, 0, 1700);
             st.search.init(&d);
+            st.init_tech_defaults(&d);
             st.init_thingies(&d);
             if let Some(chk) = &chk {
                 let name = map::TILESETS[chk.tileset()];
@@ -320,6 +321,46 @@ fn main() -> std::io::Result<()> {
             }) {
                 scene.right_click((mx, my), false);
             }
+            // Debug: SCBW_SELECT=x,y selects the unit at that map point.
+            if let Some((sx, sy)) = std::env::var("SCBW_SELECT").ok().and_then(|v| {
+                let (a, b) = v.split_once(',')?;
+                Some((a.parse::<i32>().ok()?, b.parse::<i32>().ok()?))
+            }) {
+                scene.selected = scene.unit_at(sx, sy).into_iter().collect();
+            }
+            // Debug: SCBW_KEYS="sm..." presses command card hotkeys with the selection.
+            if let Ok(keys) = std::env::var("SCBW_KEYS") {
+                let ui = ui::Ui::load(&a.casc, ["zerg", "terran", "protoss"][scene.local_race()]).ok();
+                for c in keys.chars() {
+                    let card = scene.card();
+                    let hit = card.iter().flatten().find(|(b, en)| {
+                        *en && ui.as_ref().and_then(|u| u.stat_txt.get((b.enabled_str as usize).wrapping_sub(1))).and_then(|s| s.chars().next()).map(|h| h.to_ascii_lowercase()) == Some(c)
+                    });
+                    eprintln!("key {c}: {:?}", hit.map(|(b, _)| (b.pos, b.act)));
+                    if let Some((b, _)) = hit {
+                        let b = *b;
+                        scene.press(&b, false);
+                    }
+                }
+            }
+            // Debug: SCBW_CLICK=x,y clicks the map while targeting (after SCBW_KEYS).
+            if let Some((px, py)) = std::env::var("SCBW_CLICK").ok().and_then(|v| {
+                let (a, b) = v.split_once(',')?;
+                Some((a.parse::<i32>().ok()?, b.parse::<i32>().ok()?))
+            }) {
+                eprintln!("targeting {:?}", scene.targeting);
+                scene.target_click((px, py), false);
+                eprintln!("click error {}", scene.error);
+            }
+            // Debug: SCBW_PLACE=x,y places the building chosen with SCBW_KEYS.
+            if let Some((px, py)) = std::env::var("SCBW_PLACE").ok().and_then(|v| {
+                let (a, b) = v.split_once(',')?;
+                Some((a.parse::<i32>().ok()?, b.parse::<i32>().ok()?))
+            }) {
+                scene.check_placement((px, py));
+                eprintln!("placing {:?} ok {}", scene.placing, scene.place_ok);
+                scene.build((px, py));
+            }
             // Debug: SCBW_TRAIN=type trains with the first selected unit; SCBW_BUILD=type,x,y
             // builds with it.
             if let Some(t) = std::env::var("SCBW_TRAIN").ok().and_then(|v| v.parse::<u16>().ok()) {
@@ -343,7 +384,8 @@ fn main() -> std::io::Result<()> {
                         eprintln!("build {tx},{ty} make {:?} order {:?} place {}", st.can_make_unit(d, u, t, me), st.can_issue_order(d, u, 0x1e, me), st.placement_check(d, u, me, tx, ty, t, 1, false, false, false));
                     }
                 });
-                scene.build(t, (bx, by));
+                scene.placing = Some((0x1e, t));
+                scene.build((bx, by));
             }
             for f in 0..frames {
                 scene.step();
@@ -352,6 +394,13 @@ fn main() -> std::io::Result<()> {
                         let un = &scene.st.units[u as usize];
                         let s = &scene.st.sprites[un.sprite as usize];
                         eprintln!("f{f} u{u} order {:#x} st {} pos ({},{}) tgt {} res {}", un.order, un.order_state, s.x, s.y, un.order_target_unit as i32, un.resource_type);
+                    }
+                }
+            }
+            if std::env::var("SCBW_DEBUG").is_ok() {
+                for (i, slot) in scene.card().iter().enumerate() {
+                    if let Some((b, en)) = slot {
+                        eprintln!("card {} icon {} cond {:#x} act {:#x} enabled {en}", i + 1, b.icon, b.cond, b.act);
                     }
                 }
             }

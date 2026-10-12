@@ -72,9 +72,13 @@ pub struct Scene<'a> {
     pub st: bw::State,
     pub selected: Vec<u32>,
     /// Command card submenu (button set index) opened by a Menu button, e.g. SCV "Build".
-    pub card_menu: Option<usize>,
+    pub card_menu: Option<u16>,
     /// Building type being placed, and whether the spot under the cursor is valid.
-    pub placing: Option<u16>,
+    pub placing: Option<(u8, u16)>,
+    /// Targeting mode: orders for a ground / unit / fog click (0x641691..3).
+    pub targeting: Option<(u8, u8, u8)>,
+    /// Last refused button or click (stat_txt message id, 0 for none).
+    pub error: u16,
     pub place_ok: bool,
     /// Screen-space drag rectangle while box-selecting.
     pub drag_box: Option<(i32, i32, i32, i32)>,
@@ -118,7 +122,7 @@ impl<'a> Scene<'a> {
         let remaps = ["ofire", "gfire", "bfire", "bexpl", "trans50", "red", "green"].map(tbl);
         let st = new_game(a, &chk)?;
         let local = st.local_player;
-        Ok(Scene { st, selected: Vec::new(), card_menu: None, placing: None, place_ok: false, drag_box: None, a, chk, ts, terrain, player_colors, local, shadow, remaps })
+        Ok(Scene { st, selected: Vec::new(), card_menu: None, placing: None, targeting: None, error: 0, place_ok: false, drag_box: None, a, chk, ts, terrain, player_colors, local, shadow, remaps })
     }
 
     /// Advance one frame; returns sounds (sfx id, x, y) requested this frame.
@@ -279,11 +283,66 @@ impl<'a> Scene<'a> {
         with_data(self.a, |d| st.command_right_click(d, me, &sel, (p.0 as i16, p.1 as i16), t, 0xe4, queued));
     }
 
-    /// Targeted order at map point `p` (0x4c2320).
-    pub fn targeted_order(&mut self, order: u8, p: (i32, i32), queued: bool) {
+    /// The status bar's selection (active unit, count).
+    pub fn client_selection(&self) -> bw::buttons::Selection {
+        with_data(self.a, |d| self.st.client_selection(d, &self.selected))
+    }
+
+    /// The button set on the card: an open menu, the cancel sets while targeting
+    /// (0xe5) or placing (0xe6), else the active unit's set (+0x94).
+    pub fn card_set(&self, s: &bw::buttons::Selection) -> Option<usize> {
+        if self.targeting.is_some() {
+            return Some(0xe5);
+        }
+        if self.placing.is_some() {
+            return Some(0xe6);
+        }
+        if let Some(m) = self.card_menu {
+            return Some(m as usize);
+        }
+        (s.active != NIL).then(|| self.st.units[s.active as usize].button_set as usize)
+    }
+
+    /// The command card (0x4591d0).
+    pub fn card(&self) -> bw::buttons::Card {
+        let s = self.client_selection();
+        match self.card_set(&s) {
+            Some(set) => with_data(self.a, |d| self.st.command_card(d, set, self.local, &s)),
+            None => [None; 9],
+        }
+    }
+
+    /// Press a command card button.
+    pub fn press(&mut self, btn: &bw::buttons::Button, queued: bool) {
+        use bw::buttons::ButtonAction::*;
+        let s = self.client_selection();
+        let act = with_data(self.a, |d| self.st.button_action(d, btn, self.local, &s, queued));
+        match act {
+            None => {}
+            Send(p) => {
+                let (sel, me, st) = (self.selected.clone(), self.local, &mut self.st);
+                with_data(self.a, |d| st.execute_command(d, me, &sel, &p));
+            }
+            Target { ground, unit, fog } => self.targeting = Some((ground, unit, fog)),
+            Place { order, unit_type } => self.placing = Some((order, unit_type)),
+            Menu(m) => self.card_menu = Some(m),
+            CancelTargeting => self.targeting = Option::None,
+            CancelPlacement => self.placing = Option::None,
+            SelectLarvae(l) => self.selected = l,
+            Error => self.error = btn.disabled_str,
+        }
+    }
+
+    /// A map click while targeting (0x46f5b0).
+    pub fn target_click(&mut self, p: (i32, i32), queued: bool) {
+        let Some(modes) = self.targeting.take() else { return };
         let t = self.unit_at(p.0, p.1).unwrap_or(NIL);
         let (sel, me, st) = (self.selected.clone(), self.local, &mut self.st);
-        with_data(self.a, |d| st.command_targeted_order(d, me, &sel, (p.0 as i16, p.1 as i16), t, 0xe4, order, queued));
+        let r = with_data(self.a, |d| st.target_click(d, me, &sel, modes, (p.0 as i16, p.1 as i16), t, 0xe4, queued));
+        if let Err(e) = r {
+            self.error = e;
+        }
+        self.card_menu = Option::None;
     }
 
     /// Placement tile for building `t` with the cursor at map point `p`.
@@ -293,25 +352,27 @@ impl<'a> Scene<'a> {
         (((p.0 - w / 2 + 16) / 32) as i16, ((p.1 - h / 2 + 16) / 32) as i16)
     }
 
-    /// Update `place_ok` for building `t` at map point `p` (placement grid slot 1, as
-    /// the placement cursor does).
-    pub fn check_placement(&mut self, t: u16, p: (i32, i32)) {
+    /// Update `place_ok` for the building being placed at map point `p` (placement
+    /// grid slot 1, as the placement cursor does).
+    pub fn check_placement(&mut self, p: (i32, i32)) {
+        let Some((_, t)) = self.placing else { return };
         let (tx, ty) = self.build_tile(t, p);
-        let u = self.selected.first().copied().unwrap_or(NIL);
+        let u = self.client_selection().active;
         let (me, st) = (self.local, &mut self.st);
         self.place_ok = with_data(self.a, |d| st.placement_check(d, u, me, tx, ty, t, 1, false, false, false) == 0);
     }
 
-    /// Worker order that builds `t` (SCV PlaceBuilding, probe PlaceProtossBuilding, drone DroneStartBuild).
-    pub fn build(&mut self, t: u16, p: (i32, i32)) {
+    /// Place the building at map point `p`: the build command (0x0c).
+    pub fn build(&mut self, p: (i32, i32)) {
+        let Some((order, t)) = self.placing.take() else { return };
         let (tx, ty) = self.build_tile(t, p);
-        let order = match self.st.player_races[self.local as usize] {
-            0 => 0x19,
-            2 => 0x1f,
-            _ => 0x1e,
-        };
+        let mut pkt = vec![0x0c, order];
+        pkt.extend_from_slice(&(tx as u16).to_le_bytes());
+        pkt.extend_from_slice(&(ty as u16).to_le_bytes());
+        pkt.extend_from_slice(&t.to_le_bytes());
         let (sel, me, st) = (self.selected.clone(), self.local, &mut self.st);
-        with_data(self.a, |d| st.command_build_sel(d, me, &sel, order, tx, ty, t));
+        with_data(self.a, |d| st.execute_command(d, me, &sel, &pkt));
+        self.card_menu = Option::None;
     }
 
     pub fn command(&mut self, f: impl FnOnce(&mut bw::State, &bw::Data, u8, &[u32])) {
@@ -330,6 +391,7 @@ fn new_game(a: &Assets, chk: &Chk) -> io::Result<bw::State> {
     st.rng.seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |t| t.as_secs() as u32);
     with_data(a, |d| {
         st.search.init(d);
+        st.init_tech_defaults(d);
         st.init_thingies(d);
         st.load_terrain(&ts, w as u16, h as u16, chk.section(b"MTXM").unwrap_or(&[]));
         if let Some(doodads) = chk.section(b"THG2") {
@@ -386,19 +448,6 @@ const CARD: (i32, i32, i32, i32) = (505, 358, 46, 40);
 pub fn card_slot(pos: u16) -> (i32, i32) {
     let i = pos as i32 - 1;
     (CARD.0 + (i % 3) * CARD.2, CARD.1 + (i / 3) * CARD.3)
-}
-
-/// Buttons for the current selection (the first selected unit's type).
-pub fn card_buttons(scene: &Scene) -> &'static [crate::game::buttons::Button] {
-    if let Some(set) = scene.card_menu {
-        return crate::game::buttons::SETS.get(set).copied().unwrap_or(&[]);
-    }
-    match scene.selected.first() {
-        Some(&u) if scene.st.units[u as usize].player == scene.local_player() => {
-            crate::game::buttons::SETS.get(scene.st.units[u as usize].unit_type as usize).copied().unwrap_or(&[])
-        }
-        _ => &[],
-    }
 }
 
 /// Full frame: map view + console + minimap + resource bar, as 0xRRGGBB.
@@ -502,37 +551,38 @@ pub fn compose_with_cursor(
     if let Some(b) = scene.drag_box {
         rect(out, w, h, b, 0x10FC18);
     }
-    if let (Some(kind), Some((_, cx, cy))) = (scene.placing, cursor) {
+    if let (Some((_, kind)), Some((_, cx, cy))) = (scene.placing, cursor) {
         let (tx, ty) = scene.build_tile(kind, (cx + vx, cy + vy));
         let v = scene.a.dat().units.placement_box[kind as usize];
         let (fw, fh) = (v as i16 as i32, (v >> 16) as i16 as i32);
         let (l, t) = (tx as i32 * 32 - vx, ty as i32 * 32 - vy);
         rect(out, w, h, (l, t, l + fw - 1, t + fh - 1), if scene.place_ok { 0x20E020 } else { 0xE02020 });
     }
-    for b in card_buttons(scene) {
-        let (bx, by) = card_slot(b.pos);
-        ui.draw_cmd_icon(b.icon as usize, 0, bx + 2, by + 1, pal, out, w, h);
+    for (i, slot) in scene.card().iter().enumerate() {
+        if let Some((b, enabled)) = slot {
+            let (bx, by) = card_slot(i as u16 + 1);
+            ui.draw_cmd_icon(b.icon as usize, if *enabled { 0 } else { 1 }, bx + 2, by + 1, pal, out, w, h);
+        }
     }
     if let Some((tick, cx, cy)) = cursor {
         ui.draw_cursor(tick, cx, cy, pal, out, w, h);
     }
 }
 
-use crate::game::buttons::Act;
-
 fn on_minimap_pt(x: i32, y: i32) -> bool {
     (MINIMAP.0..MINIMAP.0 + MINIMAP.2).contains(&x) && (MINIMAP.1..MINIMAP.1 + MINIMAP.2).contains(&y)
 }
 
-/// Targeted order for a command card button waiting for a map click.
-fn button_order(act: Act) -> u8 {
-    match act {
-        Act::Attack => 8,
-        Act::Patrol => 0x98,
-        Act::Gather => 0x4f,
-        Act::Repair => 0x22,
-        _ => 6,
-    }
+/// The hotkey of a button: the first character of its stat_txt string.
+fn hotkey(ui: Option<&crate::ui::Ui>, b: &bw::buttons::Button) -> Option<char> {
+    let s = ui?.stat_txt.get((b.enabled_str as usize).checked_sub(1)?)?;
+    s.chars().next().map(|c| c.to_ascii_lowercase())
+}
+
+fn key_char(k: minifb::Key) -> Option<char> {
+    use minifb::Key::*;
+    let keys = [A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, R, S, T, U, V, W, X, Y, Z];
+    keys.iter().position(|&x| x == k).map(|i| (b'a' + i as u8) as char)
 }
 
 pub fn run(a: &Assets, chk: Chk) -> io::Result<()> {
@@ -559,8 +609,6 @@ pub fn run(a: &Assets, chk: Chk) -> io::Result<()> {
     let mut drag_start: Option<(i32, i32)> = None;
     let mut rmb_was_down = false;
     let mut lmb_was_down = false;
-    // Command-card targeting mode (Move/Attack/Patrol waiting for a map click).
-    let mut targeting: Option<Act> = None;
     while win.is_open() && !win.is_key_down(Key::Escape) {
         tick += 1;
         let sp = 16;
@@ -575,65 +623,43 @@ pub fn run(a: &Assets, chk: Chk) -> io::Result<()> {
         let down = win.get_mouse_down(minifb::MouseButton::Left);
         let clicked = down && !lmb_was_down;
         lmb_was_down = down;
-        // Command card: click a button or press its hotkey.
-        let mut pressed: Option<crate::game::buttons::Button> = None;
+        // Command card: click a button or press its hotkey (enabled buttons only).
+        let card = scene.card();
+        let mut pressed: Option<bw::buttons::Button> = None;
         if clicked {
-            pressed = card_buttons(&scene).iter().find(|b| {
-                let (bx, by) = card_slot(b.pos);
-                (bx..bx + 40).contains(&cx) && (by..by + 36).contains(&cy)
-            }).copied();
+            pressed = card.iter().enumerate().find_map(|(i, slot)| {
+                let (bx, by) = card_slot(i as u16 + 1);
+                ((bx..bx + 40).contains(&cx) && (by..by + 36).contains(&cy)).then_some(*slot).flatten()
+            }).and_then(|(b, enabled)| enabled.then_some(b));
         }
         for k in win.get_keys_pressed(minifb::KeyRepeat::No) {
-            let want = match k {
-                Key::M => Some(Act::Move),
-                Key::S => Some(Act::Stop),
-                Key::A => Some(Act::Attack),
-                Key::P => Some(Act::Patrol),
-                Key::H => Some(Act::HoldPosition),
-                Key::G => Some(Act::Gather),
-                Key::C => Some(Act::ReturnCargo),
-                _ => None,
-            };
-            if let Some(b) = want.and_then(|a| card_buttons(&scene).iter().find(|b| b.act == a)) {
+            let Some(c) = key_char(k) else { continue };
+            if let Some((b, _)) = card.iter().flatten().find(|(b, en)| *en && hotkey(ui.as_ref(), b) == Some(c)) {
                 pressed = Some(*b);
             }
         }
+        let on_card = clicked && cy >= vh - 120 && !on_minimap_pt(cx, cy);
         if let Some(btn) = pressed {
-            match btn.act {
-                Act::Stop => scene.command(|st, d, me, sel| st.command_stop(d, me, sel, shift)),
-                Act::HoldPosition => scene.command(|st, d, me, sel| st.command_hold(d, me, sel, shift)),
-                Act::ReturnCargo => scene.command(|st, d, me, sel| st.command_return_cargo(d, me, sel, shift)),
-                Act::Move | Act::Attack | Act::Patrol | Act::Gather | Act::Repair => targeting = Some(btn.act),
-                Act::Menu => scene.card_menu = Some(btn.act_var as usize),
-                Act::CancelMenu => {
-                    scene.card_menu = None;
-                    scene.placing = None;
-                }
-                Act::BuildTerran | Act::BuildProtoss | Act::BuildZerg => scene.placing = Some(btn.act_var),
-                Act::Train => scene.command(|st, d, me, sel| st.command_train_sel(d, me, sel, btn.act_var)),
-                _ => {}
-            }
+            scene.press(&btn, shift);
         }
-        if let Some(kind) = scene.placing {
-            scene.check_placement(kind, map_pt);
+        if scene.placing.is_some() {
+            scene.check_placement(map_pt);
             if clicked && cy < vh - 120 && pressed.is_none() {
                 if scene.place_ok {
-                    scene.build(kind, map_pt);
-                    scene.placing = None;
-                    scene.card_menu = None;
+                    scene.build(map_pt);
                 }
                 lmb_was_down = true;
                 drag_start = None;
             }
         }
         let down = down && scene.placing.is_none();
-        if let (Some(act), true) = (targeting, clicked && cy < vh - 120 && pressed.is_none()) {
-            scene.targeted_order(button_order(act), map_pt, shift);
-            targeting = None;
+        if scene.targeting.is_some() && clicked && pressed.is_none() && !on_card {
+            let pt = if on_minimap_pt(cx, cy) { ((cx - ox) * scale, (cy - oy) * scale) } else { map_pt };
+            scene.target_click(pt, shift);
             lmb_was_down = true; // the click is consumed; don't start a drag
             drag_start = None;
         }
-        let down = down && targeting.is_none() && pressed.is_none() && !(clicked && cy >= vh - 120 && !on_minimap_pt(cx, cy));
+        let down = down && scene.targeting.is_none() && pressed.is_none() && !on_card;
         if down && on_minimap_pt(cx, cy) && drag_start.is_none() {
             vx = (cx - ox) * scale - vw / 2;
             vy = (cy - oy) * scale - (vh - 120) / 2;
@@ -661,7 +687,7 @@ pub fn run(a: &Assets, chk: Chk) -> io::Result<()> {
             }
         }
         let rdown = win.get_mouse_down(minifb::MouseButton::Right);
-        if rdown && !rmb_was_down && (targeting.take().is_some() || scene.placing.take().is_some()) {
+        if rdown && !rmb_was_down && (scene.targeting.take().is_some() || scene.placing.take().is_some()) {
             // Right-click cancels targeting / placement.
         } else if rdown && !rmb_was_down && cy < vh - 120 {
             scene.right_click(map_pt, shift);

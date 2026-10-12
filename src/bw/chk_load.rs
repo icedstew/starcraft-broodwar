@@ -205,6 +205,21 @@ impl State {
         true
     }
 
+    /// 0x4ccc80 (defaults part): every unit and tech available, nothing researched,
+    /// upgrade caps from upgrades.dat.
+    pub fn init_tech_defaults(&mut self, d: &Data) {
+        let pl = &mut self.players;
+        pl.unit_available = [[1; 228]; 12];
+        pl.tech_available = [[1; 44]; 12];
+        pl.tech_researched = [[0; 44]; 12];
+        pl.research_in_progress = [[0; 6]; 12];
+        for p in 0..12 {
+            for u in 0..61 {
+                pl.upgrade_max[p][u] = d.dat.upgrades.max_level[u];
+            }
+        }
+    }
+
     /// Create a unit and finish it as the start-of-game code does (0x4a09d0, 0x4a01f0,
     /// 0x49ec30, 0x49fa40).
     fn start_unit(&mut self, d: &Data, t: u16, x: i16, y: i16, p: u8) -> Option<u32> {

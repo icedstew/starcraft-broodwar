@@ -26,225 +26,6 @@ pub struct GroupTarget {
     pub flags: u8,
 }
 
-/// Orders whose requirement list (0x514cf8, read by 0x46d450 / 0x46d610) is non-empty or
-/// exists; orders not listed are unavailable. 0xff01 separates alternatives, 0xff02 x =
-/// "is unit type x", 0xff1e = allowed for hallucinations, other 0xffxx are unit checks
-/// and plain numbers require a completed unit of that type.
-const ORDER_REQS: &[(u8, &[u16])] = &[
-    (0x00, &[0xff1e]),
-    (0x01, &[0xff1e]),
-    (0x02, &[0xff12, 0xff1e]),
-    (0x03, &[0xff12, 0xff1e]),
-    (0x04, &[0xff1a, 0xff1e]),
-    (0x05, &[0xff02, 0x7d]),
-    (0x06, &[0xff14, 0xff1e]),
-    (0x40, &[0xff02, 0x49, 0xff1e]),
-    (0x41, &[0xff02, 0x55]),
-    (0x14, &[0xff02, 0xd]),
-    (0x32, &[0xff02, 0x48, 0xff01, 0xff02, 0x52, 0xff1e]),
-    (0x3a, &[0xff02, 0x53, 0xff01, 0xff02, 0x51, 0xff1e]),
-    (0x33, &[0xff02, 0x48, 0xff01, 0xff02, 0x52, 0xff01, 0xff02, 0x53, 0xff01, 0xff02, 0x51, 0xff1e]),
-    (0x34, &[0xff02, 0x48, 0xff01, 0xff02, 0x52, 0xff1e]),
-    (0x07, &[0xff02, 0x53, 0xff01, 0xff02, 0x51, 0xff1e]),
-    (0x39, &[0xff02, 0x48, 0xff01, 0xff02, 0x52, 0xff1e]),
-    (0x3e, &[0xff02, 0x53, 0xff01, 0xff02, 0x51, 0xff1e]),
-    (0x35, &[0xff02, 0x48, 0xff01, 0xff02, 0x52, 0xff1e]),
-    (0x3b, &[0xff02, 0x53, 0xff01, 0xff02, 0x51, 0xff1e]),
-    (0x36, &[0xff02, 0x48, 0xff01, 0xff02, 0x52, 0xff1e]),
-    (0x3c, &[0xff02, 0x53, 0xff01, 0xff02, 0x51, 0xff1e]),
-    (0x37, &[0xff02, 0x48, 0xff01, 0xff02, 0x52, 0xff01, 0xff02, 0x53, 0xff01, 0xff02, 0x51, 0xff1e]),
-    (0x38, &[0xff02, 0x48, 0xff01, 0xff02, 0x52, 0xff1e]),
-    (0x3d, &[0xff02, 0x53, 0xff01, 0xff02, 0x51, 0xff1e]),
-    (0x08, &[0xff12, 0xff1e]),
-    (0x09, &[0xff12, 0xff1e]),
-    (0x0a, &[0xff14, 0xff1e]),
-    (0x0b, &[0xff12, 0xff1e]),
-    (0x0c, &[0xff12, 0xff1e]),
-    (0x0d, &[0xff14, 0xff1e]),
-    (0x0e, &[0xff14, 0xff1e]),
-    (0x9d, &[0xff14, 0xff1e]),
-    (0x15, &[0xff14, 0xff1e]),
-    (0x12, &[0xff02, 0x7c, 0xff01, 0xff02, 0x90, 0xff01, 0xff02, 0x92, 0xff01, 0xff02, 0xa2]),
-    (0x13, &[0xff02, 0x7c, 0xff01, 0xff02, 0x90, 0xff01, 0xff02, 0x92, 0xff01, 0xff02, 0xa2, 0xff01, 0xff02, 0xd1, 0xff01, 0xff02, 0xd2, 0xff01, 0xff02, 0xd3, 0xff01, 0xff02, 0xd4, 0xff01, 0xff02, 0xd5]),
-    (0x16, &[0xff1a, 0xff1e]),
-    (0x17, &[0xff1e]),
-    (0x19, &[0xff02, 0x29]),
-    (0x1a, &[0xff02, 0x29]),
-    (0x46, &[0xff02, 0x29]),
-    (0x1e, &[0xff02, 0x7]),
-    (0x1f, &[0xff02, 0x40]),
-    (0x20, &[0xff02, 0x40]),
-    (0x24, &[]),
-    (0x27, &[0xff13]),
-    (0x28, &[0xff13]),
-    (0x0f, &[0xff02, 0x6a]),
-    (0x2e, &[0xff02, 0x86, 0xff0d]),
-    (0x6c, &[0xff02, 0x2d, 0xff01, 0xff02, 0x31]),
-    (0x1b, &[0xff02, 0x2d, 0xff01, 0xff02, 0x31]),
-    (0x1c, &[0xff02, 0x2d, 0xff01, 0xff02, 0x31]),
-    (0x1d, &[0xff02, 0x2d, 0xff01, 0xff02, 0x31]),
-    (0x21, &[0xff02, 0x7]),
-    (0x22, &[0xff02, 0x7]),
-    (0x23, &[0xff02, 0x7]),
-    (0x29, &[0xff02, 0x24, 0xff01, 0xff02, 0x3b]),
-    (0x31, &[0xff14, 0xff1e]),
-    (0x45, &[0xff16]),
-    (0x47, &[0xff17, 0xff06]),
-    (0x48, &[0xff17, 0xff05]),
-    (0x4a, &[0xff17]),
-    (0x9b, &[0xff02, 0xc5, 0xff01, 0xff02, 0xc6, 0xff01, 0xff02, 0xc7]),
-    (0x4d, &[0xff02, 0x23, 0xff1e]),
-    (0x4e, &[0xff02, 0x83, 0xff01, 0xff02, 0x84, 0xff01, 0xff02, 0x85]),
-    (0x4f, &[0xff16]),
-    (0x50, &[0xff16]),
-    (0x51, &[0xff16]),
-    (0x52, &[0xff16]),
-    (0x54, &[0xff16]),
-    (0x55, &[0xff16]),
-    (0x56, &[0xff16]),
-    (0x5a, &[0xff16]),
-    (0x5c, &[0xff1e]),
-    (0x6f, &[0xff18]),
-    (0x70, &[0xff18]),
-    (0x5e, &[0xff18]),
-    (0x5f, &[0xff02, 0x7d]),
-    (0x5d, &[0xff18, 0xff01, 0xff02, 0x2a]),
-    (0x61, &[0xff19]),
-    (0x64, &[0xff1e]),
-    (0x65, &[0xff02, 0x8f, 0xff01, 0xff02, 0x83, 0xff01, 0xff02, 0x84, 0xff01, 0xff02, 0x85]),
-    (0x67, &[0xff02, 0x90, 0xff01, 0xff02, 0x92]),
-    (0x66, &[]),
-    (0x68, &[0xff02, 0x2b]),
-    (0x6b, &[0xff1d, 0xff1e]),
-    (0x98, &[0xff14, 0xff1e]),
-    (0x43, &[0xff02, 0xac]),
-    (0x8c, &[0xff02, 0x21]),
-    (0x7b, &[0xff02, 0xe]),
-    (0x7d, &[0xff02, 0xe]),
-    (0x7e, &[0xff02, 0x1]),
-    (0x7f, &[0xff02, 0xe]),
-    (0x80, &[0xff02, 0xe]),
-    (0x81, &[0xff02, 0xe]),
-    (0x82, &[0xff02, 0x47, 0xff01, 0xff02, 0x56, 0xff1e]),
-    (0x83, &[0xff02, 0x47, 0xff01, 0xff02, 0x56]),
-    (0x85, &[0xff1e]),
-    (0x86, &[0xff02, 0x32, 0xff1e]),
-    (0x87, &[0xff02, 0x32, 0xff1e]),
-    (0x88, &[0xff02, 0x32, 0xff01, 0xff02, 0x2f, 0xff1e]),
-    (0xa5, &[0xff02, 0x55]),
-    (0xa6, &[0xff02, 0x59, 0xff01, 0xff02, 0x5a, 0xff01, 0xff02, 0x5f, 0xff01, 0xff02, 0x5d, 0xff01, 0xff02, 0x5e, 0xff01, 0xff02, 0x60, 0xff1e]),
-    (0xa7, &[0xff02, 0xd1, 0xff01, 0xff02, 0xd2, 0xff01, 0xff02, 0xd3, 0xff01, 0xff02, 0xd4, 0xff01, 0xff02, 0xd5]),
-    (0xa8, &[0xff02, 0xcd, 0xff01, 0xff02, 0xce, 0xff01, 0xff02, 0xcf, 0xff01, 0xff02, 0xd0]),
-    (0xa9, &[0xff02, 0xcd, 0xff01, 0xff02, 0xce, 0xff01, 0xff02, 0xcf, 0xff01, 0xff02, 0xd0]),
-    (0xaa, &[0xff02, 0xcb, 0xff01, 0xff02, 0xd1, 0xff01, 0xff02, 0xd2, 0xff01, 0xff02, 0xd3, 0xff01, 0xff02, 0xd4, 0xff01, 0xff02, 0xd5]),
-    (0xab, &[0xff02, 0xcb, 0xff01, 0xff02, 0xd1, 0xff01, 0xff02, 0xd2, 0xff01, 0xff02, 0xd3, 0xff01, 0xff02, 0xd4, 0xff01, 0xff02, 0xd5]),
-    (0xaf, &[0xff02, 0x22]),
-    (0xb0, &[0xff02, 0x22]),
-    (0xb1, &[0xff02, 0x22]),
-    (0xb2, &[0xff02, 0x22]),
-    (0xb6, &[0xff02, 0x3f]),
-];
-
-/// Unit types' build/train requirement lists (0x514178, read by 0x46e100 / 0x46e1c0);
-/// types not listed can't be made. Same opcodes as ORDER_REQS plus 0xff03 x (x
-/// completed or in production), 0xff04 x (has addon x), 0xff05 is a building, 0xff07
-/// not researching/upgrading, 0xff08 not building something, 0xff0b not constructing,
-/// 0xff0c no addon, 0xff0e hangar not full, 0xff10 silo empty, 0xff11 not in a
-/// transport, 0xff24 Brood War, 0xff25 x tech x researched.
-const UNIT_REQS: &[(u8, &[u16])] = &[
-    (0x00, &[0xff02, 0x6f, 0xff08, 0xff05]),
-    (0x01, &[0xff02, 0x6f, 0xff08, 0xff05, 0x75, 0x70]),
-    (0x02, &[0xff02, 0x71, 0xff05, 0xff08]),
-    (0x03, &[0xff02, 0x71, 0xff05, 0xff08, 0x7b]),
-    (0x05, &[0xff02, 0x71, 0xff05, 0xff08, 0xff04, 0x78]),
-    (0x07, &[0xff02, 0x6a, 0xff08, 0xff05]),
-    (0x08, &[0xff02, 0x72, 0xff08, 0xff05]),
-    (0x09, &[0xff02, 0x72, 0xff08, 0xff05, 0xff04, 0x73, 0x74]),
-    (0x0b, &[0xff02, 0x72, 0xff08, 0xff05, 0xff04, 0x73]),
-    (0x0c, &[0xff02, 0x72, 0xff08, 0xff05, 0xff04, 0x73, 0x76]),
-    (0x20, &[0xff02, 0x6f, 0xff08, 0xff05, 0x70]),
-    (0x0e, &[0xff02, 0x6c, 0xff10, 0xff07]),
-    (0x22, &[0xff24, 0xff02, 0x6f, 0xff08, 0xff05, 0x70]),
-    (0x3a, &[0xff24, 0xff02, 0x72, 0xff08, 0xff05, 0xff04, 0x73, 0x7b]),
-    (0x25, &[0xff02, 0x23, 0x8e]),
-    (0x26, &[0xff02, 0x23, 0x87]),
-    (0x27, &[0xff02, 0x23, 0x8c]),
-    (0x29, &[0xff02, 0x23]),
-    (0x2a, &[0xff02, 0x23]),
-    (0x2b, &[0xff02, 0x23, 0x8d, 0xff01, 0xff03, 0x89]),
-    (0x2c, &[0xff02, 0x2b, 0x89]),
-    (0x2d, &[0xff02, 0x23, 0x8a]),
-    (0x2e, &[0xff02, 0x23, 0x88]),
-    (0x2f, &[0xff02, 0x23, 0x8d, 0xff01, 0xff03, 0x89]),
-    (0x32, &[0xff02, 0x82, 0xff05]),
-    (0x3e, &[0xff24, 0xff02, 0x2b, 0x89]),
-    (0x67, &[0xff24, 0xff02, 0x26, 0xff25, 0x20]),
-    (0x40, &[0xff02, 0x9a, 0xff08]),
-    (0x41, &[0xff02, 0xa0]),
-    (0x42, &[0xff02, 0xa0, 0xa4]),
-    (0x43, &[0xff02, 0xa0, 0xa5]),
-    (0x45, &[0xff02, 0x9b]),
-    (0x46, &[0xff02, 0xa7]),
-    (0x47, &[0xff02, 0xa7, 0xaa]),
-    (0x48, &[0xff02, 0xa7, 0xa9]),
-    (0x49, &[0xff02, 0x48, 0xff01, 0xff02, 0x52, 0xff0e]),
-    (0x53, &[0xff02, 0x9b, 0xab]),
-    (0x55, &[0xff02, 0x53, 0xff01, 0xff02, 0x51, 0xff0e]),
-    (0x54, &[0xff02, 0x9b, 0x9f]),
-    (0x3c, &[0xff24, 0xff02, 0xa7]),
-    (0x3d, &[0xff24, 0xff02, 0xa0, 0xa5]),
-    (0x6a, &[0xff02, 0x7, 0xff0b]),
-    (0x6b, &[0xff02, 0x6a, 0xff0c, 0xff07, 0x70]),
-    (0x6c, &[0xff02, 0x6a, 0xff0c, 0xff07, 0x75]),
-    (0x6d, &[0xff02, 0x7, 0xff0b]),
-    (0x6e, &[0xff02, 0x7, 0xff0b]),
-    (0x6f, &[0xff02, 0x7, 0xff0b, 0x6a]),
-    (0x70, &[0xff02, 0x7, 0xff0b, 0x6f]),
-    (0x71, &[0xff02, 0x7, 0xff0b, 0x6f]),
-    (0x72, &[0xff02, 0x7, 0xff0b, 0x71]),
-    (0x73, &[0xff02, 0x72, 0xff0c, 0xff07]),
-    (0x74, &[0xff02, 0x7, 0xff0b, 0x72]),
-    (0x75, &[0xff02, 0x74, 0xff0c, 0xff07]),
-    (0x76, &[0xff02, 0x74, 0xff0c, 0xff07]),
-    (0x78, &[0xff02, 0x71, 0xff0c, 0xff07]),
-    (0x7a, &[0xff02, 0x7, 0xff0b, 0x6a]),
-    (0x7b, &[0xff02, 0x7, 0xff0b, 0x71]),
-    (0x7c, &[0xff02, 0x7, 0xff0b, 0x7a]),
-    (0x7d, &[0xff02, 0x7, 0xff0b, 0x6f]),
-    (0x83, &[0xff02, 0x29, 0xff11]),
-    (0x84, &[0xff02, 0x83, 0x8e, 0xff07]),
-    (0x85, &[0xff02, 0x84, 0x8a, 0xff07]),
-    (0x8e, &[0xff02, 0x29, 0xff11, 0x83, 0xff01, 0xff03, 0x84, 0xff01, 0xff03, 0x85]),
-    (0x87, &[0xff02, 0x29, 0xff11, 0x8e]),
-    (0x88, &[0xff02, 0x29, 0xff11, 0x85]),
-    (0x89, &[0xff02, 0x8d, 0xff07, 0x85]),
-    (0x8a, &[0xff02, 0x29, 0xff11, 0x84, 0xff01, 0xff03, 0x85]),
-    (0x8b, &[0xff02, 0x29, 0xff11, 0x83, 0xff01, 0xff03, 0x84, 0xff01, 0xff03, 0x85]),
-    (0x8c, &[0xff02, 0x29, 0xff11, 0x85]),
-    (0x8d, &[0xff02, 0x29, 0xff11, 0x84, 0xff01, 0xff03, 0x85]),
-    (0x86, &[0xff02, 0x29, 0xff11, 0x85]),
-    (0x8f, &[0xff02, 0x29, 0xff11]),
-    (0x90, &[0xff02, 0x8f, 0x8b]),
-    (0x92, &[0xff02, 0x8f, 0x8e]),
-    (0x95, &[0xff02, 0x29]),
-    (0x9a, &[0xff02, 0x40]),
-    (0x9b, &[0xff02, 0x40, 0xa4]),
-    (0x9c, &[0xff02, 0x40]),
-    (0x9d, &[0xff02, 0x40]),
-    (0x9f, &[0xff02, 0x40, 0x9b]),
-    (0xa0, &[0xff02, 0x40, 0x9a]),
-    (0xa2, &[0xff02, 0x40, 0xa6]),
-    (0xa3, &[0xff02, 0x40, 0xa4]),
-    (0xa4, &[0xff02, 0x40, 0xa0]),
-    (0xa5, &[0xff02, 0x40, 0xa3]),
-    (0xa6, &[0xff02, 0x40, 0x9a]),
-    (0xa7, &[0xff02, 0x40, 0xa4]),
-    (0xa9, &[0xff02, 0x40, 0xa7]),
-    (0xaa, &[0xff02, 0x40, 0xa7, 0xa5]),
-    (0xab, &[0xff02, 0x40, 0x9b]),
-    (0xac, &[0xff02, 0x40, 0xa0]),
-];
-
 /// 0x49ab00 ignores these orders (they arrive through other commands).
 fn targeted_ignored(order: u8) -> bool {
     matches!(order, 0 | 0xf | 0x14 | 0x19 | 0x1d..=0x21 | 0x24 | 0x2e | 0x47..=0x49 | 0x50..=0x53 | 0x55..=0x59 | 0x9b)
@@ -267,338 +48,6 @@ impl State {
                 un.sprite != NIL && (un.order != 0 || un.order_state != 1)
             })
             .collect()
-    }
-
-    fn disabled(&self, u: u32) -> bool {
-        let un = &self.units[u as usize];
-        un.status & 0x400 != 0 || un.lockdown_timer != 0 || un.stasis_timer != 0 || un.maelstrom_timer != 0
-    }
-
-    /// 0x46dc20: `player` may give `u` `order`. Err holds the 0x66ff60 error code.
-    pub fn can_issue_order(&self, d: &Data, u: u32, order: u8, player: u8) -> Result<(), u8> {
-        if order > 0xbc {
-            return Err(0xf);
-        }
-        let un = &self.units[u as usize];
-        if player != un.player {
-            return Err(1);
-        }
-        if order != 0x27 && order != 0x28 && un.status & 1 == 0 {
-            return Err(0x14);
-        }
-        if self.disabled(u) {
-            return Err(10);
-        }
-        if un.status & 0x10 != 0 && un.unit_type != 0x67 && order != 0x76 {
-            return Err(0xb);
-        }
-        let t = un.unit_type;
-        if t == 7 && un.order == 0x21 && order != 1 {
-            return Err(8);
-        }
-        // 0x401570: ghosts (and heroes) painting a nuke.
-        if matches!(t, 1 | 0x10 | 100 | 99 | 0x68) && un.order == 0x81 {
-            return Err(8);
-        }
-        if (t == 0x44 || t == 0x3f) && un.order == 0x6a {
-            return Err(8);
-        }
-        let Some(&(_, req)) = ORDER_REQS.iter().find(|(o, _)| *o == order) else {
-            return Err(0x17);
-        };
-        match self.requirements_met(d, u, player, req) {
-            Ok(1) => Ok(()),
-            Ok(_) => Err(8),
-            Err(e) => Err(e),
-        }
-    }
-
-    /// 0x46d610: run a requirement list. Ok(1) passes, Ok(-1) / Err fail.
-    fn requirements_met(&self, d: &Data, u: u32, player: u8, req: &[u16]) -> Result<i32, u8> {
-        let un = &self.units[u as usize];
-        let flags = d.dat.units.flags[un.unit_type as usize];
-        let completed = |t: u16| self.players.completed_counts.get(t as usize).map_or(0, |c| c[player as usize]);
-        let (mut first, mut wrong_unit, mut hallucination_ok) = (true, false, false);
-        let mut i = 0;
-        while i < req.len() {
-            let mut none_built = true;
-            let mut count = 0;
-            loop {
-                let op = req[i];
-                match op {
-                    0xff02 => {
-                        i += 1;
-                        let t = req[i];
-                        if completed(t) != 0 {
-                            none_built = false;
-                        }
-                        if t == un.unit_type {
-                            wrong_unit = false;
-                            first = false;
-                            count += 1;
-                        } else if first {
-                            wrong_unit = true;
-                        }
-                    }
-                    0xff05 if un.status & 2 == 0 => return Err(7),
-                    0xff06 if un.status & 2 != 0 => return Err(6),
-                    0xff0d if un.u16_at(0xd0) as u32 | (un.u16_at(0xd2) as u32) << 16 != 0 => return Err(8),
-                    0xff12 if un.status & 2 != 0 => return Err(0x13),
-                    0xff13 if un.status & 2 == 0 => return Err(0x13),
-                    0xff14 => {
-                        let lurker = un.unit_type == 0x67 && un.status & 0x10 != 0;
-                        if un.status & 2 != 0 || (!lurker && d.dat.units.right_click_action[un.unit_type as usize] == 0) {
-                            return Err(0x13);
-                        }
-                        // 0x4e5ea0
-                        let mut rca = d.dat.units.right_click_action[un.unit_type as usize];
-                        if lurker {
-                            rca = 3;
-                        } else if rca == 0 && un.status & 2 != 0 && has_rally(un.unit_type) {
-                            rca = 2;
-                        }
-                        if rca == 3 {
-                            return Err(0x13);
-                        }
-                        count += 1;
-                    }
-                    0xff16 if flags & 8 == 0 => return Err(0x13),
-                    0xff17 if flags & 0x20 == 0 => return Err(0x13),
-                    0xff18 => {
-                        if un.status & 0x4000_0000 == 0
-                            && (un.unit_type != 0x2a || self.players.upgrade_sc[player as usize][0x18] != 0)
-                            && d.dat.units.space_provided[un.unit_type as usize] != 0
-                        {
-                            count += 1;
-                        }
-                    }
-                    0xff19 if flags & 0x800 == 0 => return Err(0x13),
-                    0xff1a if flags & 0x10 == 0 => return Err(0x13),
-                    0xff1d => {
-                        let lurker = un.unit_type == 0x67 && un.status & 0x10 != 0;
-                        if !lurker && d.dat.units.right_click_action[un.unit_type as usize] == 0 && (un.status & 2 == 0 || !has_rally(un.unit_type)) {
-                            return Err(8);
-                        }
-                        count += 1;
-                    }
-                    0xff1e => {
-                        hallucination_ok = true;
-                        count += 1;
-                    }
-                    0xff05 | 0xff06 | 0xff0d | 0xff12 | 0xff13 | 0xff16 | 0xff17 | 0xff19 | 0xff1a => count += 1,
-                    0xff00..=0xffff => {
-                        todo_port!("0x46d610", "requirement opcode not used by orders");
-                        count += 1;
-                    }
-                    t => count += completed(t),
-                }
-                if req.get(i + 1) != Some(&0xff01) {
-                    break;
-                }
-                i += 2;
-            }
-            if wrong_unit {
-                return Err(0x19);
-            }
-            if count == 0 && none_built {
-                return Ok(-1);
-            }
-            i += 1;
-        }
-        if un.status & 0x4000_0000 != 0 && !hallucination_ok {
-            return Err(0x16);
-        }
-        Ok(1)
-    }
-
-    /// 0x46e1c0: `player` may make unit type `t` with `u` (Err holds the error code).
-    pub fn can_make_unit(&self, d: &Data, u: u32, t: u16, player: u8) -> Result<(), u8> {
-        let un = &self.units[u as usize];
-        if t > 0xe3 {
-            return Err(0x10);
-        }
-        if player != un.player {
-            return Err(1);
-        }
-        if un.status & 1 == 0 {
-            return Err(0x14);
-        }
-        if self.disabled(u) {
-            return Err(10);
-        }
-        todo_port!("0x46e1c0", "per-player unit availability (0x57f27c, map PUNI)");
-        // 0x401e70(4): the last queue slot is taken by a unit.
-        if un.build_queue[(un.build_queue_slot as usize + 4) % 5] < 0x6a {
-            return Err(3);
-        }
-        if un.status & 0x4000_0000 != 0 {
-            return Err(0x16);
-        }
-        let Some(&(_, req)) = UNIT_REQS.iter().find(|(o, _)| *o as u16 == t) else {
-            return Err(0x17);
-        };
-        let completed = |t: u16| self.players.completed_counts.get(t as usize).map_or(0, |c| c[player as usize]);
-        let all = |t: u16| self.players.unit_counts.get(t as usize).map_or(0, |c| c[player as usize]);
-        let cheat = self.game_options & 0x2000 != 0;
-        let (mut first, mut wrong_unit) = (true, false);
-        let mut i = 0;
-        while i < req.len() {
-            let mut none_built = true;
-            let mut count = 0;
-            loop {
-                match req[i] {
-                    0xff02 => {
-                        i += 1;
-                        let x = req[i];
-                        if completed(x) != 0 {
-                            none_built = false;
-                        }
-                        if x == un.unit_type {
-                            wrong_unit = false;
-                            first = false;
-                            count += 1;
-                        } else if first {
-                            wrong_unit = true;
-                        }
-                    }
-                    0xff03 => {
-                        i += 1;
-                        count += completed(req[i]) + all(req[i]);
-                    }
-                    0xff04 => {
-                        if cheat {
-                            i += 1;
-                            count += 1;
-                        } else {
-                            let addon = un.ptr_at(0xc0);
-                            i += 1;
-                            if addon == NIL || self.units[addon as usize].unit_type != req[i] {
-                                return Err(if wrong_unit { 0 } else { 4 });
-                            }
-                            count += 1;
-                        }
-                    }
-                    0xff05 => {
-                        if un.status & 2 == 0 {
-                            return Err(7);
-                        }
-                        count += 1;
-                    }
-                    0xff07 => {
-                        if self.busy_building(u) || un.u8_at(0xc8) != 0x2c || un.u8_at(0xc9) != 0x3d {
-                            return Err(5);
-                        }
-                        count += 1;
-                    }
-                    0xff08 => {
-                        if self.busy_building(u) {
-                            return Err(5);
-                        }
-                        count += 1;
-                    }
-                    0xff0b => {
-                        if un.unit_type == 7 && un.order == 0x21 {
-                            return Err(5);
-                        }
-                        count += 1;
-                    }
-                    0xff0c => {
-                        if un.ptr_at(0xc0) != NIL {
-                            return Err(if wrong_unit { 0 } else { 4 });
-                        }
-                        count += 1;
-                    }
-                    0xff0e => {
-                        // 0x465270 / 0x4653d0: queued interceptors or scarabs plus those
-                        // already in the hangar against its capacity.
-                        let queued = un.build_queue.iter().filter(|&&q| q == 0x49 || q == 0x55).count() as u8;
-                        let have = match un.unit_type {
-                            0x48 | 0x52 => Some(queued.wrapping_add(un.u8_at(0xc9)).wrapping_add(un.u8_at(0xc8))),
-                            0x53 | 0x51 => Some(queued.wrapping_add(un.u8_at(0xc8))),
-                            _ => None,
-                        };
-                        let have = have.unwrap_or(0xff);
-                        let flags40 = d.dat.units.flags[un.unit_type as usize] & 0x40 != 0;
-                        let p = player as usize;
-                        let cap = match un.unit_type {
-                            0x48 | 0x52 if flags40 => 8,
-                            0x48 | 0x52 => if self.players.upgrade_sc[p][0x2b] != 0 { 8 } else { 4 },
-                            0x53 | 0x51 if flags40 => 10,
-                            0x53 | 0x51 => if self.players.upgrade_sc[p][0x24] != 0 { 10 } else { 5 },
-                            _ => 0,
-                        };
-                        if cap <= have {
-                            return Err(3);
-                        }
-                        count += 1;
-                    }
-                    0xff10 => {
-                        if un.u16_at(0xd0) as u32 | (un.u16_at(0xd2) as u32) << 16 != 0 {
-                            return Err(3);
-                        }
-                        count += 1;
-                    }
-                    0xff11 => {
-                        if un.status & 0x10 != 0 {
-                            return Err(5);
-                        }
-                        count += 1;
-                    }
-                    0xff22 => return Err(0x15),
-                    0xff23 => return Err(0x17),
-                    0xff24 => {
-                        if !self.is_expansion {
-                            return Err(0x1a);
-                        }
-                        count += 1;
-                    }
-                    0xff25 => {
-                        i += 1;
-                        if !self.tech_researched(player, req[i]) && self.game_options & 0x1000 == 0 {
-                            return Err(9);
-                        }
-                        count += 1;
-                    }
-                    0xff26 => {
-                        if un.status & 0x10 == 0 {
-                            return Err(5);
-                        }
-                        count += 1;
-                    }
-                    0xff00..=0xffff => {
-                        todo_port!("0x46e1c0", "unit requirement opcode not in the table");
-                        count += 1;
-                    }
-                    x => count += completed(x) + cheat as i32,
-                }
-                if req.get(i + 1) != Some(&0xff01) {
-                    break;
-                }
-                i += 2;
-            }
-            if count == 0 && none_built {
-                return Err(8);
-            }
-            i += 1;
-        }
-        if wrong_unit {
-            return Err(0x19);
-        }
-        Ok(())
-    }
-
-    /// 0x4e66b0 / 0x4e4c40: a building still constructing what it is making.
-    fn busy_building(&self, u: u32) -> bool {
-        let un = &self.units[u as usize];
-        let incomplete = |c: u32| c != NIL && self.units[c as usize].status & 1 == 0;
-        un.status & 2 != 0 && ((un.secondary_order == 0x25 && incomplete(un.current_build_unit)) || (un.order == 0x1f && incomplete(un.order_target_unit)))
-    }
-
-    /// 0x4ce850: tech `t` researched by `player`.
-    fn tech_researched(&self, player: u8, t: u16) -> bool {
-        todo_port!("0x4ce850", "researched tech tables (0x58cf44 / 0x58f128)");
-        let _ = (player, t);
-        false
     }
 
     /// 0x4754f0: give `u` an order from a command, queued (shift) when the order allows.
@@ -851,14 +300,6 @@ impl State {
         base
     }
 
-    /// 0x4e6ba0: `u` can carry units.
-    fn is_transport(&self, d: &Data, u: u32) -> bool {
-        let un = &self.units[u as usize];
-        un.status & 0x4000_0000 == 0
-            && (un.unit_type != 0x2a || self.players.upgrade_sc[un.player as usize][0x18] != 0)
-            && d.dat.units.space_provided[un.unit_type as usize] != 0
-    }
-
     /// 0x4e6e00: transport `tr` has room for `u`.
     fn transport_has_room(&self, d: &Data, tr: u32, u: u32) -> bool {
         let t = &self.units[tr as usize];
@@ -928,7 +369,7 @@ impl State {
         if self.is_enemy(u, t) {
             return 8;
         }
-        if self.is_transport(d, t) && self.transport_has_room(d, t, u) {
+        if self.can_carry(d, t) && self.transport_has_room(d, t, u) {
             return 0x5c;
         }
         if self.units[t as usize].status & 0x10 != 0 { 6 } else { 0x31 }
@@ -946,10 +387,10 @@ impl State {
             }
             return 6;
         }
-        if self.is_transport(d, u) {
+        if self.can_carry(d, u) {
             todo_port!("0x474d90", "transport right-clicking a unit to load (order 0x5e)");
         }
-        if self.is_transport(d, t) && self.transport_has_room(d, t, u) {
+        if self.can_carry(d, t) && self.transport_has_room(d, t, u) {
             return 0x5c;
         }
         let ts = self.units[t as usize].status;
@@ -988,7 +429,7 @@ impl State {
         let un = &self.units[u as usize];
         if tu.status & 2 == 0 || tu.status & 1 != 0 {
             if self.alliances[un.player as usize][tu.player as usize] != 0 {
-                if d.dat.units.flags[tu.unit_type as usize] & 1 == 0 && self.is_transport(d, t) && self.transport_has_room(d, t, u) {
+                if d.dat.units.flags[tu.unit_type as usize] & 1 == 0 && self.can_carry(d, t) && self.transport_has_room(d, t, u) {
                     return 0x5c;
                 }
                 // 0x474d90(0x22): mechanical terran unit below full hp.
@@ -996,7 +437,7 @@ impl State {
                 if self.race_of(d, t) == 1 && d.dat.units.flags[tu.unit_type as usize] & 0x4000_0000 != 0 && tu.status & 1 != 0 && tu.hp < max {
                     return 0x22;
                 }
-                if self.is_transport(d, t) && self.transport_has_room(d, t, u) {
+                if self.can_carry(d, t) && self.transport_has_room(d, t, u) {
                     return 0x5c;
                 }
             }
@@ -1127,7 +568,7 @@ impl State {
         if (un.status & 2 != 0 && (order == 0x27 || order == 0x28)) || ((un.unit_type == 0x2e || un.unit_type == 0x34) && order == 0x77) {
             return true;
         }
-        order == 0x70 && self.is_transport(d, u)
+        order == 0x70 && self.can_carry(d, u)
     }
 
     /// Targeted order command (0x4c2320 -> 0x49ab00).
@@ -1203,21 +644,10 @@ impl State {
         }
     }
 
-    /// Stop command (0x4c2190).
+    /// Stop command (0x4c2190): the 0x46dc20 checks for order 1 (Stop).
     pub fn command_stop(&mut self, d: &Data, player: u8, sel: &[u32], queued: bool) {
         for u in self.live_selection(sel) {
-            let un = &self.units[u as usize];
-            if un.player != player || un.status & 1 == 0 || self.disabled(u) {
-                continue;
-            }
-            if un.status & 0x10 != 0 && un.unit_type != 0x67 {
-                continue;
-            }
-            let t = un.unit_type;
-            if (matches!(t, 1 | 0x10 | 100 | 99 | 0x68) && un.order == 0x81) || ((t == 0x44 || t == 0x3f) && un.order == 0x6a) {
-                continue;
-            }
-            if self.requirements_met(d, u, player, &[0xff1e]) == Ok(1) {
+            if self.can_issue_order(d, u, 1, player).is_ok() {
                 self.command_order(d, u, 1, queued, 1, NIL, 0xe4, (0, 0));
             }
         }
@@ -1261,7 +691,7 @@ impl State {
     pub fn command_train_sel(&mut self, d: &Data, player: u8, sel: &[u32], t: u16) {
         let units = self.live_selection(sel);
         let [u] = units[..] else { return };
-        if t < 0x6a && self.can_make_unit(d, u, t, player).is_ok() {
+        if t < 0x6a && self.can_make_unit(d, u, t, player) == Ok(1) {
             self.command_train(d, u, t);
             // 0x4c36c0: UI refresh.
         }
@@ -1277,7 +707,7 @@ impl State {
         }
         // 0x48dbd0
         let ok = match order {
-            0x19 | 0x1e | 0x1f | 0x20 | 0x24 => self.can_make_unit(d, u, t, player).is_ok(),
+            0x19 | 0x1e | 0x1f | 0x20 | 0x24 => self.can_make_unit(d, u, t, player) == Ok(1),
             0x9b | 0x2e | 0x47 => {
                 todo_port!("0x48dbd0", "nydus exit / addon / beacon builds");
                 false
@@ -1286,6 +716,218 @@ impl State {
         };
         if ok && self.can_issue_order(d, u, order, player).is_ok() {
             self.command_build(d, u, order, tx, ty, t);
+        }
+    }
+}
+
+impl State {
+    /// 0x474d90: `target` suits `order` given by `u` (Err holds the stat_txt message).
+    fn order_target_valid(&self, d: &Data, u: u32, order: u8, target: u32) -> Result<(), u16> {
+        let un = &self.units[u as usize];
+        match order {
+            0x22 => {
+                if target == NIL || self.race_of(d, target) != 1 {
+                    return Err(0x374);
+                }
+                let t = &self.units[target as usize];
+                let max = d.dat.units.hit_points[t.unit_type as usize] as i32;
+                if d.dat.units.flags[t.unit_type as usize] & 0x4000_0000 == 0 || t.status & 1 == 0 || t.hp >= max {
+                    return Err(0x373);
+                }
+                Ok(())
+            }
+            0x4f => {
+                if target == NIL {
+                    return Ok(());
+                }
+                let t = &self.units[target as usize];
+                let err = 0x37d + self.race_of(d, target) as u16;
+                if t.unit_type == 0xbc {
+                    return Err(err);
+                }
+                // 0x4688e0: mineral fields and geysers.
+                if matches!(t.unit_type, 0xb0..=0xb2 | 0xbc) {
+                    return Ok(());
+                }
+                if d.dat.units.flags[t.unit_type as usize] & 0x2000 == 0 {
+                    return Err(0x37c);
+                }
+                if un.player == t.player { Ok(()) } else { Err(0x380) }
+            }
+            0x5e => {
+                if target == NIL || un.player != self.units[target as usize].player {
+                    return Err(0x37a);
+                }
+                if self.transport_has_room(d, u, target) {
+                    return Ok(());
+                }
+                let need = d.dat.units.space_required[self.units[target as usize].unit_type as usize];
+                Err(if need <= d.dat.units.space_provided[un.unit_type as usize] { 0x37b } else { 0x37a })
+            }
+            0xb1 => {
+                if target == NIL {
+                    return Ok(());
+                }
+                if self.can_use_tech(d, u, 0x2c, un.player).is_err() {
+                    return Err(0);
+                }
+                let t = &self.units[target as usize];
+                let max = d.dat.units.hit_points[t.unit_type as usize] as i32;
+                if t.status & 6 != 0 || d.dat.units.flags[t.unit_type as usize] & 0x1_0000 == 0 || t.hp >= max {
+                    return Err(0x52d);
+                }
+                Ok(())
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// 0x4746d0: a remembered fog unit of type `ty` suits `order`.
+    fn fog_target_valid(&self, d: &Data, u: u32, order: u8, ty: u16) -> Result<(), u16> {
+        match order {
+            0x23 if !(0x6a..=0x7f).contains(&ty) => Err(0x374),
+            0x50 => {
+                let err = 0x37d + self.race_of(d, u) as u16;
+                if ty == 0xbc {
+                    return Err(err);
+                }
+                if !matches!(ty, 0xb0..=0xb2) {
+                    todo_port!("0x474500", "fog gather target check");
+                }
+                Ok(())
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// 0x46f5b0: a map click while targeting. Picks the order for what was clicked
+    /// (`target` unit, a fog unit of type `ty`, or ground), checks it client side and
+    /// sends the targeted-order command. Err holds the message shown instead.
+    #[allow(clippy::too_many_arguments)]
+    pub fn target_click(&mut self, d: &Data, player: u8, sel: &[u32], modes: (u8, u8, u8), pos: (i16, i16), target: u32, mut ty: u16, queued: bool) -> Result<(), u16> {
+        let order = if target != NIL { modes.1 } else if ty == 0xe4 { modes.0 } else { modes.2 };
+        let o = order as usize;
+        let weapon = d.dat.orders.weapon[o];
+        let weapon_targeting = d.dat.orders.use_weapon_targeting[o] != 0;
+        let tech = d.dat.orders.tech[o];
+        let energy = if tech < 0x2c { (d.dat.techdata.energy_cost[tech as usize] as u32) << 8 } else { 0 };
+        if d.dat.orders.obscured_order[o] == 0xbd {
+            ty = 0xe4;
+        }
+        let mut err: Option<u16> = None;
+        let (mut any_ok, mut has_energy, mut castable) = (false, false, false);
+        for u in self.live_selection(sel) {
+            if self.disabled(u) {
+                continue;
+            }
+            if !weapon_targeting {
+                if tech == 0x2c {
+                    let r = if ty == 0xe4 { self.order_target_valid(d, u, order, target) } else { self.fog_target_valid(d, u, order, ty) };
+                    if let Err(e) = r {
+                        err = Some(e);
+                    }
+                } else {
+                    todo_port!("0x492020", "spell target range / validity");
+                    castable = true;
+                    if self.units[u as usize].energy as u32 >= energy || self.game_options & 0x800 != 0 {
+                        has_energy = true;
+                    }
+                }
+            } else if weapon == 0x82 {
+                if target == NIL {
+                    if self.units[u as usize].unit_type == 0x32 {
+                        any_ok = true;
+                    } else {
+                        todo_port!("0x475c80", "attack a remembered fog unit");
+                    }
+                } else if self.right_click_kind(d, u) == 3 {
+                    todo_port!("0x476430", "immobile attacker: target in range (0x4764d0)");
+                    any_ok |= self.can_attack_pub(d, u, target);
+                } else {
+                    any_ok |= self.can_attack_pub(d, u, target);
+                }
+            } else {
+                todo_port!("0x475ce0", "weapon-targeted spell validity");
+                any_ok = true;
+                if self.units[u as usize].energy as u32 >= energy || self.game_options & 0x800 != 0 {
+                    has_energy = true;
+                }
+            }
+        }
+        if !weapon_targeting {
+            if energy != 0 {
+                if !castable {
+                    return Err(err.unwrap_or(0x36c));
+                }
+                if !has_energy {
+                    return Err(0);
+                }
+            }
+        } else {
+            if !any_ok || err.is_some() {
+                // 0x46efe0 / 0x48ee30: error, but a plain attack is sent anyway.
+                if weapon != 0x82 {
+                    return Err(err.unwrap_or(0));
+                }
+                let handle = if target != NIL { self.unit_handle(target) } else { 0 };
+                self.command_targeted_packet(d, player, sel, pos, handle, ty, order, queued);
+                return Ok(());
+            }
+            if energy != 0 && !has_energy {
+                return Err(0);
+            }
+        }
+        if let Some(e) = err {
+            return Err(e);
+        }
+        let handle = if target != NIL { self.unit_handle(target) } else { 0 };
+        self.command_targeted_packet(d, player, sel, pos, handle, ty, order, queued);
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn command_targeted_packet(&mut self, d: &Data, player: u8, sel: &[u32], pos: (i16, i16), handle: u32, ty: u16, order: u8, queued: bool) {
+        let mut p = vec![0x15];
+        p.extend_from_slice(&(pos.0 as u16).to_le_bytes());
+        p.extend_from_slice(&(pos.1 as u16).to_le_bytes());
+        p.extend_from_slice(&(handle as u16).to_le_bytes());
+        p.extend_from_slice(&ty.to_le_bytes());
+        p.push(order);
+        p.push(queued as u8);
+        self.execute_command(d, player, sel, &p);
+    }
+
+    /// 0x4865d0: run one command packet from `player`, whose selection is `sel`.
+    pub fn execute_command(&mut self, d: &Data, player: u8, sel: &[u32], p: &[u8]) {
+        let u16_at = |o: usize| p.get(o..o + 2).map_or(0, |b| u16::from_le_bytes([b[0], b[1]]));
+        let byte = |o: usize| p.get(o).copied().unwrap_or(0);
+        match byte(0) {
+            0x0c => {
+                // 0x4c23c0
+                let (order, tx, ty, t) = (byte(1), u16_at(2), u16_at(4), u16_at(6));
+                self.command_build_sel(d, player, sel, order, tx as i16, ty as i16, t);
+            }
+            0x14 => {
+                // 0x4c2370
+                let (x, y, h, ty, q) = (u16_at(1), u16_at(3), u16_at(5), u16_at(7), byte(9));
+                if x < self.map_px.0 && y < self.map_px.1 {
+                    let t = self.unit_from_handle(h as u32).unwrap_or(NIL);
+                    self.command_right_click(d, player, sel, (x as i16, y as i16), t, ty, q != 0);
+                }
+            }
+            0x15 => {
+                // 0x4c2320
+                let (x, y, h, ty, order, q) = (u16_at(1), u16_at(3), u16_at(5), u16_at(7), byte(9), byte(10));
+                if x < self.map_px.0 && y < self.map_px.1 {
+                    let t = self.unit_from_handle(h as u32).unwrap_or(NIL);
+                    self.command_targeted_order(d, player, sel, (x as i16, y as i16), t, ty, order, q != 0);
+                }
+            }
+            0x1a => self.command_stop(d, player, sel, byte(1) != 0),
+            0x1e => self.command_return_cargo(d, player, sel, byte(1) != 0),
+            0x1f => self.command_train_sel(d, player, sel, u16_at(1)),
+            0x2b => self.command_hold(d, player, sel, byte(1) != 0),
+            _ => todo_port!("0x4865d0", "command receiver not ported yet"),
         }
     }
 }

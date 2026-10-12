@@ -36,6 +36,16 @@ pub struct Players {
     pub unit_score: [i32; 12],
     pub buildings_constructed: [i32; 12],
     pub building_score: [i32; 12],
+    /// 0x57f27c: units each player may build (map settings; all by default).
+    pub unit_available: [[u8; 228]; 12],
+    /// 0x58ce24 / 0x58f050: techs enabled; 0x58cf44 / 0x58f140: techs researched
+    /// (indexed by tech id; Brood War techs continue the classic arrays).
+    pub tech_available: [[u8; 44]; 12],
+    pub tech_researched: [[u8; 44]; 12],
+    /// 0x58d088 / 0x58f24a: upgrade level caps.
+    pub upgrade_max: [[u8; 61]; 12],
+    /// 0x58f230: research-in-progress bits, 6 bytes per player.
+    pub research_in_progress: [[u8; 6]; 12],
 }
 
 impl Default for Players {
@@ -63,6 +73,11 @@ impl Default for Players {
             unit_score: [0; 12],
             buildings_constructed: [0; 12],
             building_score: [0; 12],
+            unit_available: [[1; 228]; 12],
+            tech_available: [[1; 44]; 12],
+            tech_researched: [[0; 44]; 12],
+            upgrade_max: [[0; 61]; 12],
+            research_in_progress: [[0; 6]; 12],
         }
     }
 }

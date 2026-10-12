@@ -851,6 +851,14 @@ impl State {
         self.can_hit_now(d, u, attacker) && !self.can_hit_now(d, u, current)
     }
 
+    pub(super) fn can_attack_pub(&self, d: &Data, u: u32, target: u32) -> bool {
+        self.can_attack(d, u, target, true)
+    }
+
+    pub(super) fn is_armed_pub(&self, d: &Data, u: u32) -> bool {
+        self.is_armed(d, u)
+    }
+
     /// 0x476180: `u` has a weapon (including interceptors / scarabs and turrets).
     fn is_armed(&self, d: &Data, u: u32) -> bool {
         let un = &self.units[u as usize];

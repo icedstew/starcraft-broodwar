@@ -7,6 +7,7 @@
 pub mod attack;
 pub mod build;
 pub mod bullet;
+pub mod buttons;
 pub mod chk_load;
 pub mod command;
 pub mod collide;
@@ -25,6 +26,7 @@ pub mod orders;
 pub mod path;
 pub mod path_req;
 pub mod players;
+pub mod requirements;
 pub mod list;
 pub mod map;
 pub mod load;
