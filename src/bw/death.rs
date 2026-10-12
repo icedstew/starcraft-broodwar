@@ -6,6 +6,12 @@ use super::{Data, State};
 use crate::todo_port;
 
 impl State {
+    /// Still in the game: has a sprite and is not dying (0x49a850's test).
+    pub fn unit_alive(&self, u: u32) -> bool {
+        let un = &self.units[u as usize];
+        un.sprite != NIL && (un.order != 0 || un.order_state != 1)
+    }
+
     /// 0x475710: give `u` the Die order (clearing its queue).
     pub fn kill_unit(&mut self, d: &Data, u: u32) {
         if self.units[u as usize].resource_type != 0 {

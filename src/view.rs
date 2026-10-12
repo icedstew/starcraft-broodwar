@@ -1,9 +1,10 @@
-//! Map viewer: terrain + map units/doodads animated by iscript.
+//! Playable map viewer on the faithful engine (`bw::State`): terrain, fog of war,
+//! sprites, selection, the console HUD and player commands.
 
+use crate::bw::{self, list::NIL};
 use crate::casc::Casc;
 use crate::dat::{self, Dat};
 use crate::grp::{Blend, Grp};
-use crate::iscript::{Iscript, Sprite, World};
 use crate::map::{self, Chk, Tileset};
 use std::cell::RefCell;
 use std::io;
@@ -31,25 +32,28 @@ pub fn pcx(d: &[u8]) -> (usize, usize, Vec<u8>) {
 
 pub struct Assets {
     pub casc: Casc,
-    pub dat: Dat,
-    pub iscript: Iscript,
+    /// Engine data (dat tables, iscript, GRP sizes, LO files).
+    pub bw: bw::load::Loaded,
     image_names: Vec<String>,
     grps: RefCell<Vec<Option<Option<std::rc::Rc<Grp>>>>>,
 }
 
 impl Assets {
     pub fn load(casc: Casc) -> io::Result<Assets> {
-        let dat = Dat::load(&casc)?;
-        let iscript = Iscript::parse(casc.read("scripts/iscript.bin")?);
+        let bw = bw::load::Loaded::load(&casc)?;
         let image_names = dat::parse_tbl(&casc.read("arr/images.tbl")?);
-        Ok(Assets { casc, dat, iscript, image_names, grps: RefCell::new(vec![None; dat::Images::COUNT]) })
+        Ok(Assets { casc, bw, image_names, grps: RefCell::new(vec![None; dat::Images::COUNT]) })
+    }
+
+    pub fn dat(&self) -> &Dat {
+        &self.bw.dat
     }
 
     pub fn grp(&self, image: u16) -> Option<std::rc::Rc<Grp>> {
         let mut g = self.grps.borrow_mut();
         let slot = g.get_mut(image as usize)?;
         slot.get_or_insert_with(|| {
-            let idx = self.dat.images.grp[image as usize] as usize;
+            let idx = self.bw.dat.images.grp[image as usize] as usize;
             let name = self.image_names.get(idx.checked_sub(1)?)?;
             self.casc.read(&format!("unit/{name}")).ok().map(|d| std::rc::Rc::new(Grp::parse(d)))
         })
@@ -57,13 +61,21 @@ impl Assets {
     }
 }
 
+/// Run `f` with the engine's `Data` view over `a`.
+fn with_data<R>(a: &Assets, f: impl FnOnce(&bw::Data) -> R) -> R {
+    let g = |i: u16| a.bw.grp_size(i);
+    let d = bw::load::data(&a.bw, &g);
+    f(&d)
+}
+
 pub struct Scene<'a> {
-    pub game: crate::game::Game,
-    pub selected: Vec<usize>,
+    pub st: bw::State,
+    pub selected: Vec<u32>,
     /// Command card submenu (button set index) opened by a Menu button, e.g. SCV "Build".
     pub card_menu: Option<usize>,
-    /// Building type being placed (placement preview follows the cursor).
-    pub placing: Option<usize>,
+    /// Building type being placed, and whether the spot under the cursor is valid.
+    pub placing: Option<u16>,
+    pub place_ok: bool,
     /// Screen-space drag rectangle while box-selecting.
     pub drag_box: Option<(i32, i32, i32, i32)>,
     pub a: &'a Assets,
@@ -71,8 +83,14 @@ pub struct Scene<'a> {
     pub ts: Tileset,
     pub terrain: (usize, usize, Vec<u8>),
     pub player_colors: [[u8; 8]; 12],
+    local: u8,
     shadow: [u8; 256],
     remaps: [Vec<u8>; 7],
+}
+
+/// Melee maps: only start locations and neutral units.
+pub fn is_melee_map(chk: &Chk) -> bool {
+    chk.section(b"UNIT").unwrap_or(&[]).chunks_exact(36).all(|r| r[16] >= 8 || u16::from_le_bytes([r[8], r[9]]) == 214)
 }
 
 impl<'a> Scene<'a> {
@@ -98,94 +116,80 @@ impl<'a> Scene<'a> {
         }
         // images.dat remapping ids 1..=7
         let remaps = ["ofire", "gfire", "bfire", "bexpl", "trans50", "red", "green"].map(tbl);
-        let frames = |id: u16| a.grp(id).map_or(0, |g| g.frame_count() as u16);
-        let w = World { dat: &a.dat, iscript: &a.iscript, grp_frames: &frames, tileset: chk.tileset() as u16 };
-        let (gw, gh, walk) = map::walk_grid(&chk, &ts);
-        let mut game = crate::game::Game::new(&w, &chk, crate::game::path::WalkGrid { w: gw, h: gh, walk }, map::build_grid(&chk, &ts));
-        if crate::game::Game::is_melee_map(&chk) && std::env::var("SCBW_NOMELEE").is_err() {
-            // ponytail: local player slot 0 plays SCBW_RACE (default terran); other start
-            // locations get computer slots cycling through the races until there's an AI.
-            let mine = match std::env::var("SCBW_RACE").as_deref() {
-                Ok("zerg") => 0,
-                Ok("protoss") => 2,
-                _ => 1,
-            };
-            let mut races = [None; 8];
-            for (i, r) in races.iter_mut().enumerate() {
-                *r = Some(if i == 0 { mine } else { (i % 3) as u8 });
-            }
-            game.setup_melee(&w, &chk, &races);
-        }
-        Ok(Scene { game, selected: Vec::new(), card_menu: None, placing: None, drag_box: None, a, chk, ts, terrain, player_colors, shadow, remaps })
-    }
-
-    pub fn world(&self, frames: &'a dyn Fn(u16) -> u16) -> World<'a> {
-        World { dat: &self.a.dat, iscript: &self.a.iscript, grp_frames: frames, tileset: self.chk.tileset() as u16 }
+        let st = new_game(a, &chk)?;
+        let local = st.local_player;
+        Ok(Scene { st, selected: Vec::new(), card_menu: None, placing: None, place_ok: false, drag_box: None, a, chk, ts, terrain, player_colors, local, shadow, remaps })
     }
 
     /// Advance one frame; returns sounds (sfx id, x, y) requested this frame.
     pub fn step(&mut self) -> Vec<(u16, i32, i32)> {
-        let a = self.a;
-        let frames = |id: u16| a.grp(id).map_or(0, |g| g.frame_count() as u16);
-        let w = self.world(&frames);
-        self.game.step(&w)
+        let st = &mut self.st;
+        with_data(self.a, |d| {
+            // 0x4d9670: the frame counter advances before each step.
+            st.frame += 1;
+            st.game_step(d);
+        });
+        self.selected.retain(|&u| self.st.unit_alive(u));
+        self.st.sounds.drain(..).map(|(id, x, y)| (id, x as i32, y as i32)).collect()
     }
 
-    pub fn spawn(&mut self, kind: usize, owner: u8, x: i32, y: i32) -> usize {
-        let a = self.a;
-        let frames = |id: u16| a.grp(id).map_or(0, |g| g.frame_count() as u16);
-        let w = self.world(&frames);
-        self.game.create_unit(&w, kind, owner, x, y, 100)
+    /// Create a finished unit (debug spawning).
+    pub fn spawn(&mut self, kind: u16, owner: u8, x: i16, y: i16) -> Option<u32> {
+        let st = &mut self.st;
+        with_data(self.a, |d| {
+            let u = st.create_unit(d, kind, x, y, owner)?;
+            st.finish_unit_pre(d, u);
+            if st.place_unit(d, u) {
+                st.finish_unit_post(d, u);
+            }
+            Some(u)
+        })
     }
 
-    /// Local player: first human (OWNR 6) slot; slot 0 on melee maps.
     pub fn local_player(&self) -> u8 {
-        if crate::game::Game::is_melee_map(&self.chk) {
-            return 0;
-        }
-        self.chk.owners().iter().position(|&o| o == 6).unwrap_or(0) as u8
+        self.local
     }
 
-    /// Local player's race (SIDE: 0 zerg, 1 terran, 2 protoss); random/other -> terran.
+    /// Local player's race (0 zerg, 1 terran, 2 protoss).
     pub fn local_race(&self) -> usize {
-        let p = self.local_player() as usize;
-        if let Some(u) = self.game.units.iter().find(|u| u.owner as usize == p && self.a.dat.units.flags[u.kind] & 0x1000 != 0) {
-            return crate::game::economy::race_of(&self.world(&|_| 0), u.kind);
-        }
-        match self.chk.races()[p] {
-            r @ 0..=2 => r as usize,
-            _ => 1,
-        }
+        (self.st.player_races[self.local as usize] as usize).min(2)
     }
 
-    /// (used, max) supply for `player` and race, from units.dat values (stored doubled).
     /// (used, max) supply in whole units, for the HUD.
     pub fn supply(&self, player: u8, race: usize) -> (u32, u32) {
-        let frames = |_: u16| 0;
-        let (used, max) = crate::game::economy::supply(&self.game, &self.world(&frames), player, race);
-        (used.div_ceil(2), max / 2)
+        let p = &self.st.players;
+        let (used, max, prov) = (p.supply_used[race][player as usize], p.supply_max[race][player as usize], p.supply_provided[race][player as usize]);
+        ((used.max(0) as u32).div_ceil(2), (prov.min(max).max(0) / 2) as u32)
     }
 
-    /// (x, y, unit index) for every unit, from its sprite.
-    pub fn unit_positions(&self) -> Vec<(i32, i32, usize)> {
-        // Subunits (turrets, units.dat flag 0x10) are not selectable on their own.
-        let flags = &self.a.dat.units.flags;
-        (0..self.game.units.len())
-            .filter(|&i| !self.game.units[i].dead && flags[self.game.units[i].kind] & 0x10 == 0)
-            .map(|i| {
-                let (x, y) = self.game.unit_pos(i);
-                (x, y, i)
-            })
-            .collect()
+    fn sprite_seen(&self, s: u32) -> bool {
+        let sp = &self.st.sprites[s as usize];
+        sp.flags & bw::sprite::sflag::HIDDEN == 0 && sp.visibility & (1 << self.local) != 0
+    }
+
+    /// (x, y, unit) for every selectable unit the local player can see.
+    pub fn unit_positions(&self) -> Vec<(i32, i32, u32)> {
+        let flags = &self.a.dat().units.flags;
+        let mut v = Vec::new();
+        let mut u = self.st.visible_units.head;
+        while u != NIL {
+            let un = &self.st.units[u as usize];
+            if flags[un.unit_type as usize] & 0x10 == 0 && self.st.unit_alive(u) && self.sprite_seen(un.sprite) {
+                let s = &self.st.sprites[un.sprite as usize];
+                v.push((s.x as i32, s.y as i32, u));
+            }
+            u = un.link.next;
+        }
+        v
     }
 
     /// Units whose units.dat bounds intersect the map-space rectangle.
-    pub fn units_in_rect(&self, x0: i32, y0: i32, x1: i32, y1: i32) -> Vec<usize> {
-        let d = &self.a.dat.units.dimensions;
+    pub fn units_in_rect(&self, x0: i32, y0: i32, x1: i32, y1: i32) -> Vec<u32> {
+        let d = &self.a.dat().units.dimensions;
         self.unit_positions()
             .into_iter()
             .filter(|&(x, y, u)| {
-                let dm = d[self.game.units[u].kind];
+                let dm = d[self.st.units[u as usize].unit_type as usize];
                 let (l, t, r, b) = ((dm & 0xFFFF) as i32, (dm >> 16 & 0xFFFF) as i32, (dm >> 32 & 0xFFFF) as i32, (dm >> 48) as i32);
                 x - l <= x1.max(x0) && x + r >= x0.min(x1) && y - t <= y1.max(y0) && y + b >= y0.min(y1)
             })
@@ -196,45 +200,65 @@ impl<'a> Scene<'a> {
     /// Draw the view at (vx, vy) into an indexed buffer of vw*vh.
     pub fn draw(&self, vx: i32, vy: i32, vw: i32, vh: i32, out: &mut [u8]) {
         let (tw, th, tpx) = &self.terrain;
+        let (unexplored, fogged) = (1u32 << (self.local + 8), 1u32 << self.local);
+        let mw = self.st.terrain.width as i32;
         for y in 0..vh {
             let sy = (vy + y).clamp(0, *th as i32 - 1) as usize;
             let row = &tpx[sy * tw..sy * tw + tw];
             for x in 0..vw {
-                out[(y * vw + x) as usize] = row[(vx + x).clamp(0, *tw as i32 - 1) as usize];
+                let sx = (vx + x).clamp(0, *tw as i32 - 1);
+                let f = self.st.terrain.tile_flags.get(((sy as i32 / 32) * mw + sx / 32) as usize).copied().unwrap_or(0);
+                let c = row[sx as usize];
+                out[(y * vw + x) as usize] = if f & unexplored != 0 { 0 } else if f & fogged != 0 { self.shadow[c as usize] } else { c };
             }
         }
-        let mut order: Vec<&Sprite> = self.game.sprites.iter().flatten().filter(|s| !s.hidden && (s.x - vx).abs() < vw + 256 && (s.y - vy).abs() < vh + 256).collect();
-        order.sort_by_key(|s| (s.elevation, s.y));
-        for s in &order {
-            let Some(u) = s.unit.filter(|u| self.selected.contains(u)) else { continue };
-            let sp = &self.a.dat.sprites;
-            let id = s.id as usize;
+        // Sprites by elevation, then tile row (row lists as the game keeps them).
+        let mut order: Vec<u32> = Vec::new();
+        for l in &self.st.sprite_rows {
+            let mut s = l.head;
+            while s != NIL {
+                order.push(s);
+                s = self.st.sprites[s as usize].link.next;
+            }
+        }
+        order.retain(|&s| {
+            let sp = &self.st.sprites[s as usize];
+            self.sprite_seen(s) && (sp.x as i32 - vx).abs() < vw + 256 && (sp.y as i32 - vy).abs() < vh + 256
+        });
+        order.sort_by_key(|&s| self.st.sprites[s as usize].elevation);
+        let sp_dat = &self.a.dat().sprites;
+        for &u in &self.selected {
+            let s = self.st.units[u as usize].sprite;
+            let sp = &self.st.sprites[s as usize];
+            let id = sp.sprite_id as usize;
             // selection circle images start at 561; offset is the vertical shift.
-            let img = 561 + sp.selection_circle[id] as u16;
-            if let Some(g) = self.a.grp(img) {
-                let x = s.x - g.w / 2 - vx;
-                let y = s.y + sp.selection_offset[id] as i32 - g.h / 2 - vy;
-                let _ = u;
+            if let Some(g) = self.a.grp(561 + sp_dat.selection_circle[id] as u16) {
+                let x = sp.x as i32 - g.w / 2 - vx;
+                let y = sp.y as i32 + sp_dat.selection_offset[id] as i32 - g.h / 2 - vy;
                 g.draw(0, false, x, y, out, vw, vh, Blend::Normal);
             }
         }
         for s in order {
-            for img in &s.images {
-                if img.flags & crate::iscript::image_flags::HIDDEN != 0 {
+            let sp = &self.st.sprites[s as usize];
+            let mut i = sp.images.tail;
+            while i != NIL {
+                let img = &self.st.images[i as usize];
+                i = img.link.prev;
+                if img.flags & bw::sprite::iflag::HIDDEN != 0 {
                     continue;
                 }
-                let Some(g) = self.a.grp(img.id) else { continue };
-                let x = s.x + img.x as i32 - g.w / 2 - vx;
-                let y = s.y + img.y as i32 - g.h / 2 - vy;
-                let blend = match img.draw_fn {
+                let Some(g) = self.a.grp(img.image_id) else { continue };
+                let x = sp.x as i32 + img.x as i32 - g.w / 2 - vx;
+                let y = sp.y as i32 + img.y as i32 - g.h / 2 - vy;
+                let blend = match img.modifier {
                     10 => Blend::Remap(&self.shadow),
-                    9 => match self.a.dat.images.remapping[img.id as usize] {
+                    9 => match self.a.dat().images.remapping[img.image_id as usize] {
                         r @ 1..=7 => Blend::Table(&self.remaps[r as usize - 1]),
                         _ => Blend::Normal,
                     },
-                    _ => Blend::Player(&self.player_colors[(s.owner as usize).min(11)]),
+                    _ => Blend::Player(&self.player_colors[(sp.owner as usize).min(11)]),
                 };
-                g.draw(img.frame as usize, img.flipped(), x, y, out, vw, vh, blend);
+                g.draw(img.frame as usize, img.flags & bw::sprite::iflag::FLIPPED != 0, x, y, out, vw, vh, blend);
             }
         }
     }
@@ -242,6 +266,114 @@ impl<'a> Scene<'a> {
     pub fn palette(&self) -> &[[u8; 3]; 256] {
         &self.ts.palette
     }
+
+    /// The unit under map point (x, y), if any.
+    pub fn unit_at(&self, x: i32, y: i32) -> Option<u32> {
+        self.units_in_rect(x, y, x, y).into_iter().next()
+    }
+
+    /// Right-click at map point `p` (0x4c2370).
+    pub fn right_click(&mut self, p: (i32, i32), queued: bool) {
+        let t = self.unit_at(p.0, p.1).unwrap_or(NIL);
+        let (sel, me, st) = (self.selected.clone(), self.local, &mut self.st);
+        with_data(self.a, |d| st.command_right_click(d, me, &sel, (p.0 as i16, p.1 as i16), t, 0xe4, queued));
+    }
+
+    /// Targeted order at map point `p` (0x4c2320).
+    pub fn targeted_order(&mut self, order: u8, p: (i32, i32), queued: bool) {
+        let t = self.unit_at(p.0, p.1).unwrap_or(NIL);
+        let (sel, me, st) = (self.selected.clone(), self.local, &mut self.st);
+        with_data(self.a, |d| st.command_targeted_order(d, me, &sel, (p.0 as i16, p.1 as i16), t, 0xe4, order, queued));
+    }
+
+    /// Placement tile for building `t` with the cursor at map point `p`.
+    pub fn build_tile(&self, t: u16, p: (i32, i32)) -> (i16, i16) {
+        let v = self.a.dat().units.placement_box[t as usize];
+        let (w, h) = (v as i16 as i32, (v >> 16) as i16 as i32);
+        (((p.0 - w / 2 + 16) / 32) as i16, ((p.1 - h / 2 + 16) / 32) as i16)
+    }
+
+    /// Update `place_ok` for building `t` at map point `p` (placement grid slot 1, as
+    /// the placement cursor does).
+    pub fn check_placement(&mut self, t: u16, p: (i32, i32)) {
+        let (tx, ty) = self.build_tile(t, p);
+        let u = self.selected.first().copied().unwrap_or(NIL);
+        let (me, st) = (self.local, &mut self.st);
+        self.place_ok = with_data(self.a, |d| st.placement_check(d, u, me, tx, ty, t, 1, false, false, false) == 0);
+    }
+
+    /// Worker order that builds `t` (SCV PlaceBuilding, probe PlaceProtossBuilding, drone DroneStartBuild).
+    pub fn build(&mut self, t: u16, p: (i32, i32)) {
+        let (tx, ty) = self.build_tile(t, p);
+        let order = match self.st.player_races[self.local as usize] {
+            0 => 0x19,
+            2 => 0x1f,
+            _ => 0x1e,
+        };
+        let (sel, me, st) = (self.selected.clone(), self.local, &mut self.st);
+        with_data(self.a, |d| st.command_build_sel(d, me, &sel, order, tx, ty, t));
+    }
+
+    pub fn command(&mut self, f: impl FnOnce(&mut bw::State, &bw::Data, u8, &[u32])) {
+        let (sel, me, st) = (self.selected.clone(), self.local, &mut self.st);
+        with_data(self.a, |d| f(st, d, me, &sel));
+    }
+}
+
+/// Engine state for a new game on `chk` (map load, players, melee starting units).
+fn new_game(a: &Assets, chk: &Chk) -> io::Result<bw::State> {
+    let (w, h) = chk.dims();
+    let mut st = bw::State::new((w, h), chk.tileset() as u16, 1700);
+    let name = map::TILESETS[chk.tileset()];
+    let vf4 = a.casc.read(&format!("tileset/{name}.vf4"))?;
+    let ts = bw::map::TilesetData { vf4: vf4.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect(), cv5: a.casc.read(&format!("tileset/{name}.cv5"))? };
+    st.rng.seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |t| t.as_secs() as u32);
+    with_data(a, |d| {
+        st.search.init(d);
+        st.init_thingies(d);
+        st.load_terrain(&ts, w as u16, h as u16, chk.section(b"MTXM").unwrap_or(&[]));
+        if let Some(doodads) = chk.section(b"THG2") {
+            st.chk_doodads(d, doodads, Default::default());
+        }
+        let melee = is_melee_map(chk) && std::env::var("SCBW_NOMELEE").is_err();
+        let units = chk.section(b"UNIT").unwrap_or(&[]);
+        if melee {
+            // ponytail: local player is slot 0 playing SCBW_RACE (default terran); other
+            // start locations get idle computer slots cycling the races (no AI yet).
+            let starts: Vec<u8> = units.chunks_exact(36).filter(|r| u16::from_le_bytes([r[8], r[9]]) == 0xd6 && r[16] < 8).map(|r| r[16]).collect();
+            let mine = match std::env::var("SCBW_RACE").as_deref() {
+                Ok("zerg") => 0,
+                Ok("protoss") => 2,
+                _ => 1,
+            };
+            for &p in &starts {
+                st.player_types[p as usize] = if p == 0 { 2 } else { 1 };
+                st.player_races[p as usize] = if p == 0 { mine } else { p % 3 };
+                st.players.minerals[p as usize] = 50;
+            }
+            st.local_player = 0;
+        } else {
+            let (owners, races) = (chk.owners(), chk.races());
+            for p in 0..12 {
+                st.player_types[p] = match owners[p] {
+                    6 => 2,
+                    5 => 1,
+                    o => o,
+                };
+                st.player_races[p] = races[p].min(2);
+            }
+            st.local_player = owners.iter().position(|&o| o == 6).unwrap_or(0) as u8;
+        }
+        st.local_vision_mask = 1 << st.local_player;
+        st.init_alliances(Default::default());
+        st.chk_units(d, units, Default::default());
+        if melee {
+            st.rng.enabled = true;
+            st.melee_start_units(d, 2);
+            st.rng.enabled = false;
+        }
+    });
+    Ok(st)
 }
 
 pub const SCREEN_W: i32 = 640;
@@ -262,8 +394,8 @@ pub fn card_buttons(scene: &Scene) -> &'static [crate::game::buttons::Button] {
         return crate::game::buttons::SETS.get(set).copied().unwrap_or(&[]);
     }
     match scene.selected.first() {
-        Some(&u) if scene.game.units[u].owner == scene.local_player() => {
-            crate::game::buttons::SETS.get(scene.game.units[u].kind).copied().unwrap_or(&[])
+        Some(&u) if scene.st.units[u as usize].player == scene.local_player() => {
+            crate::game::buttons::SETS.get(scene.st.units[u as usize].unit_type as usize).copied().unwrap_or(&[])
         }
         _ => &[],
     }
@@ -280,6 +412,23 @@ pub fn minimap_geom(scene: &Scene) -> (i32, i32, i32) {
     let (tw, th) = (scene.terrain.0 as i32, scene.terrain.1 as i32);
     let scale = (tw.max(th) / ms).max(1);
     (mx + (ms - tw / scale) / 2, my + (ms - th / scale) / 2, scale)
+}
+
+fn rect(out: &mut [u32], w: i32, h: i32, (x0, y0, x1, y1): (i32, i32, i32, i32), col: u32) {
+    for x in x0.min(x1)..=x0.max(x1) {
+        for y in [y0, y1] {
+            if (0..w).contains(&x) && (0..h).contains(&y) {
+                out[(y * w + x) as usize] = col;
+            }
+        }
+    }
+    for y in y0.min(y1)..=y0.max(y1) {
+        for x in [x0, x1] {
+            if (0..w).contains(&x) && (0..h).contains(&y) {
+                out[(y * w + x) as usize] = col;
+            }
+        }
+    }
 }
 
 pub fn compose_with_cursor(
@@ -314,37 +463,21 @@ pub fn compose_with_cursor(
             out[((oy + y) * w + ox + x) as usize] = rgb(t);
         }
     }
-    for s in scene.game.sprites.iter().flatten() {
-        if s.owner < 8 {
-            let (px, py) = (ox + s.x / scale, oy + s.y / scale);
-            if (0..w).contains(&px) && (0..h).contains(&py) {
-                out[(py * w + px) as usize] = rgb(scene.player_colors[s.owner as usize][0]);
-            }
+    for (x, y, u) in scene.unit_positions() {
+        let p = scene.st.units[u as usize].player as usize;
+        let (px, py) = (ox + x / scale, oy + y / scale);
+        if (0..w).contains(&px) && (0..h).contains(&py) {
+            out[(py * w + px) as usize] = rgb(scene.player_colors[p.min(11)][0]);
         }
     }
     let (rx, ry, rw, rh) = (ox + vx / scale, oy + vy / scale, w / scale, (h - 120) / scale);
-    for i in 0..=rw {
-        for py in [ry, ry + rh] {
-            if (0..h).contains(&py) && (0..w).contains(&(rx + i)) {
-                out[(py * w + rx + i) as usize] = 0xFFFFFF;
-            }
-        }
-    }
-    for i in 0..=rh {
-        for px in [rx, rx + rw] {
-            if (0..h).contains(&(ry + i)) && (0..w).contains(&px) {
-                out[((ry + i) * w + px) as usize] = 0xFFFFFF;
-            }
-        }
-    }
-    // Resource bar (values come from game state once players exist).
-    // icons.grp frames: 0 minerals, 1..=3 gas (z/t/p), 4..=6 supply (z/t/p).
+    rect(out, w, h, (rx, ry, rx + rw, ry + rh), 0xFFFFFF);
+    // Resource bar. icons.grp frames: 0 minerals, 1..=3 gas (z/t/p), 4..=6 supply (z/t/p).
     let col = ui.text_color(2);
     let race = scene.local_race();
-    let (used, max) = scene.supply(scene.local_player(), race);
-    let pl = scene.game.players[scene.local_player() as usize];
-    // icons.grp race order is z/t/p, same as SIDE race ids.
-    let (supply, minerals, gas) = (format!("{}/{}", used, max), pl.minerals.to_string(), pl.gas.to_string());
+    let me = scene.local_player() as usize;
+    let (used, max) = scene.supply(me as u8, race);
+    let (supply, minerals, gas) = (format!("{}/{}", used, max), scene.st.players.minerals[me].to_string(), scene.st.players.gas[me].to_string());
     let mut x = 440;
     for (icon, text) in [(0, minerals.as_str()), (1 + race, gas.as_str()), (4 + race, supply.as_str())] {
         ui.draw_icon(icon, x, 2, pal, out, w, h);
@@ -353,11 +486,12 @@ pub fn compose_with_cursor(
     }
     // Selected unit panel.
     if let [u] = scene.selected[..] {
-        let mu = &scene.game.units[u];
-        crate::ui::draw_grp_rgb(&ui.wireframe, mu.kind, 170, 390, pal, out, w, h);
-        let name = ui.stat_txt.get(mu.kind).map_or("", |s| s.split('\0').next().unwrap_or(""));
+        let mu = &scene.st.units[u as usize];
+        let kind = mu.unit_type as usize;
+        crate::ui::draw_grp_rgb(&ui.wireframe, kind, 170, 390, pal, out, w, h);
+        let name = ui.stat_txt.get(kind).map_or("", |s| s.split('\0').next().unwrap_or(""));
         ui.font.draw(name, 260, 392, ui.text_color(2), pal, out, w, h);
-        let max = scene.a.dat.units.hit_points[mu.kind] >> 8;
+        let max = scene.a.dat().units.hit_points[kind] >> 8;
         if max > 0 {
             let hp = format!("{}/{}", (mu.hp.max(0) as u32).div_ceil(256), max);
             ui.font.draw(&hp, 176, 456, ui.text_color(3), pal, out, w, h);
@@ -365,36 +499,15 @@ pub fn compose_with_cursor(
     } else if !scene.selected.is_empty() {
         ui.font.draw(&format!("{} units", scene.selected.len()), 260, 392, ui.text_color(2), pal, out, w, h);
     }
-    if let Some((x0, y0, x1, y1)) = scene.drag_box {
-        for x in x0.min(x1)..=x0.max(x1) {
-            for y in [y0, y1] {
-                if (0..w).contains(&x) && (0..h).contains(&y) { out[(y * w + x) as usize] = 0x10FC18; }
-            }
-        }
-        for y in y0.min(y1)..=y0.max(y1) {
-            for x in [x0, x1] {
-                if (0..w).contains(&x) && (0..h).contains(&y) { out[(y * w + x) as usize] = 0x10FC18; }
-            }
-        }
+    if let Some(b) = scene.drag_box {
+        rect(out, w, h, b, 0x10FC18);
     }
     if let (Some(kind), Some((_, cx, cy))) = (scene.placing, cursor) {
-        let frames = |_: u16| 0;
-        let wd = scene.world(&frames);
-        let (px, py) = crate::game::build::snap_on(&scene.game, &wd, kind, cx + vx, cy + vy);
-        let ok = crate::game::build::can_place(&scene.game, &wd, kind, (px, py), scene.selected.first().copied());
-        let (fw, fh) = crate::game::build::footprint(&wd, kind);
-        let (l, t) = (px - fw / 2 - vx, py - fh / 2 - vy);
-        let col = if ok { 0x20E020 } else { 0xE02020 };
-        for x in l..l + fw {
-            for y in [t, t + fh - 1] {
-                if (0..w).contains(&x) && (0..h).contains(&y) { out[(y * w + x) as usize] = col; }
-            }
-        }
-        for y in t..t + fh {
-            for x in [l, l + fw - 1] {
-                if (0..w).contains(&x) && (0..h).contains(&y) { out[(y * w + x) as usize] = col; }
-            }
-        }
+        let (tx, ty) = scene.build_tile(kind, (cx + vx, cy + vy));
+        let v = scene.a.dat().units.placement_box[kind as usize];
+        let (fw, fh) = (v as i16 as i32, (v >> 16) as i16 as i32);
+        let (l, t) = (tx as i32 * 32 - vx, ty as i32 * 32 - vy);
+        rect(out, w, h, (l, t, l + fw - 1, t + fh - 1), if scene.place_ok { 0x20E020 } else { 0xE02020 });
     }
     for b in card_buttons(scene) {
         let (bx, by) = card_slot(b.pos);
@@ -411,14 +524,14 @@ fn on_minimap_pt(x: i32, y: i32) -> bool {
     (MINIMAP.0..MINIMAP.0 + MINIMAP.2).contains(&x) && (MINIMAP.1..MINIMAP.1 + MINIMAP.2).contains(&y)
 }
 
-/// Give `order` to every selected unit the local player owns.
-fn issue_to_selection(scene: &mut Scene, order: u8, target: Option<crate::game::Target>) {
-    let me = scene.local_player();
-    for &u in &scene.selected.clone() {
-        if scene.game.units[u].owner == me {
-            let t = target.unwrap_or(crate::game::Target { pos: scene.game.units[u].flingy.pos, unit: None });
-            scene.game.issue_order(u, order, t, false);
-        }
+/// Targeted order for a command card button waiting for a map click.
+fn button_order(act: Act) -> u8 {
+    match act {
+        Act::Attack => 8,
+        Act::Patrol => 0x98,
+        Act::Gather => 0x4f,
+        Act::Repair => 0x22,
+        _ => 6,
     }
 }
 
@@ -436,7 +549,9 @@ pub fn run(a: &Assets, chk: Chk) -> io::Result<()> {
     let mut win = Window::new("scbw", vw as usize, vh as usize, opts).map_err(|e| io::Error::other(e.to_string()))?;
     win.set_target_fps(24); // BW "fastest" = 42 ms/frame
     let (mw, mh) = (scene.terrain.0 as i32, scene.terrain.1 as i32);
-    let (mut vx, mut vy) = (0, 0);
+    // Start with the view on the local player's start location.
+    let start = scene.st.start_locations[scene.local_player() as usize];
+    let (mut vx, mut vy) = (start.0 as i32 - vw / 2, start.1 as i32 - (vh - 120) / 2);
     let mut idx = vec![0u8; (vw * vh) as usize];
     let mut rgb = vec![0u32; (vw * vh) as usize];
     win.set_cursor_visibility(false);
@@ -449,12 +564,14 @@ pub fn run(a: &Assets, chk: Chk) -> io::Result<()> {
     while win.is_open() && !win.is_key_down(Key::Escape) {
         tick += 1;
         let sp = 16;
+        let shift = win.is_key_down(Key::LeftShift) || win.is_key_down(Key::RightShift);
         let (cx, cy) = win.get_mouse_pos(minifb::MouseMode::Clamp).map_or((vw / 2, vh / 2), |(x, y)| (x as i32, y as i32));
         if cx <= 1 { vx -= sp }
         if cx >= vw - 2 { vx += sp }
         if cy <= 1 { vy -= sp }
         if cy >= vh - 2 { vy += sp }
         let (ox, oy, scale) = minimap_geom(&scene);
+        let map_pt = (cx + vx, cy + vy);
         let down = win.get_mouse_down(minifb::MouseButton::Left);
         let clicked = down && !lmb_was_down;
         lmb_was_down = down;
@@ -473,6 +590,8 @@ pub fn run(a: &Assets, chk: Chk) -> io::Result<()> {
                 Key::A => Some(Act::Attack),
                 Key::P => Some(Act::Patrol),
                 Key::H => Some(Act::HoldPosition),
+                Key::G => Some(Act::Gather),
+                Key::C => Some(Act::ReturnCargo),
                 _ => None,
             };
             if let Some(b) = want.and_then(|a| card_buttons(&scene).iter().find(|b| b.act == a)) {
@@ -480,78 +599,42 @@ pub fn run(a: &Assets, chk: Chk) -> io::Result<()> {
             }
         }
         if let Some(btn) = pressed {
-            let act = btn.act;
-            match act {
-                Act::Stop => issue_to_selection(&mut scene, crate::game::orders::id::STOP, None),
-                Act::HoldPosition => issue_to_selection(&mut scene, crate::game::orders::id::HOLD_POSITION, None),
-                Act::Move | Act::Attack | Act::Patrol | Act::Gather => targeting = Some(act),
+            match btn.act {
+                Act::Stop => scene.command(|st, d, me, sel| st.command_stop(d, me, sel, shift)),
+                Act::HoldPosition => scene.command(|st, d, me, sel| st.command_hold(d, me, sel, shift)),
+                Act::ReturnCargo => scene.command(|st, d, me, sel| st.command_return_cargo(d, me, sel, shift)),
+                Act::Move | Act::Attack | Act::Patrol | Act::Gather | Act::Repair => targeting = Some(btn.act),
                 Act::Menu => scene.card_menu = Some(btn.act_var as usize),
-                Act::MorphUnit => {
-                    // One morph per click: the first selected larva/hydra/muta that isn't already an egg.
-                    let me = scene.local_player();
-                    let src = scene.selected.iter().copied().find(|&u| {
-                        let un = &scene.game.units[u];
-                        un.owner == me && matches!(un.kind, 35 | 38 | 43)
-                    });
-                    if let Some(u) = src {
-                        let frames = |_: u16| 0;
-                        let wd = scene.world(&frames);
-                        let _ = crate::game::morph::morph_unit(&mut scene.game, &wd, u, btn.act_var as usize);
-                    }
-                }
                 Act::CancelMenu => {
                     scene.card_menu = None;
                     scene.placing = None;
                 }
-                Act::BuildTerran | Act::BuildProtoss | Act::BuildZerg => scene.placing = Some(btn.act_var as usize),
-                Act::ReturnCargo => issue_to_selection(&mut scene, crate::game::orders::id::RETURN_MINERALS, None),
-                Act::Train => {
-                    // The card belongs to the first selected unit; train there.
-                    if let Some(&b) = scene.selected.first() {
-                        let frames = |id: u16| a.grp(id).map_or(0, |g| g.frame_count() as u16);
-                        let w = scene.world(&frames);
-                        // ponytail: errors (not enough minerals/supply) should show the BW error text + sound.
-                        let _ = crate::game::economy::train(&mut scene.game, &w, b, btn.act_var as usize);
-                    }
-                }
+                Act::BuildTerran | Act::BuildProtoss | Act::BuildZerg => scene.placing = Some(btn.act_var),
+                Act::Train => scene.command(|st, d, me, sel| st.command_train_sel(d, me, sel, btn.act_var)),
                 _ => {}
             }
         }
-        if let (Some(kind), true) = (scene.placing, clicked && cy < vh - 120 && pressed.is_none()) {
-            let frames = |_: u16| 0;
-            let wd = scene.world(&frames);
-            let site = crate::game::build::snap_on(&scene.game, &wd, kind, cx + vx, cy + vy);
-            let builder = scene.selected.first().copied();
-            if let Some(b) = builder.filter(|_| crate::game::build::can_place(&scene.game, &wd, kind, site, builder)) {
-                crate::game::build::order_build(&mut scene.game, b, kind, site);
-                scene.placing = None;
-                scene.card_menu = None;
+        if let Some(kind) = scene.placing {
+            scene.check_placement(kind, map_pt);
+            if clicked && cy < vh - 120 && pressed.is_none() {
+                if scene.place_ok {
+                    scene.build(kind, map_pt);
+                    scene.placing = None;
+                    scene.card_menu = None;
+                }
+                lmb_was_down = true;
+                drag_start = None;
             }
-            lmb_was_down = true;
-            drag_start = None;
         }
         let down = down && scene.placing.is_none();
         if let (Some(act), true) = (targeting, clicked && cy < vh - 120 && pressed.is_none()) {
-            let (tx, ty) = ((cx + vx) as i16, (cy + vy) as i16);
-            let hit = scene.units_in_rect(tx as i32, ty as i32, tx as i32, ty as i32).into_iter().next();
-            let me = scene.local_player();
-            let order = match act {
-                Act::Attack => match hit {
-                    Some(h) if scene.game.units[h].owner != me => crate::game::orders::id::ATTACK_UNIT,
-                    _ => crate::game::orders::id::ATTACK_MOVE,
-                },
-                Act::Patrol => crate::game::orders::id::PATROL,
-                Act::Gather => crate::game::orders::id::MOVE_TO_MINERALS,
-                _ => crate::game::orders::id::MOVE,
-            };
-            issue_to_selection(&mut scene, order, Some(crate::game::Target { pos: (tx, ty), unit: hit }));
+            scene.targeted_order(button_order(act), map_pt, shift);
             targeting = None;
             lmb_was_down = true; // the click is consumed; don't start a drag
             drag_start = None;
         }
         let down = down && targeting.is_none() && pressed.is_none() && !(clicked && cy >= vh - 120 && !on_minimap_pt(cx, cy));
-        let on_minimap = (MINIMAP.0..MINIMAP.0 + MINIMAP.2).contains(&cx) && (MINIMAP.1..MINIMAP.1 + MINIMAP.2).contains(&cy);
-        if down && on_minimap && drag_start.is_none() {
+        if down && on_minimap_pt(cx, cy) && drag_start.is_none() {
             vx = (cx - ox) * scale - vw / 2;
             vy = (cy - oy) * scale - (vh - 120) / 2;
         } else if down && cy < vh - 120 {
@@ -562,14 +645,11 @@ pub fn run(a: &Assets, chk: Chk) -> io::Result<()> {
                 scene.drag_box = None;
                 let (x0, y0, x1, y1) = (sx + vx, sy + vy, cx + vx, cy + vy);
                 let hits = if (x1 - x0).abs() < 4 && (y1 - y0).abs() < 4 {
-                    // Click: the single unit nearest the point.
-                    let pt = (cx + vx, cy + vy);
-                    let mut hits = scene.units_in_rect(pt.0, pt.1, pt.0, pt.1);
-                    hits.truncate(1);
-                    hits
+                    scene.unit_at(map_pt.0, map_pt.1).into_iter().collect()
                 } else {
                     // Box: BW only box-selects the player's own units (max 12).
-                    let mut hits: Vec<usize> = scene.units_in_rect(x0, y0, x1, y1).into_iter().filter(|&u| scene.game.units[u].owner == scene.local_player()).collect();
+                    let me = scene.local_player();
+                    let mut hits: Vec<u32> = scene.units_in_rect(x0, y0, x1, y1).into_iter().filter(|&u| scene.st.units[u as usize].player == me).collect();
                     hits.truncate(12);
                     hits
                 };
@@ -584,26 +664,9 @@ pub fn run(a: &Assets, chk: Chk) -> io::Result<()> {
         if rdown && !rmb_was_down && (targeting.take().is_some() || scene.placing.take().is_some()) {
             // Right-click cancels targeting / placement.
         } else if rdown && !rmb_was_down && cy < vh - 120 {
-            let (tx, ty) = ((cx + vx) as i16, (cy + vy) as i16);
-            let me = scene.local_player();
-            // Right-click on a unit: attack if hostile, else move to it.
-            let hit = scene.units_in_rect(tx as i32, ty as i32, tx as i32, ty as i32).into_iter().next();
-            use crate::game::{economy, orders::id};
-            let flags = &a.dat.units.flags;
-            for &u in &scene.selected.clone() {
-                if scene.game.units[u].owner == me {
-                    let t = crate::game::Target { pos: (tx, ty), unit: hit };
-                    let worker = flags[scene.game.units[u].kind] & economy::flag::WORKER != 0;
-                    let order = match hit.map(|h| (h, &scene.game.units[h])) {
-                        Some((_, h)) if worker && economy::is_mineral_field(h.kind) => id::MOVE_TO_MINERALS,
-                        Some((_, h)) if worker && h.owner == me && h.completed && economy::GAS_BUILDINGS.contains(&h.kind) => id::MOVE_TO_GAS,
-                        Some((_, h)) if worker && h.owner == me && flags[h.kind] & economy::flag::RESOURCE_DEPOT != 0 && scene.game.units[u].carry > 0 => if scene.game.units[u].carry_gas { id::RETURN_GAS } else { id::RETURN_MINERALS },
-                        Some((_, h)) if h.owner != me && h.owner < 8 => id::ATTACK_UNIT,
-                        _ => id::MOVE,
-                    };
-                    scene.game.issue_order(u, order, t, false);
-                }
-            }
+            scene.right_click(map_pt, shift);
+        } else if rdown && !rmb_was_down && on_minimap_pt(cx, cy) {
+            scene.right_click(((cx - ox) * scale, (cy - oy) * scale), shift);
         }
         rmb_was_down = rdown;
         if win.is_key_down(Key::Left) { vx -= sp }
@@ -612,12 +675,11 @@ pub fn run(a: &Assets, chk: Chk) -> io::Result<()> {
         if win.is_key_down(Key::Down) { vy += sp }
         vx = vx.clamp(0, (mw - vw).max(0));
         vy = vy.clamp(0, (mh - vh + 120).max(0)); // console covers the bottom
-        scene.selected.retain(|&u| !scene.game.units[u].dead);
         for (id, x, y) in scene.step() {
             // ponytail: on-screen only, no distance falloff or per-frame voice limits yet.
             if let Some(au) = &audio {
                 if (vx..vx + vw).contains(&x) && (vy..vy + vh).contains(&y) {
-                    au.play(&a.casc, &a.dat, id, 0.6);
+                    au.play(&a.casc, a.dat(), id, 0.6);
                 }
             }
         }

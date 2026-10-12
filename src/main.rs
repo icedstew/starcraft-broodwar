@@ -287,6 +287,7 @@ fn main() -> std::io::Result<()> {
         Some("shot") => {
             let a = view::Assets::load(casc)?;
             let mut scene = view::Scene::new(&a, load_chk(&args[1])?)?;
+            eprintln!("local player {} start {:?}", scene.local_player(), scene.st.start_locations[scene.local_player() as usize]);
             let frames: usize = args.get(5).and_then(|f| f.parse().ok()).unwrap_or(24);
             let (x, y) = (args[3].parse().unwrap_or(0), args[4].parse().unwrap_or(0));
             // Debug: SCBW_SPAWN="kind,owner,x,y;..." creates units before stepping.
@@ -294,68 +295,38 @@ fn main() -> std::io::Result<()> {
                 for e in spec.split(';').filter(|e| !e.is_empty()) {
                     let v: Vec<i32> = e.split(',').filter_map(|n| n.trim().parse().ok()).collect();
                     if let [k, o, sx, sy] = v[..] {
-                        scene.spawn(k as usize, o as u8, sx, sy);
+                        scene.spawn(k as u16, o as u8, sx as i16, sy as i16);
                     }
                 }
             }
             if let Some(n) = args.get(6).and_then(|v| v.parse::<usize>().ok()) {
-                // Debug: select up to n units in view.
-                let mut sel = scene.units_in_rect(x, y, x + 640, y + 360);
-                sel.truncate(n);
+                // Debug: select up to n of the local player's units in view.
+                let me = scene.local_player();
+                let mut sel: Vec<u32> = scene.units_in_rect(x, y, x + 640, y + 360).into_iter().filter(|&u| scene.st.units[u as usize].player == me).collect();
+                sel.truncate(n.min(12));
                 scene.selected = sel;
             }
-            if std::env::var("SCBW_SEL_ALL").is_ok() {
-                scene.selected = (0..scene.game.units.len()).filter(|&u| scene.game.units[u].owner == 0).collect();
-            }
-            // Debug: SCBW_MOVE=x,y orders the selection to move there before stepping.
+            // Vision is computed by the first frame; commands pick only visible units.
+            scene.step();
+            // Debug: SCBW_MOVE=x,y right-clicks there with the selection before stepping.
             if let Some((mx, my)) = std::env::var("SCBW_MOVE").ok().and_then(|v| {
                 let (a, b) = v.split_once(',')?;
-                Some((a.parse::<i16>().ok()?, b.parse::<i16>().ok()?))
+                Some((a.parse::<i32>().ok()?, b.parse::<i32>().ok()?))
             }) {
-                for &u in &scene.selected.clone() {
-                    let t = game::Target { pos: (mx, my), unit: None };
-                    let order = std::env::var("SCBW_ORDER").ok().and_then(|v| v.parse().ok()).unwrap_or(game::orders::id::MOVE);
-                    if scene.game.units[u].owner == 0 {
-                        scene.game.issue_order(u, order, t, false);
-                    }
-                }
+                scene.right_click((mx, my), false);
             }
             if let Some(m) = std::env::var("SCBW_MINERALS").ok().and_then(|v| v.parse().ok()) {
-                scene.game.players[0].minerals = m;
+                let me = scene.local_player() as usize;
+                scene.st.players.minerals[me] = m;
             }
-            if let Ok(spec) = std::env::var("SCBW_BUILD") {
-                let v: Vec<i32> = spec.split(',').filter_map(|n| n.parse().ok()).collect();
-                let worker = (0..scene.game.units.len()).find(|&u| scene.game.units[u].owner == 0 && a.dat.units.flags[scene.game.units[u].kind] & 0x8 != 0);
-                if let (Some(b), &[k, x, y]) = (worker, &v[..]) {
-                    let frames = |_: u16| 0;
-                    let site = game::build::snap_on(&scene.game, &scene.world(&frames), k as usize, x, y);
-                    game::build::order_build(&mut scene.game, b, k as usize, site);
-                }
-            }
-            if let Some(k) = std::env::var("SCBW_MORPH").ok().and_then(|v| v.parse::<usize>().ok()) {
-                let larva = (0..scene.game.units.len()).filter(|&u| scene.game.units[u].owner == 0 && scene.game.units[u].kind == 35).collect::<Vec<_>>();
-                let frames = |_: u16| 0;
-                for l in larva {
-                    let w = scene.world(&frames);
-                    eprintln!("morph: {:?}", game::morph::morph_unit(&mut scene.game, &w, l, k));
-                }
-            }
-            if let Some(k) = std::env::var("SCBW_TRAIN").ok().and_then(|v| v.parse::<usize>().ok()) {
-                let depot = (0..scene.game.units.len()).find(|&u| scene.game.units[u].owner == 0 && a.dat.units.flags[scene.game.units[u].kind] & 0x1000 != 0);
-                if let Some(b) = depot {
-                    let frames = |_: u16| 0;
-                    let w = scene.world(&frames);
-                    eprintln!("train: {:?}", game::economy::train(&mut scene.game, &w, b, k));
-                }
-            }
-            for _ in 0..frames {
+            for f in 0..frames {
                 scene.step();
-            }
-            if std::env::var("SCBW_DEBUG").is_ok() {
-                eprintln!("player0 {:?} frame {}", scene.game.players[0], scene.game.frame);
-                for (i, u) in scene.game.units.iter().enumerate().filter(|(_, u)| u.owner < 8) {
-                    eprintln!("unit {i} kind {} owner {} order {} state {} pos {:?} target {:?} path {:?} hp {} dead {}",
-                        u.kind, u.owner, u.order, u.order_state, u.flingy.pos, u.flingy.move_target, u.path, u.hp, u.dead);
+                if std::env::var("SCBW_DEBUG").is_ok() && f % 50 == 0 {
+                    for &u in &scene.selected {
+                        let un = &scene.st.units[u as usize];
+                        let s = &scene.st.sprites[un.sprite as usize];
+                        eprintln!("f{f} u{u} order {:#x} st {} pos ({},{}) tgt {} res {}", un.order, un.order_state, s.x, s.y, un.order_target_unit as i32, un.resource_type);
+                    }
                 }
             }
             let ui = ui::Ui::load(&a.casc, ["zerg", "terran", "protoss"][scene.local_race()]).ok();
