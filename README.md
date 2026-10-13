@@ -101,6 +101,15 @@ python3 -I re/coverage.py <decomp.c> . | tail -5      # summary: in scope / reac
 python3 -I re/coverage.py <decomp.c> . --html cov.html  # per source file, as HTML
 ```
 
+Summary as a table (`column -N` is util-linux):
+
+```sh
+python3 -I re/coverage.py <decomp.c> . | sed -nE \
+  's/^in scope: ([0-9]+) functions, ([0-9]+) ported \(([0-9]+%)\).*/In scope|\1|\2 (\3)/p;
+   s/^reachable from (.*): ([0-9]+) functions, ([0-9]+) ported \(([0-9]+%)\).*/Reachable from \1|\2|\3 (\4)/p' \
+  | column -t -s'|' -N Scope,Functions,Ported
+```
+
 ## Commands
 
 - `view <map|chk|rep>` – map viewer
