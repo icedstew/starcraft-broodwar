@@ -601,6 +601,20 @@ impl State {
         }
     }
 
+    /// 0x48ee30: an error for `player`: advisor sound `sound` (sfxdata id) and stat_txt
+    /// line `msg`, both for the local player only.
+    pub fn local_error(&mut self, player: u8, sound: u16, msg: u16) {
+        if player != self.local_player || self.replay {
+            return;
+        }
+        if sound != 0 {
+            self.ui_sounds.push(sound);
+        }
+        if msg != 0 {
+            self.shown_error = msg;
+        }
+    }
+
     /// 0x49e530: the last error (0x59cca0) goes to the screen when `player` is the
     /// local player (0x48ccb0, the front end's); either way it is cleared.
     pub fn show_last_error(&mut self, player: u8) {

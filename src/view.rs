@@ -837,6 +837,11 @@ pub fn run(a: &Assets, chk: Chk) -> io::Result<()> {
                 }
             }
         }
+        for id in std::mem::take(&mut scene.st.ui_sounds) {
+            if let Some(au) = &audio {
+                au.play(&a.casc, a.dat(), id, 0.8);
+            }
+        }
         compose_with_cursor(&scene, ui.as_ref(), vx, vy, Some((tick, cx, cy)), &mut idx, &mut rgb);
         win.update_with_buffer(&rgb, vw as usize, vh as usize).map_err(|e| io::Error::other(e.to_string()))?;
     }

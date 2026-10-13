@@ -255,6 +255,8 @@ pub struct State {
     pub mv: flingy::MoveScratch,
     /// Sounds requested this frame (sfx id, x, y) for the front end to play.
     pub sounds: Vec<(u16, i16, i16)>,
+    /// Interface sounds (sfx ids) for the local player, such as advisor errors.
+    pub ui_sounds: Vec<u16>,
 }
 
 /// Free list built by inserting 1..n after element 0 with insert_after_head, as 1.16.1 does
@@ -363,6 +365,7 @@ impl State {
             walker: short_path::Walker::default(),
             mv: flingy::MoveScratch::default(),
             sounds: Vec::new(),
+            ui_sounds: Vec::new(),
         };
         st.path_pool_init();
         st

@@ -168,13 +168,24 @@ impl State {
         let (tx, ty) = Self::build_tile(d, t, x, y);
         let err = self.placement_check(d, u, player, tx, ty, t, 0, false, true, true);
         if err != 0 || self.unit_sprite_pos(u) != self.units[u as usize].order_target_pos {
-            // 0x48f6c0(0x358): "can't build here" (UI).
+            // 0x48f6c0(0x358): "can't build here" with the unit race's sound (0xa2 + race).
+            // ponytail: the sound cooldown check 0x48ed50 is not ported.
+            let race = Self::supply_race_of(d, self.units[u as usize].unit_type);
+            self.local_error(player, 0xa2 + race, 0x358);
             return self.drone_build_failed(d, u);
         }
         let p = player as usize;
         let (m, g) = (d.dat.units.mineral_cost[t as usize] as i32, d.dat.units.gas_cost[t as usize] as i32);
-        if !self.supply_ok(d, p, t) || self.players.minerals[p] < m || self.players.gas[p] < g {
-            // 0x48ee30: not enough supply / minerals / gas (UI).
+        if !self.supply_ok_show(d, p, t) {
+            return self.drone_build_failed(d, u);
+        }
+        let race = self.player_races[self.local_player as usize] as u16;
+        if self.players.minerals[p] < m {
+            self.local_error(player, 0x93 + race, 0x352);
+            return self.drone_build_failed(d, u);
+        }
+        if self.players.gas[p] < g {
+            self.local_error(player, 0x96 + race, 0x353);
             return self.drone_build_failed(d, u);
         }
         self.players.minerals[p] -= m;
@@ -360,8 +371,7 @@ impl State {
                 };
                 let t = self.building_queued(u);
                 let p = self.units[u as usize].player as usize;
-                if !self.supply_ok(d, p, t) {
-                    // 0x48ee30: not enough supply (UI).
+                if !self.supply_ok_show(d, p, t) {
                     self.clear_build_queue(d, u);
                     let idle = self.idle_order_of(d, u);
                     return self.order_now(d, u, idle);

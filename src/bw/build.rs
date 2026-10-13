@@ -361,6 +361,12 @@ impl State {
         let p = self.units[u as usize].player;
         let r = self.placement_check(d, u, p, tx, ty, t, 1, false, false, false);
         if r != 0 {
+            // 0x48d930: the placement error (table 0x513634) to the local player.
+            const PLACEMENT_ERRORS: [u16; 12] = [0, 853, 852, 854, 856, 860, 861, 862, 859, 858, 857, 855];
+            let e = PLACEMENT_ERRORS.get(r as usize).copied().unwrap_or(0);
+            if !self.replay && e != 0 && p == self.local_player {
+                self.shown_error = e;
+            }
             return;
         }
         let (pw, ph) = placement(d, t);
@@ -383,7 +389,7 @@ impl State {
             return;
         }
         let p = un.player;
-        if !self.supply_ok(d, p as usize, t) {
+        if !self.supply_ok_show(d, p as usize, t) {
             return;
         }
         let (m, g) = (d.dat.units.mineral_cost[t as usize] as i32, d.dat.units.gas_cost[t as usize] as i32);
@@ -424,7 +430,7 @@ impl State {
         let t = un.build_queue[un.build_queue_slot as usize];
         let p = un.player;
         let (m, g) = (d.dat.units.mineral_cost[t as usize] as i32, d.dat.units.gas_cost[t as usize] as i32);
-        if !self.supply_ok(d, p as usize, t) {
+        if !self.supply_ok_show(d, p as usize, t) {
             return false;
         }
         if self.players.minerals[p as usize] < m || self.players.gas[p as usize] < g {

@@ -43,39 +43,69 @@ impl State {
         prov - used
     }
 
-    /// 0x42cf70: enough supply to make `t`.
-    pub(super) fn supply_ok(&self, d: &Data, p: usize, t: u16) -> bool {
+    /// 0x42cf70: enough supply to make `t`; otherwise the advisor sound and stat_txt
+    /// error 0x48ee30 would show.
+    pub(super) fn supply_error(&self, d: &Data, p: usize, t: u16) -> Option<(u16, u16)> {
         let flags = d.dat.units.flags[t as usize];
         let mut req = d.dat.units.supply_required[t as usize] as i32;
         if flags & 0x400 != 0 {
             req *= 2;
         }
         if req == 0 || flags & 0x100_0000 != 0 {
-            return true;
+            return None;
         }
         if t == 0x67 {
             req -= d.dat.units.supply_required[0x26] as i32;
         }
-        let used = Self::supply_race(d, t).map_or(0, |r| self.players.supply_used[r][p]);
+        let race = Self::supply_race(d, t);
+        let used = race.map_or(0, |r| self.players.supply_used[r][p]);
+        let r = race.map_or(4, |r| r as u16);
         if self.supply_max(d, p, t) < req + used {
-            todo_port!("0x48ee30", "not enough supply message");
-            return false;
+            return Some((r + 1, 0x34f + r));
         }
         if self.supply_free(d, p, t) - req < 0 {
-            todo_port!("0x48ee30", "not enough supply message");
+            return Some((0x99 + r, 0x34c + r));
+        }
+        None
+    }
+
+    /// Race index of a unit type as 1.16.1's sounds use it (0 zerg, 1 terran, 2 protoss, else 4).
+    pub(super) fn supply_race_of(d: &Data, t: u16) -> u16 {
+        Self::supply_race(d, t).map_or(4, |r| r as u16)
+    }
+
+    pub(super) fn supply_ok(&self, d: &Data, p: usize, t: u16) -> bool {
+        self.supply_error(d, p, t).is_none()
+    }
+
+    /// 0x42cf70 called with errors shown (its third argument 1).
+    pub(super) fn supply_ok_show(&mut self, d: &Data, p: usize, t: u16) -> bool {
+        match self.supply_error(d, p, t) {
+            Some((sound, msg)) => {
+                self.local_error(p as u8, sound, msg);
+                false
+            }
+            None => true,
+        }
+    }
+
+    /// 0x42d140: can pay for `t` (and, with `check_supply`, house it), errors shown.
+    fn can_afford(&mut self, d: &Data, p: usize, t: u16, check_supply: bool) -> bool {
+        if check_supply && !self.supply_ok_show(d, p, t) {
+            return false;
+        }
+        // 0x42d0c0: the advisor sound is the local player's race's (0x57f1e2).
+        let (m, g) = (d.dat.units.mineral_cost[t as usize] as i32, d.dat.units.gas_cost[t as usize] as i32);
+        let race = self.player_races[self.local_player as usize] as u16;
+        if self.players.minerals[p] < m {
+            self.local_error(p as u8, 0x93 + race, 0x352);
+            return false;
+        }
+        if self.players.gas[p] < g {
+            self.local_error(p as u8, 0x96 + race, 0x353);
             return false;
         }
         true
-    }
-
-    /// 0x42d140: can pay for `t` (and, with `check_supply`, house it).
-    fn can_afford(&self, d: &Data, p: usize, t: u16, check_supply: bool) -> bool {
-        if check_supply && !self.supply_ok(d, p, t) {
-            return false;
-        }
-        // 0x42d0c0
-        let (m, g) = (d.dat.units.mineral_cost[t as usize] as i32, d.dat.units.gas_cost[t as usize] as i32);
-        self.players.minerals[p] >= m && self.players.gas[p] >= g
     }
 
     /// 0x4669b0: first free build queue slot from the current one (5 = full).
@@ -212,8 +242,7 @@ impl State {
         let bu = &self.units[b as usize];
         let ok_builder = bu.status & 2 != 0 || matches!(bu.unit_type, 0x48 | 0x52 | 0x53 | 0x51 | 0x24);
         let p = bu.player;
-        let _ = show_error;
-        if !ok_builder || !self.supply_ok(d, p as usize, t) {
+        if !ok_builder || !(if show_error { self.supply_ok_show(d, p as usize, t) } else { self.supply_ok(d, p as usize, t) }) {
             return NIL;
         }
         let (x, y) = self.unit_sprite_pos(b);
