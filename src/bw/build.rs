@@ -312,8 +312,18 @@ impl State {
         0
     }
 
+    /// 0x466e40: drop the last filled build queue entry.
+    pub(super) fn cancel_last_queued(&mut self, d: &Data, u: u32) {
+        let base = self.units[u as usize].build_queue_slot as usize + 4;
+        for i in (0..5).rev() {
+            if self.units[u as usize].build_queue[(base - 4 + i) % 5] != NONE {
+                return self.cancel_queued(d, u, i);
+            }
+        }
+    }
+
     /// 0x466a70: drop build queue entry `i` (relative to the current slot), refunding it.
-    fn cancel_queued(&mut self, d: &Data, u: u32, i: usize) {
+    pub(super) fn cancel_queued(&mut self, d: &Data, u: u32, i: usize) {
         if i >= 5 {
             return;
         }

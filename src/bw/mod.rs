@@ -235,6 +235,11 @@ pub struct State {
     pub last_error: u16,
     /// Error the front end should show the local player (stat_txt id + 1), set by 0x49e530.
     pub shown_error: u16,
+    /// 0x6ceb20: the interface colors in the current palette (set by the front end).
+    pub interface_colors: [u8; 26],
+    /// 0x640870: frames until the next under-attack alert may play; 0x6d63cc: tick phase.
+    pub alert_cooldown: u32,
+    pub alert_tick_counter: u32,
     /// 0x57f0b0: local player's vision mask.
     pub local_vision_mask: u8,
     /// MSVC `rand` state (`_holdrand`), seeded with the game seed by 0x4a2c20.
@@ -338,6 +343,9 @@ impl State {
             repulse: vec![0; 0xab * 0xab],
             last_error: 0,
             shown_error: 0,
+            interface_colors: [0; 26],
+            alert_cooldown: 0,
+            alert_tick_counter: 0,
             local_vision_mask: 1,
             crt_seed: 1,
             screen_tile: (0, 0),

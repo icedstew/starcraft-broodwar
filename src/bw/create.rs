@@ -615,6 +615,62 @@ impl State {
         }
     }
 
+    /// 0x48f230: the local player's unit `u` was hit: it blinks red on the minimap and,
+    /// unless an alert played lately (0x640870) or nearby, or the unit is on screen
+    /// (0x4e5ad0), the advisor warns (building or forces sound by the local race).
+    pub fn under_attack_alert(&mut self, u: u32) {
+        if self.replay || self.units[u as usize].player != self.local_player {
+            return;
+        }
+        let red = self.interface_colors[0x14];
+        let un = &mut self.units[u as usize];
+        un.last_event_color = red;
+        un.last_event_timer = 0x14;
+        if self.alert_cooldown != 0 {
+            return;
+        }
+        let (x, y) = self.unit_sprite_pos(u);
+        let (tx, ty) = ((x as i32) >> 5, (y as i32) >> 5);
+        let (sx, sy) = (self.screen_tile.0 as i32, self.screen_tile.1 as i32);
+        let on_screen = sx <= tx + 2 && sy <= ty + 2 && tx <= sx + 0x16 && ty <= sy + 0xf;
+        if on_screen || self.units[u as usize].attack_notify_timer != 0 {
+            return;
+        }
+        // 0x48eae0: units within 0x160 are quiet for a while (0x48e9f0).
+        let b = [x.wrapping_sub(0x160), y.wrapping_sub(0x160), x.wrapping_add(0x160), y.wrapping_add(0x160)];
+        let mut search = std::mem::replace(&mut self.search, super::collide::UnitSearch::empty());
+        let start = search.units_in_finder_box(self, b);
+        let found = search.results(start);
+        search.pop();
+        self.search = search;
+        for n in found {
+            self.units[n as usize].attack_notify_timer = 100;
+        }
+        self.alert_cooldown = 100;
+        let race = self.player_races[self.local_player as usize] as u16;
+        let building = self.units[u as usize].status & 2 != 0;
+        // ponytail: the sound gate 0x48ed50 and the alert's volume are not ported.
+        self.ui_sounds.push(if building { 0x75 } else { 0x78 } + race);
+    }
+
+    /// 0x48e980 (once per frame, front end): alert cooldowns, and every other frame the
+    /// units' quiet timers.
+    pub fn alert_tick(&mut self) {
+        self.alert_cooldown = self.alert_cooldown.saturating_sub(1);
+        let t = self.alert_tick_counter;
+        self.alert_tick_counter = t.wrapping_sub(1);
+        if t != 0 {
+            return;
+        }
+        self.alert_tick_counter = 1;
+        let mut u = self.visible_units.head;
+        while u != NIL {
+            let un = &mut self.units[u as usize];
+            un.attack_notify_timer = un.attack_notify_timer.saturating_sub(1);
+            u = un.link.next;
+        }
+    }
+
     /// 0x49e530: the last error (0x59cca0) goes to the screen when `player` is the
     /// local player (0x48ccb0, the front end's); either way it is cleared.
     pub fn show_last_error(&mut self, player: u8) {

@@ -656,14 +656,30 @@ fn apply_moves(st: &mut bw::State, d: &bw::Data, made: &[u32], m: &str) {
             let (a, g) = b.split_once(':').unwrap_or(("0", "0"));
             vec![0x13, a.parse().unwrap_or(0), g.parse().unwrap_or(0)]
         } else {
-            let idx: Vec<usize> = p[1..].split(',').filter_map(|n| n.parse().ok()).collect();
-            let mut pkt = vec![[9, 10, 11]["SAD".find(&p[..1]).unwrap_or(0)], idx.len() as u8];
-            for i in idx {
-                pkt.extend((st.unit_handle(units[i]) as u16).to_le_bytes());
+            // "#n" is unit array index n rather than the n-th created unit.
+            let ids: Vec<u32> = p[1..]
+                .split(',')
+                .filter_map(|n| match n.strip_prefix('#') {
+                    Some(r) => r.parse().ok(),
+                    None => n.parse::<usize>().ok().map(|i| units[i]),
+                })
+                .collect();
+            let mut pkt = vec![[9, 10, 11]["SAD".find(&p[..1]).unwrap_or(0)], ids.len() as u8];
+            for u in ids {
+                pkt.extend((st.unit_handle(u) as u16).to_le_bytes());
             }
             pkt
         };
         st.execute_command(d, 0, &[], &pkt);
+    }
+    for p in v.iter().filter(|p| p.starts_with('K')) {
+        // "K<op>[:<u16>]": cancel command 0x18 / 0x19 / 0x20 with player 0's selection.
+        let (op, arg) = p[1..].split_once(':').unwrap_or((&p[1..], "0"));
+        let num = |s: &str| s.strip_prefix("0x").map_or_else(|| s.parse().unwrap_or(0), |h| u16::from_str_radix(h, 16).unwrap_or(0));
+        let mut pkt = vec![num(op) as u8];
+        pkt.extend(num(arg).to_le_bytes());
+        let sel = bw::select::selection_units(&st.selections[0]).to_vec();
+        st.execute_command(d, 0, &sel, &pkt);
     }
     for p in v.iter().filter(|p| p.starts_with('M')) {
         // "M<type>": every player-0 larva morphs into <type> (0x4c1990).
@@ -703,7 +719,7 @@ fn apply_moves(st: &mut bw::State, d: &bw::Data, made: &[u32], m: &str) {
     let units = if made.is_empty() { sel.clone() } else { made.to_vec() };
     for (i, &u) in units.iter().enumerate() {
         let p = v[i % v.len()];
-        if p.starts_with(['R', 'T', 'M', 'S', 'A', 'D', 'H']) {
+        if p.starts_with(['R', 'T', 'M', 'S', 'A', 'D', 'H', 'K']) {
             continue;
         }
         if let Some(t) = p.strip_prefix('t') {

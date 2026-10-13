@@ -305,10 +305,60 @@ impl State {
         self.order_target(d, c, 6, p, NIL);
     }
 
-    /// 0x468280: cancel a unit under construction (refund and remove).
+    /// 0x468280: cancel a unit under construction or in production: refund it (75% for
+    /// buildings), then cocoons turn back into their unit and anything else dies.
     pub(super) fn cancel_unit(&mut self, d: &Data, c: u32) {
-        let _ = d;
-        todo_port!("0x468280", "cancel a unit under construction");
-        let _ = c;
+        let un = &self.units[c as usize];
+        if un.sprite == NIL || un.order == 0 || un.status & 1 != 0 {
+            return;
+        }
+        let t = un.unit_type;
+        if matches!(t, 0x2c | 0x67 | 0x3e | 0x2b | 0x26) || (t == 0x86 && un.ptr_at(0xd0) != NIL) {
+            return;
+        }
+        let p = un.player as usize;
+        if un.status & 2 != 0 {
+            if Self::supply_race_of(d, t) == 0 {
+                todo_port!("0x45da40", "cancel a zerg building (the drone comes back)");
+                return;
+            }
+            // 0x42ce70
+            self.players.minerals[p] += (d.dat.units.mineral_cost[t as usize] as i32 * 3) >> 2;
+            self.players.gas[p] += (d.dat.units.gas_cost[t as usize] as i32 * 3) >> 2;
+        } else {
+            let paid = if matches!(t, 0x24 | 0x3b | 0x61) { un.build_queue[un.build_queue_slot as usize % 5] } else { t };
+            self.refund(d, p, paid);
+        }
+        match t {
+            0x3b | 0x61 => {
+                self.transform_unit(d, c, if t == 0x3b { 0x2b } else { 0x26 });
+                let un = &mut self.units[c as usize];
+                un.remaining_build_time = 0;
+                let slot = un.build_queue_slot as usize;
+                un.build_queue[slot] = NONE;
+                let prev = un.previous_unit_type as usize;
+                let img = d.dat.sprites.image[d.dat.flingy.sprite[d.dat.units.flingy[prev] as usize] as usize];
+                let s = un.sprite;
+                self.replace_sprite_images(d, s, img, 0);
+                self.units[c as usize].order_signal &= !4;
+                let mut i = self.sprites[s as usize].images.head;
+                while i != NIL {
+                    let next = self.images[i as usize].link.next;
+                    self.image_run_anim(d, i, 0xe);
+                    i = next;
+                }
+                self.order_now(d, c, 0x29);
+            }
+            _ => {
+                if t == 0xe {
+                    let silo = self.units[c as usize].connected_unit;
+                    if silo != NIL {
+                        self.units[silo as usize].set_ptr_at(0xd0, NIL);
+                        self.units[silo as usize].order_state = 0;
+                    }
+                }
+                self.kill_unit(d, c);
+            }
+        }
     }
 }

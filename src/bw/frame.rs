@@ -234,7 +234,7 @@ impl State {
     fn execute_hidden_order(&mut self, d: &Data, u: u32) {
         let order = self.units[u as usize].order;
         match order {
-            0 => todo_port!("0x479480", "Die (hidden)"),
+            0 => self.order_die(d, u),
             3 | 4 | 0x16 | 0x5c => {
                 let next = if self.units[u as usize].status & 0x20 != 0 { 5 } else { 0x17 };
                 self.order_now(d, u, next);

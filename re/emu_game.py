@@ -319,7 +319,11 @@ def parse_move(m):
     if m[0] == "M":  # "M<type>": every player-0 larva morphs into <type>
         return ("M", int(m[1:], 0))
     if m[0] in "SAD":  # "S<i>,<j>,...": select / add / remove created units i, j, ... (0x09-0x0b)
-        return (m[0], tuple(int(v) for v in m[1:].split(",") if v))
+        # "#n" is unit array index n rather than the n-th created unit.
+        return (m[0], tuple(("#", int(v[1:])) if v.startswith("#") else int(v) for v in m[1:].split(",") if v))
+    if m[0] == "K":  # "K<op>[:<u16>]": cancel command 0x18 / 0x19 / 0x20 with the current selection
+        op, _, arg = m[1:].partition(":")
+        return ("K", int(op, 0), int(arg, 0) if arg else 0)
     if m[0] == "H":  # "H<action>:<group>": hotkey command 0x13
         a, g = m[1:].split(":")
         return ("H", int(a), int(g))
@@ -406,6 +410,15 @@ def scenario(e, units, move, frames, out):
                     e.write(pkt, bytes([0x23]) + struct.pack("<H", m[1]))
                     e.call(0x4c1990, stack=[pkt])
                     continue
+                if m[0] == "K":
+                    e.w32(0x512678, 0)
+                    e.w32(0x51267c, 0)
+                    e.write(pkt, bytes([m[1]]) + struct.pack("<H", m[2]))
+                    if m[1] == 0x20:
+                        e.call(0x4c0100, stack=[pkt])
+                    else:
+                        e.call({0x18: 0x4c2ef0, 0x19: 0x4c2ec0}[m[1]])
+                    continue
                 if m[0] in ("S", "A", "D", "H"):
                     e.w32(0x512678, 0)
                     e.w32(0x51267c, 0)
@@ -414,7 +427,8 @@ def scenario(e, units, move, frames, out):
                         e.call(0x4c2870, regs={"ecx": pkt})
                         continue
                     units = made or sel
-                    hs = [(e.r8(UNITS + units[i] * 0x150 + 0xa5) << 11) | (units[i] + 1) for i in m[1]]
+                    ids = [i[1] if isinstance(i, tuple) else units[i] for i in m[1]]
+                    hs = [(e.r8(UNITS + u * 0x150 + 0xa5) << 11) | (u + 1) for u in ids]
                     e.write(pkt, bytes([{"S": 9, "A": 10, "D": 11}[m[0]], len(hs)]) + struct.pack(f"<{len(hs)}H", *hs))
                     e.call({"S": 0x4c2750, "A": 0x4c2560, "D": 0x4bfb40}[m[0]], stack=[pkt])
                     continue
@@ -440,7 +454,7 @@ def scenario(e, units, move, frames, out):
                     e.call(0x4c2320, regs={"eax": pkt})
             for i, u in enumerate(made or sel):
                 m = move[i % len(move)]
-                if m[0] in ("R", "T", "M", "S", "A", "D", "H"):
+                if m[0] in ("R", "T", "M", "S", "A", "D", "H", "K"):
                     continue
                 if m[0] == "t":  # train unit type m[1] (0x4c1c20 without the selection checks)
                     a = UNITS + u * 0x150

@@ -162,6 +162,7 @@ impl<'a> Scene<'a> {
             let c = if p < 8 { colr.get(p).copied().unwrap_or(p as u8) as usize } else { p };
             minimap.player_colors[p] = tm.get(c).copied().unwrap_or(0);
         }
+        st.interface_colors = minimap.colors;
         with_data(a, |d| minimap.refresh(d, &mut st));
         Ok(Scene { st, minimap, selected: Vec::new(), sent_selection: Vec::new(), card_menu: None, placing: None, targeting: None, error: 0, error_frames: 0, place_ok: false, drag_box: None, a, chk, ts, terrain, player_colors, local, shadow, tselect, thpbar, remaps })
     }
@@ -249,6 +250,11 @@ impl<'a> Scene<'a> {
             st.game_step(d);
             self.minimap.update(d, st);
         });
+        self.st.alert_tick();
+        // 0x4a4e40 runs on a 200 ms timer: about every fifth frame at 42 ms.
+        if self.st.frame % 5 == 0 {
+            self.minimap.blink_phase = !self.minimap.blink_phase;
+        }
         if self.st.shown_error != 0 {
             let e = std::mem::take(&mut self.st.shown_error);
             self.show_error(e);
@@ -916,6 +922,8 @@ pub fn run(a: &Assets, chk: Chk) -> io::Result<()> {
         if win.is_key_down(Key::Down) { vy += sp }
         vx = vx.clamp(0, (mw - vw).max(0));
         vy = vy.clamp(0, (mh - vh + 120).max(0)); // console covers the bottom
+        // 0x57f1d0: the screen position in tiles.
+        scene.st.screen_tile = ((vx.max(0) / 32) as u16, (vy.max(0) / 32) as u16);
         for (id, x, y) in scene.step() {
             // ponytail: on-screen only, no distance falloff or per-frame voice limits yet.
             if let Some(au) = &audio {

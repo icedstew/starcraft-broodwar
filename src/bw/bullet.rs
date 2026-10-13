@@ -737,8 +737,11 @@ impl State {
         let tu = &mut self.units[t as usize];
         if dmg < tu.hp {
             tu.hp -= dmg;
-            todo_port!("0x4797b0", "damage overlays, AI strength, under-attack alert (0x48f230)");
-            let _ = (notify, player);
+            todo_port!("0x4797b0", "damage overlays, AI strength");
+            let _ = player;
+            if source != NIL && self.units[source as usize].player != self.units[t as usize].player && notify {
+                self.under_attack_alert(t);
+            }
         } else {
             if self.units[t as usize].status & 0x40 != 0 || self.units[t as usize].loaded_units.iter().any(|&h| h != 0) {
                 todo_port!("0x4797b0", "loaded units die with their transport");

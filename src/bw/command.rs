@@ -937,6 +937,36 @@ impl State {
                 }
             }
             0x13 => self.command_hotkey(d, player, byte(1), byte(2)),
+            0x18 => {
+                // 0x4c2ef0: cancel the construction of the one selected unit.
+                if let [u] = self.live_selection(sel)[..] {
+                    if self.units[u as usize].player == player {
+                        self.cancel_unit(d, u);
+                    }
+                }
+            }
+            0x19 => {
+                // 0x4c2ec0: cancel the morphs of the selected units.
+                for u in self.live_selection(sel) {
+                    if self.units[u as usize].player == player {
+                        self.cancel_unit(d, u);
+                    }
+                }
+            }
+            0x20 => {
+                // 0x4c0100: cancel training queue slot (0xfe = the last one).
+                if let [u] = self.live_selection(sel)[..] {
+                    let un = &self.units[u as usize];
+                    let t = un.unit_type;
+                    if !matches!(t, 0x23 | 0x2b | 0x26 | 0x83 | 0x84 | 0x8d | 0x8f) && un.status & 1 != 0 && un.player == player {
+                        match u16_at(1) {
+                            0xfe => self.cancel_last_queued(d, u),
+                            0xff => {}
+                            i => self.cancel_queued(d, u, i as usize),
+                        }
+                    }
+                }
+            }
             0x1a => self.command_stop(d, player, sel, byte(1) != 0),
             0x1e => self.command_return_cargo(d, player, sel, byte(1) != 0),
             0x1f => self.command_train_sel(d, player, sel, u16_at(1)),
