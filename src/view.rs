@@ -61,6 +61,25 @@ impl Assets {
     }
 }
 
+/// The 1.16.1 minimap for a map, with the tileset's graphics from the install.
+pub fn load_minimap(casc: &Casc, chk: &Chk) -> std::io::Result<bw::minimap::Minimap> {
+    let name = map::TILESETS[chk.tileset()];
+    let rd = |p: String| casc.read(&p);
+    let wpe = rd(format!("tileset/{name}.wpe"))?;
+    let mut pal = [[0u8; 3]; 256];
+    for (i, p) in pal.iter_mut().enumerate() {
+        p.copy_from_slice(&wpe[i * 4..i * 4 + 3]);
+    }
+    let dark = pcx(&rd(format!("tileset/{name}/dark.pcx"))?).2;
+    let vx4 = rd(format!("tileset/{name}.vx4ex"))?.chunks_exact(4).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+    let vr4 = rd(format!("tileset/{name}.vr4"))?;
+    let tm = pcx(&rd("game/tminimap.pcx".into())?).2;
+    let mut colors = [0u8; 12];
+    colors.copy_from_slice(&tm[..12]);
+    let (w, h) = chk.dims();
+    Ok(bw::minimap::Minimap::new(w as u16, h as u16, chk.tileset() as u16, &pal, &dark, vx4, vr4, colors))
+}
+
 /// Run `f` with the engine's `Data` view over `a`.
 fn with_data<R>(a: &Assets, f: impl FnOnce(&bw::Data) -> R) -> R {
     let g = |i: u16| a.bw.grp_size(i);
@@ -87,6 +106,7 @@ pub struct Scene<'a> {
     pub ts: Tileset,
     pub terrain: (usize, usize, Vec<u8>),
     pub player_colors: [[u8; 8]; 12],
+    pub minimap: bw::minimap::Minimap,
     local: u8,
     shadow: [u8; 256],
     remaps: [Vec<u8>; 7],
@@ -120,9 +140,17 @@ impl<'a> Scene<'a> {
         }
         // images.dat remapping ids 1..=7
         let remaps = ["ofire", "gfire", "bfire", "bexpl", "trans50", "red", "green"].map(tbl);
-        let st = new_game(a, &chk)?;
+        let mut st = new_game(a, &chk)?;
         let local = st.local_player;
-        Ok(Scene { st, selected: Vec::new(), card_menu: None, placing: None, targeting: None, error: 0, place_ok: false, drag_box: None, a, chk, ts, terrain, player_colors, local, shadow, remaps })
+        let mut minimap = load_minimap(&a.casc, &chk)?;
+        // 0x581dd6: each player's minimap color is the tminimap.pcx entry of its color.
+        let tm = pcx(&a.casc.read("game/tminimap.pcx")?).2;
+        for p in 0..12 {
+            let c = if p < 8 { colr.get(p).copied().unwrap_or(p as u8) as usize } else { p };
+            minimap.player_colors[p] = tm.get(c).copied().unwrap_or(0);
+        }
+        with_data(a, |d| minimap.refresh(d, &mut st));
+        Ok(Scene { st, minimap, selected: Vec::new(), card_menu: None, placing: None, targeting: None, error: 0, place_ok: false, drag_box: None, a, chk, ts, terrain, player_colors, local, shadow, remaps })
     }
 
     /// Advance one frame; returns sounds (sfx id, x, y) requested this frame.
@@ -132,6 +160,7 @@ impl<'a> Scene<'a> {
             // 0x4d9670: the frame counter advances before each step.
             st.frame += 1;
             st.game_step(d);
+            self.minimap.update(d, st);
         });
         self.selected.retain(|&u| self.st.unit_alive(u));
         self.st.sounds.drain(..).map(|(id, x, y)| (id, x as i32, y as i32)).collect()
@@ -456,12 +485,12 @@ pub fn compose(scene: &Scene, ui: Option<&crate::ui::Ui>, vx: i32, vy: i32, idx:
     compose_with_cursor(scene, ui, vx, vy, None, idx, out)
 }
 
-/// Minimap geometry: (origin x, origin y, map pixels per minimap pixel).
+/// Minimap geometry: (origin x, origin y, map pixels per minimap pixel). 0x4a4400
+/// centers a smaller image in the 128x128 control.
 pub fn minimap_geom(scene: &Scene) -> (i32, i32, i32) {
     let (mx, my, ms) = MINIMAP;
-    let (tw, th) = (scene.terrain.0 as i32, scene.terrain.1 as i32);
-    let scale = (tw.max(th) / ms).max(1);
-    (mx + (ms - tw / scale) / 2, my + (ms - th / scale) / 2, scale)
+    let m = &scene.minimap;
+    (mx + (ms - m.w as i32) / 2, my + (ms - m.h as i32) / 2, m.tile_px as i32)
 }
 
 fn rect(out: &mut [u32], w: i32, h: i32, (x0, y0, x1, y1): (i32, i32, i32, i32), col: u32) {
@@ -499,25 +528,15 @@ pub fn compose_with_cursor(
     }
     let Some(ui) = ui else { return };
     crate::ui::blit_rgba(&ui.console, 0, h - ui.console.h as i32, out, w, h);
-    // Minimap: sample the terrain image, then mark units and the current view.
-    let (tw, th, tpx) = &scene.terrain;
     let (ox, oy, scale) = minimap_geom(scene);
-    let (mw, mh) = (*tw as i32 / scale, *th as i32 / scale);
     let rgb = |i: u8| {
         let [r, g, b] = pal[i as usize];
         (r as u32) << 16 | (g as u32) << 8 | b as u32
     };
-    for y in 0..mh {
-        for x in 0..mw {
-            let t = tpx[(y * scale) as usize * tw + (x * scale) as usize];
-            out[((oy + y) * w + ox + x) as usize] = rgb(t);
-        }
-    }
-    for (x, y, u) in scene.unit_positions() {
-        let p = scene.st.units[u as usize].player as usize;
-        let (px, py) = (ox + x / scale, oy + y / scale);
-        if (0..w).contains(&px) && (0..h).contains(&py) {
-            out[(py * w + px) as usize] = rgb(scene.player_colors[p.min(11)][0]);
+    let mm = &scene.minimap;
+    for y in 0..mm.h as i32 {
+        for x in 0..mm.w as i32 {
+            out[((oy + y) * w + ox + x) as usize] = rgb(mm.pixels[(y * mm.w as i32 + x) as usize]);
         }
     }
     let (rx, ry, rw, rh) = (ox + vx / scale, oy + vy / scale, w / scale, (h - 120) / scale);
@@ -674,11 +693,10 @@ pub fn run(a: &Assets, chk: Chk) -> io::Result<()> {
                 let hits = if (x1 - x0).abs() < 4 && (y1 - y0).abs() < 4 {
                     scene.unit_at(map_pt.0, map_pt.1).into_iter().collect()
                 } else {
-                    // Box: BW only box-selects the player's own units (max 12).
-                    let me = scene.local_player();
-                    let mut hits: Vec<u32> = scene.units_in_rect(x0, y0, x1, y1).into_iter().filter(|&u| scene.st.units[u as usize].player == me).collect();
-                    hits.truncate(12);
-                    hits
+                    let r = [x0.min(x1) as i16, y0.min(y1) as i16, x0.max(x1) as i16, y0.max(y1) as i16];
+                    let cur = scene.selected.clone();
+                    let st = &mut scene.st;
+                    with_data(scene.a, |d| st.box_select(d, r, shift, &cur)).unwrap_or(cur)
                 };
                 if scene.selected != hits {
                     scene.card_menu = None;

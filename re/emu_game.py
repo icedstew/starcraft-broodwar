@@ -222,6 +222,92 @@ def unit_trace(e, f, u):
             f"hp {s32(e, a + 8)} sh {s32(e, a + 0x60)} gcd {e.r8(a + 0x55)} tgt {tgt(e, e.r32(a + 0x5c))} vis {e.r8(sp + 0xc)}")
 
 
+def pcx(path):
+    """(w, h, pixels) of an 8-bit PCX (asset decode only)."""
+    d = open(path, "rb").read()
+    x0, y0, x1, y1 = struct.unpack_from("<4H", d, 4)
+    w, h, bpl = x1 - x0 + 1, y1 - y0 + 1, struct.unpack_from("<H", d, 66)[0]
+    out, i = bytearray(), 128
+    while len(out) < bpl * h:
+        c = d[i]
+        i += 1
+        if c >= 0xc0:
+            out += bytes([d[i]]) * (c & 0x3f)
+            i += 1
+        else:
+            out.append(c)
+    return w, h, b"".join(out[r * bpl:r * bpl + w] for r in range(h))
+
+
+TILESETS = ["badlands", "platform", "install", "ashworld", "jungle", "desert", "ice", "twilight"]
+
+
+def minimap_init(e, data):
+    """The minimap state 0x4a5a80 sets up, with its asset loads done here."""
+    name = TILESETS[e.r16(0x57f1dc)]
+    wpe = open(os.path.join(data, "tileset", name + ".wpe"), "rb").read()
+    e.write(0x5994e0, wpe)  # palette
+    e.write(0x5973a0, pcx(os.path.join(data, "tileset", name, "dark.pcx"))[2][:0x2000])
+    e.write(0x581dd6, pcx(os.path.join(data, "game", "tminimap.pcx"))[2][:12])
+    e.call(0x4bdd60)  # color-cycling exclusions 0x6d125c
+    for i in range(256):  # 0x59cb60 remap, as 0x4a5a80
+        if e.call(0x4cb560, regs={"ecx": i}):
+            v = e.call(0x4bdb30, regs={"ecx": 0x5994e0}, stack=[struct.unpack_from("<I", wpe, i * 4)[0]]) & 0xff
+        else:
+            v = i
+        e.w8(0x59cb60 + i, v)
+    e.call(0x41e450, regs={"ebx": 0x4bdb30}, stack=[0x5994e0])  # interface colors 0x6ceb20
+    e.w32(0x59cc60, e.alloc(0x40))  # the minimap dialog control
+    e.w16(0x59cc74, 0x80)
+    e.w16(0x59cc64, 0x80)
+    e.call(0x4a4400)
+
+
+def minimap_trace(e, f):
+    """0x4a4ce0's redraw: terrain, fog, unit boxes, drawn for local player 0 (the
+    simulation runs with 0x512684 = 8, which keeps the UI side effects of player 0 off)."""
+    local = e.r32(0x512684)
+    e.w32(0x512684, 0)
+    e.call(e.r32(0x59c1a0))
+    e.call(0x4a4150)
+    e.call(0x4a4ac0)
+    e.w32(0x512684, local)
+    w, h = e.r16(0x59cc74), e.r16(0x59cc64)
+    return f"f{f} minimap {w}x{h} {e.r32(0x59c2b8)} " + e.read(e.r32(0x59c198), w * h).hex()
+
+
+def select_test(e, f, tests):
+    """Drag boxes through 0x46fa40 for local player 0, from no selection; 0x49aef0
+    (apply + send) is replaced by storing its list as the client selection 0x6284b8."""
+    from unicorn.x86_const import UC_X86_REG_ESP
+    if not hasattr(e, "sel_hooked"):
+        def apply(e):
+            esp = e.uc.reg_read(UC_X86_REG_ESP)
+            n, lst = e.r32(esp + 4), e.r32(esp + 8)
+            e.write(0x6284b8, e.read(lst, n * 4) + bytes(4 * (12 - n)))
+        e.at(0x49aef0, apply)
+        e.skip(0x49aef0, 0, 4)
+        e.sel_hooked = True
+    local = e.r32(0x512684)
+    e.w32(0x512684, 0)
+    e.write(0x6284b8, bytes(48))
+    out = []
+    for b in tests.split(";"):
+        if not b:
+            continue
+        v = b.split(",")
+        r = e.alloc(8)
+        e.write(r, struct.pack("<4h", *[int(x) for x in v[:4]]))
+        e.w8(0x596a28, 1 if v[4:] == ["s"] else 0)
+        e.w8(0x596a2a, 0)
+        e.call(0x46fa40, stack=[r])
+        sel = [(a - UNITS) // 0x150 for a in struct.unpack("<12I", e.read(0x6284b8, 48)) if a]
+        out.append(f"f{f} sel {b} -> " + " ".join(map(str, sel)))
+    e.w8(0x596a28, 0)
+    e.w32(0x512684, local)
+    return "\n".join(out)
+
+
 def parse_move(m):
     if m[0] == "@":
         return ("@", int(m[1:]))
@@ -266,6 +352,7 @@ def scenario(e, units, move, frames, out):
     # __getptd (0x4059e4) reads TLS: return one static per-thread block instead, with
     # MSVC's initial rand state (_holdrand at +0x14 = 1).
     e.w32(0x57f0b0, 1)  # local player 0's vision mask
+    e.w32(0x57eeb8, 0x100)  # and explored mask
     ptd = e.alloc(0x8c)
     e.w32(ptd + 0x14, 1)
     e.write(0x4059e4, b"\xb8" + struct.pack("<I", ptd) + b"\xc3")
@@ -378,6 +465,9 @@ def scenario(e, units, move, frames, out):
     apply_moves(move)
     move2, at = os.environ.get("SCBW_MOVE2"), int(os.environ.get("SCBW_AT", "0"))
     move2 = [parse_move(m) for m in move2.split(";") if m] if move2 else None
+    minimap = bool(os.environ.get("SCBW_MINIMAP"))
+    if minimap:
+        minimap_init(e, e.data_root)
     with open(out, "w") as fo:
         for f in range(frames):
             if move2 and f == at:
@@ -403,12 +493,17 @@ def scenario(e, units, move, frames, out):
             fo.write(bullet_trace(e, f) + "\n")
             fo.write(f"f{f} res " + " ".join(f"{e.r32(0x57f0f0 + p * 4)},{e.r32(0x57f120 + p * 4)}" for p in range(2)) + "\n")
             fo.write(f"f{f} rng {e.r32(0x51ca14):#x} {e.r32(0x51ca18)}\n")
+            if os.environ.get("SCBW_SELTEST") and f % 50 == 0:
+                fo.write(select_test(e, f, os.environ["SCBW_SELTEST"]) + "\n")
+            if minimap and f % 50 == 0:
+                fo.write(minimap_trace(e, f) + "\n")
 
 
 def main():
     exe, data, md = sys.argv[1:4]
     e = Emu(exe)
     f = Files(e, data)
+    e.data_root = data
     if not game_init(e, f, md):
         return
     check_sai(e, md)

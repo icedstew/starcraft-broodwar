@@ -166,6 +166,11 @@ fn main() -> std::io::Result<()> {
             let frames: u32 = args.get(1).and_then(|f| f.parse().ok()).unwrap_or(48);
             let trace = std::env::var("SCBW_TRACE").ok().map(std::fs::File::create).transpose()?;
             let mut trace = trace.map(std::io::BufWriter::new);
+            // SCBW_MINIMAP: also trace the minimap image every 50 frames.
+            let mut minimap = match (&chk, std::env::var("SCBW_MINIMAP").is_ok()) {
+                (Some(chk), true) => Some(view::load_minimap(&casc, chk)?),
+                _ => None,
+            };
             for f in 0..frames {
                 if let (Some(m), true) = (&move2, f == at) {
                     apply_moves(&mut st, &d, &made, m);
@@ -204,6 +209,24 @@ fn main() -> std::io::Result<()> {
                     let r: Vec<String> = (0..2).map(|p| format!("{},{}", st.players.minerals[p], st.players.gas[p])).collect();
                     writeln!(t, "f{f} res {}", r.join(" "))?;
                     writeln!(t, "f{f} rng {:#x} {}", st.rng.seed, st.rng.total)?;
+                    if let (Ok(tests), 0) = (std::env::var("SCBW_SELTEST"), f % 50) {
+                        // "x0,y0,x1,y1[,s];...": drag boxes in turn (s = shift), from no selection.
+                        let mut sel: Vec<u32> = Vec::new();
+                        for b in tests.split(';').filter(|b| !b.is_empty()) {
+                            let v: Vec<&str> = b.split(',').collect();
+                            let r: Vec<i16> = v[..4].iter().map(|n| n.parse().unwrap_or(0)).collect();
+                            if let Some(n) = st.box_select(&d, [r[0], r[1], r[2], r[3]], v.get(4) == Some(&"s"), &sel) {
+                                sel = n;
+                            }
+                            let ids: Vec<String> = sel.iter().map(|u| u.to_string()).collect();
+                            writeln!(t, "f{f} sel {b} -> {}", ids.join(" "))?;
+                        }
+                    }
+                    if let (Some(m), 0) = (minimap.as_mut(), f % 50) {
+                        m.refresh(&d, &mut st);
+                        let hex: String = m.pixels.iter().map(|b| format!("{b:02x}")).collect();
+                        writeln!(t, "f{f} minimap {}x{} {} {}", m.w, m.h, m.boxes, hex)?;
+                    }
                 }
                 if f % 8 == 0 || f + 1 == frames {
                     for &u in &made {
