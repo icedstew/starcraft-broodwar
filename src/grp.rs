@@ -27,6 +27,8 @@ pub enum Blend<'a> {
     Player(&'a [u8; 8]),
     /// Shadow: darken via lookup table.
     Remap(&'a [u8; 256]),
+    /// Source colors replaced through this table (selection circles).
+    Colors(&'a [u8; 256]),
     /// Translucent remap (ofire, bexpl, ...): out = table[(src - 1) * 256 + dst].
     Table(&'a [u8]),
 }
@@ -97,6 +99,7 @@ impl Grp {
                         Blend::Player(pc) if (8..16).contains(&c) => pc[c as usize - 8],
                         Blend::Player(_) => c,
                         Blend::Remap(t) => t[*d as usize],
+                        Blend::Colors(t) => t[c as usize],
                         Blend::Table(t) => t.get((c as usize).wrapping_sub(1) * 256 + *d as usize).copied().unwrap_or(c),
                     };
                 }

@@ -113,6 +113,8 @@ pub struct Scene<'a> {
     pub minimap: bw::minimap::Minimap,
     local: u8,
     shadow: [u8; 256],
+    /// game/tselect.pcx: selection circle colors, 8 per color (0x5240b8).
+    tselect: Vec<u8>,
     remaps: [Vec<u8>; 7],
 }
 
@@ -144,6 +146,7 @@ impl<'a> Scene<'a> {
         }
         // images.dat remapping ids 1..=7
         let remaps = ["ofire", "gfire", "bfire", "bexpl", "trans50", "red", "green"].map(tbl);
+        let tselect = pcx(&a.casc.read("game/tselect.pcx")?).2;
         let mut st = new_game(a, &chk)?;
         let local = st.local_player;
         let mut minimap = load_minimap(&a.casc, &chk)?;
@@ -154,7 +157,7 @@ impl<'a> Scene<'a> {
             minimap.player_colors[p] = tm.get(c).copied().unwrap_or(0);
         }
         with_data(a, |d| minimap.refresh(d, &mut st));
-        Ok(Scene { st, minimap, selected: Vec::new(), sent_selection: Vec::new(), card_menu: None, placing: None, targeting: None, error: 0, error_frames: 0, place_ok: false, drag_box: None, a, chk, ts, terrain, player_colors, local, shadow, remaps })
+        Ok(Scene { st, minimap, selected: Vec::new(), sent_selection: Vec::new(), card_menu: None, placing: None, targeting: None, error: 0, error_frames: 0, place_ok: false, drag_box: None, a, chk, ts, terrain, player_colors, local, shadow, tselect, remaps })
     }
 
     /// Send the local selection to the simulation (0x4c0860) and return the local
@@ -306,20 +309,33 @@ impl<'a> Scene<'a> {
             self.sprite_seen(s) && (sp.x as i32 - vx).abs() < vw + 256 && (sp.y as i32 - vy).abs() < vh + 256
         });
         order.sort_by_key(|&s| self.st.sprites[s as usize].elevation);
+        // Selection circles (0x4d7070 / 0x4d6810): image 0x231 + the sprite's circle size,
+        // below the sprite, colored from tselect.pcx by 0x581d6a (own 0, ally 1, enemy 2).
         let sp_dat = &self.a.dat().sprites;
-        for &u in &self.selected {
-            let s = self.st.units[u as usize].sprite;
-            let sp = &self.st.sprites[s as usize];
-            let id = sp.sprite_id as usize;
-            // selection circle images start at 561; offset is the vertical shift.
-            if let Some(g) = self.a.grp(561 + sp_dat.selection_circle[id] as u16) {
-                let x = sp.x as i32 - g.w / 2 - vx;
-                let y = sp.y as i32 + sp_dat.selection_offset[id] as i32 - g.h / 2 - vy;
-                g.draw(0, false, x, y, out, vw, vh, Blend::Normal);
-            }
-        }
+        let circled: std::collections::HashMap<u32, u8> = self
+            .selected
+            .iter()
+            .map(|&u| {
+                let un = &self.st.units[u as usize];
+                let p = un.player as usize;
+                let c = if p == self.local as usize { 0 } else if self.st.alliances[self.local as usize][p] == 0 { 2 } else { 1 };
+                (un.sprite, c)
+            })
+            .collect();
         for s in order {
             let sp = &self.st.sprites[s as usize];
+            if let Some(&c) = circled.get(&s) {
+                let id = sp.sprite_id as usize;
+                if let Some(g) = self.a.grp(0x231 + sp_dat.selection_circle[id] as u16) {
+                    let mut table = [0u8; 256];
+                    for (k, t) in table.iter_mut().enumerate() {
+                        *t = if k < 8 { self.tselect.get(c as usize * 8 + k).copied().unwrap_or(k as u8) } else { k as u8 };
+                    }
+                    let x = sp.x as i32 - g.w / 2 - vx;
+                    let y = sp.y as i32 + sp_dat.selection_offset[id] as i32 - g.h / 2 - vy;
+                    g.draw(0, false, x, y, out, vw, vh, Blend::Colors(&table));
+                }
+            }
             let mut i = sp.images.tail;
             while i != NIL {
                 let img = &self.st.images[i as usize];
