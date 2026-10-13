@@ -154,11 +154,21 @@ pub fn blit_rgba(img: &Rgba, x: i32, y: i32, dst: &mut [u32], dw: i32, dh: i32) 
     }
 }
 
+/// 0x512708: cursor GRPs. Indices: 0 arrow, 1 illegal, 2..=5 targeting yellow / red /
+/// green / none, 6..=8 magnifier green / red / yellow, 9 drag, 10 time, 11..=18 scroll
+/// up, up-right, right, down-right, down, down-left, left, up-left.
+pub const CURSORS: [&str; 19] = [
+    "arrow.grp", "illegal.grp", "targy.grp", "targr.grp", "targg.grp", "targn.grp", "magg.grp", "magr.grp", "magy.grp",
+    "drag.grp", "time.grp", "scrollu.grp", "scrollur.grp", "scrollr.grp", "scrolldr.grp", "scrolld.grp", "scrolldl.grp",
+    "scrolll.grp", "scrollul.grp",
+];
+
 pub struct Ui {
     pub console: Rgba,
     pub font: Font,
     pub icons: Grp,
-    pub cursor: Grp,
+    /// The cursors in 1.16.1's order (0x512708, loaded by 0x4d1560).
+    pub cursors: Vec<Grp>,
     pub wireframe: Grp,
     pub cmdicons: Grp,
     /// ticon.pcx: 6 states x 16 colors for command icons.
@@ -174,13 +184,13 @@ impl Ui {
         let console = dds(&casc.read(&format!("sd/game/consoles/{race}/console.dds"))?)?;
         let font = Font::parse(casc.read("sd/font/font10.fnt")?);
         let icons = Grp::parse(casc.read("game/icons.grp")?);
-        let cursor = Grp::parse(casc.read("cursor/arrow.grp")?);
+        let cursors = CURSORS.iter().map(|n| casc.read(&format!("cursor/{n}")).map(Grp::parse)).collect::<io::Result<Vec<_>>>()?;
         let wireframe = Grp::parse(casc.read("unit/wirefram/wirefram.grp")?);
         let cmdicons = Grp::parse(casc.read("unit/cmdicons/cmdicons.grp")?);
         let ticon = crate::view::pcx(&casc.read("game/ticon.pcx")?).2;
         let stat_txt = crate::dat::parse_tbl(&casc.read("rez/stat_txt.tbl")?);
         let (_, _, text_colors) = crate::view::pcx(&casc.read("game/tfontgam.pcx")?);
-        Ok(Ui { console, font, icons, cursor, wireframe, cmdicons, ticon, stat_txt, text_colors })
+        Ok(Ui { console, font, icons, cursors, wireframe, cmdicons, ticon, stat_txt, text_colors })
     }
 
     pub fn text_color(&self, c: usize) -> &[u8] {
@@ -209,9 +219,12 @@ impl Ui {
     }
 
     /// Cursor centered on (x, y), animating over `tick`.
-    pub fn draw_cursor(&self, tick: usize, x: i32, y: i32, pal: &[[u8; 3]; 256], dst: &mut [u32], dw: i32, dh: i32) {
-        let f = (tick / 4) % self.cursor.frame_count().max(1);
-        draw_grp_rgb(&self.cursor, f, x - self.cursor.w / 2, y - self.cursor.h / 2, pal, dst, dw, dh);
+    /// Cursor `kind` (index into CURSORS) at (x, y): frame `counter` (0x597390, one step
+    /// per 100 ms), hot spot at (63, 63) of the 128x128 GRP (0x4be120).
+    pub fn draw_cursor(&self, kind: usize, counter: usize, x: i32, y: i32, pal: &[[u8; 3]; 256], dst: &mut [u32], dw: i32, dh: i32) {
+        let Some(g) = self.cursors.get(kind) else { return };
+        let f = counter % g.frame_count().max(1);
+        draw_grp_rgb(g, f, x - 0x3f, y - 0x3f, pal, dst, dw, dh);
     }
 }
 

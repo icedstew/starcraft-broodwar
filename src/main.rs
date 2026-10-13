@@ -406,7 +406,15 @@ fn main() -> std::io::Result<()> {
                 scene.placing = Some((0x1e, t));
                 scene.check_placement((sx + x, sy + y));
             }
-            let cursor = hover.map(|(_, sx, sy)| (0, sx, sy));
+            // Debug: SCBW_CURSOR=sx,sy draws the cursor the game would show there.
+            let at = std::env::var("SCBW_CURSOR").ok().and_then(|v| {
+                let (a, b) = v.split_once(',')?;
+                Some((a.parse::<i32>().ok()?, b.parse::<i32>().ok()?))
+            });
+            let cursor = match at {
+                Some((sx, sy)) => Some((scene.cursor_kind(sx, sy, x, y, false), 0, sx, sy)),
+                None => hover.map(|(_, sx, sy)| (0, 0, sx, sy)),
+            };
             view::compose_with_cursor(&scene, ui.as_ref(), x, y, cursor, &mut idx, &mut rgb);
             write_png_rgb(&args[2], w, h, &rgb)?;
         }

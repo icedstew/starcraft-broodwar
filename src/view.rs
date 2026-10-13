@@ -204,6 +204,42 @@ impl<'a> Scene<'a> {
         self.error_frames = 7000 / 42;
     }
 
+    /// 0x4d14d0: which cursor shows with the mouse at screen (x, y): scrolling at the
+    /// screen edges (0x4d12a0), else over the minimap (0x6556fc) or the map (0x4d1460),
+    /// where units under it pick a magnifier or target color (0x4d13e0).
+    pub fn cursor_kind(&mut self, x: i32, y: i32, vx: i32, vy: i32, dragging: bool) -> usize {
+        let (mw, mh) = (self.st.map_px.0 as i32, self.st.map_px.1 as i32);
+        let dx = if x < 2 && vx > 0 { -1 } else if x >= 0x27e && vx < mw - SCREEN_W { 1 } else { 0 };
+        let dy = if y < 2 && vy > 0 { -1 } else if y >= 0x1de && vy < mh - (SCREEN_H - 80) { 1 } else { 0 };
+        if dx != 0 || dy != 0 {
+            // 0x51275c, indexed by dx + 3 * dy.
+            const SCROLL: [usize; 9] = [18, 11, 12, 17, 0, 13, 16, 15, 14];
+            return SCROLL[(dx + 1 + (dy + 1) * 3) as usize];
+        }
+        if on_minimap_pt(x, y) {
+            return if self.targeting.is_some() { 2 } else { 0 };
+        }
+        if !(0..SCREEN_W).contains(&x) || !(0..400).contains(&y) {
+            return 0;
+        }
+        if dragging {
+            return 9;
+        }
+        if self.placing.is_some() {
+            return 0;
+        }
+        let u = self.unit_at(x + vx, y + vy);
+        let enemy = |st: &bw::State, u: u32| st.alliances[st.local_player as usize][st.units[u as usize].player as usize] == 0 && !st.replay;
+        match (self.targeting.is_some(), u) {
+            (true, None) => 5,
+            (true, Some(u)) if self.st.units[u as usize].player == 11 => 2,
+            (true, Some(u)) => if enemy(&self.st, u) { 3 } else { 4 },
+            (false, Some(u)) if self.st.units[u as usize].player == 11 => 8,
+            (false, Some(u)) => 6 + enemy(&self.st, u) as usize,
+            (false, None) => 0,
+        }
+    }
+
     /// Advance one frame; returns sounds (sfx id, x, y) requested this frame.
     pub fn step(&mut self) -> Vec<(u16, i32, i32)> {
         let st = &mut self.st;
@@ -621,7 +657,7 @@ pub fn compose_with_cursor(
     ui: Option<&crate::ui::Ui>,
     vx: i32,
     vy: i32,
-    cursor: Option<(usize, i32, i32)>,
+    cursor: Option<(usize, usize, i32, i32)>,
     idx: &mut [u8],
     out: &mut [u32],
 ) {
@@ -684,7 +720,7 @@ pub fn compose_with_cursor(
     if let Some(b) = scene.drag_box {
         rect(out, w, h, b, 0x10FC18);
     }
-    if let (Some((_, kind)), Some((_, cx, cy))) = (scene.placing, cursor) {
+    if let (Some((_, kind)), Some((_, _, cx, cy))) = (scene.placing, cursor) {
         // placebox.cpp (0x48daf0, 0x48d7f0): the building's first frame in the local
         // player's color, each tile dithered (0x40c4d2) green when free, red when not.
         let (tx, ty) = scene.build_tile(kind, (cx + vx, cy + vy));
@@ -729,8 +765,8 @@ pub fn compose_with_cursor(
             ui.draw_cmd_icon(b.icon as usize, if *enabled { 0 } else { 1 }, bx + 2, by + 1, pal, out, w, h);
         }
     }
-    if let Some((tick, cx, cy)) = cursor {
-        ui.draw_cursor(tick, cx, cy, pal, out, w, h);
+    if let Some((kind, counter, cx, cy)) = cursor {
+        ui.draw_cursor(kind, counter, cx, cy, pal, out, w, h);
     }
 }
 
@@ -893,7 +929,9 @@ pub fn run(a: &Assets, chk: Chk) -> io::Result<()> {
                 au.play(&a.casc, a.dat(), id, 0.8);
             }
         }
-        compose_with_cursor(&scene, ui.as_ref(), vx, vy, Some((tick, cx, cy)), &mut idx, &mut rgb);
+        let kind = scene.cursor_kind(cx, cy, vx, vy, drag_start.is_some());
+        let counter = tick * 42 / 100;
+        compose_with_cursor(&scene, ui.as_ref(), vx, vy, Some((kind, counter, cx, cy)), &mut idx, &mut rgb);
         win.update_with_buffer(&rgb, vw as usize, vh as usize).map_err(|e| io::Error::other(e.to_string()))?;
     }
     Ok(())
