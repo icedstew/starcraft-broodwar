@@ -102,14 +102,14 @@ Share of the 4,644 1.16.1 functions that are ported. A function counts as ported
 part of this repo:
 
 ```sh
-python3 -I re/coverage.py <decomp.c> . | tail -5      # summary: in scope / reachable from game_step
-python3 -I re/coverage.py <decomp.c> . --html cov.html  # per source file, as HTML
+python3 -I re/coverage.py /tmp/claude-1000/-home-stubob/76c93498-4528-4c2d-b789-d58b9cc39c19/scratchpad/dump/bw116n.c . | tail -5      # summary: in scope / reachable from game_step
+python3 -I re/coverage.py /tmp/claude-1000/-home-stubob/76c93498-4528-4c2d-b789-d58b9cc39c19/scratchpad/dump/bw116n.c . --html cov.html  # per source file, as HTML
 ```
 
 Summary as a table (`column -N` is util-linux):
 
 ```sh
-python3 -I re/coverage.py <decomp.c> . | sed -nE \
+python3 -I re/coverage.py /tmp/claude-1000/-home-stubob/76c93498-4528-4c2d-b789-d58b9cc39c19/scratchpad/dump/bw116n.c . | sed -nE \
   's/^all functions: ([0-9]+) functions, ([0-9]+) ported \(([0-9]+%)\).*/All functions|\1|\2 (\3)/p;
    s/^in scope: ([0-9]+) functions, ([0-9]+) ported \(([0-9]+%)\).*/In scope|\1|\2 (\3)/p;
    s/^reachable from (.*): ([0-9]+) functions, ([0-9]+) ported \(([0-9]+%)\).*/Reachable from \1|\2|\3 (\4)/p' \
