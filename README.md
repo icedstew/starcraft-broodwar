@@ -14,10 +14,12 @@ Pure Rust, no platform-specific code: builds for any target Rust supports.
 
 `view` runs the faithful engine below. Melee maps start you (slot 0, `SCBW_RACE` =
 terran/protoss/zerg, default terran) with a town hall and four workers; other start
-locations get idle computer players. Controls: left-click / drag selects, right-click
-moves, attacks, gathers or sets rallies (Shift queues), the command card and hotkeys
-M/A/S/H/P/G/C issue Move, Attack, Stop, Hold, Patrol, Gather and Return Cargo, and the
-Build menu places buildings; arrows or the screen edge scroll, Esc quits.
+locations get idle computer players. Controls: left-click / drag selects (Shift adds or
+removes, Ctrl or a double-click picks the same type on screen), right-click moves,
+attacks, gathers or sets rallies (Shift queues), Ctrl+0-9 / 0-9 / Shift+0-9 set, select
+and add to hotkey groups, the command card and hotkeys M/A/S/H/P/G/C issue Move,
+Attack, Stop, Hold, Patrol, Gather and Return Cargo, and the Build menu places
+buildings; arrows or the screen edge scroll, Esc quits.
 
 Set `SCBW_INSTALL` to the directory containing `.build.info` and `Data/` (defaults to the Lutris/Wine path).
 
@@ -62,6 +64,9 @@ address. Ported so far:
   group formation, stop, hold, return cargo, train, build, with order and unit
   requirement checks and Shift-queueing.
 - Melee starting units.
+- Interface logic: minimap image, drag-box and click selection (pixel-exact unit
+  picking), selections and hotkey groups as the simulation keeps them, select
+  commands, building placement box.
 
 Not yet: Protoss/Zerg building, zerg larvae and creep, add-ons, research and
 upgrades, spells, transports, triggers, AI, networking.

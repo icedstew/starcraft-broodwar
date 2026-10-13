@@ -171,6 +171,22 @@ impl<'a> Scene<'a> {
         bw::select::selection_units(&self.st.selections[me as usize]).to_vec()
     }
 
+    /// Hotkey group command 0x13 (`action` 0 set, 1 select, 2 add); the local selection
+    /// follows the simulation's.
+    pub fn hotkey(&mut self, action: u8, g: u8) {
+        self.sim_selection();
+        let me = self.local;
+        let st = &mut self.st;
+        with_data(self.a, |d| st.execute_command(d, me, &[], &[0x13, action, g]));
+        let sel = bw::select::selection_units(&self.st.selections[me as usize]).to_vec();
+        if sel != self.selected {
+            self.card_menu = None;
+            self.placing = None;
+        }
+        self.selected = sel.clone();
+        self.sent_selection = sel;
+    }
+
     /// Advance one frame; returns sounds (sfx id, x, y) requested this frame.
     pub fn step(&mut self) -> Vec<(u16, i32, i32)> {
         let st = &mut self.st;
@@ -712,6 +728,13 @@ pub fn run(a: &Assets, chk: Chk) -> io::Result<()> {
             }).and_then(|(b, enabled)| enabled.then_some(b));
         }
         for k in win.get_keys_pressed(minifb::KeyRepeat::No) {
+            use minifb::Key::*;
+            if let Some(g) = [Key0, Key1, Key2, Key3, Key4, Key5, Key6, Key7, Key8, Key9].iter().position(|&n| n == k) {
+                // Hotkey groups (command 0x13): Ctrl sets, Shift adds, the key alone selects.
+                let ctrl = win.is_key_down(LeftCtrl) || win.is_key_down(RightCtrl);
+                scene.hotkey(if ctrl { 0 } else if shift { 2 } else { 1 }, g as u8);
+                continue;
+            }
             let Some(c) = key_char(k) else { continue };
             if let Some((b, _)) = card.iter().flatten().find(|(b, en)| *en && hotkey(ui.as_ref(), b) == Some(c)) {
                 pressed = Some(*b);
