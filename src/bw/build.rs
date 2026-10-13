@@ -83,8 +83,7 @@ impl State {
                 todo_port!("0x473150", "nydus exit placement");
                 0
             } else if flags & 0x2_0000 != 0 {
-                todo_port!("0x473010", "creep placement");
-                0
+                self.creep_placement(tx, ty, player, w, h, slot, a7, a9)
             } else {
                 self.terrain_check(d, t, tx, ty, player, w, h, slot, a7)
             };
@@ -197,6 +196,33 @@ impl State {
                 };
                 self.placement[(row as usize + slot * 8) * 6 + col as usize] = v;
                 worst = worst.max(v);
+            }
+        }
+        worst
+    }
+
+    /// 0x473010: Zerg buildings need creep on every tile (5 = no creep, 10 unexplored).
+    #[allow(clippy::too_many_arguments)]
+    fn creep_placement(&mut self, tx: i16, ty: i16, player: u8, w: i16, h: i16, slot: usize, a7: bool, a9: bool) -> u8 {
+        let unexplored = self.human_tile_mask(player, true);
+        let fogged = self.human_tile_mask(player, false);
+        let creep = if a7 { 0x4000_0000 } else { 0x40_0000 };
+        let mut worst = 0;
+        for row in 0..h.max(0) as i32 {
+            for col in 0..w.max(0) as i32 {
+                let f = self.tile_flag(tx as i32 + col, ty as i32 + row);
+                let mut v = 0;
+                if unexplored & f != 0 {
+                    v = 10;
+                    worst = 10;
+                }
+                if (a9 || a7 || fogged & f == 0) && creep & f == 0 {
+                    v = 5;
+                    if worst < 6 {
+                        worst = 5;
+                    }
+                }
+                self.placement[(row as usize + slot * 8) * 6 + col as usize] = v;
             }
         }
         worst
@@ -318,7 +344,7 @@ impl State {
     }
 
     /// 0x466e80: empty the build queue, refunding it.
-    fn clear_build_queue(&mut self, d: &Data, u: u32) {
+    pub(super) fn clear_build_queue(&mut self, d: &Data, u: u32) {
         for i in (0..5).rev() {
             let j = (self.units[u as usize].build_queue_slot as usize + i) % 5;
             if self.units[u as usize].build_queue[j] != NONE {
@@ -333,7 +359,8 @@ impl State {
     /// Build command: 0x48e010 (placement check at tile (tx, ty)) then 0x48de70.
     pub fn command_build(&mut self, d: &Data, u: u32, order: u8, tx: i16, ty: i16, t: u16) {
         let p = self.units[u as usize].player;
-        if self.placement_check(d, u, p, tx, ty, t, 1, false, false, false) != 0 {
+        let r = self.placement_check(d, u, p, tx, ty, t, 1, false, false, false);
+        if r != 0 {
             return;
         }
         let (pw, ph) = placement(d, t);

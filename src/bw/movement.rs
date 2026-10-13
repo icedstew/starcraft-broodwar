@@ -446,7 +446,7 @@ impl State {
     fn mv_flyer(&mut self, d: &Data, u: u32) -> bool {
         self.clamp_move_target(d, u);
         self.predict(d, u);
-        let repulsed = self.air_repulse(u);
+        let repulsed = self.air_repulse(d, u);
         let ut = self.units[u as usize].unit_type as usize;
         let dim = d.dat.units.dimensions[ut];
         let (l, t, r, b) = (dim as i16 as i32, (dim >> 16) as i16 as i32, (dim >> 32) as i16 as i32, (dim >> 48) as i16 as i32);
@@ -468,7 +468,7 @@ impl State {
         }
         m.new_pos = (x as i16, y as i16);
         self.apply_move_checked(d, u);
-        self.air_repulse_finish(u, repulsed);
+        self.air_repulse_finish(d, u, repulsed);
         false
     }
 
@@ -498,16 +498,111 @@ impl State {
     }
 
     /// 0x453420: air unit repulsion. Adjusts the predicted position; returns whether applied.
-    fn air_repulse(&mut self, u: u32) -> bool {
-        todo_port!("0x453420", "air repulse (repulse grid 0x6d5cd8, table 0x515418)");
-        let _ = u;
-        false
+    fn air_repulse(&mut self, d: &Data, u: u32) -> bool {
+        if !self.repulse_eligible(d, u) || self.units[u as usize].status & 0x3000 != 0 {
+            return false;
+        }
+        let un = &self.units[u as usize];
+        let n = self.repulse[un.repulse_x as usize + un.repulse_y as usize * 0xab];
+        if n < 2 {
+            self.units[u as usize].repulse_unknown &= 0xf8;
+            return false;
+        }
+        let r = self.units[u as usize].repulse_unknown;
+        if r & 7 == 0 {
+            self.units[u as usize].repulse_unknown = r | 7;
+            self.repulse_new_angle(d, u);
+        } else {
+            self.units[u as usize].repulse_unknown = r - 1;
+        }
+        let (dx, dy) = crate::game::flingy::direction_table()[self.units[u as usize].repulse_angle as usize];
+        let (mut x, mut y) = (dx / 2, dy / 2);
+        if self.unit_at_move_target(u) != 0 {
+            let k = ((n >> 2) + 1) as i32;
+            x = k * x / 2;
+            y = k * y / 2;
+        }
+        const JITTER: [(i32, i32); 16] = [
+            (-5, -5), (-5, 5), (5, -5), (5, 5), (5, -5), (5, 5), (-5, -5), (-5, 5),
+            (-5, 5), (5, -5), (-5, -5), (5, 5), (-5, 5), (5, -5), (5, 5), (-5, -5),
+        ];
+        let (jx, jy) = JITTER[(self.units[u as usize].repulse_unknown >> 4) as usize];
+        if jx * 4 < x || (x < 0 && x >= jx * -4) {
+            x -= jx;
+        } else if x > 0 || x < jx * -4 {
+            x += jx;
+        }
+        if jy * 4 < y || (y < 0 && y >= jy * -4) {
+            y -= jy;
+        } else if y > 0 || y < jy * -4 {
+            y += jy;
+        }
+        let m = &mut self.mv;
+        m.new_exact.0 += x;
+        m.new_exact.1 += y;
+        m.new_pos = ((m.new_exact.0 as u32 >> 8) as i16, (m.new_exact.1 as u32 >> 8) as i16);
+        true
+    }
+
+    /// 0x4531f0: pick a new repulse angle, steered towards the move target and away from map edges.
+    fn repulse_new_angle(&mut self, d: &Data, u: u32) {
+        let (sx, sy) = { let p = self.unit_sprite_pos(u); (p.0 as i32, p.1 as i32) };
+        let un = &self.units[u as usize];
+        let mut b = un.repulse_angle;
+        let mt = un.fl.move_target;
+        if (sx, sy) != (mt.0 as i32, mt.1 as i32) {
+            let c = direction_to(sx, sy, mt.0 as i32, mt.1 as i32);
+            // 0x68c348 (filled by 0x4531a0)
+            let k = b.wrapping_sub(c);
+            let t = if k < 0x80 { (k & 0x1f) + 0x20 } else { (k & 0x1f).wrapping_sub(0x40) };
+            b = t.wrapping_add(c);
+        }
+        let dim = d.dat.units.dimensions[un.unit_type as usize];
+        let (l, t, r, bt) = (dim as i16 as i32, (dim >> 16) as i16 as i32, (dim >> 32) as i16 as i32, (dim >> 48) as i16 as i32);
+        let (w, h) = (self.map_px.0 as i32, self.map_px.1 as i32);
+        let mut ru = un.repulse_unknown;
+        if sx < l + 0x20 {
+            if (b as i8) < 0 {
+                b = b.wrapping_neg();
+            }
+            ru &= 0xf;
+        } else if w - r - 0x21 < sx {
+            if (b as i8) >= 0 {
+                b = b.wrapping_neg();
+            }
+            ru &= 0xf;
+        }
+        let edge = if sy < t + 0x20 { Some(true) } else if h - bt - 0x21 < sy { Some(false) } else { None };
+        if let Some(top) = edge {
+            let mut c = b.wrapping_add(0x40);
+            if ((c as i8) >= 0) == top {
+                c = c.wrapping_neg();
+            }
+            b = c.wrapping_sub(0x40);
+            ru &= 0xf;
+        }
+        let un = &mut self.units[u as usize];
+        un.repulse_unknown = ru;
+        un.repulse_angle = b;
     }
 
     /// 0x4535a0: update repulse grid cell; snap target if close.
-    fn air_repulse_finish(&mut self, u: u32, repulsed: bool) {
-        let _ = (u, repulsed);
-        todo_port!("0x4535a0", "repulse grid update");
+    fn air_repulse_finish(&mut self, d: &Data, u: u32, repulsed: bool) {
+        if !self.repulse_eligible(d, u) {
+            return;
+        }
+        let (sx, sy) = self.unit_sprite_pos(u);
+        let un = &self.units[u as usize];
+        if un.repulse_x as i32 != sx as i32 / 0x30 || un.repulse_y as i32 != sy as i32 / 0x30 {
+            self.repulse_remove(d, u);
+            self.repulse_init(d, u);
+        }
+        let np = self.mv.new_pos;
+        let f = &mut self.units[u as usize].fl;
+        if repulsed && (f.move_target.0 as i32 - np.0 as i32).abs() < 0x18 && (f.move_target.1 as i32 - np.1 as i32).abs() < 0x18 {
+            f.move_target = np;
+            f.next_waypoint = np;
+        }
     }
 
     /// 0x46b790: ground unit, checks whether it needs a path.

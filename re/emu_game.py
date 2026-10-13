@@ -228,6 +228,8 @@ def parse_move(m):
     if m[0] == "t":  # "t<type>[x<count>]"
         t, _, n = m[1:].partition("x")
         return ("t", int(t, 0), int(n) if n else 1)
+    if m[0] == "M":  # "M<type>": every player-0 larva morphs into <type>
+        return ("M", int(m[1:], 0))
     if m[0] in "RT":  # "R<x>,<y>[q]" / "R@k[q]", "T<order>:<x>,<y>[q]" / "T<order>:@k[q]"
         q = 1 if m.endswith("q") else 0
         body = m[1:].rstrip("q")
@@ -300,6 +302,16 @@ def scenario(e, units, move, frames, out):
                        and e.r16(UNITS + u * 0x150 + 0x64) in (7, 0x29, 0x40)][:12]
             pkt = e.alloc(16)
             for m in move:
+                if m[0] == "M":  # unit morph receiver 0x4c1990 with player 0's larvae selected
+                    lv = [u for u in range(1700) if e.r32(UNITS + u * 0x150 + 0xc) and e.r8(UNITS + u * 0x150 + 0x4c) == 0
+                          and e.r16(UNITS + u * 0x150 + 0x64) == 0x23][:12]
+                    for k in range(12):
+                        e.w32(0x6284e8 + k * 4, UNITS + lv[k] * 0x150 if k < len(lv) else 0)
+                    e.w32(0x512678, 0)
+                    e.w32(0x51267c, 0)
+                    e.write(pkt, bytes([0x23]) + struct.pack("<H", m[1]))
+                    e.call(0x4c1990, stack=[pkt])
+                    continue
                 if m[0] not in ("R", "T"):
                     continue
                 for k in range(12):
@@ -320,9 +332,9 @@ def scenario(e, units, move, frames, out):
                 else:
                     e.write(pkt, b + bytes([m[1], q]))
                     e.call(0x4c2320, regs={"eax": pkt})
-            for i, u in enumerate(made):
+            for i, u in enumerate(made or sel):
                 m = move[i % len(move)]
-                if m[0] in ("R", "T"):
+                if m[0] in ("R", "T", "M"):
                     continue
                 if m[0] == "t":  # train unit type m[1] (0x4c1c20 without the selection checks)
                     a = UNITS + u * 0x150

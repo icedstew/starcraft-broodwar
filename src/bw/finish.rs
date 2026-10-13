@@ -215,6 +215,50 @@ impl State {
         self.visible_units = l;
     }
 
+    /// 0x4e6340: take a unit off the map: references, finder, tiles, visible list out,
+    /// hidden list in.
+    pub fn hide_unit(&mut self, d: &Data, u: u32) {
+        let s = self.units[u as usize].sprite;
+        if self.sprites[s as usize].flags & super::sprite::sflag::HIDDEN != 0 {
+            return;
+        }
+        let mut o = self.visible_units.head;
+        while o != NIL {
+            let next = self.units[o as usize].link.next;
+            self.forget_unit_pub(d, o, u);
+            o = next;
+        }
+        self.untarget_bullets_pub(u);
+        // 0x49a7f0 / 0x49f7a0: player selections and selection UI.
+        self.finder_remove(u);
+        if self.units[u as usize].status & status::GROUNDED_BUILDING != 0 {
+            let p = (self.sprites[s as usize].x, self.sprites[s as usize].y);
+            self.mark_building_tiles(d, u, p, false);
+        }
+        if self.units[u as usize].status & status::IN_AIR != 0 {
+            self.repulse_remove(d, u);
+        }
+        self.path_free(u);
+        let elev = self.sprites[s as usize].elevation;
+        let un = &mut self.units[u as usize];
+        un.movement_state = 0;
+        un.pathing_flags = (un.pathing_flags & !1) | (elev < 0xc) as u8;
+        let mut l = self.visible_units;
+        list::remove(&mut self.units, u, &mut l);
+        self.visible_units = l;
+        let mut l = self.hidden_units;
+        list::insert_after_head(&mut self.units, u, &mut l);
+        self.hidden_units = l;
+        self.sprites[s as usize].flags |= super::sprite::sflag::HIDDEN;
+        self.sprite_set_visibility(s, 0);
+        let sub = self.units[u as usize].subunit;
+        if sub != NIL && d.dat.units.flags[self.units[sub as usize].unit_type as usize] & 0x10 != 0 {
+            let ss = self.units[sub as usize].sprite;
+            self.sprites[ss as usize].flags |= super::sprite::sflag::HIDDEN;
+            self.sprite_set_visibility(ss, 0);
+        }
+    }
+
     /// 0x4e42a0: release the unit's path (same as 0x42f740).
     fn path_free(&mut self, u: u32) {
         self.path_delete(u);

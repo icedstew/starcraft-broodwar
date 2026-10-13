@@ -1058,7 +1058,7 @@ impl State {
             self.mark_building_tiles(d, u, p, false);
         }
         if self.units[u as usize].status & 4 != 0 {
-            todo_port!("0x4533d0", "air unit repulse grid");
+            self.repulse_remove(d, u);
         }
         let mut l = self.visible_units;
         super::list::remove(&mut self.units, u, &mut l);

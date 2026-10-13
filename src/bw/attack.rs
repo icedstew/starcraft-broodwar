@@ -613,8 +613,8 @@ impl State {
         true
     }
 
-    /// 0x474a20: queue `order` at `p` in front of the queue.
-    fn order_queue_front(&mut self, d: &Data, u: u32, order: u8, p: (i16, i16)) {
+    /// 0x474a20 (0x474b40 with p = (0, 0)): queue `order` at `p` in front of the queue.
+    pub(super) fn order_queue_front(&mut self, d: &Data, u: u32, order: u8, p: (i16, i16)) {
         let head = self.units[u as usize].order_queue_head;
         if head != NIL {
             self.order_insert_before(d, u, order, 0xe4, p, NIL, head);

@@ -577,6 +577,18 @@ fn apply_moves(st: &mut bw::State, d: &bw::Data, made: &[u32], m: &str) {
             .take(12)
             .collect();
     }
+    for p in v.iter().filter(|p| p.starts_with('M')) {
+        // "M<type>": every player-0 larva morphs into <type> (0x4c1990).
+        let t = p[1..].strip_prefix("0x").map_or_else(|| p[1..].parse().unwrap_or(0), |h| u16::from_str_radix(h, 16).unwrap_or(0));
+        let larvae: Vec<u32> = (0..st.units.len() as u32)
+            .filter(|&u| {
+                let un = &st.units[u as usize];
+                un.sprite != bw::list::NIL && un.player == 0 && un.unit_type == 0x23
+            })
+            .take(12)
+            .collect();
+        st.command_unit_morph(&d, 0, &larvae, t);
+    }
     for p in v.iter().filter(|p| p.starts_with(['R', 'T'])) {
         let q = p.ends_with('q');
         let mut body = p[1..].trim_end_matches('q');
@@ -600,9 +612,10 @@ fn apply_moves(st: &mut bw::State, d: &bw::Data, made: &[u32], m: &str) {
             st.command_targeted_order(&d, 0, &sel, pos, t, 0xe4, order, q);
         }
     }
-    for (i, &u) in made.iter().enumerate() {
+    let units = if made.is_empty() { sel.clone() } else { made.to_vec() };
+    for (i, &u) in units.iter().enumerate() {
         let p = v[i % v.len()];
-        if p.starts_with(['R', 'T']) {
+        if p.starts_with(['R', 'T', 'M']) {
             continue;
         }
         if let Some(t) = p.strip_prefix('t') {

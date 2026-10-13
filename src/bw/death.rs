@@ -49,7 +49,7 @@ impl State {
     /// 0x479480: Die.
     pub fn order_die(&mut self, d: &Data, u: u32) {
         if self.units[u as usize].order_flags & 4 != 0 {
-            todo_port!("0x4e6340", "remove the unit from the map before dying");
+            self.hide_unit(d, u);
         }
         if self.units[u as usize].subunit != NIL {
             todo_port!("0x479480", "kill the subunit (0x496f00, 0x4a0990)");
@@ -66,7 +66,6 @@ impl State {
             }
             todo_port!("0x479480", "hallucination death (0x48ed50, sprite 0x176)");
         }
-        todo_port!("0x4e6340", "hidden unit dies");
         self.remove_unit(d, u);
         self.free_unit_sprite(u);
     }
@@ -187,6 +186,10 @@ impl State {
         self.clear_references(d, dead);
     }
 
+    pub(super) fn forget_unit_pub(&mut self, d: &Data, o: u32, dead: u32) {
+        self.forget_unit(d, o, dead);
+    }
+
     pub(super) fn untarget_bullets_pub(&mut self, u: u32) {
         self.untarget_bullets(u);
     }
@@ -234,8 +237,18 @@ impl State {
         if un.irradiated_by == dead {
             un.irradiated_by = NIL;
         }
-        if d.dat.units.flags[un.unit_type as usize] & 8 != 0 || un.status & 2 != 0 {
-            todo_port!("0x49e590", "worker / building union references (+0xc0, +0xc8, +0xd0)");
+        if d.dat.units.flags[un.unit_type as usize] & 8 == 0 {
+            if un.status & 2 != 0 && un.ptr_at(0xc0) == dead {
+                un.set_ptr_at(0xc0, NIL);
+            }
+        } else {
+            if un.ptr_at(0xc8) == dead {
+                un.set_ptr_at(0xc8, NIL);
+            }
+            if un.u8_at(0xce) != 0 && un.ptr_at(0xd0) == dead {
+                un.set_u8_at(0xce, 0);
+                un.set_ptr_at(0xd0, NIL);
+            }
         }
         let t = un.unit_type;
         if matches!(t, 0x6a | 0x6f | 0x71 | 0x72 | 0x82 | 0x83 | 0x84 | 0x85 | 0x9a | 0xa0 | 0xa7 | 0x9b) && un.rally_unit == dead {

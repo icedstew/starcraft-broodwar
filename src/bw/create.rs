@@ -601,10 +601,26 @@ impl State {
         }
     }
 
+    pub(crate) fn repulse_eligible(&self, d: &Data, u: u32) -> bool {
+        let t = self.units[u as usize].unit_type;
+        self.units[u as usize].status & 0x20000 != 0 && d.dat.units.flags[t as usize] & 1 == 0 && t != 0x49
+    }
+
+    /// 0x4533d0: take a flyer out of its repulse grid cell.
+    pub(crate) fn repulse_remove(&mut self, d: &Data, u: u32) {
+        if !self.repulse_eligible(d, u) {
+            return;
+        }
+        let un = &self.units[u as usize];
+        let i = un.repulse_x as usize + un.repulse_y as usize * 0xab;
+        if let Some(c) = self.repulse.get_mut(i) {
+            *c = c.saturating_sub(1);
+        }
+    }
+
     /// 0x453300: register a flyer in the repulse grid (48px cells, 0xab per row).
     pub(crate) fn repulse_init(&mut self, d: &Data, u: u32) {
-        let t = self.units[u as usize].unit_type;
-        if self.units[u as usize].status & 0x20000 == 0 || d.dat.units.flags[t as usize] & 1 != 0 || t == 0x49 {
+        if !self.repulse_eligible(d, u) {
             return;
         }
         if self.units[u as usize].repulse_unknown & 0xf0 == 0 {

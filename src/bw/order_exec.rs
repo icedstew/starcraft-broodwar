@@ -226,30 +226,14 @@ impl State {
         todo_port!("0x477980", "TurretAttack");
     }
 
-    /// 0x45e090: DroneBuild.
-    fn order_drone_build(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x45e090", "DroneBuild");
-    }
 
     /// 0x4673d0: Repair.
     fn order_repair(&mut self, _d: &Data, _u: u32) {
         todo_port!("0x4673d0", "Repair");
     }
 
-    /// 0x45dd60: ZergBirth.
-    fn order_zerg_birth(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x45dd60", "ZergBirth");
-    }
 
-    /// 0x45dea0: ZergUnitMorph.
-    fn order_zerg_unit_morph(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x45dea0", "ZergUnitMorph");
-    }
 
-    /// 0x45d500: IncompleteMorphing.
-    fn order_incomplete_morphing(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x45d500", "IncompleteMorphing");
-    }
 
     /// 0x465e00: ScarabAttack.
     fn order_scarab_attack(&mut self, _d: &Data, _u: u32) {
@@ -611,10 +595,6 @@ impl State {
         todo_port!("0x47c4f0", "StayInRange");
     }
 
-    /// 0x45cf80: DroneStartBuild.
-    fn order_drone_start_build(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x45cf80", "DroneStartBuild");
-    }
 
     /// inline: CastInfestation.
     fn order_cast_infestation(&mut self, _d: &Data, _u: u32) {
@@ -696,10 +676,6 @@ impl State {
         todo_port!("0x466350", "InterceptorReturn");
     }
 
-    /// inline: DroneLand.
-    fn order_drone_land(&mut self, _d: &Data, _u: u32) {
-        todo_port!("inline", "DroneLand");
-    }
 
     /// 0x463ac0: LiftingOff.
     fn order_lifting_off(&mut self, _d: &Data, _u: u32) {

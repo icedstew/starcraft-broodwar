@@ -258,7 +258,10 @@ impl State {
     }
 
     /// 0x466f50: send a freshly trained unit to the builder's rally point.
-    fn send_to_rally(&mut self, d: &Data, b: u32, c: u32) {
+    pub(super) fn send_to_rally(&mut self, d: &Data, b: u32, c: u32) {
+        if b == NIL {
+            return;
+        }
         let bu = &self.units[b as usize];
         let has_rally = matches!(bu.unit_type, 0x6a | 0x6f | 0x71 | 0x72 | 0x82 | 0x83 | 0x84 | 0x85 | 0x9a | 0xa0 | 0xa7 | 0x9b);
         if !has_rally || bu.rally_unit == b || bu.rally_pos.0 == 0 {

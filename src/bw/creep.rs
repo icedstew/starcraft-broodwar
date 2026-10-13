@@ -127,6 +127,81 @@ impl State {
         }
     }
 
+    /// 0x47d770: creep tiles around `u` that were waiting to recede get a source again.
+    pub(super) fn creep_unmark_receding(&mut self, d: &Data, u: u32) {
+        let un = &self.units[u as usize];
+        let (x, y) = (un.fl.pos.0 as i32, un.fl.pos.1 as i32);
+        let ([l, top, r, b], ellipse) = self.creep_box(d, un.unit_type, x, y, un.status & 1 != 0);
+        let w = self.terrain.width as i32;
+        for ty in top..=b {
+            let dy = ty * 32 - y + 0x10;
+            for tx in l..=r {
+                let dx = tx * 32 - x + 0x10;
+                if self.terrain.tile_flags[(ty * w + tx) as usize] & 0x1000_0000 != 0 && (!ellipse || dy * dy * 0x100 + dx * dx * 100 < 0x9c_4001) {
+                    todo_port!("0x47d540", "creep tile stops receding");
+                }
+            }
+        }
+    }
+
+    /// 0x45ce90: creep under a finished Zerg building `t` at (x, y) (creep sources, and
+    /// buildings that don't need creep), with a ring around buildings flagged 0x80000000.
+    pub(super) fn creep_under_building(&mut self, d: &Data, t: u16, x: i32, y: i32) {
+        let colony = matches!(t, 0x83 | 0x8f | 0x84 | 0x85 | 0x90 | 0x92);
+        if !colony && d.dat.units.flags[t as usize] & 0x2_0000 != 0 {
+            return;
+        }
+        let v = d.dat.units.placement_box[t as usize];
+        let (pw, ph) = (v as i16 as i32, (v as i32) >> 16);
+        let (tx, ty, w, h) = ((x - pw / 2) / 32, (y - ph / 2) / 32, pw / 32, ph / 32);
+        self.set_tile_flags(tx, ty, w, h, 0x800_0000, false);
+        if d.dat.units.flags[t as usize] & 0x8000_0000 != 0 {
+            self.creep_fill(tx - 2, ty - 1, w + 4, h + 2, true);
+        } else {
+            self.creep_fill(tx, ty, w, h, false);
+        }
+        self.set_tile_flags(tx, ty, w, h, 0x800_0000, true);
+    }
+
+    /// 0x472e50 (clear) / 0x472eb0 (set): `mask` on a w x h tile box.
+    fn set_tile_flags(&mut self, tx: i32, ty: i32, w: i32, h: i32, mask: u32, set: bool) {
+        let mw = self.terrain.width as i32;
+        for row in 0..h {
+            for col in 0..w {
+                let f = &mut self.terrain.tile_flags[((ty + row) * mw + tx + col) as usize];
+                *f = if set { *f | mask } else { *f & !mask };
+            }
+        }
+    }
+
+    /// 0x45cd50: creep on the free tiles of a w x h box (without its corners when
+    /// `ring`).
+    fn creep_fill(&mut self, tx: i32, ty: i32, w: i32, h: i32, ring: bool) {
+        let (mw, mh) = (self.terrain.width as u32, self.terrain.height as u32);
+        for row in 0..h {
+            let y = (ty + row) as u32;
+            if y >= mh {
+                continue;
+            }
+            for col in 0..w {
+                let x = (tx + col) as u32;
+                let corner = (col == 0 || col == w - 1) && (row == 0 || row == h - 1);
+                if x >= mw || (ring && corner) {
+                    continue;
+                }
+                let f = self.terrain.tile_flags[(y as i16 as i32 * mw as i32 + x as i16 as i32) as usize];
+                let below = (y as i16).wrapping_add(1);
+                if f & 0x2080_0000 == 0
+                    && (below as u16 as u32 == mh || self.terrain.tile_flags[(below as i32 * mw as i32 + x as i16 as i32) as usize] & 0x80_0000 == 0)
+                    && f & 0x800_0000 == 0
+                {
+                    self.add_creep_tile(x as i32, y as i32);
+                    // 0x47d230 / 0x413b30: creep edges (UI).
+                }
+            }
+        }
+    }
+
     /// 0x4148f0: creep under a new `t` at (x, y), then spread it as far as it goes.
     pub fn spread_creep_instantly(&mut self, d: &Data, t: u16, x: i32, y: i32) {
         let v = d.dat.units.placement_box[t as usize];
