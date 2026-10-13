@@ -6,6 +6,7 @@ mod casc;
 mod dat;
 mod game;
 mod grp;
+mod hpbar;
 mod iscript;
 mod map;
 mod mpq;

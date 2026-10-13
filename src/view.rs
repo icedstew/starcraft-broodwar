@@ -115,6 +115,8 @@ pub struct Scene<'a> {
     shadow: [u8; 256],
     /// game/tselect.pcx: selection circle colors, 8 per color (0x5240b8).
     tselect: Vec<u8>,
+    /// game/thpbar.pcx: health bar colors (0x66fbe4).
+    thpbar: [u8; 19],
     remaps: [Vec<u8>; 7],
 }
 
@@ -147,6 +149,10 @@ impl<'a> Scene<'a> {
         // images.dat remapping ids 1..=7
         let remaps = ["ofire", "gfire", "bfire", "bexpl", "trans50", "red", "green"].map(tbl);
         let tselect = pcx(&a.casc.read("game/tselect.pcx")?).2;
+        let mut thpbar = [0u8; 19];
+        for (t, &c) in thpbar.iter_mut().zip(pcx(&a.casc.read("game/thpbar.pcx")?).2.iter()) {
+            *t = c;
+        }
         let mut st = new_game(a, &chk)?;
         let local = st.local_player;
         let mut minimap = load_minimap(&a.casc, &chk)?;
@@ -157,7 +163,7 @@ impl<'a> Scene<'a> {
             minimap.player_colors[p] = tm.get(c).copied().unwrap_or(0);
         }
         with_data(a, |d| minimap.refresh(d, &mut st));
-        Ok(Scene { st, minimap, selected: Vec::new(), sent_selection: Vec::new(), card_menu: None, placing: None, targeting: None, error: 0, error_frames: 0, place_ok: false, drag_box: None, a, chk, ts, terrain, player_colors, local, shadow, tselect, remaps })
+        Ok(Scene { st, minimap, selected: Vec::new(), sent_selection: Vec::new(), card_menu: None, placing: None, targeting: None, error: 0, error_frames: 0, place_ok: false, drag_box: None, a, chk, ts, terrain, player_colors, local, shadow, tselect, thpbar, remaps })
     }
 
     /// Send the local selection to the simulation (0x4c0860) and return the local
@@ -312,19 +318,19 @@ impl<'a> Scene<'a> {
         // Selection circles (0x4d7070 / 0x4d6810): image 0x231 + the sprite's circle size,
         // below the sprite, colored from tselect.pcx by 0x581d6a (own 0, ally 1, enemy 2).
         let sp_dat = &self.a.dat().sprites;
-        let circled: std::collections::HashMap<u32, u8> = self
+        let circled: std::collections::HashMap<u32, (u8, u32)> = self
             .selected
             .iter()
             .map(|&u| {
                 let un = &self.st.units[u as usize];
                 let p = un.player as usize;
                 let c = if p == self.local as usize { 0 } else if self.st.alliances[self.local as usize][p] == 0 { 2 } else { 1 };
-                (un.sprite, c)
+                (un.sprite, (c, u))
             })
             .collect();
         for s in order {
             let sp = &self.st.sprites[s as usize];
-            if let Some(&c) = circled.get(&s) {
+            if let Some(&(c, _)) = circled.get(&s) {
                 let id = sp.sprite_id as usize;
                 if let Some(g) = self.a.grp(0x231 + sp_dat.selection_circle[id] as u16) {
                     let mut table = [0u8; 256];
@@ -355,6 +361,35 @@ impl<'a> Scene<'a> {
                     _ => Blend::Player(&self.player_colors[(sp.owner as usize).min(11)]),
                 };
                 g.draw(img.frame as usize, img.flags & bw::sprite::iflag::FLIPPED != 0, x, y, out, vw, vh, blend);
+            }
+            // Health bar (0x4d6420 / 0x4d6010), above the sprite's images.
+            if let Some(&(_, u)) = circled.get(&s) {
+                let t = self.st.units[u as usize].unit_type as usize;
+                if self.a.dat().units.flags[t] & 0x2000_0000 == 0 {
+                    let id = sp.sprite_id as usize;
+                    let ch = self.a.grp(0x231 + sp_dat.selection_circle[id] as u16).and_then(|g| g.frame(0).map(|f| f.h)).unwrap_or(0);
+                    let st = &self.st;
+                    with_data(self.a, |d| {
+                        let (w, h, dy) = crate::hpbar::layout(st, d, u, ch);
+                        // 0x4d57b0: map position, clipped to the 640x400 game screen.
+                        let (mut x, mut y) = (sp.x as i32 - w / 2 - vx, sp.y as i32 + dy - h / 2 - vy);
+                        let mut clip = crate::hpbar::Clip { left: 0, top: 0, w, h };
+                        if x < 0 {
+                            clip.w += x;
+                            clip.left = -x;
+                            x = 0;
+                        }
+                        clip.w = clip.w.min(vw - x);
+                        if y < 0 {
+                            clip.h += y;
+                            clip.top = -y;
+                            y = 0;
+                        }
+                        clip.h = clip.h.min(vh.min(400) - y);
+                        let mut surf = crate::hpbar::Surface { px: out, w: vw, h: vh };
+                        crate::hpbar::draw(&mut surf, &self.thpbar, st, d, u, x, y, clip);
+                    });
+                }
             }
         }
     }
