@@ -601,6 +601,17 @@ impl State {
         }
     }
 
+    /// 0x49e530: the last error (0x59cca0) goes to the screen when `player` is the
+    /// local player (0x48ccb0, the front end's); either way it is cleared.
+    pub fn show_last_error(&mut self, player: u8) {
+        if self.last_error != 0 {
+            if player == self.local_player {
+                self.shown_error = self.last_error;
+            }
+            self.last_error = 0;
+        }
+    }
+
     pub(crate) fn repulse_eligible(&self, d: &Data, u: u32) -> bool {
         let t = self.units[u as usize].unit_type;
         self.units[u as usize].status & 0x20000 != 0 && d.dat.units.flags[t as usize] & 1 == 0 && t != 0x49

@@ -59,7 +59,7 @@ impl State {
                 };
                 self.units[u as usize].build_queue[slot] = super::train::NONE;
                 let Some(b) = b else {
-                    todo_port!("0x49e530", "show the creation error");
+                    self.show_last_error(player);
                     return self.order_done_or_next(d, u);
                 };
                 let s = self.units[b as usize].sprite;

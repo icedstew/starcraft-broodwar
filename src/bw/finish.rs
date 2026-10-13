@@ -51,7 +51,8 @@ impl State {
         }
         let p = (self.sprites[s as usize].x, self.sprites[s as usize].y);
         let Some(p) = self.find_unit_placement(d, u, p, None, false) else {
-            todo_port!("0x49e530", "show the placement error to the owner");
+            let owner = self.units[u as usize].player;
+            self.show_last_error(owner);
             return false;
         };
         self.set_unit_position(d, u, p.0, p.1);

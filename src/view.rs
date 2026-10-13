@@ -100,6 +100,8 @@ pub struct Scene<'a> {
     pub targeting: Option<(u8, u8, u8)>,
     /// Last refused button or click (stat_txt message id, 0 for none).
     pub error: u16,
+    /// Frames the error line stays up (0x48ccb0: 7000 ms).
+    pub error_frames: u32,
     pub place_ok: bool,
     /// Screen-space drag rectangle while box-selecting.
     pub drag_box: Option<(i32, i32, i32, i32)>,
@@ -152,7 +154,7 @@ impl<'a> Scene<'a> {
             minimap.player_colors[p] = tm.get(c).copied().unwrap_or(0);
         }
         with_data(a, |d| minimap.refresh(d, &mut st));
-        Ok(Scene { st, minimap, selected: Vec::new(), sent_selection: Vec::new(), card_menu: None, placing: None, targeting: None, error: 0, place_ok: false, drag_box: None, a, chk, ts, terrain, player_colors, local, shadow, remaps })
+        Ok(Scene { st, minimap, selected: Vec::new(), sent_selection: Vec::new(), card_menu: None, placing: None, targeting: None, error: 0, error_frames: 0, place_ok: false, drag_box: None, a, chk, ts, terrain, player_colors, local, shadow, remaps })
     }
 
     /// Send the local selection to the simulation (0x4c0860) and return the local
@@ -187,6 +189,12 @@ impl<'a> Scene<'a> {
         self.sent_selection = sel;
     }
 
+    /// 0x48ccb0: put stat_txt line `id` (1-based) up for 7 seconds.
+    pub fn show_error(&mut self, id: u16) {
+        self.error = id;
+        self.error_frames = 7000 / 42;
+    }
+
     /// Advance one frame; returns sounds (sfx id, x, y) requested this frame.
     pub fn step(&mut self) -> Vec<(u16, i32, i32)> {
         let st = &mut self.st;
@@ -196,6 +204,11 @@ impl<'a> Scene<'a> {
             st.game_step(d);
             self.minimap.update(d, st);
         });
+        if self.st.shown_error != 0 {
+            let e = std::mem::take(&mut self.st.shown_error);
+            self.show_error(e);
+        }
+        self.error_frames = self.error_frames.saturating_sub(1);
         self.selected.retain(|&u| self.st.unit_alive(u));
         self.st.sounds.drain(..).map(|(id, x, y)| (id, x as i32, y as i32)).collect()
     }
@@ -396,7 +409,7 @@ impl<'a> Scene<'a> {
             CancelTargeting => self.targeting = Option::None,
             CancelPlacement => self.placing = Option::None,
             SelectLarvae(l) => self.selected = l,
-            Error => self.error = btn.disabled_str,
+            Error => self.show_error(btn.disabled_str),
         }
     }
 
@@ -408,7 +421,7 @@ impl<'a> Scene<'a> {
         let st = &mut self.st;
         let r = with_data(self.a, |d| st.target_click(d, me, &sel, modes, (p.0 as i16, p.1 as i16), t, 0xe4, queued));
         if let Err(e) = r {
-            self.error = e;
+            self.show_error(e);
         }
         self.card_menu = Option::None;
     }
@@ -609,6 +622,13 @@ pub fn compose_with_cursor(
         }
     } else if !scene.selected.is_empty() {
         ui.font.draw(&format!("{} units", scene.selected.len()), 260, 392, ui.text_color(2), pal, out, w, h);
+    }
+    if scene.error != 0 && scene.error_frames > 0 {
+        let msg = ui.stat_txt.get(scene.error as usize - 1).map_or("", |s| s.split('\0').next().unwrap_or(""));
+        let msg: String = msg.chars().filter(|c| *c >= ' ').collect();
+        let tw = msg.chars().count() as i32 * 6;
+        // Color code 4 (0x641680); tfontgam rows start at code 2.
+        ui.font.draw(&msg, (w - tw) / 2, h - 160, ui.text_color(4 - 2), pal, out, w, h);
     }
     if let Some(b) = scene.drag_box {
         rect(out, w, h, b, 0x10FC18);

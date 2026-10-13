@@ -397,6 +397,10 @@ fn main() -> std::io::Result<()> {
                 let n: Vec<i32> = v.split(',').filter_map(|x| x.parse().ok()).collect();
                 Some((*n.first()? as u16, *n.get(1)?, *n.get(2)?))
             });
+            // Debug: SCBW_ERROR=id shows stat_txt line id as an error.
+            if let Some(e) = std::env::var("SCBW_ERROR").ok().and_then(|v| v.parse().ok()) {
+                scene.show_error(e);
+            }
             if let Some((t, sx, sy)) = hover {
                 scene.placing = Some((0x1e, t));
                 scene.check_placement((sx + x, sy + y));

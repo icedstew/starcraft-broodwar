@@ -495,7 +495,7 @@ impl State {
         self.set_unit_position(d, u, p1.0, p1.1);
         let player = self.units[u as usize].player;
         let Some(c) = self.create_unit(d, t, p2.0, p2.1, player) else {
-            todo_port!("0x49e530", "show the creation error");
+            self.show_last_error(player);
             return NIL;
         };
         let dir = match t {

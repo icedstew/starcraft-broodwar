@@ -506,7 +506,7 @@ impl State {
         };
         self.units[u as usize].build_queue[slot] = NONE;
         let Some(b) = b else {
-            todo_port!("0x49e530", "show the creation error");
+            self.show_last_error(player);
             let idle = self.idle_order_of(d, u);
             return self.order_now(d, u, idle);
         };

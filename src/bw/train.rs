@@ -220,7 +220,7 @@ impl State {
         match self.create_unit(d, t, x, y, p) {
             Some(n) => n,
             None => {
-                todo_port!("0x49e530", "show the creation error");
+                self.show_last_error(p);
                 NIL
             }
         }

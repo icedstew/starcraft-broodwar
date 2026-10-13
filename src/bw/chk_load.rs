@@ -333,7 +333,7 @@ impl State {
             return None;
         }
         let Some(u) = self.create_unit(d, ty, x, y, player) else {
-            todo_port!("0x49e530", "show the placement error");
+            self.show_last_error(player);
             return None;
         };
         let t = self.units[u as usize].unit_type;
