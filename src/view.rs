@@ -575,11 +575,43 @@ pub fn compose_with_cursor(
         rect(out, w, h, b, 0x10FC18);
     }
     if let (Some((_, kind)), Some((_, cx, cy))) = (scene.placing, cursor) {
+        // placebox.cpp (0x48daf0, 0x48d7f0): the building's first frame in the local
+        // player's color, each tile dithered (0x40c4d2) green when free, red when not.
         let (tx, ty) = scene.build_tile(kind, (cx + vx, cy + vy));
-        let v = scene.a.dat().units.placement_box[kind as usize];
-        let (fw, fh) = (v as i16 as i32, (v >> 16) as i16 as i32);
-        let (l, t) = (tx as i32 * 32 - vx, ty as i32 * 32 - vy);
-        rect(out, w, h, (l, t, l + fw - 1, t + fh - 1), if scene.place_ok { 0x20E020 } else { 0xE02020 });
+        let dat = scene.a.dat();
+        let v = dat.units.placement_box[kind as usize];
+        let (pw, ph) = (v as u16 as i32, (v >> 16) as u16 as i32);
+        let img = dat.sprites.image[dat.flingy.sprite[dat.units.flingy[kind as usize] as usize] as usize];
+        let (gw, gh, grp) = match scene.a.grp(img) {
+            Some(g) => (g.w, g.h, Some(g)),
+            None => (0, 0, None),
+        };
+        let (sw, sh) = ((gw.max(pw) + 31) & !31, (gh.max(ph) + 31) & !31);
+        let (cols, rows) = (pw / 32, ph / 32);
+        let (ox, oy) = ((sw - cols * 32) / 2, (sh - rows * 32) / 2);
+        let mut surf = vec![0u8; (sw * sh) as usize];
+        if let Some(g) = grp {
+            g.draw(0, false, 0, 0, &mut surf, sw, sh, Blend::Player(&scene.player_colors[scene.local_player() as usize]));
+        }
+        for r in 0..rows.min(8) {
+            for c in 0..cols.min(6) {
+                let blocked = scene.st.placement[(r as usize + 8) * 6 + c as usize] != 0;
+                let col = scene.minimap.colors[if blocked { 0x14 } else { 0x13 }];
+                for yy in 0..32 {
+                    for xx in (yy & 1..32).step_by(2) {
+                        surf[((oy + r * 32 + yy) * sw + ox + c * 32 + xx) as usize] = col;
+                    }
+                }
+            }
+        }
+        let (sx, sy) = (tx as i32 * 32 - vx - ox, ty as i32 * 32 - vy - oy);
+        for (i, &c) in surf.iter().enumerate() {
+            let (px, py) = (sx + i as i32 % sw, sy + i as i32 / sw);
+            if c != 0 && (0..w).contains(&px) && (0..h - 120).contains(&py) {
+                let [r, g, b] = pal[c as usize];
+                out[(py * w + px) as usize] = (r as u32) << 16 | (g as u32) << 8 | b as u32;
+            }
+        }
     }
     for (i, slot) in scene.card().iter().enumerate() {
         if let Some((b, enabled)) = slot {

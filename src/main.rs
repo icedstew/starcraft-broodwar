@@ -378,7 +378,18 @@ fn main() -> std::io::Result<()> {
             let ui = ui::Ui::load(&a.casc, ["zerg", "terran", "protoss"][scene.local_race()]).ok();
             let (w, h) = (view::SCREEN_W as usize, view::SCREEN_H as usize);
             let (mut idx, mut rgb) = (vec![0u8; w * h], vec![0u32; w * h]);
-            view::compose(&scene, ui.as_ref(), x, y, &mut idx, &mut rgb);
+            // Debug: SCBW_HOVER=type,sx,sy shows the placement box of `type` with the
+            // cursor at screen point (sx, sy).
+            let hover = std::env::var("SCBW_HOVER").ok().and_then(|v| {
+                let n: Vec<i32> = v.split(',').filter_map(|x| x.parse().ok()).collect();
+                Some((*n.first()? as u16, *n.get(1)?, *n.get(2)?))
+            });
+            if let Some((t, sx, sy)) = hover {
+                scene.placing = Some((0x1e, t));
+                scene.check_placement((sx + x, sy + y));
+            }
+            let cursor = hover.map(|(_, sx, sy)| (0, sx, sy));
+            view::compose_with_cursor(&scene, ui.as_ref(), x, y, cursor, &mut idx, &mut rgb);
             write_png_rgb(&args[2], w, h, &rgb)?;
         }
         Some("path") => {
