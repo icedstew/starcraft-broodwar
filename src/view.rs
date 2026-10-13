@@ -300,9 +300,11 @@ impl<'a> Scene<'a> {
         &self.ts.palette
     }
 
-    /// The unit under map point (x, y), if any.
-    pub fn unit_at(&self, x: i32, y: i32) -> Option<u32> {
-        self.units_in_rect(x, y, x, y).into_iter().next()
+    /// The unit under map point (x, y), if any (0x46f3a0).
+    pub fn unit_at(&mut self, x: i32, y: i32) -> Option<u32> {
+        let st = &mut self.st;
+        let u = with_data(self.a, |d| st.unit_at_point(d, x as i16, y as i16));
+        (u != NIL).then_some(u)
     }
 
     /// Right-click at map point `p` (0x4c2370).
@@ -630,6 +632,7 @@ pub fn run(a: &Assets, chk: Chk) -> io::Result<()> {
     let mut drag_start: Option<(i32, i32)> = None;
     let mut rmb_was_down = false;
     let mut lmb_was_down = false;
+    let mut last_click = 0usize;
     while win.is_open() && !win.is_key_down(Key::Escape) {
         tick += 1;
         let sp = 16;
@@ -692,7 +695,14 @@ pub fn run(a: &Assets, chk: Chk) -> io::Result<()> {
                 scene.drag_box = None;
                 let (x0, y0, x1, y1) = (sx + vx, sy + vy, cx + vx, cy + vy);
                 let hits = if (x1 - x0).abs() < 4 && (y1 - y0).abs() < 4 {
-                    scene.unit_at(map_pt.0, map_pt.1).into_iter().collect()
+                    let ctrl = win.is_key_down(Key::LeftCtrl) || win.is_key_down(Key::RightCtrl);
+                    let double = tick.saturating_sub(last_click) < 8;
+                    last_click = tick;
+                    let screen = [vx as i16, vy as i16, (vx + 640) as i16, (vy + 400) as i16];
+                    let cur = scene.selected.clone();
+                    let st = &mut scene.st;
+                    let p = (map_pt.0 as i16, map_pt.1 as i16);
+                    with_data(scene.a, |d| st.click_select(d, p, shift, ctrl, double, screen, &cur)).unwrap_or(cur)
                 } else {
                     let r = [x0.min(x1) as i16, y0.min(y1) as i16, x0.max(x1) as i16, y0.max(y1) as i16];
                     let cur = scene.selected.clone();

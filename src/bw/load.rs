@@ -14,6 +14,8 @@ pub struct Loaded {
     pub lo: [Vec<Option<Vec<u8>>>; 5],
     /// GRP of the psi field image (its frame is the pylon power shape).
     pub psi_grp: Vec<u8>,
+    /// GRP files by images.dat grp index.
+    pub grp_files: Vec<Vec<u8>>,
 }
 
 impl Loaded {
@@ -38,7 +40,14 @@ impl Loaded {
         let cols = [&im.attack_overlay, &im.damage_overlay, &im.special_overlay, &im.landing_dust, &im.liftoff_dust];
         let lo = cols.map(|c| (0..n).map(|i| if c[i] == 0 { None } else { file(c[i]) }).collect());
         let psi_grp = file(im.grp[super::psi::PSI_FIELD_IMAGE as usize]).unwrap_or_default();
-        Ok(Loaded { dat, iscript, grp, lo, psi_grp })
+        let max = im.grp.iter().copied().max().unwrap_or(0) as usize;
+        let mut grp_files = vec![Vec::new(); max + 1];
+        for &g in &im.grp {
+            if grp_files[g as usize].is_empty() {
+                grp_files[g as usize] = file(g).unwrap_or_default();
+            }
+        }
+        Ok(Loaded { dat, iscript, grp, lo, psi_grp, grp_files })
     }
 
     pub fn grp_size(&self, image: u16) -> (u16, u16, u16) {
@@ -48,5 +57,5 @@ impl Loaded {
 
 /// Build a `Data` view over loaded data. `grp` must be `|i| loaded.grp_size(i)`.
 pub fn data<'a>(l: &'a Loaded, grp: &'a dyn Fn(u16) -> (u16, u16, u16)) -> Data<'a> {
-    Data { dat: &l.dat, iscript: &l.iscript, grp, lo: &l.lo }
+    Data { dat: &l.dat, iscript: &l.iscript, grp, lo: &l.lo, grp_files: &l.grp_files }
 }

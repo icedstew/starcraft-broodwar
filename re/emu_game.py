@@ -493,6 +493,20 @@ def scenario(e, units, move, frames, out):
             fo.write(bullet_trace(e, f) + "\n")
             fo.write(f"f{f} res " + " ".join(f"{e.r32(0x57f0f0 + p * 4)},{e.r32(0x57f120 + p * 4)}" for p in range(2)) + "\n")
             fo.write(f"f{f} rng {e.r32(0x51ca14):#x} {e.r32(0x51ca18)}\n")
+            if os.environ.get("SCBW_CLICKTEST") and f % 50 == 0:
+                local = e.r32(0x512684)
+                e.w32(0x512684, 0)
+                # Image map positions (+0x1c) are refreshed as sprites are drawn: 0x4983a0
+                # for every unit's sprite, as if all were on screen.
+                a = e.r32(0x628430)
+                while a:
+                    e.call(0x4983a0, regs={"eax": e.r32(a + 0xc)})
+                    a = e.r32(a + 4)
+                for pt in filter(None, os.environ["SCBW_CLICKTEST"].split(";")):
+                    x, y = (int(v) for v in pt.split(","))
+                    a = e.call(0x46f3a0, stack=[x, y])
+                    fo.write(f"f{f} click {pt} -> {(a - UNITS) // 0x150 if a else '-'}\n")
+                e.w32(0x512684, local)
             if os.environ.get("SCBW_SELTEST") and f % 50 == 0:
                 fo.write(select_test(e, f, os.environ["SCBW_SELTEST"]) + "\n")
             if minimap and f % 50 == 0:

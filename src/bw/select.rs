@@ -149,3 +149,236 @@ impl State {
         Some(picked)
     }
 }
+
+/// 0x4d4db0: whether pixel (fx, fy) of a GRP frame is opaque (RLE line walk).
+fn grp_pixel(grp: &[u8], frame: u16, fx: u32, fy: u32) -> bool {
+    let h = 6 + frame as usize * 8;
+    let Some(fh) = grp.get(h..h + 8) else { return false };
+    let (w, ht) = (fh[2] as u32, fh[3] as u32);
+    if fx >= w || fy >= ht {
+        return false;
+    }
+    let lines = u32::from_le_bytes([fh[4], fh[5], fh[6], fh[7]]) as usize;
+    let rd = |o: usize| grp.get(o).copied().unwrap_or(0);
+    let mut p = lines + u16::from_le_bytes([rd(lines + fy as usize * 2), rd(lines + fy as usize * 2 + 1)]) as usize;
+    let mut x = fx as i32;
+    loop {
+        let b = rd(p);
+        p += 1;
+        if b & 0x80 != 0 {
+            x -= (b & 0x7f) as i32;
+        } else if b & 0x40 == 0 {
+            x -= b as i32;
+            p += b as usize;
+        } else {
+            x -= (b & 0xbf) as i32;
+            p += 1;
+        }
+        if x <= 0 {
+            return b & 0x80 == 0;
+        }
+    }
+}
+
+impl State {
+    /// 0x4d57b0 (position part): an image's top-left in map coordinates.
+    /// ponytail: computed on demand; 1.16.1 keeps the last drawn y while FREEZE_Y is set.
+    fn image_map_pos(&self, d: &Data, i: u32) -> (i16, i16) {
+        let im = &self.images[i as usize];
+        let g = d.grp_file(im.image_id);
+        let (_, gw, gh) = (d.grp)(im.image_id);
+        let h = 6 + im.frame as usize * 8;
+        let f = |k: usize| g.get(h + k).copied().unwrap_or(0) as u16;
+        let x = if im.flags & super::sprite::iflag::FLIPPED == 0 {
+            f(0).wrapping_sub(gw >> 1)
+        } else {
+            (gw >> 1).wrapping_sub(f(2)).wrapping_sub(f(0))
+        };
+        let sp = &self.sprites[im.sprite as usize];
+        let x = sp.x.wrapping_add(im.x as i16).wrapping_add(x as i16);
+        let y = f(1).wrapping_sub(gh >> 1).wrapping_add(im.y as i16 as u16).wrapping_add(sp.y as u16) as i16;
+        (x, y)
+    }
+
+    /// 0x4977c0: bounds (left, top, right, bottom, inclusive) of a sprite's clickable images.
+    fn sprite_click_bounds(&self, d: &Data, s: u32) -> Option<[i32; 4]> {
+        let mut r: Option<[i32; 4]> = None;
+        let mut i = self.sprites[s as usize].images.head;
+        while i != NIL {
+            let im = &self.images[i as usize];
+            if im.flags & super::sprite::iflag::CLICKABLE != 0 {
+                let (x, y) = self.image_map_pos(d, i);
+                let h = 6 + im.frame as usize * 8;
+                let g = d.grp_file(im.image_id);
+                let (w, ht) = (g.get(h + 2).copied().unwrap_or(0) as i32, g.get(h + 3).copied().unwrap_or(0) as i32);
+                let b = [x as i32, y as i32, w - 1 + x as i32, ht - 1 + y as i32];
+                r = Some(match r {
+                    None => b,
+                    Some(a) => [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])],
+                });
+            }
+            i = im.link.next;
+        }
+        r
+    }
+
+    /// 0x4029b0 / 0x497e10 body: image pixel under map point (px, py).
+    fn image_hit(&self, d: &Data, i: u32, px: i32, py: i32) -> bool {
+        let im = &self.images[i as usize];
+        let (x, y) = self.image_map_pos(d, i);
+        let g = d.grp_file(im.image_id);
+        let mut fx = px - x as i32;
+        if im.flags & super::sprite::iflag::FLIPPED != 0 {
+            let gw = (d.grp)(im.image_id).1 as i32;
+            let frame_x = g.get(6 + im.frame as usize * 8).copied().unwrap_or(0) as i32;
+            fx = gw - frame_x * 2 - fx;
+        }
+        grp_pixel(g, im.frame, fx as u32, (py - y as i32) as u32)
+    }
+
+    /// 0x402a00: point (px, py) is on unit `u`'s graphics.
+    fn unit_hit(&self, d: &Data, u: u32, px: i32, py: i32) -> bool {
+        let s = self.units[u as usize].sprite;
+        let Some(b) = self.sprite_click_bounds(d, s) else { return false };
+        if px < b[0] || py < b[1] || px >= b[2] || py >= b[3] {
+            return false;
+        }
+        if d.dat.units.flags[self.units[u as usize].unit_type as usize] & 0x100 != 0 {
+            // 0x497e10: any clickable image.
+            let mut i = self.sprites[s as usize].images.head;
+            while i != NIL {
+                if self.images[i as usize].flags & super::sprite::iflag::CLICKABLE != 0 && self.image_hit(d, i, px, py) {
+                    return true;
+                }
+                i = self.images[i as usize].link.next;
+            }
+            return false;
+        }
+        self.image_hit(d, self.sprites[s as usize].main_image, px, py)
+    }
+
+    /// 0x431030: units whose clickable bounds contain map point (x, y).
+    fn clickable_units_at(&mut self, d: &Data, x: i16, y: i16) -> Vec<u32> {
+        let (mw, mh) = (self.search.max_w as i16, self.search.max_h as i16);
+        let b = [x.wrapping_sub(0x20), y.wrapping_sub(0x20), mw.wrapping_add(x).wrapping_add(0x20), mh.wrapping_add(y).wrapping_add(0x20)];
+        let start = self.units_in_finder_box_now(b);
+        let found = self.search.results(start);
+        self.search.pop();
+        let (x, y) = (x as i32, y as i32);
+        found
+            .into_iter()
+            .filter(|&u| {
+                self.sprite_click_bounds(d, self.units[u as usize].sprite)
+                    .is_some_and(|b| b[0] <= x && b[1] <= y && x < b[2] && y < b[3])
+            })
+            .collect()
+    }
+
+    /// 0x46f3a0: the unit drawn topmost under map point (x, y) whose graphics are
+    /// hit, else the smallest one whose bounds contain it.
+    pub fn unit_at_point(&mut self, d: &Data, x: i16, y: i16) -> u32 {
+        let mask = self.local_vision_mask;
+        let (px, py) = (x as i32, y as i32);
+        let mut best = NIL;
+        let mut area = i32::MAX;
+        for mut u in self.clickable_units_at(d, x, y) {
+            if d.dat.units.flags[self.units[u as usize].unit_type as usize] & 0x10 != 0 {
+                u = self.units[u as usize].subunit;
+            }
+            let un = &self.units[u as usize];
+            // ponytail: replay vision (0x6d0f14 / 0x6d0f18 / 0x6d0f1c) not handled.
+            if self.sprites[un.sprite as usize].visibility & mask == 0
+                || un.status & 0x300 != 0 && un.visibility & mask as u32 == 0
+                || never_picked(un.unit_type)
+            {
+                continue;
+            }
+            let place_area = |st: &State, u: u32| {
+                let pb = d.dat.units.placement_box[st.units[u as usize].unit_type as usize];
+                (pb as u16 as i16 as i32) * ((pb >> 16) as u16 as i16 as i32)
+            };
+            let hit = |st: &State, u: u32| {
+                st.unit_hit(d, u, px, py) || {
+                    let s = st.units[u as usize].subunit;
+                    s != NIL && st.unit_hit(d, s, px, py)
+                }
+            };
+            if best == NIL {
+                best = u;
+                area = place_area(self, u);
+                continue;
+            }
+            let smaller = if self.draw_key(best) < self.draw_key(u) {
+                if hit(self, u) {
+                    let sp = &self.sprites[un.sprite as usize];
+                    best = u;
+                    area = sp.height as i32 * sp.width as i32;
+                    continue;
+                }
+                true
+            } else {
+                !hit(self, best)
+            };
+            if smaller {
+                let a = place_area(self, u);
+                if a < area {
+                    best = u;
+                    area = a;
+                }
+            }
+        }
+        best
+    }
+}
+
+impl State {
+    /// 0x46fb40: click selection at map point `p`. Shift toggles the unit in `cur`;
+    /// Ctrl or a double-click on a selected unit picks the units like it in the
+    /// screen rect `screen` (x0, y0, x1, y1). Returns the new selection, or None.
+    /// ponytail: "selected" is `cur.contains`, not the sprite's selection flag 0x8.
+    #[allow(clippy::too_many_arguments)]
+    pub fn click_select(&mut self, d: &Data, p: (i16, i16), shift: bool, ctrl: bool, double: bool, screen: [i16; 4], cur: &[u32]) -> Option<Vec<u32>> {
+        let u = self.unit_at_point(d, p.0, p.1);
+        if u == NIL {
+            return None;
+        }
+        let dbl = double && cur.contains(&u);
+        if !(ctrl || dbl || shift && !cur.is_empty()) {
+            return Some(vec![u]);
+        }
+        if ctrl || dbl {
+            let start = self.units_in_finder_box_now(screen);
+            let found = self.search.results(start);
+            self.search.pop();
+            let picked = self.select_filter(d, &found, u);
+            if picked.is_empty() {
+                return None;
+            }
+            if !shift {
+                return Some(picked);
+            }
+            let mut sel = cur.to_vec();
+            self.select_merge(d, &mut sel, &picked, u);
+            return Some(sel);
+        }
+        let mut sel = cur.to_vec();
+        if let Some(i) = sel.iter().position(|&s| s == u) {
+            sel.remove(i);
+            return Some(sel);
+        }
+        let own = |st: &State, u: u32| st.multi_selectable(d, u) && !st.replay && st.units[u as usize].player == st.local_player;
+        if sel.len() < 12 && own(self, sel[0]) && own(self, u) {
+            sel.push(u);
+            return Some(sel);
+        }
+        None
+    }
+
+    /// 0x42ff80 over this state's finder.
+    fn units_in_finder_box_now(&mut self, b: [i16; 4]) -> usize {
+        let mut search = std::mem::replace(&mut self.search, super::collide::UnitSearch::empty());
+        let start = search.units_in_finder_box(self, b);
+        self.search = search;
+        start
+    }
+}

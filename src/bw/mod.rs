@@ -68,9 +68,17 @@ pub struct Data<'a> {
     pub grp: &'a dyn Fn(u16) -> (u16, u16, u16),
     /// LO files per [type 0..=4 (attack, damage, special, landing, liftoff)][image id].
     pub lo: &'a [Vec<Option<Vec<u8>>>; 5],
+    /// GRP files by images.dat grp index (empty when missing).
+    pub grp_files: &'a [Vec<u8>],
 }
 
 impl Data<'_> {
+    /// The GRP file of an image (the images.dat grp column), or empty.
+    pub fn grp_file(&self, image_id: u16) -> &[u8] {
+        let i = self.dat.images.grp.get(image_id as usize).copied().unwrap_or(0) as usize;
+        self.grp_files.get(i).map_or(&[], |v| v.as_slice())
+    }
+
     pub fn grp_size(&self, image_id: u16) -> (u16, u16) {
         let (_, w, h) = (self.grp)(image_id);
         (w, h)

@@ -210,6 +210,14 @@ fn main() -> std::io::Result<()> {
                     let r: Vec<String> = (0..2).map(|p| format!("{},{}", st.players.minerals[p], st.players.gas[p])).collect();
                     writeln!(t, "f{f} res {}", r.join(" "))?;
                     writeln!(t, "f{f} rng {:#x} {}", st.rng.seed, st.rng.total)?;
+                    if let (Ok(tests), 0) = (std::env::var("SCBW_CLICKTEST"), f % 50) {
+                        for pt in tests.split(';').filter(|p| !p.is_empty()) {
+                            let v: Vec<i16> = pt.split(',').map(|n| n.parse().unwrap_or(0)).collect();
+                            let u = st.unit_at_point(&d, v[0], v[1]);
+                            let u = if u == bw::list::NIL { "-".to_string() } else { u.to_string() };
+                            writeln!(t, "f{f} click {pt} -> {u}")?;
+                        }
+                    }
                     if let (Ok(tests), 0) = (std::env::var("SCBW_SELTEST"), f % 50) {
                         // "x0,y0,x1,y1[,s];...": drag boxes in turn (s = shift), from no selection.
                         let mut sel: Vec<u32> = Vec::new();
