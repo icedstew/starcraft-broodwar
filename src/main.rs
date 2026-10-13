@@ -210,6 +210,16 @@ fn main() -> std::io::Result<()> {
                     let r: Vec<String> = (0..2).map(|p| format!("{},{}", st.players.minerals[p], st.players.gas[p])).collect();
                     writeln!(t, "f{f} res {}", r.join(" "))?;
                     writeln!(t, "f{f} rng {:#x} {}", st.rng.seed, st.rng.total)?;
+                    if std::env::var("SCBW_SELTRACE").is_ok() {
+                        let row: Vec<String> = bw::select::selection_units(&st.selections[0]).iter().map(|u| u.to_string()).collect();
+                        writeln!(t, "f{f} psel {}", row.join(" "))?;
+                        for g in 0..18 {
+                            let hk: Vec<String> = st.hotkeys[g].iter().filter(|&&h| h != 0).map(|h| format!("{h:#x}")).collect();
+                            if !hk.is_empty() {
+                                writeln!(t, "f{f} hk{g} {}", hk.join(" "))?;
+                            }
+                        }
+                    }
                     if let (Ok(tests), 0) = (std::env::var("SCBW_CLICKTEST"), f % 50) {
                         for pt in tests.split(';').filter(|p| !p.is_empty()) {
                             let v: Vec<i16> = pt.split(',').map(|n| n.parse().unwrap_or(0)).collect();
@@ -240,6 +250,9 @@ fn main() -> std::io::Result<()> {
                 if f % 8 == 0 || f + 1 == frames {
                     for &u in &made {
                         let un = &st.units[u as usize];
+                        if un.sprite == bw::list::NIL {
+                            continue;
+                        }
                         let s = &st.sprites[un.sprite as usize];
                         println!(
                             "f{f:4} u{u} order {:#x} st {} mv {:#x} pos ({},{}) tgt {:?} spd {} anim {} top {} next {} fl {:#x}",
@@ -555,6 +568,9 @@ fn thingy_trace(st: &bw::State, f: u32) -> String {
 
 fn unit_trace(st: &bw::State, f: u32, u: u32) -> String {
     let un = &st.units[u as usize];
+    if un.sprite == bw::list::NIL {
+        return format!("f{f} u{u} gone");
+    }
     let s = &st.sprites[un.sprite as usize];
     let fl = &un.fl;
     format!(
@@ -620,6 +636,22 @@ fn apply_moves(st: &mut bw::State, d: &bw::Data, made: &[u32], m: &str) {
             .take(12)
             .collect();
     }
+    for p in v.iter().filter(|p| p.starts_with(['S', 'A', 'D', 'H'])) {
+        // "S<i>,<j>,..." select / add / remove created units (0x09-0x0b); "H<action>:<group>" hotkey 0x13.
+        let units = if made.is_empty() { &sel[..] } else { made };
+        let pkt: Vec<u8> = if let Some(b) = p.strip_prefix('H') {
+            let (a, g) = b.split_once(':').unwrap_or(("0", "0"));
+            vec![0x13, a.parse().unwrap_or(0), g.parse().unwrap_or(0)]
+        } else {
+            let idx: Vec<usize> = p[1..].split(',').filter_map(|n| n.parse().ok()).collect();
+            let mut pkt = vec![[9, 10, 11]["SAD".find(&p[..1]).unwrap_or(0)], idx.len() as u8];
+            for i in idx {
+                pkt.extend((st.unit_handle(units[i]) as u16).to_le_bytes());
+            }
+            pkt
+        };
+        st.execute_command(d, 0, &[], &pkt);
+    }
     for p in v.iter().filter(|p| p.starts_with('M')) {
         // "M<type>": every player-0 larva morphs into <type> (0x4c1990).
         let t = p[1..].strip_prefix("0x").map_or_else(|| p[1..].parse().unwrap_or(0), |h| u16::from_str_radix(h, 16).unwrap_or(0));
@@ -658,7 +690,7 @@ fn apply_moves(st: &mut bw::State, d: &bw::Data, made: &[u32], m: &str) {
     let units = if made.is_empty() { sel.clone() } else { made.to_vec() };
     for (i, &u) in units.iter().enumerate() {
         let p = v[i % v.len()];
-        if p.starts_with(['R', 'T', 'M']) {
+        if p.starts_with(['R', 'T', 'M', 'S', 'A', 'D', 'H']) {
             continue;
         }
         if let Some(t) = p.strip_prefix('t') {

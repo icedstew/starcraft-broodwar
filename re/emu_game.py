@@ -213,6 +213,8 @@ def tgt(e, p):
 def unit_trace(e, f, u):
     a = UNITS + u * 0x150
     sp = e.r32(a + 0xc)
+    if not sp:
+        return f"f{f} u{u} gone"
     return (f"f{f} u{u} pos {s16(e, sp + 0x14)},{s16(e, sp + 0x16)} order {e.r8(a + 0x4d):#x} ost {e.r8(a + 0x4e)} "
             f"mv {e.r8(a + 0x97):#x} mt {s16(e, a + 0x10)},{s16(e, a + 0x12)} nw {s16(e, a + 0x18)},{s16(e, a + 0x1a)} "
             f"ntw {s16(e, a + 0x1c)},{s16(e, a + 0x1e)} fl {e.r8(a + 0x20):#x} dir {e.r8(a + 0x21)} vdir {e.r8(a + 0x23)} "
@@ -316,6 +318,11 @@ def parse_move(m):
         return ("t", int(t, 0), int(n) if n else 1)
     if m[0] == "M":  # "M<type>": every player-0 larva morphs into <type>
         return ("M", int(m[1:], 0))
+    if m[0] in "SAD":  # "S<i>,<j>,...": select / add / remove created units i, j, ... (0x09-0x0b)
+        return (m[0], tuple(int(v) for v in m[1:].split(",") if v))
+    if m[0] == "H":  # "H<action>:<group>": hotkey command 0x13
+        a, g = m[1:].split(":")
+        return ("H", int(a), int(g))
     if m[0] in "RT":  # "R<x>,<y>[q]" / "R@k[q]", "T<order>:<x>,<y>[q]" / "T<order>:@k[q]"
         q = 1 if m.endswith("q") else 0
         body = m[1:].rstrip("q")
@@ -399,6 +406,18 @@ def scenario(e, units, move, frames, out):
                     e.write(pkt, bytes([0x23]) + struct.pack("<H", m[1]))
                     e.call(0x4c1990, stack=[pkt])
                     continue
+                if m[0] in ("S", "A", "D", "H"):
+                    e.w32(0x512678, 0)
+                    e.w32(0x51267c, 0)
+                    if m[0] == "H":
+                        e.write(pkt, bytes([0x13, m[1], m[2]]))
+                        e.call(0x4c2870, regs={"ecx": pkt})
+                        continue
+                    units = made or sel
+                    hs = [(e.r8(UNITS + units[i] * 0x150 + 0xa5) << 11) | (units[i] + 1) for i in m[1]]
+                    e.write(pkt, bytes([{"S": 9, "A": 10, "D": 11}[m[0]], len(hs)]) + struct.pack(f"<{len(hs)}H", *hs))
+                    e.call({"S": 0x4c2750, "A": 0x4c2560, "D": 0x4bfb40}[m[0]], stack=[pkt])
+                    continue
                 if m[0] not in ("R", "T"):
                     continue
                 for k in range(12):
@@ -421,7 +440,7 @@ def scenario(e, units, move, frames, out):
                     e.call(0x4c2320, regs={"eax": pkt})
             for i, u in enumerate(made or sel):
                 m = move[i % len(move)]
-                if m[0] in ("R", "T", "M"):
+                if m[0] in ("R", "T", "M", "S", "A", "D", "H"):
                     continue
                 if m[0] == "t":  # train unit type m[1] (0x4c1c20 without the selection checks)
                     a = UNITS + u * 0x150
@@ -470,6 +489,7 @@ def scenario(e, units, move, frames, out):
         minimap_init(e, e.data_root)
     with open(out, "w") as fo:
         for f in range(frames):
+            e.w32(0x57eebc, e.r32(0x57f23c))  # net turns: one per frame
             if move2 and f == at:
                 apply_moves(move2)
             e.w32(0x57f23c, e.r32(0x57f23c) + 1)  # 0x4d9670 advances the frame first
@@ -493,6 +513,13 @@ def scenario(e, units, move, frames, out):
             fo.write(bullet_trace(e, f) + "\n")
             fo.write(f"f{f} res " + " ".join(f"{e.r32(0x57f0f0 + p * 4)},{e.r32(0x57f120 + p * 4)}" for p in range(2)) + "\n")
             fo.write(f"f{f} rng {e.r32(0x51ca14):#x} {e.r32(0x51ca18)}\n")
+            if os.environ.get("SCBW_SELTRACE"):
+                row = [(a - UNITS) // 0x150 for a in struct.unpack("<12I", e.read(0x6284e8, 48)) if a]
+                fo.write(f"f{f} psel " + " ".join(map(str, row)) + "\n")
+                for g in range(18):
+                    hk = [h for h in struct.unpack("<12I", e.read(0x57fe60 + g * 48, 48)) if h]
+                    if hk:
+                        fo.write(f"f{f} hk{g} " + " ".join(f"{h:#x}" for h in hk) + "\n")
             if os.environ.get("SCBW_CLICKTEST") and f % 50 == 0:
                 local = e.r32(0x512684)
                 e.w32(0x512684, 0)

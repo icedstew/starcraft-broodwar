@@ -923,6 +923,20 @@ impl State {
                     self.command_targeted_order(d, player, sel, (x as i16, y as i16), t, ty, order, q != 0);
                 }
             }
+            0x09 | 0x0a | 0x0b => {
+                // 0x4c2750 / 0x4c2560 / 0x4bfb40
+                let n = byte(1) as usize;
+                if p.len() < 2 + n * 2 {
+                    return;
+                }
+                let hs: Vec<u16> = (0..n).map(|i| u16_at(2 + i * 2)).collect();
+                match byte(0) {
+                    0x09 => self.command_select(d, player, &hs),
+                    0x0a => self.command_select_add(d, player, &hs),
+                    _ => self.command_select_remove(d, player, &hs),
+                }
+            }
+            0x13 => self.command_hotkey(d, player, byte(1), byte(2)),
             0x1a => self.command_stop(d, player, sel, byte(1) != 0),
             0x1e => self.command_return_cargo(d, player, sel, byte(1) != 0),
             0x1f => self.command_train_sel(d, player, sel, u16_at(1)),

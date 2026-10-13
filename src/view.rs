@@ -90,6 +90,8 @@ fn with_data<R>(a: &Assets, f: impl FnOnce(&bw::Data) -> R) -> R {
 pub struct Scene<'a> {
     pub st: bw::State,
     pub selected: Vec<u32>,
+    /// 0x59724c: the selection last sent to the simulation as select commands.
+    sent_selection: Vec<u32>,
     /// Command card submenu (button set index) opened by a Menu button, e.g. SCV "Build".
     pub card_menu: Option<u16>,
     /// Building type being placed, and whether the spot under the cursor is valid.
@@ -150,7 +152,23 @@ impl<'a> Scene<'a> {
             minimap.player_colors[p] = tm.get(c).copied().unwrap_or(0);
         }
         with_data(a, |d| minimap.refresh(d, &mut st));
-        Ok(Scene { st, minimap, selected: Vec::new(), card_menu: None, placing: None, targeting: None, error: 0, place_ok: false, drag_box: None, a, chk, ts, terrain, player_colors, local, shadow, remaps })
+        Ok(Scene { st, minimap, selected: Vec::new(), sent_selection: Vec::new(), card_menu: None, placing: None, targeting: None, error: 0, place_ok: false, drag_box: None, a, chk, ts, terrain, player_colors, local, shadow, remaps })
+    }
+
+    /// Send the local selection to the simulation (0x4c0860) and return the local
+    /// player's selection as the simulation sees it (0x6284e8).
+    fn sim_selection(&mut self) -> Vec<u32> {
+        let me = self.local;
+        let mut sent = std::mem::take(&mut self.sent_selection);
+        let pkts = self.st.selection_packets(&mut sent, &self.selected);
+        self.sent_selection = sent;
+        let st = &mut self.st;
+        with_data(self.a, |d| {
+            for p in &pkts {
+                st.execute_command(d, me, &[], p);
+            }
+        });
+        bw::select::selection_units(&self.st.selections[me as usize]).to_vec()
     }
 
     /// Advance one frame; returns sounds (sfx id, x, y) requested this frame.
@@ -310,7 +328,8 @@ impl<'a> Scene<'a> {
     /// Right-click at map point `p` (0x4c2370).
     pub fn right_click(&mut self, p: (i32, i32), queued: bool) {
         let t = self.unit_at(p.0, p.1).unwrap_or(NIL);
-        let (sel, me, st) = (self.selected.clone(), self.local, &mut self.st);
+        let (sel, me) = (self.sim_selection(), self.local);
+        let st = &mut self.st;
         with_data(self.a, |d| st.command_right_click(d, me, &sel, (p.0 as i16, p.1 as i16), t, 0xe4, queued));
     }
 
@@ -351,7 +370,8 @@ impl<'a> Scene<'a> {
         match act {
             None => {}
             Send(p) => {
-                let (sel, me, st) = (self.selected.clone(), self.local, &mut self.st);
+                let (sel, me) = (self.sim_selection(), self.local);
+        let st = &mut self.st;
                 with_data(self.a, |d| st.execute_command(d, me, &sel, &p));
             }
             Target { ground, unit, fog } => self.targeting = Some((ground, unit, fog)),
@@ -368,7 +388,8 @@ impl<'a> Scene<'a> {
     pub fn target_click(&mut self, p: (i32, i32), queued: bool) {
         let Some(modes) = self.targeting.take() else { return };
         let t = self.unit_at(p.0, p.1).unwrap_or(NIL);
-        let (sel, me, st) = (self.selected.clone(), self.local, &mut self.st);
+        let (sel, me) = (self.sim_selection(), self.local);
+        let st = &mut self.st;
         let r = with_data(self.a, |d| st.target_click(d, me, &sel, modes, (p.0 as i16, p.1 as i16), t, 0xe4, queued));
         if let Err(e) = r {
             self.error = e;
@@ -401,13 +422,15 @@ impl<'a> Scene<'a> {
         pkt.extend_from_slice(&(tx as u16).to_le_bytes());
         pkt.extend_from_slice(&(ty as u16).to_le_bytes());
         pkt.extend_from_slice(&t.to_le_bytes());
-        let (sel, me, st) = (self.selected.clone(), self.local, &mut self.st);
+        let (sel, me) = (self.sim_selection(), self.local);
+        let st = &mut self.st;
         with_data(self.a, |d| st.execute_command(d, me, &sel, &pkt));
         self.card_menu = Option::None;
     }
 
     pub fn command(&mut self, f: impl FnOnce(&mut bw::State, &bw::Data, u8, &[u32])) {
-        let (sel, me, st) = (self.selected.clone(), self.local, &mut self.st);
+        let (sel, me) = (self.sim_selection(), self.local);
+        let st = &mut self.st;
         with_data(self.a, |d| f(st, d, me, &sel));
     }
 }

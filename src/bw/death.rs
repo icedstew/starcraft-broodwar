@@ -127,7 +127,8 @@ impl State {
         if self.units[u as usize].resource_type != 0 {
             todo_port!("0x4f3b70", "drop a carried powerup");
         }
-        todo_port!("0x49a7f0", "selection circles / UI");
+        // 0x49a7f0: out of every selection (selection circles are not ported).
+        self.selections_remove_unit(u);
         self.modify_unit_counters(d, u, -1);
         if self.units[u as usize].status & 1 != 0 {
             self.modify_completed_counters(d, u, -1, false);

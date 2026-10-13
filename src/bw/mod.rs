@@ -214,6 +214,13 @@ pub struct State {
     pub path_all_units: bool,
     /// 0x58d634: alliances [player][other] (0 = enemy).
     pub alliances: [[u8; 12]; 12],
+    /// 0x6284e8: each player's selection as the simulation sees it (NIL-terminated).
+    pub selections: [[u32; 12]; 8],
+    /// 0x57fe60: unit handle groups per [player * 18 + group]: 0..=9 hotkeys, 10..=17
+    /// the recent selections.
+    pub hotkeys: Vec<[u32; 12]>,
+    /// 0x63fe2c: when groups 10..=17 were last used, per [player][group - 10] (net turns).
+    pub recent_used: [[u16; 8]; 12],
     /// 0x58d720: start locations from the scenario.
     pub start_locations: [(i16, i16); 8],
     /// 0x59bda8: per-player "use map-placed units" setting.
@@ -342,6 +349,9 @@ impl State {
             placement: vec![0; build::PLACEMENT_SLOTS * 0x30],
             start_locations: [(0, 0); 8],
             alliances: [[0; 12]; 12],
+            selections: [[NIL; 12]; 8],
+            hotkeys: vec![[0; 12]; 12 * 18],
+            recent_used: [[0; 8]; 12],
             path_avoid_unit: None,
             path_all_units: false,
             melee_map_units: [0; 8],

@@ -382,3 +382,261 @@ impl State {
         start
     }
 }
+
+/// The units of a NIL-terminated selection row.
+pub fn selection_units(row: &[u32; 12]) -> &[u32] {
+    let n = row.iter().position(|&u| u == NIL).unwrap_or(12);
+    &row[..n]
+}
+
+impl State {
+    /// 0x49a740: clear player `p`'s selection.
+    fn selection_clear(&mut self, p: usize) {
+        if p < 8 {
+            self.selections[p] = [NIL; 12];
+        }
+    }
+
+    /// 0x49af80: put `u` in slot `i` of player `p`'s selection; slots after the first
+    /// take only `player`'s multi-selectable units.
+    fn selection_put(&mut self, d: &Data, p: usize, i: usize, u: u32, player: u8) -> bool {
+        if p > 7 || i > 11 || self.sprites[self.units[u as usize].sprite as usize].flags & super::sprite::sflag::HIDDEN != 0 {
+            return false;
+        }
+        if i > 0 && (!self.multi_selectable(d, u) || self.units[u as usize].player != player) {
+            return false;
+        }
+        self.selections[p][i] = u;
+        true
+    }
+
+    /// 0x49a170: take `u` out of player `p`'s selection; returns the remaining count.
+    fn selection_remove(&mut self, p: usize, u: u32) -> usize {
+        if p >= 8 {
+            return 0;
+        }
+        let row = &mut self.selections[p];
+        let mut n = row.iter().position(|&s| s == NIL).unwrap_or(12);
+        let at = row[..n].iter().rposition(|&s| s == u);
+        if u != NIL && n != 0 {
+            if let Some(i) = at {
+                n -= 1;
+                row.copy_within(i + 1..=n, i);
+                row[n] = NIL;
+            }
+        }
+        n
+    }
+
+    /// 0x49a7f0 (selection part): a dying or hidden unit leaves every selection.
+    pub fn selections_remove_unit(&mut self, u: u32) {
+        for p in 0..8 {
+            self.selection_remove(p, u);
+        }
+    }
+
+    /// 0x496560: the recent-selection group (0..8) used longest ago (0xff if none).
+    fn least_recent_group(&self, p: usize) -> u8 {
+        let mut best = (0xffffu16, 0xffu8);
+        for i in (0..8).rev() {
+            if self.recent_used[p][i] < best.0 {
+                best = (self.recent_used[p][i], i as u8);
+            }
+        }
+        best.1
+    }
+
+    /// Remember a selection of more than one unit in the least recent of groups 10..=17.
+    fn remember_selection(&mut self, d: &Data, p: usize, player: u8) {
+        let g = self.least_recent_group(p);
+        self.hotkey_save(d, p, g.wrapping_add(10) as usize, true, player);
+        if let Some(s) = self.recent_used[p].get_mut(g as usize) {
+            *s = self.frame as u16;
+        }
+    }
+
+    /// 0x4965d0: save player `p`'s selection as hotkey group `g`, replacing it when
+    /// `fresh`, else adding to it.
+    fn hotkey_save(&mut self, d: &Data, p: usize, g: usize, fresh: bool, player: u8) {
+        let slot = g + p * 18;
+        if slot >= self.hotkeys.len() {
+            return;
+        }
+        let mut n = 0;
+        if fresh {
+            self.hotkeys[slot] = [0; 12];
+        } else {
+            if let Some(u) = self.unit_from_handle(self.hotkeys[slot][0]) {
+                if !self.multi_selectable(d, u) {
+                    return;
+                }
+            }
+            n = self.hotkeys[slot].iter().position(|&h| h == 0).unwrap_or(12);
+        }
+        let sel = self.selections.get(p).copied().unwrap_or([NIL; 12]);
+        for &u in selection_units(&sel) {
+            if self.units[u as usize].player != player {
+                return;
+            }
+            let h = self.unit_handle(u);
+            if !fresh && (self.hotkeys[slot][..n].contains(&h) || n != 0 && !self.multi_selectable(d, u)) {
+                continue;
+            }
+            self.hotkeys[slot][n] = h;
+            n += 1;
+            if n > 11 {
+                return;
+            }
+        }
+    }
+
+    /// 0x496940: select hotkey group `g`, dropping units that are gone.
+    fn hotkey_select(&mut self, d: &Data, p: usize, g: usize, player: u8) {
+        let slot = g + p * 18;
+        if slot >= self.hotkeys.len() {
+            return;
+        }
+        let mut n = self.hotkeys[slot].iter().position(|&h| h == 0).unwrap_or(12);
+        if n == 0 {
+            return;
+        }
+        self.selection_clear(p);
+        let mut i = 0;
+        while i < n {
+            let h = self.hotkeys[slot][i];
+            let keep = self.unit_from_handle(h).filter(|&u| {
+                let un = &self.units[u as usize];
+                un.player == player
+                    && self.sprites[un.sprite as usize].flags & super::sprite::sflag::HIDDEN == 0
+                    && (self.multi_selectable(d, u) || n <= 1)
+            });
+            let Some(u) = keep else {
+                n -= 1;
+                self.hotkeys[slot][i] = self.hotkeys[slot][n];
+                self.hotkeys[slot][n] = 0;
+                continue;
+            };
+            if p < 8 && i < 12 && (i < 1 || self.multi_selectable(d, u)) {
+                self.selections[p][i] = u;
+            }
+            i += 1;
+        }
+        if g > 9 {
+            if let Some(s) = self.recent_used[p].get_mut(g - 10) {
+                *s = self.frame as u16;
+            }
+        } else {
+            self.remember_selection(d, p, player);
+        }
+    }
+
+    /// Command 0x09 (0x4c2750): select the units of `handles`.
+    pub fn command_select(&mut self, d: &Data, player: u8, handles: &[u16]) {
+        let p = player as usize;
+        if handles.len() >= 13 {
+            return;
+        }
+        self.selection_clear(p);
+        let mut n = 0;
+        for &h in handles {
+            let Some(u) = self.unit_from_handle(h as u32) else { continue };
+            if p < 8 && selection_units(&self.selections[p]).contains(&u) {
+                continue;
+            }
+            if self.units[u as usize].unit_type != 0xe && self.selection_put(d, p, n, u, player) {
+                n += 1;
+            }
+        }
+        if n > 1 {
+            self.remember_selection(d, p, player);
+        }
+    }
+
+    /// Command 0x0a (0x4c2560): add the units of `handles` to the selection.
+    pub fn command_select_add(&mut self, d: &Data, player: u8, handles: &[u16]) {
+        let p = player as usize;
+        let mut n = if p < 8 { selection_units(&self.selections[p]).len() } else { 0 };
+        if handles.len() + n >= 13 {
+            return;
+        }
+        for &h in handles {
+            let Some(u) = self.unit_from_handle(h as u32) else { continue };
+            if p < 8 && selection_units(&self.selections[p]).contains(&u) {
+                continue;
+            }
+            let hidden = self.sprites[self.units[u as usize].sprite as usize].flags & super::sprite::sflag::HIDDEN != 0;
+            if p < 8 && n < 12 && !hidden && (n < 1 || self.multi_selectable(d, u) && self.units[u as usize].player == player) {
+                self.selections[p][n] = u;
+                n += 1;
+            }
+        }
+        if n > 1 {
+            self.remember_selection(d, p, player);
+        }
+    }
+
+    /// Command 0x0b (0x4bfb40): take the units of `handles` out of the selection.
+    pub fn command_select_remove(&mut self, d: &Data, player: u8, handles: &[u16]) {
+        let p = player as usize;
+        if handles.len() >= 13 {
+            return;
+        }
+        let mut n = 0;
+        for &h in handles {
+            let Some(u) = self.unit_from_handle(h as u32) else { continue };
+            n = if p < 8 { self.selection_remove(p, u) } else { 0 };
+        }
+        if n > 1 {
+            self.remember_selection(d, p, player);
+        }
+    }
+
+    /// Command 0x13 (0x4c2870): hotkey group `g`: 0 = set, 1 = select, 2 = add.
+    pub fn command_hotkey(&mut self, d: &Data, player: u8, action: u8, g: u8) {
+        if g >= 0x13 {
+            return;
+        }
+        let p = player as usize;
+        match action {
+            0 => self.hotkey_save(d, p, g as usize, true, player),
+            1 => self.hotkey_select(d, p, g as usize, player),
+            2 => self.hotkey_save(d, p, g as usize, false, player),
+            _ => {}
+        }
+    }
+}
+
+impl State {
+    /// 0x4c0860: the select commands that tell the other players the local selection
+    /// changed from `sent` (0x59724c, updated) to `new`: one 0x09 with the whole
+    /// selection (in reverse order) when that is shorter, else 0x0b removals then 0x0a
+    /// additions (only of units the local player sees).
+    pub fn selection_packets(&self, sent: &mut Vec<u32>, new: &[u32]) -> Vec<Vec<u8>> {
+        let mask = if self.replay { 0 } else { self.local_vision_mask };
+        let h = |u: u32| (self.unit_handle(u) as u16).to_le_bytes();
+        let added: Vec<u32> = new
+            .iter()
+            .copied()
+            .filter(|u| !sent.contains(u) && self.sprites[self.units[*u as usize].sprite as usize].visibility & mask != 0)
+            .collect();
+        let removed: Vec<u32> = sent.iter().copied().filter(|u| !new.contains(u)).collect();
+        *sent = new.to_vec();
+        let pkt = |op: u8, us: &mut dyn Iterator<Item = u32>| {
+            let hs: Vec<u8> = us.flat_map(h).collect();
+            let mut p = vec![op, (hs.len() / 2) as u8];
+            p.extend(hs);
+            p
+        };
+        if new.len() <= added.len() + removed.len() {
+            return vec![pkt(0x09, &mut new.iter().rev().copied())];
+        }
+        let mut out = Vec::new();
+        if !removed.is_empty() {
+            out.push(pkt(0x0b, &mut removed.into_iter()));
+        }
+        if !added.is_empty() {
+            out.push(pkt(0x0a, &mut added.into_iter()));
+        }
+        out
+    }
+}
