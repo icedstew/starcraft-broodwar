@@ -102,6 +102,7 @@ Share of the 4,644 1.16.1 functions that are ported. A function counts as ported
 part of this repo:
 
 ```sh
+cd ~/src/decomp/scbw
 python3 -I re/coverage.py /tmp/claude-1000/-home-stubob/76c93498-4528-4c2d-b789-d58b9cc39c19/scratchpad/dump/bw116n.c . | tail -5      # summary: in scope / reachable from game_step
 python3 -I re/coverage.py /tmp/claude-1000/-home-stubob/76c93498-4528-4c2d-b789-d58b9cc39c19/scratchpad/dump/bw116n.c . --html cov.html  # per source file, as HTML
 ```
@@ -109,6 +110,7 @@ python3 -I re/coverage.py /tmp/claude-1000/-home-stubob/76c93498-4528-4c2d-b789-
 Summary as a table (`column -N` is util-linux):
 
 ```sh
+cd ~/src/decomp/scbw
 python3 -I re/coverage.py /tmp/claude-1000/-home-stubob/76c93498-4528-4c2d-b789-d58b9cc39c19/scratchpad/dump/bw116n.c . | sed -nE \
   's/^all functions: ([0-9]+) functions, ([0-9]+) ported \(([0-9]+%)\).*/All functions|\1|\2 (\3)/p;
    s/^in scope: ([0-9]+) functions, ([0-9]+) ported \(([0-9]+%)\).*/In scope|\1|\2 (\3)/p;
