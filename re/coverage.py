@@ -19,6 +19,8 @@ HEADER = re.compile(r"^// ==== 00([0-9a-f]{6}) (\S+)")
 SRC = re.compile(r'"Starcraft\\\\SWAR\\\\lang\\\\([^"]+?\.(?:cpp|c))"', re.I)
 DOC = re.compile(r"///\s*(?:[^\n]*?)\b0x(4[0-9a-f]{5})\b")
 CALL = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(")
+LIST = re.compile(r"///\s*(0x4[0-9a-f]{5}(?:\s*(?:/|,|\+|and|or|\(|\))\s*0x4[0-9a-f]{5})+)")
+ADDR = re.compile(r"0x(4[0-9a-f]{5})")
 TODO = re.compile(r'todo_port!\("0x(4[0-9a-f]{5})"')
 
 # Entry points whose call trees make up the simulation.
@@ -71,6 +73,9 @@ def scan_src(root):
             if n.endswith(".rs"):
                 t = open(os.path.join(d, n), errors="replace").read()
                 ported |= {int(a, 16) for a in DOC.findall(t)}
+                # A doc line may open with several addresses: "/// 0xA / 0xB + 0xC:".
+                for run in LIST.findall(t):
+                    ported |= {int(a, 16) for a in ADDR.findall(run)}
                 todo |= {int(a, 16) for a in TODO.findall(t)}
     return ported, todo - ported
 
@@ -111,6 +116,9 @@ def main():
           "between files (likely still the neighbouring file, or library code).")
     print(f"in scope: {tot[0]} functions, {tot[1]} ported ({100 * tot[1] // max(tot[0], 1)}%), "
           f"{tot[2]} more named by todo_port!, all: {len(funcs)}")
+    pa = sum(1 for f in funcs if f[0] in ported)
+    print(f"all functions: {len(funcs)} functions, {pa} ported ({100 * pa // max(len(funcs), 1)}%), "
+          f"{sum(1 for f in funcs if f[0] in todo)} named by todo_port!")
     # Reachability from the simulation entry points (direct calls only; Ghidra misses
     # some register-passed and indirect calls, so this undercounts).
     by_name = {f[1]: f[0] for f in funcs}
