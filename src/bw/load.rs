@@ -1,7 +1,7 @@
 //! Loading the read-only game data the engine needs from the user's install.
 
 use super::Data;
-use crate::casc::Casc;
+use crate::storage::Storage;
 use crate::dat::{self, Dat};
 use std::io;
 
@@ -19,13 +19,13 @@ pub struct Loaded {
 }
 
 impl Loaded {
-    pub fn load(casc: &Casc) -> io::Result<Loaded> {
-        let dat = Dat::load(casc)?;
-        let iscript = casc.read("scripts/iscript.bin")?;
-        let names = dat::parse_tbl(&casc.read("arr/images.tbl")?);
+    pub fn load(files: &Storage) -> io::Result<Loaded> {
+        let dat = Dat::load(files)?;
+        let iscript = files.read("scripts/iscript.bin")?;
+        let names = dat::parse_tbl(&files.read("arr/images.tbl")?);
         let file = |idx: u32| -> Option<Vec<u8>> {
             let name = names.get((idx as usize).checked_sub(1)?)?;
-            casc.read(&format!("unit/{name}")).ok()
+            files.read(&format!("unit/{name}")).ok()
         };
         let n = dat::Images::COUNT;
         let im = &dat.images;

@@ -2,9 +2,11 @@
 
 mod audio;
 mod bw;
-mod casc;
+mod storage;
+mod storm;
 mod dat;
 mod game;
+mod grid;
 mod grp;
 mod hpbar;
 mod iscript;
@@ -19,7 +21,7 @@ use std::path::PathBuf;
 fn install_dir() -> PathBuf {
     std::env::var_os("SCBW_INSTALL").map(PathBuf::from).unwrap_or_else(|| {
         PathBuf::from(std::env::var("HOME").unwrap_or_default())
-            .join("Games/battlenet/drive_c/Program Files (x86)/StarCraft")
+            .join("Downloads/StarCraft-BroodWar_1.16.1")
     })
 }
 
@@ -51,31 +53,15 @@ fn main() -> std::io::Result<()> {
         println!("chk {} bytes, tileset {}", r.chk.len(), map::Chk::parse(&r.chk).tileset());
         return Ok(());
     }
-    let casc = casc::Casc::open(&install_dir())?;
+    let files = storage::Storage::open(&install_dir())?;
     match args.first().map(String::as_str) {
-        Some("ls") => {
-            let mut v: Vec<_> = casc.files().collect();
-            v.sort();
-            v.iter().for_each(|f| println!("{f}"));
-        }
         Some("extract") => {
-            let data = casc.read(&args[1])?;
+            let data = files.read(&args[1])?;
             std::fs::write(&args[2], data)?;
         }
-        Some("export") => {
-            // export <dir> <prefix>...: copy matching CASC files (for the emulator harness).
-            let dir = std::path::Path::new(&args[1]);
-            let files: Vec<String> = casc.files().filter(|f| args[2..].iter().any(|p| f.starts_with(p.as_str()))).map(|f| f.to_string()).collect();
-            for f in &files {
-                let out = dir.join(f);
-                std::fs::create_dir_all(out.parent().unwrap())?;
-                std::fs::write(out, casc.read(f)?)?;
-            }
-            println!("{} files", files.len());
-        }
         Some("dat") => {
-            let dat = dat::Dat::load(&casc)?;
-            let names = dat::parse_tbl(&casc.read("rez/stat_txt.tbl")?);
+            let dat = dat::Dat::load(&files)?;
+            let names = dat::parse_tbl(&files.read("rez/stat_txt.tbl")?);
             let u = &dat.units;
             for id in 0..dat::Units::COUNT {
                 println!(
@@ -92,7 +78,7 @@ fn main() -> std::io::Result<()> {
         }
         Some("bwsim") => {
             // Faithful-engine harness: SCBW_UNITS="type,x,y,player;..." SCBW_MOVE="x,y" bwsim <frames>
-            let l = bw::load::Loaded::load(&casc)?;
+            let l = bw::load::Loaded::load(&files)?;
             let g = |i: u16| l.grp_size(i);
             let d = bw::load::data(&l, &g);
             let chk = std::env::var("SCBW_MAP").ok().map(|p| load_chk(&p)).transpose()?;
@@ -105,10 +91,10 @@ fn main() -> std::io::Result<()> {
             st.init_thingies(&d);
             if let Some(chk) = &chk {
                 let name = map::TILESETS[chk.tileset()];
-                let vf4 = casc.read(&format!("tileset/{name}.vf4"))?;
+                let vf4 = files.read(&format!("tileset/{name}.vf4"))?;
                 let ts = bw::map::TilesetData {
                     vf4: vf4.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect(),
-                    cv5: casc.read(&format!("tileset/{name}.cv5"))?,
+                    cv5: files.read(&format!("tileset/{name}.cv5"))?,
                 };
                 let (w, h) = chk.dims();
                 let ok = st.load_terrain(&ts, w as u16, h as u16, chk.section(b"MTXM").unwrap_or(&[]));
@@ -170,7 +156,7 @@ fn main() -> std::io::Result<()> {
             let mut trace = trace.map(std::io::BufWriter::new);
             // SCBW_MINIMAP: also trace the minimap image every 50 frames.
             let mut minimap = match (&chk, std::env::var("SCBW_MINIMAP").is_ok()) {
-                (Some(chk), true) => Some(view::load_minimap(&casc, chk)?),
+                (Some(chk), true) => Some(view::load_minimap(&files, chk)?),
                 _ => None,
             };
             for f in 0..frames {
@@ -267,11 +253,11 @@ fn main() -> std::io::Result<()> {
             println!("rng seed {:#x} draws {}", st.rng.seed, st.rng.total);
         }
         Some("view") => {
-            let a = view::Assets::load(casc)?;
+            let a = view::Assets::load(files)?;
             view::run(&a, load_chk(&args[1])?)?;
         }
         Some("shot") => {
-            let a = view::Assets::load(casc)?;
+            let a = view::Assets::load(files)?;
             let mut scene = view::Scene::new(&a, load_chk(&args[1])?)?;
             eprintln!("local player {} start {:?}", scene.local_player(), scene.st.start_locations[scene.local_player() as usize]);
             let frames: usize = args.get(5).and_then(|f| f.parse().ok()).unwrap_or(24);
@@ -315,7 +301,7 @@ fn main() -> std::io::Result<()> {
             }
             // Debug: SCBW_KEYS="sm..." presses command card hotkeys with the selection.
             if let Ok(keys) = std::env::var("SCBW_KEYS") {
-                let ui = ui::Ui::load(&a.casc, ["zerg", "terran", "protoss"][scene.local_race()]).ok();
+                let ui = ui::Ui::load(&a.files, ["zerg", "terran", "protoss"][scene.local_race()]).ok();
                 for c in keys.chars() {
                     let card = scene.card();
                     let hit = card.iter().flatten().find(|(b, en)| {
@@ -389,7 +375,7 @@ fn main() -> std::io::Result<()> {
                     }
                 }
             }
-            let ui = ui::Ui::load(&a.casc, ["zerg", "terran", "protoss"][scene.local_race()]).ok();
+            let ui = ui::Ui::load(&a.files, ["zerg", "terran", "protoss"][scene.local_race()]).ok();
             let (w, h) = (view::SCREEN_W as usize, view::SCREEN_H as usize);
             let (mut idx, mut rgb) = (vec![0u8; w * h], vec![0u32; w * h]);
             // Debug: SCBW_HOVER=type,sx,sy shows the placement box of `type` with the
@@ -420,7 +406,7 @@ fn main() -> std::io::Result<()> {
         }
         Some("path") => {
             let chk = load_chk(&args[1])?;
-            let ts = map::Tileset::load(&casc, chk.tileset())?;
+            let ts = map::Tileset::load(&files, chk.tileset())?;
             let (w, h, walk) = map::walk_grid(&chk, &ts);
             let g = game::path::WalkGrid { w, h, walk };
             let n: Vec<i32> = args[2..6].iter().map(|v| v.parse().unwrap_or(0)).collect();
@@ -437,7 +423,7 @@ fn main() -> std::io::Result<()> {
         }
         Some("walk") => {
             let chk = load_chk(&args[1])?;
-            let ts = map::Tileset::load(&casc, chk.tileset())?;
+            let ts = map::Tileset::load(&files, chk.tileset())?;
             let (w, h, g) = map::walk_grid(&chk, &ts);
             let mut pal = [[0u8; 3]; 256];
             pal[1] = [255, 255, 255];
@@ -450,8 +436,8 @@ fn main() -> std::io::Result<()> {
             let dir = std::path::Path::new(&args[2]);
             std::fs::create_dir_all(dir)?;
             let name = map::TILESETS[chk.tileset()];
-            let vf4 = casc.read(&format!("tileset/{name}.vf4"))?;
-            let cv5 = casc.read(&format!("tileset/{name}.cv5"))?;
+            let vf4 = files.read(&format!("tileset/{name}.vf4"))?;
+            let cv5 = files.read(&format!("tileset/{name}.cv5"))?;
             let ts = bw::map::TilesetData {
                 vf4: vf4.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect(),
                 cv5: cv5.clone(),
@@ -493,7 +479,7 @@ fn main() -> std::io::Result<()> {
                 std::fs::write(dir.join("path_tests"), &tests)?;
                 std::fs::write(dir.join("path_regions"), out)?;
                 // Full searches for a marine.
-                let dat = dat::Dat::load(&casc)?;
+                let dat = dat::Dat::load(&files)?;
                 let dims = |t: u16| {
                     let d = dat.units.dimensions[t as usize];
                     [d as i16, (d >> 16) as i16, (d >> 32) as i16, (d >> 48) as i16]
@@ -517,12 +503,12 @@ fn main() -> std::io::Result<()> {
         }
         Some("render") => {
             let chk = load_chk(&args[1])?;
-            let ts = map::Tileset::load(&casc, chk.tileset())?;
+            let ts = map::Tileset::load(&files, chk.tileset())?;
             let (w, h, img) = map::render_terrain(&chk, &ts);
             write_png(&args[2], w, h, &img, &ts.palette)?;
         }
         _ => eprintln!(
-            "usage: scbw ls | extract <path> <out> | dat | render <map> <out.png> | view <map> | shot <map> <out.png> <x> <y> [frames]"
+            "usage: scbw extract <path> <out> | dat | render <map> <out.png> | view <map> | shot <map> <out.png> <x> <y> [frames]"
         ),
     }
     Ok(())

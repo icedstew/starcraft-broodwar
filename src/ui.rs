@@ -1,6 +1,6 @@
-//! In-game UI: console overlay (SD DDS), bitmap fonts, minimap, resource bar.
+//! In-game UI: console overlay, bitmap fonts, minimap, resource bar.
 
-use crate::casc::Casc;
+use crate::storage::Storage;
 use crate::grp::{Blend, Grp};
 use std::io;
 
@@ -10,77 +10,18 @@ pub struct Rgba {
     pub px: Vec<[u8; 4]>,
 }
 
-/// DDS: uncompressed 32bpp (bitmasks) or DXT1/DXT5.
-pub fn dds(d: &[u8]) -> io::Result<Rgba> {
-    let r32 = |o: usize| u32::from_le_bytes(d[o..o + 4].try_into().unwrap());
-    if d.len() < 128 || &d[0..4] != b"DDS " {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "not a DDS"));
-    }
-    let (h, w) = (r32(12) as usize, r32(16) as usize);
-    let four = &d[84..88];
-    let body = &d[128..];
-    let mut px = vec![[0u8; 4]; w * h];
-    match four {
-        b"DXT1" | b"DXT5" => {
-            let bc3 = four == b"DXT5";
-            let bs = if bc3 { 16 } else { 8 };
-            for (bi, blk) in body.chunks_exact(bs).enumerate().take(w.div_ceil(4) * h.div_ceil(4)) {
-                let (bx, by) = (bi % w.div_ceil(4) * 4, bi / w.div_ceil(4) * 4);
-                let (alpha, c) = if bc3 { (Some(&blk[0..8]), &blk[8..16]) } else { (None, blk) };
-                let cols = bc_colors(c, !bc3);
-                let idx = u32::from_le_bytes(c[4..8].try_into().unwrap());
-                for i in 0..16 {
-                    let (x, y) = (bx + i % 4, by + i / 4);
-                    if x < w && y < h {
-                        let mut p = cols[(idx >> (i * 2)) as usize & 3];
-                        if let Some(a) = alpha {
-                            p[3] = bc3_alpha(a, i);
-                        }
-                        px[y * w + x] = p;
-                    }
-                }
-            }
-        }
-        _ => {
-            // Uncompressed: assume 32bpp with masks.
-            let masks = [r32(92), r32(96), r32(100), r32(104)];
-            let ch = |v: u32, m: u32| if m == 0 { 255 } else { ((v & m) >> m.trailing_zeros()) as u8 };
-            for (i, p) in body.chunks_exact(4).take(w * h).enumerate() {
-                let v = u32::from_le_bytes(p.try_into().unwrap());
-                px[i] = [ch(v, masks[0]), ch(v, masks[1]), ch(v, masks[2]), ch(v, masks[3])];
-            }
-        }
-    }
-    Ok(Rgba { w, h, px })
+/// An 8-bit PCX as RGBA with its own palette; palette index 0 is transparent.
+pub fn pcx_rgba(d: &[u8]) -> io::Result<Rgba> {
+    let (w, h, idx) = crate::view::pcx(d);
+    let pal = d.len().checked_sub(768).filter(|&o| o > 0 && d[o - 1] == 0x0c).map(|o| &d[o..]);
+    let pal = pal.ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "PCX without palette"))?;
+    let px = idx.iter().map(|&i| {
+        let c = &pal[i as usize * 3..i as usize * 3 + 3];
+        [c[0], c[1], c[2], if i == 0 { 0 } else { 255 }]
+    });
+    Ok(Rgba { w, h, px: px.collect() })
 }
 
-fn bc_colors(c: &[u8], dxt1: bool) -> [[u8; 4]; 4] {
-    let (c0, c1) = (u16::from_le_bytes([c[0], c[1]]), u16::from_le_bytes([c[2], c[3]]));
-    let rgb = |v: u16| [((v >> 11) as u32 * 255 / 31) as u8, ((v >> 5 & 63) as u32 * 255 / 63) as u8, ((v & 31) as u32 * 255 / 31) as u8, 255];
-    let (a, b) = (rgb(c0), rgb(c1));
-    let mix = |p: u32, q: u32, n: u32| -> [u8; 4] {
-        let f = |i: usize| ((a[i] as u32 * p + b[i] as u32 * q) / n) as u8;
-        [f(0), f(1), f(2), 255]
-    };
-    if c0 > c1 || !dxt1 { [a, b, mix(2, 1, 3), mix(1, 2, 3)] } else { [a, b, mix(1, 1, 2), [0, 0, 0, 0]] }
-}
-
-fn bc3_alpha(a: &[u8], i: usize) -> u8 {
-    let (a0, a1) = (a[0] as u32, a[1] as u32);
-    let bits = u64::from_le_bytes([a[2], a[3], a[4], a[5], a[6], a[7], 0, 0]);
-    let k = (bits >> (i * 3)) as u32 & 7;
-    (match (k, a0 > a1) {
-        (0, _) => a0,
-        (1, _) => a1,
-        (k, true) => ((8 - k) * a0 + (k - 1) * a1) / 7,
-        (6, false) => 0,
-        (7, false) => 255,
-        (k, false) => ((6 - k) * a0 + (k - 1) * a1) / 5,
-    }) as u8
-}
-
-/// Classic FNT: "FONT", u8 low, u8 high, u8 max_w, u8 max_h, u32 offsets[], glyphs
-/// {u8 w, h, x, y; RLE bytes (skip << 3 | color)}.
 pub struct Font {
     d: Vec<u8>,
     low: u8,
@@ -178,18 +119,29 @@ pub struct Ui {
     pub text_colors: Vec<u8>,
 }
 
+/// 0x4dab00: fonts are encrypted with the key in `font\font.gid` (grid.cpp).
+fn read_font(files: &Storage, name: &str) -> io::Result<Vec<u8>> {
+    let bad = || io::Error::new(io::ErrorKind::InvalidData, format!("{name}: decryption failed"));
+    let key = crate::grid::font_key(&files.read("font/font.gid")?).ok_or_else(bad)?;
+    let mut d = files.read(name)?;
+    let n = crate::grid::decrypt(&mut d, &key).ok_or_else(bad)?;
+    d.truncate(n);
+    Ok(d)
+}
+
 impl Ui {
     /// race: "terran" | "protoss" | "zerg"
-    pub fn load(casc: &Casc, race: &str) -> io::Result<Ui> {
-        let console = dds(&casc.read(&format!("sd/game/consoles/{race}/console.dds"))?)?;
-        let font = Font::parse(casc.read("sd/font/font10.fnt")?);
-        let icons = Grp::parse(casc.read("game/icons.grp")?);
-        let cursors = CURSORS.iter().map(|n| casc.read(&format!("cursor/{n}")).map(Grp::parse)).collect::<io::Result<Vec<_>>>()?;
-        let wireframe = Grp::parse(casc.read("unit/wirefram/wirefram.grp")?);
-        let cmdicons = Grp::parse(casc.read("unit/cmdicons/cmdicons.grp")?);
-        let ticon = crate::view::pcx(&casc.read("game/ticon.pcx")?).2;
-        let stat_txt = crate::dat::parse_tbl(&casc.read("rez/stat_txt.tbl")?);
-        let (_, _, text_colors) = crate::view::pcx(&casc.read("game/tfontgam.pcx")?);
+    pub fn load(files: &Storage, race: &str) -> io::Result<Ui> {
+        // game\[tpz]console.pcx by the local race.
+        let console = pcx_rgba(&files.read(&format!("game/{}console.pcx", &race[..1]))?)?;
+        let font = Font::parse(read_font(files, "font/font10.fnt")?);
+        let icons = Grp::parse(files.read("game/icons.grp")?);
+        let cursors = CURSORS.iter().map(|n| files.read(&format!("cursor/{n}")).map(Grp::parse)).collect::<io::Result<Vec<_>>>()?;
+        let wireframe = Grp::parse(files.read("unit/wirefram/wirefram.grp")?);
+        let cmdicons = Grp::parse(files.read("unit/cmdbtns/cmdicons.grp")?);
+        let ticon = crate::view::pcx(&files.read("unit/cmdbtns/ticon.pcx")?).2;
+        let stat_txt = crate::dat::parse_tbl(&files.read("rez/stat_txt.tbl")?);
+        let (_, _, text_colors) = crate::view::pcx(&files.read("game/tfontgam.pcx")?);
         Ok(Ui { console, font, icons, cursors, wireframe, cmdicons, ticon, stat_txt, text_colors })
     }
 

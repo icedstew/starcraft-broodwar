@@ -53,10 +53,6 @@ class Files:
         data = None
         if os.path.exists(p):
             data = open(p, "rb").read()
-        elif p.endswith(".vx4") and os.path.exists(p + "ex"):
-            # SC:R ships only 32-bit vx4ex; graphics-only, so truncate to vx4.
-            ex = open(p + "ex", "rb").read()
-            data = b"".join(ex[i:i + 2] for i in range(0, len(ex), 4))
         if data is None:
             self.missing.append(name)
             return 0, 4

@@ -4,7 +4,7 @@
 //! Every column is stored widened and padded to the table's full entry count;
 //! partial columns (e.g. units infestation, ids 106..=201) are placed at their first id.
 
-use crate::casc::Casc;
+use crate::storage::Storage;
 use std::io;
 
 fn read_col(d: &[u8], pos: &mut usize, size: usize, count: usize, first: usize, total: usize) -> io::Result<Vec<u64>> {
@@ -29,8 +29,8 @@ macro_rules! dat {
                 let mut pos = 0;
                 Ok($name { $($field: read_col(d, &mut pos, $size, $count, $first, $total)?.into_iter().map(|x| x as $ty).collect(),)* })
             }
-            pub fn load(casc: &Casc) -> io::Result<Self> {
-                Self::parse(&casc.read($file)?)
+            pub fn load(files: &Storage) -> io::Result<Self> {
+                Self::parse(&files.read($file)?)
             }
         }
     };
@@ -228,17 +228,17 @@ pub struct Dat {
 }
 
 impl Dat {
-    pub fn load(casc: &Casc) -> io::Result<Dat> {
+    pub fn load(files: &Storage) -> io::Result<Dat> {
         Ok(Dat {
-            units: Units::load(casc)?,
-            weapons: Weapons::load(casc)?,
-            flingy: Flingy::load(casc)?,
-            sprites: Sprites::load(casc)?,
-            images: Images::load(casc)?,
-            orders: Orders::load(casc)?,
-            upgrades: Upgrades::load(casc)?,
-            techdata: Techdata::load(casc)?,
-            sfxdata: Sfxdata::load(casc)?,
+            units: Units::load(files)?,
+            weapons: Weapons::load(files)?,
+            flingy: Flingy::load(files)?,
+            sprites: Sprites::load(files)?,
+            images: Images::load(files)?,
+            orders: Orders::load(files)?,
+            upgrades: Upgrades::load(files)?,
+            techdata: Techdata::load(files)?,
+            sfxdata: Sfxdata::load(files)?,
         })
     }
 }

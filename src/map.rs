@@ -1,6 +1,6 @@
 //! Scenario (.chk) parsing and terrain rendering.
 
-use crate::casc::Casc;
+use crate::storage::Storage;
 use std::collections::HashMap;
 use std::io;
 
@@ -94,15 +94,15 @@ pub struct Tileset {
 }
 
 impl Tileset {
-    pub fn load(casc: &Casc, id: usize) -> io::Result<Tileset> {
+    pub fn load(files: &Storage, id: usize) -> io::Result<Tileset> {
         let name = TILESETS[id];
-        let rd = |ext: &str| casc.read(&format!("tileset/{name}.{ext}"));
+        let rd = |ext: &str| files.read(&format!("tileset/{name}.{ext}"));
         let wpe = rd("wpe")?;
         let mut palette = [[0u8; 3]; 256];
         for (i, p) in palette.iter_mut().enumerate() {
             p.copy_from_slice(&wpe[i * 4..i * 4 + 3]);
         }
-        let vx4 = rd("vx4ex")?.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect();
+        let vx4 = rd("vx4")?.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]]) as u32).collect();
         let vf4 = rd("vf4")?.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
         Ok(Tileset { palette, cv5: rd("cv5")?, vx4, vr4: rd("vr4")?, vf4 })
     }

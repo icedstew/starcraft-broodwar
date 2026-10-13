@@ -2,7 +2,7 @@
 //! sprites, selection, the console HUD and player commands.
 
 use crate::bw::{self, list::NIL};
-use crate::casc::Casc;
+use crate::storage::Storage;
 use crate::dat::{self, Dat};
 use crate::grp::{Blend, Grp};
 use crate::map::{self, Chk, Tileset};
@@ -31,7 +31,7 @@ pub fn pcx(d: &[u8]) -> (usize, usize, Vec<u8>) {
 }
 
 pub struct Assets {
-    pub casc: Casc,
+    pub files: Storage,
     /// Engine data (dat tables, iscript, GRP sizes, LO files).
     pub bw: bw::load::Loaded,
     image_names: Vec<String>,
@@ -39,10 +39,10 @@ pub struct Assets {
 }
 
 impl Assets {
-    pub fn load(casc: Casc) -> io::Result<Assets> {
-        let bw = bw::load::Loaded::load(&casc)?;
-        let image_names = dat::parse_tbl(&casc.read("arr/images.tbl")?);
-        Ok(Assets { casc, bw, image_names, grps: RefCell::new(vec![None; dat::Images::COUNT]) })
+    pub fn load(files: Storage) -> io::Result<Assets> {
+        let bw = bw::load::Loaded::load(&files)?;
+        let image_names = dat::parse_tbl(&files.read("arr/images.tbl")?);
+        Ok(Assets { files, bw, image_names, grps: RefCell::new(vec![None; dat::Images::COUNT]) })
     }
 
     pub fn dat(&self) -> &Dat {
@@ -55,23 +55,23 @@ impl Assets {
         slot.get_or_insert_with(|| {
             let idx = self.bw.dat.images.grp[image as usize] as usize;
             let name = self.image_names.get(idx.checked_sub(1)?)?;
-            self.casc.read(&format!("unit/{name}")).ok().map(|d| std::rc::Rc::new(Grp::parse(d)))
+            self.files.read(&format!("unit/{name}")).ok().map(|d| std::rc::Rc::new(Grp::parse(d)))
         })
         .clone()
     }
 }
 
 /// The 1.16.1 minimap for a map, with the tileset's graphics from the install.
-pub fn load_minimap(casc: &Casc, chk: &Chk) -> std::io::Result<bw::minimap::Minimap> {
+pub fn load_minimap(files: &Storage, chk: &Chk) -> std::io::Result<bw::minimap::Minimap> {
     let name = map::TILESETS[chk.tileset()];
-    let rd = |p: String| casc.read(&p);
+    let rd = |p: String| files.read(&p);
     let wpe = rd(format!("tileset/{name}.wpe"))?;
     let mut pal = [[0u8; 3]; 256];
     for (i, p) in pal.iter_mut().enumerate() {
         p.copy_from_slice(&wpe[i * 4..i * 4 + 3]);
     }
     let dark = pcx(&rd(format!("tileset/{name}/dark.pcx"))?).2;
-    let vx4 = rd(format!("tileset/{name}.vx4ex"))?.chunks_exact(4).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+    let vx4 = rd(format!("tileset/{name}.vx4"))?.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
     let vr4 = rd(format!("tileset/{name}.vr4"))?;
     let tm = pcx(&rd("game/tminimap.pcx".into())?).2;
     let mut colors = [0u8; 12];
@@ -127,9 +127,9 @@ pub fn is_melee_map(chk: &Chk) -> bool {
 
 impl<'a> Scene<'a> {
     pub fn new(a: &'a Assets, chk: Chk) -> io::Result<Scene<'a>> {
-        let ts = Tileset::load(&a.casc, chk.tileset())?;
+        let ts = Tileset::load(&a.files, chk.tileset())?;
         let terrain = map::render_terrain(&chk, &ts);
-        let (tw, _, tunit) = pcx(&a.casc.read("game/tunit.pcx")?);
+        let (tw, _, tunit) = pcx(&a.files.read("game/tunit.pcx")?);
         let colr = chk.section(b"COLR").unwrap_or(&[0, 1, 2, 3, 4, 5, 6, 7]).to_vec();
         let mut player_colors = [[0u8; 8]; 12];
         for (p, pc) in player_colors.iter_mut().enumerate() {
@@ -139,7 +139,7 @@ impl<'a> Scene<'a> {
             }
         }
         let tsname = map::TILESETS[chk.tileset()];
-        let tbl = |n: &str| a.casc.read(&format!("tileset/{tsname}/{n}.pcx")).map(|d| pcx(&d).2).unwrap_or_default();
+        let tbl = |n: &str| a.files.read(&format!("tileset/{tsname}/{n}.pcx")).map(|d| pcx(&d).2).unwrap_or_default();
         // ponytail: shadow row 17 (~50% light) picked by brightness; confirm against the draw-func table in the decomp.
         let dark = tbl("dark");
         let mut shadow = [0u8; 256];
@@ -148,16 +148,16 @@ impl<'a> Scene<'a> {
         }
         // images.dat remapping ids 1..=7
         let remaps = ["ofire", "gfire", "bfire", "bexpl", "trans50", "red", "green"].map(tbl);
-        let tselect = pcx(&a.casc.read("game/tselect.pcx")?).2;
+        let tselect = pcx(&a.files.read("game/tselect.pcx")?).2;
         let mut thpbar = [0u8; 19];
-        for (t, &c) in thpbar.iter_mut().zip(pcx(&a.casc.read("game/thpbar.pcx")?).2.iter()) {
+        for (t, &c) in thpbar.iter_mut().zip(pcx(&a.files.read("game/thpbar.pcx")?).2.iter()) {
             *t = c;
         }
         let mut st = new_game(a, &chk)?;
         let local = st.local_player;
-        let mut minimap = load_minimap(&a.casc, &chk)?;
+        let mut minimap = load_minimap(&a.files, &chk)?;
         // 0x581dd6: each player's minimap color is the tminimap.pcx entry of its color.
-        let tm = pcx(&a.casc.read("game/tminimap.pcx")?).2;
+        let tm = pcx(&a.files.read("game/tminimap.pcx")?).2;
         for p in 0..12 {
             let c = if p < 8 { colr.get(p).copied().unwrap_or(p as u8) as usize } else { p };
             minimap.player_colors[p] = tm.get(c).copied().unwrap_or(0);
@@ -562,8 +562,8 @@ fn new_game(a: &Assets, chk: &Chk) -> io::Result<bw::State> {
     let (w, h) = chk.dims();
     let mut st = bw::State::new((w, h), chk.tileset() as u16, 1700);
     let name = map::TILESETS[chk.tileset()];
-    let vf4 = a.casc.read(&format!("tileset/{name}.vf4"))?;
-    let ts = bw::map::TilesetData { vf4: vf4.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect(), cv5: a.casc.read(&format!("tileset/{name}.cv5"))? };
+    let vf4 = a.files.read(&format!("tileset/{name}.vf4"))?;
+    let ts = bw::map::TilesetData { vf4: vf4.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect(), cv5: a.files.read(&format!("tileset/{name}.cv5"))? };
     st.rng.seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |t| t.as_secs() as u32);
     with_data(a, |d| {
         st.search.init(d);
@@ -796,10 +796,10 @@ pub fn run(a: &Assets, chk: Chk) -> io::Result<()> {
     use minifb::{Key, Scale, Window, WindowOptions};
     let mut scene = Scene::new(a, chk)?;
     let race = ["zerg", "terran", "protoss"][scene.local_race()];
-    let ui = crate::ui::Ui::load(&a.casc, race).ok();
-    let mut audio = crate::audio::Audio::open(&a.casc);
+    let ui = crate::ui::Ui::load(&a.files, race).ok();
+    let mut audio = crate::audio::Audio::open(&a.files);
     if let Some(au) = audio.as_mut() {
-        au.play_music(&a.casc, &format!("music/{race}1.ogg"));
+        au.play_music(&a.files, &format!("music/{race}1.wav"));
     }
     let (vw, vh) = (SCREEN_W, SCREEN_H);
     let opts = WindowOptions { scale: Scale::X2, ..WindowOptions::default() };
@@ -928,13 +928,13 @@ pub fn run(a: &Assets, chk: Chk) -> io::Result<()> {
             // ponytail: on-screen only, no distance falloff or per-frame voice limits yet.
             if let Some(au) = &audio {
                 if (vx..vx + vw).contains(&x) && (vy..vy + vh).contains(&y) {
-                    au.play(&a.casc, a.dat(), id, 0.6);
+                    au.play(&a.files, a.dat(), id, 0.6);
                 }
             }
         }
         for id in std::mem::take(&mut scene.st.ui_sounds) {
             if let Some(au) = &audio {
-                au.play(&a.casc, a.dat(), id, 0.8);
+                au.play(&a.files, a.dat(), id, 0.8);
             }
         }
         let kind = scene.cursor_kind(cx, cy, vx, vy, drag_start.is_some());

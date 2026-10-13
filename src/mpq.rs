@@ -1,7 +1,8 @@
 //! Minimal MPQ (v1) reader: enough for .scm/.scx maps and classic .mpq archives.
 
-use std::io::{self, Read};
-use std::sync::OnceLock;
+use std::fs::File;
+use std::io::{self, Read, Seek, SeekFrom};
+use std::sync::{Mutex, OnceLock};
 
 fn err(msg: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, msg.into())
@@ -63,8 +64,40 @@ struct Block {
     flags: u32,
 }
 
+/// Archive bytes: in memory (maps), or read on demand from a file (game archives,
+/// which can be hundreds of MB).
+enum Source {
+    Mem(Vec<u8>),
+    File(Mutex<File>, u64),
+}
+
+impl Source {
+    fn len(&self) -> u64 {
+        match self {
+            Source::Mem(d) => d.len() as u64,
+            Source::File(_, n) => *n,
+        }
+    }
+
+    fn get(&self, pos: usize, len: usize) -> io::Result<Vec<u8>> {
+        match self {
+            Source::Mem(d) => d.get(pos..pos + len).map(|b| b.to_vec()).ok_or_else(|| err("read out of range")),
+            Source::File(f, n) => {
+                if (pos + len) as u64 > *n {
+                    return Err(err("read out of range"));
+                }
+                let mut f = f.lock().map_err(|_| err("archive lock"))?;
+                f.seek(SeekFrom::Start(pos as u64))?;
+                let mut b = vec![0; len];
+                f.read_exact(&mut b)?;
+                Ok(b)
+            }
+        }
+    }
+}
+
 pub struct Mpq {
-    data: Vec<u8>,
+    data: Source,
     base: usize,
     sector_size: usize,
     hashes: Vec<[u32; 4]>, // nameA, nameB, locale|platform, block index
@@ -80,17 +113,21 @@ const F_EXISTS: u32 = 0x8000_0000;
 
 impl Mpq {
     pub fn new(data: Vec<u8>) -> io::Result<Mpq> {
-        let base = (0..data.len().saturating_sub(32))
+        Mpq::from_source(Source::Mem(data))
+    }
+
+    fn from_source(data: Source) -> io::Result<Mpq> {
+        let base = (0..data.len().saturating_sub(32) as usize)
             .step_by(512)
-            .find(|&o| &data[o..o + 4] == b"MPQ\x1A")
+            .find(|&o| data.get(o, 4).is_ok_and(|m| m == b"MPQ\x1A"))
             .ok_or_else(|| err("no MPQ header"))?;
-        let rd = |o: usize| u32::from_le_bytes(data[base + o..base + o + 4].try_into().unwrap());
+        let hdr = data.get(base, 32)?;
+        let rd = |o: usize| u32::from_le_bytes(hdr[o..o + 4].try_into().unwrap());
         let sector_size = 512usize << (rd(0x0E) & 0xFFFF);
         let (ht_pos, bt_pos, ht_n, bt_n) = (rd(0x10) as usize, rd(0x14) as usize, rd(0x18) as usize, rd(0x1C) as usize);
         // ponytail: trusts table sizes; map "protectors" that lie about them are not handled.
         let table = |pos: usize, n: usize, key: &str| -> io::Result<Vec<u32>> {
-            let start = base + pos;
-            let bytes = data.get(start..start + n * 16).ok_or_else(|| err("table out of range"))?;
+            let bytes = data.get(base + pos, n * 16)?;
             let mut w: Vec<u32> = bytes.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect();
             decrypt(&mut w, hash(key, 3));
             Ok(w)
@@ -102,8 +139,11 @@ impl Mpq {
         Ok(Mpq { data, base, sector_size, hashes, blocks })
     }
 
+    /// Open an archive file, reading its files from disk on demand.
     pub fn open(path: &std::path::Path) -> io::Result<Mpq> {
-        Mpq::new(std::fs::read(path)?)
+        let f = File::open(path)?;
+        let n = f.metadata()?.len();
+        Mpq::from_source(Source::File(Mutex::new(f), n))
     }
 
     pub fn read(&self, name: &str) -> io::Result<Vec<u8>> {
@@ -125,8 +165,11 @@ impl Mpq {
         if blk.flags & F_EXISTS == 0 {
             return Err(io::Error::new(io::ErrorKind::NotFound, name.to_string()));
         }
-        let raw_start = self.base + blk.pos as usize;
-        let raw = self.data.get(raw_start..raw_start + blk.csize as usize).ok_or_else(|| err("block out of range"))?;
+        if std::env::var_os("SCBW_MPQ_DEBUG").is_some() {
+            eprintln!("{name}: pos {:#x} csize {} size {} flags {:#x}", blk.pos, blk.csize, blk.size, blk.flags);
+        }
+        let raw = self.data.get(self.base + blk.pos as usize, blk.csize as usize)?;
+        let raw = &raw[..];
         let mut key = 0;
         if blk.flags & F_ENCRYPTED != 0 {
             let base_name = name.rsplit(['\\', '/']).next().unwrap();
@@ -153,6 +196,7 @@ impl Mpq {
             return Ok(out);
         }
         let nsec = size.div_ceil(self.sector_size);
+        let raw_sectors = std::env::var_os("SCBW_MPQ_RAW");
         let mut offs = raw.get(..(nsec + 1) * 4).ok_or_else(|| err("bad sector table"))?.to_vec();
         if key != 0 {
             decrypt_bytes(&mut offs, key.wrapping_sub(1));
@@ -165,6 +209,10 @@ impl Mpq {
                 decrypt_bytes(&mut c, key.wrapping_add(i as u32));
             }
             let want = (size - out.len()).min(self.sector_size);
+            if let Some(dir) = &raw_sectors {
+                // Debug: dump each compressed sector and its size for decompressor tests.
+                std::fs::write(std::path::Path::new(dir).join(format!("{i}_{want}")), &c)?;
+            }
             out.extend(decompress(&c, want, blk.flags)?);
         }
         Ok(out)
@@ -181,15 +229,31 @@ fn decompress(c: &[u8], want: usize, flags: u32) -> io::Result<Vec<u8>> {
     if flags & F_COMPRESS == 0 {
         return Ok(c.to_vec());
     }
-    match c[0] {
-        0x02 => {
-            let mut out = Vec::with_capacity(want);
-            flate2::read::ZlibDecoder::new(&c[1..]).read_to_end(&mut out)?;
-            Ok(out)
-        }
-        0x08 => explode::explode(&c[1..]).map_err(|e| err(format!("explode: {e:?}"))),
-        m => Err(err(format!("unsupported MPQ compression 0x{m:02x}"))),
+    let mask = c[0];
+    let mut d = c[1..].to_vec();
+    // storm.dll's SCompDecompress applies these in order: implode, Huffman, stereo
+    // ADPCM, mono ADPCM (table at 0x15050b50); zlib comes from later archive formats.
+    if mask & 0x02 != 0 {
+        let mut out = Vec::with_capacity(want);
+        flate2::read::ZlibDecoder::new(&d[..]).read_to_end(&mut out)?;
+        d = out;
     }
+    if mask & 0x08 != 0 {
+        d = explode::explode(&d).map_err(|e| err(format!("explode: {e:?}")))?;
+    }
+    if mask & 0x01 != 0 {
+        d = crate::storm::huffman_decompress(&d, want)?;
+    }
+    if mask & 0x80 != 0 {
+        d = crate::storm::adpcm_decompress(&d, want, 2)?;
+    }
+    if mask & 0x40 != 0 {
+        d = crate::storm::adpcm_decompress(&d, want, 1)?;
+    }
+    if mask & !0xcb != 0 {
+        return Err(err(format!("unsupported MPQ compression 0x{mask:02x}")));
+    }
+    Ok(d)
 }
 
 #[cfg(test)]

@@ -2,14 +2,14 @@
 
 Open-source reimplementation of StarCraft: Brood War in Rust.
 
-**No game assets are included or distributed.** You must own StarCraft (Remastered,
-free from Battle.net). scbw reads the assets from your local install at runtime.
+**No game assets are included or distributed.** You need a StarCraft: Brood War 1.16.1
+install (the MPQs and storm.dll); scbw reads the assets from it at runtime.
 
 Pure Rust, no platform-specific code: builds for any target Rust supports.
 
 ## Usage
 
-    cargo run --release -- view "/path/to/StarCraft/Maps/(4)Blood Bath.scm"   # play a melee start
+    cargo run --release -- view "/path/to/StarCraft/maps/(4)Blood Bath.scm"   # play a melee start
     cargo run --release -- render "/path/to/map.scm" out.png                  # full-map terrain PNG
 
 `view` runs the faithful engine below. Melee maps start you (slot 0, `SCBW_RACE` =
@@ -21,12 +21,15 @@ and add to hotkey groups, the command card and hotkeys M/A/S/H/P/G/C issue Move,
 Attack, Stop, Hold, Patrol, Gather and Return Cargo, and the Build menu places
 buildings; arrows or the screen edge scroll, Esc quits.
 
-Set `SCBW_INSTALL` to the directory containing `.build.info` and `Data/` (defaults to the Lutris/Wine path).
+Set `SCBW_INSTALL` to the 1.16.1 install directory (the one with `StarDat.mpq`;
+defaults to `~/Downloads/StarCraft-BroodWar_1.16.1`).
 
 ## Layout
 
-- `src/casc.rs` – local CASC storage reader (SC:R asset store)
-- `src/mpq.rs`  – MPQ reader (maps)
+- `src/storage.rs` – the install's MPQ archives in 1.16.1 priority order
+- `src/mpq.rs`  – MPQ reader (archives and maps)
+- `src/storm.rs` – storm.dll's Huffman and ADPCM decompressors (tables read from storm.dll)
+- `src/grid.rs` – the 1.16.1 font encryption
 - `src/map.rs`  – CHK parsing, tileset terrain rendering
 - `src/dat.rs`  – arr/*.dat tables (layouts recovered from the binary)
 - `src/grp.rs`  – GRP sprite decoding/drawing
@@ -88,7 +91,7 @@ The 1.16.1 executable and decompiler output are not part of this repository.
 
 ## Status
 
-Working: asset loading (CASC, MPQ maps, replays), terrain, sprites/iscript animation,
+Working: asset loading (1.16.1 MPQs, maps, replays), terrain, sprites/iscript animation,
 shadows/remaps/player colors, console HUD, minimap, cursor, selection, sound/music;
 `view` plays on the faithful engine: move, fight, mine, train and build (Terran).
 
@@ -123,7 +126,7 @@ python3 -I re/coverage.py /tmp/claude-1000/-home-stubob/76c93498-4528-4c2d-b789-
 - `view <map|chk|rep>` – map viewer
 - `shot <map> out.png x y [frames] [n_select]` – headless screenshot
 - `render <map> out.png` – full-map terrain PNG
-- `rep <file.rep>`, `dat`, `units`, `ls`, `extract <path> <out>`, `walk`, `path`
+- `rep <file.rep>`, `dat`, `units`, `extract <path> <out>`, `walk`, `path`
 - `bwsim <frames>` – run the faithful engine headless. Env: `SCBW_MAP` (map file),
   `SCBW_UNITS="type,x,y,player;..."`, `SCBW_MOVE` (`;`-separated, cycled over the
   created units: `x,y` move, `@k` attack unit k, `o<order>:<x>,<y>` / `o<order>:@k`,
@@ -132,5 +135,3 @@ python3 -I re/coverage.py /tmp/claude-1000/-home-stubob/76c93498-4528-4c2d-b789-
   order, `q` suffix queues), `SCBW_MELEE=race,...` (melee start),
   `SCBW_TRACE=<file>` (per-frame trace).
 - `mapdump <map> <dir>` – dump tile flags, minitiles, SAI and contours for diffing.
-- `export <dir> <paths...>` – copy CASC data (e.g. `arr/ scripts/ unit/`) for the
-  emulator harness.
