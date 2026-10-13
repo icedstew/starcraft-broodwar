@@ -205,6 +205,27 @@ impl State {
         true
     }
 
+    /// 0x49e010 (game start, from 0x49f380): each unit type's acquisition range is at
+    /// least the range of its (or its subunit's) weapons.
+    pub fn init_acquisition_ranges(&mut self, d: &Data) {
+        let (u, w) = (&d.dat.units, &d.dat.weapons);
+        let mut acq = u.target_acquisition_range.clone();
+        for i in 0..acq.len() {
+            let s = match u.subunit1[i] {
+                0xe4 => i,
+                s => s as usize,
+            };
+            let mut r = acq[s] as u32;
+            for wp in [u.ground_weapon[s], u.air_weapon[s]] {
+                if wp < 0x82 {
+                    r = r.max(w.max_range[wp as usize] >> 5);
+                }
+            }
+            acq[i] = r as u8;
+        }
+        self.acquisition = acq;
+    }
+
     /// 0x4ccc80 (defaults part): every unit and tech available, nothing researched,
     /// upgrade caps from upgrades.dat.
     pub fn init_tech_defaults(&mut self, d: &Data) {

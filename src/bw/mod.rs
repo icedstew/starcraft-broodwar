@@ -228,6 +228,8 @@ pub struct State {
     pub is_expansion: bool,
     pub players: players::Players,
     pub psi: psi::Psi,
+    /// 0x662db8 after 0x49e010: units.dat target acquisition ranges, raised to weapon ranges.
+    pub acquisition: Vec<u8>,
     /// COrder pool (0x6416a0), free list (0x64b2e0) and live count (0x641698).
     pub orders: Vec<orders::Order>,
     pub free_orders: List,
@@ -322,6 +324,7 @@ impl State {
             is_expansion: true,
             players: players::Players::default(),
             psi: psi::Psi { providers: list::NIL, ..Default::default() },
+            acquisition: Vec::new(),
             orders,
             free_orders,
             order_count: 0,

@@ -509,7 +509,12 @@ impl State {
                 f.next_target_waypoint = w;
             }
         }
-        todo_port!("0x476000", "PlayerGuard: return-to-guard-position check (0x443080, 0x476fc0)");
+        if self.acquisition_range(u) as u8 != 0 {
+            let t = self.find_auto_target(d, u);
+            if t != super::list::NIL {
+                self.order_attack(d, u, t, true);
+            }
+        }
     }
 
     /// 0x47c950: Move, ReaverCarrierMove.

@@ -421,6 +421,7 @@ fn new_game(a: &Assets, chk: &Chk) -> io::Result<bw::State> {
     with_data(a, |d| {
         st.search.init(d);
         st.init_tech_defaults(d);
+        st.init_acquisition_ranges(d);
         st.init_psi(&a.bw.psi_grp);
         st.init_thingies(d);
         st.load_terrain(&ts, w as u16, h as u16, chk.section(b"MTXM").unwrap_or(&[]));

@@ -177,7 +177,7 @@ impl State {
         let un = &self.units[u as usize];
         if un.move_target_unit == target {
             let ts = &self.sprites[self.units[target as usize].sprite as usize];
-            if un.fl.move_target == (ts.x, ts.y) || self.at_goal_unit_edge(u, un.fl.move_target) {
+            if un.fl.move_target == (ts.x, ts.y) || self.at_goal_unit_edge(d, u, target, un.fl.move_target) {
                 self.units[u as usize].status &= !0x8_0000;
                 return true;
             }
@@ -209,11 +209,27 @@ impl State {
         true
     }
 
-    /// 0x42da90: `p` lies on the edge of the box where `u` touches its move target unit.
-    fn at_goal_unit_edge(&self, u: u32, p: (i16, i16)) -> bool {
-        todo_port!("0x42da90", "point on goal unit box edge");
-        let _ = (u, p);
-        false
+    /// 0x42da90: `p` lies on the edge of the box where mover `u` touches `goal`. As in
+    /// 1.16.1 the right edge also adds the mover's top extent and the bottom edge
+    /// leaves the mover out.
+    fn at_goal_unit_edge(&self, d: &Data, u: u32, goal: u32, p: (i16, i16)) -> bool {
+        let dims = |t: u16| {
+            let v = d.dat.units.dimensions[t as usize];
+            (v as i16, (v >> 16) as i16, (v >> 32) as i16, (v >> 48) as i16)
+        };
+        let gs = &self.sprites[self.units[goal as usize].sprite as usize];
+        let (gl, gu, gr, gd) = dims(self.units[goal as usize].unit_type);
+        let (ml, mu, mr, md) = dims(self.units[u as usize].unit_type);
+        let left = gs.x.wrapping_sub(gl).wrapping_add((-1i16).wrapping_sub(mr));
+        let top = gs.y.wrapping_sub(gu).wrapping_add((-1i16).wrapping_sub(md));
+        let bottom = gd.wrapping_add(gs.y);
+        let right = gr.wrapping_add(gs.x).wrapping_add(ml + 1).wrapping_add(mu + 1);
+        let (x, y) = p;
+        if x == left || x == right {
+            (top..=bottom).contains(&y)
+        } else {
+            (y == top || y == bottom) && (left..=right).contains(&x)
+        }
     }
 
     /// 0x4eb900: chase `target` unless recently ordered; give up when it is out of
@@ -358,14 +374,14 @@ impl State {
     }
 
     /// 0x476000: target acquisition range in tiles, with range upgrades.
-    fn acquisition_range(&self, d: &Data, u: u32) -> u32 {
+    pub(super) fn acquisition_range(&self, u: u32) -> u32 {
         let un = &self.units[u as usize];
         let t = un.unit_type;
         let p = un.player as usize;
         if matches!(t, 1 | 0x10 | 100 | 99 | 0x68) && un.status & 0x300 != 0 && un.order != 0x6b {
             return 0;
         }
-        let base = d.dat.units.target_acquisition_range[t as usize] as u32;
+        let base = self.acquisition[t as usize] as u32;
         let up = &self.players;
         match t {
             0 if up.upgrade_sc[p][0x10] != 0 => base + 1,
@@ -409,7 +425,7 @@ impl State {
     /// 0x443080: best enemy for `u` within its acquisition range (priority buckets,
     /// nearest within the best bucket).
     pub fn find_auto_target(&mut self, d: &Data, u: u32) -> u32 {
-        let mut range = self.acquisition_range(d, u);
+        let mut range = self.acquisition_range(u);
         let un = &self.units[u as usize];
         if un.status & 0x20 != 0 {
             range += 2;
@@ -989,7 +1005,7 @@ impl State {
     }
 
     /// 0x476fc0: order `u` to attack `t` with its attack order.
-    fn order_attack(&mut self, d: &Data, u: u32, mut t: u32, mark: bool) {
+    pub(super) fn order_attack(&mut self, d: &Data, u: u32, mut t: u32, mark: bool) {
         if self.units[t as usize].unit_type == 0x49 && self.units[t as usize].connected_unit != NIL {
             t = self.units[t as usize].connected_unit;
         }

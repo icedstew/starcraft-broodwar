@@ -99,6 +99,7 @@ fn main() -> std::io::Result<()> {
             let mut st = bw::State::new(dims, 0, 1700);
             st.search.init(&d);
             st.init_tech_defaults(&d);
+            st.init_acquisition_ranges(&d);
             st.init_psi(&l.psi_grp);
             st.init_thingies(&d);
             if let Some(chk) = &chk {
