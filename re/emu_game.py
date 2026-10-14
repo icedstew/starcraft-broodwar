@@ -119,6 +119,11 @@ def install_ptd(e):
 def game_init(e, f, md):
     """0x4eee00 with the scenario taken from memory (replay-style CHK, 0x4bf520)."""
     install_ptd(e)
+    # 0x4fc7f0: CRT static constructor of the per-player lists at 0x51a280 (freed when
+    # a player leaves, 0x48a1c0): empty-list sentinels, head + 8 = ~(head + 4). The
+    # harness does not run the CRT init table (its atexit needs CRT state).
+    for head in range(0x51a280, 0x51a2e0, 0xc):
+        e.w32(head + 8, ~(head + 4) & 0xffffffff)
     rd = lambda n: open(os.path.join(md, n), "rb").read()
     if os.environ.get("SCBW_REPLAY"):
         e.w8(0x58f440, 1)  # Brood War game (BW maps need it to load)
