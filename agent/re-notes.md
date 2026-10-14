@@ -47,6 +47,20 @@ storm.dll base 0x15000000). Long-standing notes are also in `re/NOTES.md`.
   2 burrowed (0x4ccf20), 4 lifted/in transit (0x4cc470), 8 hallucinated (0x4f6420),
   0x10 invincible.
 
+## Game start (verified against the real game's memory, tl1412)
+
+- 0x4ef100 seeds the RNG (0x51ca14 = 0x51ca10, which for replays is header +8) twice; the
+  second time right before 0x4eee00 loads the scenario. CHK units (0x4bf520) and the melee
+  start (0x49da40) are created with the RNG **on**: 133 draws each at create_unit's sites
+  0xe / 0xf on Python 1.1.
+- 0x4d9950 -> 0x4d9530 runs `game_step` **twice** (plus UI refresh 0x4d93f0) before the
+  frame loop; the frame counter stays 0. So frame f of the loop is the f+3-th step.
+- Replays: 0x4ef100 ends with vision 0x57f0b0 = 0xff, explored 0x57eeb8 = 0xff00,
+  0x6d0f18 = 0xff, 0x6d0f1c = 0. All eight players have 50 minerals (empty slots too).
+- With these, re/emu_game.py's replay mode equals the real game frame for frame
+  (`~/games/Starcraft/broodwar-reps-116/shots/tl1412/native/trace.txt`, frames 0-1500,
+  captured by `NATIVE_MODE=trace re/native_shots.sh`).
+
 ## Orders ported this session
 
 - 0x4f6420 make hallucination: counters -1 (0x488bf0(-1), 0x488d50(ecx=-1, score 1)),

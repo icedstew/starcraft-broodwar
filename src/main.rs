@@ -151,6 +151,9 @@ fn main() -> std::io::Result<()> {
                     println!("create {t} at ({x},{y}) p{p} -> {u:?}");
                 }
             }
+            // 0x4d9950 -> 0x4d9530: the game steps twice before the frame loop counts.
+            st.game_step(&d);
+            st.game_step(&d);
             if let Ok(m) = std::env::var("SCBW_MOVE") {
                 apply_moves(&mut st, &d, &made, &m);
             }

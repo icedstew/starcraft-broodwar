@@ -17,7 +17,7 @@ impl State {
         let units = self.live_selection(sel);
         let [u] = units[..] else { return };
         if self.can_research(d, u, tech as u16, player) == Ok(1) && self.start_research(d, u, tech) {
-            self.start_building_order(d, u, 0x4b);
+            self.start_order_now(d, u, 0x4b);
             // 0x68c1b0 / 0x68ac74 / 0x68c1f8 / 0x68c1e8: the command card is redrawn.
         }
     }
@@ -27,7 +27,7 @@ impl State {
         let units = self.live_selection(sel);
         let [u] = units[..] else { return };
         if self.can_upgrade(d, u, up as u16, player) == Ok(1) && self.start_upgrade(d, u, up) {
-            self.start_building_order(d, u, 0x4c);
+            self.start_order_now(d, u, 0x4c);
         }
     }
 
@@ -52,12 +52,6 @@ impl State {
         }
     }
 
-    /// 0x475310: start `order` now (no target), as research and upgrades do.
-    fn start_building_order(&mut self, d: &Data, u: u32, order: u8) {
-        self.units[u as usize].order_flags |= 1;
-        self.issue_order(d, u, order, true, (0, 0), NIL, 0xe4);
-        self.order_nothing(d, u);
-    }
 
     /// Cost check message of 0x42d0c0 / 0x454b70: the advisor sound is the local
     /// player's race's (0x57f1e2).
@@ -239,7 +233,7 @@ impl State {
             return;
         }
         if self.units[u as usize].order_queue_head == NIL {
-            self.start_building_order(d, u, d.dat.units.ai_return_to_idle[self.units[u as usize].unit_type as usize]);
+            self.start_order_now(d, u, d.dat.units.ai_return_to_idle[self.units[u as usize].unit_type as usize]);
         } else {
             self.units[u as usize].order_flags |= 1;
             self.order_nothing(d, u);

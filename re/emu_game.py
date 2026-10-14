@@ -89,6 +89,20 @@ class Files:
         return 1, 1
 
 
+def load_replay(path):
+    """`scbw repdump` output: {"seed", "players": [(p, type, race)], "cmds": [(frame, player, bytes)]}."""
+    r = {"players": [], "cmds": []}
+    for line in open(path):
+        w = line.split()
+        if w[0] == "seed":
+            r["seed"] = int(w[1], 0)
+        elif w[0] == "player":
+            r["players"].append((int(w[1]), int(w[2]), int(w[3])))
+        elif w[0] == "cmd":
+            r["cmds"].append((int(w[1]), int(w[2]), bytes.fromhex(w[3])))
+    return r
+
+
 def game_init(e, f, md):
     """0x4eee00 with the scenario taken from memory (replay-style CHK, 0x4bf520)."""
     rd = lambda n: open(os.path.join(md, n), "rb").read()
@@ -129,11 +143,24 @@ def game_init(e, f, md):
                 e.w32(0x63fec8, 0)
                 e.w32(0x63ff34, 0)
             elif name == "chk 4bf520":
+                rep = os.environ.get("SCBW_REPLAY")
+                if rep:
+                    # 0x4ef100 seeds the RNG from the replay header just before 0x4eee00
+                    # loads the scenario, whose units are created with the RNG on.
+                    r = load_replay(rep)
+                    for pl, ty, race in r["players"]:
+                        e.w8(0x57eee8 + pl * 0x24, ty)
+                        e.w8(0x57eee8 + pl * 0x24 + 1, race)
+                    e.w32(0x51ca14, r["seed"])
+                    e.w32(0x51ca18, 0)
+                    e.w32(0x6d11c8, 1)
                 e.w32(0x6d0f14, 1)
                 e.w32(0x6d0f24, p)
                 e.w32(0x6d0f20, len(chk))
                 r = e.call(0x4bf520)
-                e.w32(0x6d0f14, 0)
+                if not rep:
+                    e.w32(0x6d0f14, 0)
+                e.w32(0x6d11c8, 0)
                 print("  chk parse ->", r)
             elif what == "skip":
                 pass
@@ -364,19 +391,12 @@ def scenario(e, units, move, frames, out):
     if os.environ.get("SCBW_REPLAY"):
         # `scbw repdump` output: play the replay's game (0x4ef100 seeds the RNG from the
         # header, 0x487100 feeds each frame's commands to 0x4865d0).
-        replay = {"cmds": []}
-        for line in open(os.environ["SCBW_REPLAY"]):
-            w = line.split()
-            if w[0] == "seed":
-                replay["seed"] = int(w[1], 0)
-            elif w[0] == "player":
-                p, ty, race = int(w[1]), int(w[2]), int(w[3])
-                e.w8(0x57eee8 + p * 0x24, ty)
-                e.w8(0x57eee8 + p * 0x24 + 1, race)
-                e.w32(0x57f0f0 + p * 4, 50 if ty in (1, 2) else 0)
-                e.w32(0x57f120 + p * 4, 0)
-            elif w[0] == "cmd":
-                replay["cmds"].append((int(w[1]), int(w[2]), bytes.fromhex(w[3])))
+        replay = load_replay(os.environ["SCBW_REPLAY"])
+        for p, ty, race in replay["players"]:
+            e.w8(0x57eee8 + p * 0x24, ty)
+            e.w8(0x57eee8 + p * 0x24 + 1, race)
+            e.w32(0x57f0f0 + p * 4, 50)
+            e.w32(0x57f120 + p * 4, 0)
     if replay:
         for p in range(8, 12):
             e.w8(0x57eee8 + p * 0x24, 0)
@@ -392,16 +412,22 @@ def scenario(e, units, move, frames, out):
     e.write(0x4059e4, b"\xb8" + struct.pack("<I", ptd) + b"\xc3")
     if replay:
         e.w32(0x6d0f14, 1)
+        # The end of 0x4ef100 for replays: everyone's vision and exploration shown.
+        e.w32(0x6d0f18, 0xff)
+        e.w32(0x57f0b0, 0xff)
+        e.w32(0x6d0f1c, 0)
+        e.w32(0x57eeb8, 0xff00)
         e.w32(0x596bbc, e.alloc(0x20))  # replay writer, not recording while playing back
         for tbl in (0x6d1238, 0x6d1220):  # string tables (stat_txt, network): empty, so
             if not e.r32(tbl):              # messages fall back to the default string
                 e.w32(tbl, e.alloc(0x10))
-        e.w32(0x51ca14, replay["seed"])
-        e.w32(0x51ca18, 0)
         e.w8(0x596871, 2)
         e.w32(0x6d11c8, 1)
         e.call(0x49da40)
         e.w32(0x6d11c8, 0)
+        if os.environ.get("SCBW_RNGDBG"):
+            sites = struct.unpack("<256I", e.read(0x51c610, 0x400))
+            print("rngsites", " ".join(f"{i:#x}:{c}" for i, c in enumerate(sites) if c))
     melee = os.environ.get("SCBW_MELEE")
     if melee:  # "race,race,...": those players start a melee game (0x49da40, mode 2)
         races = [int(r) for r in melee.split(",")]
@@ -540,6 +566,9 @@ def scenario(e, units, move, frames, out):
                 mx, my = m
                 e.call(0x474c30, regs={"esi": UNITS + u * 0x150}, stack=[6, (my << 16) | (mx & 0xffff), 0])
 
+    # 0x4d9950 -> 0x4d9530: the game steps twice before the frame loop starts counting.
+    e.call(0x4d94b0)
+    e.call(0x4d94b0)
     apply_moves(move)
     move2, at = os.environ.get("SCBW_MOVE2"), int(os.environ.get("SCBW_AT", "0"))
     move2 = [parse_move(m) for m in move2.split(";") if m] if move2 else None

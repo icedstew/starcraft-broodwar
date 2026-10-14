@@ -70,7 +70,7 @@ impl State {
     }
 
     /// 0x476730 / the inline copy in 0x478540: `u` can attack `target` at all.
-    fn can_attack(&self, d: &Data, u: u32, target: u32, check_cloak: bool) -> bool {
+    pub(super) fn can_attack(&self, d: &Data, u: u32, target: u32, check_cloak: bool) -> bool {
         let un = &self.units[u as usize];
         if un.status & 0x400 != 0 || un.lockdown_timer != 0 || un.stasis_timer != 0 || un.maelstrom_timer != 0 || target == NIL {
             return false;

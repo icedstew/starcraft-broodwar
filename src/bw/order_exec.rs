@@ -703,9 +703,105 @@ impl State {
         todo_port!("inline", "EnterNydusCanal");
     }
 
-    /// 0x47c7b0: Follow.
-    fn order_follow(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x47c7b0", "Follow");
+    /// 0x47c7b0: Follow: keep close to the order target; enemies become a Guard order
+    /// (attack), a nydus canal / shield battery target hands over to their orders.
+    fn order_follow(&mut self, d: &Data, u: u32) {
+        let t = self.units[u as usize].order_target_unit;
+        if t == NIL {
+            if self.units[u as usize].order_queue_head != NIL {
+                self.units[u as usize].order_flags |= 1;
+                self.order_nothing(d, u);
+                return;
+            }
+            let o = if self.units[u as usize].ai != NIL { 0x9c } else { d.dat.units.ai_return_to_idle[self.units[u as usize].unit_type as usize] };
+            self.start_order_now(d, u, o);
+            return;
+        }
+        if self.units[u as usize].ai != NIL {
+            // AI units stop following when at full hit points.
+            let un = &self.units[u as usize];
+            let mut max = d.dat.units.hit_points[un.unit_type as usize] as i32 >> 8;
+            if max == 0 {
+                max = (un.hp + 0xff) >> 8;
+                if max == 0 {
+                    max = 1;
+                }
+            }
+            if (un.hp + 0xff) >> 8 == max {
+                self.order_done_or_next(d, u);
+                return;
+            }
+        }
+        if self.units[u as usize].order_state == 0 {
+            if !self.move_to_unit_aim(d, u, t) {
+                return;
+            }
+            match self.units[t as usize].unit_type {
+                0x86 => todo_port!("0x4e8c20", "following onto a nydus canal: EnterNyduscanal (0x2f)"),
+                0xac => todo_port!("0x493520", "following onto a shield battery: RechargeShieldsBattery (0x42)"),
+                _ => {}
+            }
+            self.units[u as usize].order_state = 1;
+        }
+        if self.units[u as usize].main_order_timer != 0 {
+            return;
+        }
+        self.units[u as usize].main_order_timer = 7;
+        // 0x47b910: not allied.
+        if self.is_enemy(u, t) && self.can_attack(d, u, t, true) {
+            self.start_order_now(d, u, 2);
+            return;
+        }
+        let air = self.units[u as usize].status & 4 != 0;
+        // 0x49cbb0: both in the same region group.
+        let same_group = || {
+            let (a, b) = (self.unit_sprite_pos(u), self.unit_sprite_pos(t));
+            let ra = super::path::region_at(&self.sai, a.0 as i32, a.1 as i32);
+            let rb = super::path::region_at(&self.sai, b.0 as i32, b.1 as i32);
+            self.sai.regions[ra as usize].group == self.sai.regions[rb as usize].group
+        };
+        if air || same_group() {
+            // 0x47b490: the target's owner is a rescuable or neutral (type 3 / 4) player.
+            let tt = self.player_type(self.units[t as usize].player);
+            if (tt == 3 || tt == 4) && !self.box_distance_within(d, u, 1, t) {
+                self.move_to_unit_aim(d, u, t);
+                return;
+            }
+            if !self.box_distance_within(d, u, 0x60, t) {
+                self.follow_move(d, u, t);
+                return;
+            }
+            if self.units[t as usize].status & 2 != 0 || self.units[u as usize].order_queue_head != NIL {
+                self.order_done_or_next(d, u);
+                return;
+            }
+        }
+        self.unit_halt_facing(d, u);
+    }
+
+    /// 0x475310 with order `o`: issue it now (no target) and start it.
+    pub(super) fn start_order_now(&mut self, d: &Data, u: u32, o: u8) {
+        self.units[u as usize].order_flags |= 1;
+        self.issue_order(d, u, o, true, (0, 0), NIL, 0xe4);
+        self.order_nothing(d, u);
+    }
+
+    /// 0x4eb900: follow `t` while it is in sight (within 0x1c0 when not seen),
+    /// unless the unit just got an order (+0xe3).
+    fn follow_move(&mut self, d: &Data, u: u32, t: u32) -> bool {
+        if self.units[u as usize].recent_order_timer != 0 {
+            return true;
+        }
+        let bit = 1u8 << (self.units[u as usize].player & 0x1f);
+        let seen = self.sprites[self.units[t as usize].sprite as usize].visibility & bit != 0;
+        if !seen && !self.box_distance_within(d, u, 0x1c0, t) {
+            if self.unit_at_move_target(u) != 1 {
+                return true;
+            }
+            self.order_done_or_next(d, u);
+            return false;
+        }
+        self.move_to_unit(d, u, t)
     }
 
     /// 0x4666a0: Carrier, CarrierFight, CarrierHoldPosition.

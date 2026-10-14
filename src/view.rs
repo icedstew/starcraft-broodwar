@@ -179,7 +179,12 @@ impl<'a> Scene<'a> {
             minimap.player_colors[p] = tm.get(c).copied().unwrap_or(0);
         }
         st.interface_colors = minimap.colors;
-        with_data(a, |d| minimap.refresh(d, &mut st));
+        with_data(a, |d| {
+            // 0x4d9950 -> 0x4d9530: the game steps twice before the frame loop counts.
+            st.game_step(d);
+            st.game_step(d);
+            minimap.refresh(d, &mut st)
+        });
         Ok(Scene { st, minimap, selected: Vec::new(), sent_selection: Vec::new(), card_menu: None, placing: None, targeting: None, error: 0, error_frames: 0, place_ok: false, drag_box: None, a, chk, ts, terrain, player_colors, local, shadow, dark, fog: crate::fog::Fog::new(), tselect, thpbar, remaps })
     }
 
@@ -657,9 +662,9 @@ fn new_game(a: &Assets, chk: &Chk, rep: Option<&crate::replay::Header>) -> io::R
             for (p, s) in h.slots.iter().enumerate().take(8) {
                 st.player_types[p] = s.kind;
                 st.player_races[p] = s.race;
-                if s.kind == 2 || s.kind == 1 {
-                    st.players.minerals[p] = 50;
-                }
+                // Melee starting resources go to all eight players, empty slots too (as
+                // the real game's memory shows; todo: the routine applying game settings).
+                st.players.minerals[p] = 50;
             }
             st.replay = true;
             // Header byte 0: 1 = Brood War (0x58f440).
@@ -698,7 +703,10 @@ fn new_game(a: &Assets, chk: &Chk, rep: Option<&crate::replay::Header>) -> io::R
             None => 1 << st.local_player,
         };
         st.init_alliances(Default::default());
+        // 0x4eee00 loads the scenario right after 0x4ef100 seeds the RNG, with it on.
+        st.rng.enabled = true;
         st.chk_units(d, units, Default::default());
+        st.rng.enabled = false;
         if melee {
             st.rng.enabled = true;
             st.melee_start_units(d, 2);
