@@ -158,11 +158,12 @@ impl<'a> Scene<'a> {
         }
         let tsname = map::TILESETS[chk.tileset()];
         let tbl = |n: &str| a.files.read(&format!("tileset/{tsname}/{n}.pcx")).map(|d| pcx(&d).2).unwrap_or_default();
-        // ponytail: shadow row 17 (~50% light) picked by brightness; confirm against the draw-func table in the decomp.
+        // Shadows (draw function 10, 0x40b6f0) use 0x5985a0: dark.pcx (loaded at
+        // 0x5973a0 by 0x4bddd0) row 0x12.
         let dark = tbl("dark");
         let mut shadow = [0u8; 256];
         for (i, s) in shadow.iter_mut().enumerate() {
-            *s = dark.get(17 * 256 + i).copied().unwrap_or(i as u8);
+            *s = dark.get(0x12 * 256 + i).copied().unwrap_or(i as u8);
         }
         // images.dat remapping ids 1..=7
         let remaps = ["ofire", "gfire", "bfire", "bexpl", "trans50", "red", "green"].map(tbl);
