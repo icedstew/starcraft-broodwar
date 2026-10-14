@@ -522,3 +522,33 @@ pub fn transport_panel(st: &State, d: &Data, strings: &[String], u: u32) -> Opti
     out.extend(base.into_iter().filter(|(id, _)| matches!(id, 1 | -7 | -5)));
     Some(out)
 }
+
+/// 0x427260 (eggs, cocoons, lurker eggs) and 0x4274a0 (carriers, reavers): an own egg
+/// shows the unit it becomes (17), its progress (16) and "Morphing" (-40); a carrier or
+/// reaver training shows the training queue. None otherwise (the unit panel applies).
+pub fn morph_panel(st: &State, d: &Data, strings: &[String], u: u32) -> Option<Vec<(i16, Show)>> {
+    let un = &st.units[u as usize];
+    let t = un.unit_type;
+    if !(st.replay || un.player == st.local_player) {
+        return None;
+    }
+    let keep = |v: Vec<(i16, Show)>| v.into_iter().filter(|(id, _)| matches!(id, 1 | -7 | -5));
+    match t {
+        0x24 | 0x3b | 0x61 if un.status & 0x4000_0000 == 0 => {
+            let q = un.build_queue[un.build_queue_slot as usize % 5];
+            let mut out = vec![
+                (16, Show::Progress(build_progress(st, d, u))),
+                (17, Show::Button { bg: 2, icon: q, cmdicon: true }),
+                (-40, Show::Text(stat(strings, race_index(d, t) + 0x303))),
+            ];
+            out.extend(keep(unit_panel(st, d, strings, u)));
+            Some(out)
+        }
+        0x48 | 0x52 | 0x53 | 0x51 if un.build_queue[un.build_queue_slot as usize % 5] <= 0x69 => {
+            let mut out = training_panel(st, d, strings, u);
+            out.extend(keep(unit_panel(st, d, strings, u)));
+            Some(out)
+        }
+        _ => None,
+    }
+}

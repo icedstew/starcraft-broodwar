@@ -635,6 +635,9 @@ impl<'a> Scene<'a> {
             if let Some(p) = crate::statdata::transport_panel(st, d, &ui.stat_txt, u) {
                 return Some((crate::statdata::Panel::Unit, p));
             }
+            if let Some(p) = crate::statdata::morph_panel(st, d, &ui.stat_txt, u) {
+                return Some((crate::statdata::Panel::Training, p));
+            }
             crate::statdata::building_panel(st, d, &ui.stat_txt, u).or_else(|| Some((crate::statdata::Panel::Unit, crate::statdata::unit_panel(st, d, &ui.stat_txt, u))))
         })
     }

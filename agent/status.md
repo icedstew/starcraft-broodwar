@@ -15,22 +15,29 @@ runtime from the user's 1.16.1 install (`~/Downloads/StarCraft-BroodWar_1.16.1`,
 
 ## Where the work is (updated 2026-10-14)
 
-**tl1412 replay** (`agent/tools/repcmp.sh <rep> <frames>`): the emulator equals the real
-1.16.1 (native traces, `re/native_trace_gdb.py`), and scbw equals the emulator through
-frame ~10379. Ported along the way this session: addons (addon.rs), transports / bunkers
-and Unload (transport.rs), siege mode (siege.rs), turret orders (TurretGuard /
-TurretAttack), StayInRange, WatchTarget, BunkerGuard, subunit death, damage overlays,
-splash damage (0x48b570), Repair, Patrol, worker resource release on death, resource
-holder removal (0x49f4a0), and the turret mode switch (0x49f6a0). Replay commands now
-run with the synced RNG on (as the turn loop 0x487191 does).
+**tl1412 replay**: scbw equals the emulator (which equals the real 1.16.1) for the whole
+game (24641 frames; the diff starts only where the native trace ends). Also with a
+follow camera (`SCBW_CAMERA`, see below).
 
-Debug aids: `SCBW_WATCH=<unit>` (per-frame line + main image anim/pc on stderr),
-`SCBW_FINDPOS=f,x,y` (unit indices at a position), `SCBW_RNGSITES_AT=f`, and
-`SCBW_RNGLOG_AT=f` (every RNG draw on frame f; the emulator also prints the iscript unit,
-image id, anim and pc for each).
+**Replay camera**: 1.16.1 replays keep no camera; `view::Follow` derives one from a
+player's commands (latest commanded point or the middle of a new selection).
+`scbw view <rep>` plays a replay following a player (Tab / F). `scbw repcam <rep> <out>`
+writes the per-frame screen positions (as 0x49c440 sets them; the screen tile feeds
+creep updates, so the sim depends on it). `SCBW_CAMERA` feeds them to reptrace /
+repshot / the emulator, `NATIVE_CAMERA` to re/native_shots.sh (gdb calls the game's
+0x49c440 after each draw / step). tl1412_p0 shots: mean 8% differing; late frames
+differ a lot: check against the native trace with camera (NATIVE_MODE=trace, running
+into shots/tl1412_p0/native/trace.txt) before blaming rendering.
 
-User requests still open: screenshot tests must become exact and follow a player's
-camera (lower priority: "focus on decomp"); selection target flash drawing.
+**UI** (statdata.cpp panels ported): unit 0x426f50, group 0x425960, building queue /
+research / upgrade, supply 0x427540, resources 0x426190, construction 0x4260c0,
+transports 0x427c90, eggs 0x427260, carriers 0x4274a0; command and info tooltips;
+unit voices; wireframe colors. Missing: replay progress panel 0x427a80, dark archon /
+archon panel 0x4273e0, specials 0x425ee0, powerups 0x426ee0, status button tooltips,
+shadows look off in screenshots (user report).
+
+Background runs: always run replays / compares / screenshot tests in the background
+with a copied binary (`SCBW=<copy>` for suite.sh / repcmp.sh) so rebuilding is safe.
 
 ## Next steps
 
