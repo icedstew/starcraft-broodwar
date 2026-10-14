@@ -7,6 +7,10 @@
 - Replays: `~/games/Starcraft/broodwar-reps/` (9 PvZ games, recorded by SC:R:
   they use the extended commands 0x60–0x63).
 - Their map: `~/games/Starcraft/broodwar-maps/Polypoid 1.65.scx`.
+- 1.16.1 replays: `~/games/Starcraft/broodwar-reps-116/` (15 pro/iCCup games from
+  Mar–May 2009, after 1.16.1's January 2009 release; from https://tl.net/replay/, ids in
+  the file names). Legacy format (PKWare-imploded sections); each embeds its map's
+  `scenario.chk`, so `view`/`shot`/`render` take the `.rep` directly as the map.
 
 ```sh
 cargo run --release -- rep ~/games/Starcraft/broodwar-reps/<file>.rep     # header and command summary

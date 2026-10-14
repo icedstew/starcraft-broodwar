@@ -1,8 +1,7 @@
 //! .rep replay reader (legacy, 1.18-1.20 and 1.21+ "seRS" formats).
 //!
 //! Container format and command sizes follow icza/screp (Apache-2.0):
-//! https://github.com/icza/screp. Legacy (pre-1.18) PKWare-compressed
-//! sections are not supported yet.
+//! https://github.com/icza/screp.
 
 use std::io::{self, Read};
 
@@ -28,7 +27,9 @@ impl Reader<'_> {
         Ok(b)
     }
 
-    /// One section: u32 checksum, u32 chunk count, then chunks (u32 len + data, zlib if it has a zlib header).
+    /// One section: u32 checksum, u32 chunk count, then chunks (u32 len + data) of up to
+    /// 0x2000 bytes each, compressed when shorter than that: zlib if it has a zlib header,
+    /// else PKWare implode (pre-1.18).
     fn section(&mut self, size: usize) -> io::Result<Vec<u8>> {
         if size == 0 {
             return Ok(Vec::new());
@@ -39,8 +40,11 @@ impl Reader<'_> {
         for _ in 0..chunks {
             let len = self.u32()? as usize;
             let c = self.bytes(len)?;
+            let want = (size - out.len().min(size)).min(0x2000);
             if len > 4 && c[0] == 0x78 && (u16::from_be_bytes([c[0], c[1]]) % 31) == 0 {
                 flate2::read::ZlibDecoder::new(c).read_to_end(&mut out)?;
+            } else if len < want {
+                out.extend(explode::explode(c).map_err(|e| err(format!("explode: {e:?}")))?);
             } else {
                 out.extend_from_slice(c);
             }
@@ -112,9 +116,6 @@ impl Replay {
             return Err(err("not a replay"));
         }
         let modern121 = d[12] == b's';
-        if !modern121 && d[28] != 0x78 {
-            return Err(err("legacy (pre-1.18) replays are not supported yet"));
-        }
         let mut r = Reader { d, pos: 0 };
         let id = r.section(4)?;
         if id != b"seRS" && id != b"reRS" {
@@ -129,7 +130,7 @@ impl Replay {
         }
         let cmds = r.sized_section()?;
         let chk = r.sized_section()?;
-        Ok(Replay { modern: true, header: parse_header(&h), commands: parse_commands(&cmds)?, chk })
+        Ok(Replay { modern: modern121 || d[28] == 0x78, header: parse_header(&h), commands: parse_commands(&cmds)?, chk })
     }
 }
 
