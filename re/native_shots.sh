@@ -11,12 +11,23 @@
 # gdb, xdotool and ImageMagick, and the 1.16.1 install (SCBW_INSTALL).
 set -e
 REP=$(realpath "$1"); OUT=$(realpath -m "$2"); EVERY=${3:-120}
-# NATIVE_FULL=1 also saves fNNNNNN_full.png: the whole screen with the interface.
-# NATIVE_CAMERA=<scbw repcam file> moves the screen like a player's camera.
+# By default the screen follows a player's camera: `scbw repcam` (player SCBW_FOLLOW,
+# default the first) writes <shots dir>/camera.txt, which the game then follows; set
+# NATIVE_CAMERA=<file> to use another, or NATIVE_CAMERA=none for the fixed start view.
+# Each shot is also saved as fNNNNNN_full.png, the whole screen with the interface
+# (NATIVE_FULL=0 to skip).
 # NATIVE_MODE=trace writes <shots dir>/native/trace.txt (re/native_trace_gdb.py, frames
 # up to CAP_END) instead of screenshots.
 MODE=${NATIVE_MODE:-shots}
 RE=$(dirname "$(realpath "$0")")
+NATIVE_FULL=${NATIVE_FULL-1}
+[ "$NATIVE_FULL" = 0 ] && NATIVE_FULL=
+mkdir -p "$OUT"
+if [ -z "$NATIVE_CAMERA" ]; then
+  "${SCBW:-$RE/../target/release/scbw}" repcam "$REP" "$OUT/camera.txt"
+  NATIVE_CAMERA=$OUT/camera.txt
+fi
+[ "$NATIVE_CAMERA" = none ] && NATIVE_CAMERA=
 GDBPY=$RE/native_shots_gdb.py
 [ "$MODE" = trace ] && GDBPY=$RE/native_trace_gdb.py
 INSTALL=${SCBW_INSTALL:-$HOME/Downloads/StarCraft-BroodWar_1.16.1}

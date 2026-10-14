@@ -429,7 +429,7 @@ fn main() -> std::io::Result<()> {
                     player_of[s.player_id as usize] = i as u8;
                 }
             }
-            let camera = load_camera();
+            let camera = load_camera_or(Some(&dir.join("camera.txt")));
             let last = shots.iter().map(|s| s.0).max().unwrap_or(0);
             let (w, h) = (640usize, 400usize);
             let mut report = String::new();
@@ -901,7 +901,19 @@ fn unit_trace(st: &bw::State, f: u32, u: u32) -> String {
 
 /// SCBW_CAMERA: a `scbw repcam` file; the screen position set after each frame.
 fn load_camera() -> std::collections::HashMap<u32, (i32, i32)> {
-    let Ok(path) = std::env::var("SCBW_CAMERA") else { return Default::default() };
+    load_camera_or(None)
+}
+
+/// SCBW_CAMERA, else `default` (repshot: <shots dir>/camera.txt, written by
+/// native_shots.sh, so ours follows the same camera as the native shots).
+fn load_camera_or(default: Option<&std::path::Path>) -> std::collections::HashMap<u32, (i32, i32)> {
+    let path = match std::env::var("SCBW_CAMERA") {
+        Ok(p) => std::path::PathBuf::from(p),
+        Err(_) => match default {
+            Some(p) if p.exists() => p.to_path_buf(),
+            _ => return Default::default(),
+        },
+    };
     std::fs::read_to_string(path)
         .unwrap_or_default()
         .lines()
