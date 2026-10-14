@@ -575,6 +575,11 @@ def scenario(e, units, move, frames, out):
     minimap = bool(os.environ.get("SCBW_MINIMAP"))
     if minimap:
         minimap_init(e, e.data_root)
+    camera = {}
+    if os.environ.get("SCBW_CAMERA"):  # a `scbw repcam` file: "frame x y"
+        for line in open(os.environ["SCBW_CAMERA"]):
+            f_, x_, y_ = map(int, line.split())
+            camera[f_] = (x_, y_)
     rnglog_at = os.environ.get("SCBW_RNGLOG_AT")
     cur = [0]
     if rnglog_at:
@@ -630,6 +635,14 @@ def scenario(e, units, move, frames, out):
                 apply_moves(move2)
             e.w32(0x57f23c, e.r32(0x57f23c) + 1)  # 0x4d9670 advances the frame first
             e.call(0x4d94b0)
+            if f in camera:
+                # 0x49c440 (its 0x49bfd0 scroll redraw is UI only): the screen position
+                # set after this frame's draw.
+                x, y = camera[f]
+                e.w32(0x62848c, x & ~7)
+                e.w16(0x57f1d0, x >> 5)
+                e.w32(0x6284a8, y & ~7)
+                e.w16(0x57f1d2, y >> 5)
             for u in made:
                 fo.write(unit_trace(e, f, u) + "\n")
             a = e.r32(0x628430)  # other units on the map (map-placed critters etc.)

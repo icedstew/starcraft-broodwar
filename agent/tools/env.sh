@@ -8,4 +8,4 @@ EXE=$W/sc116/StarCraft.exe          # clean 1.16.1 exe (code identical to the in
 DUMP=$W/dump/bw116n.c               # Ghidra decompile of EXE, one "// ==== 00addr name" per function
 DATA=$W/data116                     # 1.16.1 MPQ files extracted for the emulator (re/emu_game.py)
 INSTALL=${SCBW_INSTALL:-$HOME/Downloads/StarCraft-BroodWar_1.16.1}
-SCBW=$REPO/target/release/scbw
+SCBW=${SCBW:-$REPO/target/release/scbw}

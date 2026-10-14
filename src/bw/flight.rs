@@ -81,7 +81,7 @@ impl State {
             return;
         }
         if self.units[u as usize].ptr_at(0xc0) != NIL {
-            todo_port!("0x464930", "lifting off detaches the addon");
+            self.detach_addon(d, u);
         }
         // 0x47b2e0: town halls (and the other rally-capable types) rally to themselves.
         if matches!(t, 0x6a | 0x6f | 0x71 | 0x72 | 0x82 | 0x83 | 0x84 | 0x85 | 0x9a | 0xa0 | 0xa7 | 0x9b) {

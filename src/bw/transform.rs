@@ -305,4 +305,172 @@ impl State {
             }
         }
     }
+
+    /// 0x47c9f0: give `u` to `player`: the new owner gets the techs and upgrade levels
+    /// that matter to it (tables 0x5011ca / 0x5012e2), queues and research stop, and
+    /// the unit starts the new owner's idle order.
+    pub fn give_unit(&mut self, d: &Data, u: u32, player: u8) {
+        let t = self.units[u as usize].unit_type;
+        let old = self.units[u as usize].player as usize;
+        let p = player as usize;
+        // 0x4e2c00 with 0x47b3c0: techs the old owner has.
+        for (ty, techs) in GIVE_TECHS.iter().rev() {
+            if *ty != t {
+                continue;
+            }
+            for &tech in techs.iter().take_while(|&&x| x != 0x2c) {
+                let tech = tech as usize;
+                if self.players.tech_researched[old][tech] != 0 && self.players.tech_researched[p][tech] == 0 && (tech < 0x18 || self.is_expansion) {
+                    self.players.tech_researched[p][tech] = 1;
+                }
+            }
+        }
+        // 0x4e2b50 with 0x47b340: upgrade levels the old owner has.
+        for (ty, ups) in GIVE_UPGRADES.iter().rev() {
+            if *ty != t {
+                continue;
+            }
+            for &up in ups.iter().take_while(|&&x| x != 0x3d) {
+                let up = up as usize;
+                let lvl = self.players.upgrade_level(old as u8, up);
+                if self.players.upgrade_level(player, up) < lvl {
+                    if up < 0x2e {
+                        self.players.upgrade_sc[p][up] = lvl;
+                    } else if self.is_expansion {
+                        self.players.upgrade_bw[p][up - 0x2e] = lvl;
+                    }
+                }
+            }
+        }
+        // 0x49a7f0 (0x49f7a0: the local UI selection).
+        self.selections_remove_unit(u);
+        if self.units[u as usize].status & 2 != 0 {
+            let un = &self.units[u as usize];
+            if un.build_queue[un.build_queue_slot as usize % 5] < 0x6a {
+                self.clear_build_queue(d, u);
+                // 0x499d00(0x14, 1)
+                let s = self.units[u as usize].sprite;
+                self.sprite_images_run_anim(d, s, 0x14);
+            }
+            if self.units[u as usize].u8_at(0xc8) != 0x2c {
+                self.cancel_research(d, u);
+            }
+            if self.units[u as usize].u8_at(0xc9) != 0x3d {
+                self.cancel_upgrade(d, u);
+            }
+        }
+        if matches!(t, 0x48 | 0x52 | 0x53 | 0x51) {
+            self.clear_build_queue(d, u);
+        }
+        self.change_owner(d, u, player, true);
+        if player < 8 {
+            self.set_unit_colors(d, u, player);
+        }
+        // 0x4e2b50 with 0x47b940: the new owner's upgrades take effect.
+        for (ty, ups) in GIVE_UPGRADES.iter().rev() {
+            if *ty != t {
+                continue;
+            }
+            for &up in ups.iter().take_while(|&&x| x != 0x3d) {
+                if self.players.upgrade_level(self.units[u as usize].player, up as usize) != 0 {
+                    let pl = self.units[u as usize].player;
+                    self.apply_upgrade(d, pl, up as u8);
+                }
+            }
+        }
+        let un = &self.units[u as usize];
+        let c = un.current_build_unit;
+        let building_addon = un.secondary_order == 0x25 && un.status & 2 != 0 && c != NIL && self.units[c as usize].status & 1 == 0;
+        if !building_addon
+            && un.status & 1 != 0
+            && d.dat.units.flags[t as usize] & 0x800 == 0
+            && !matches!(t, 0x49 | 0x55 | 0xe)
+            && un.status & 0x40 == 0
+        {
+            let o = match self.player_types[p] {
+                1 => d.dat.units.ai_computer_idle[t as usize],
+                3 => 0xa1,
+                7 => 0xa2,
+                _ => d.dat.units.ai_human_idle[t as usize],
+            };
+            self.order_now(d, u, o);
+        }
+    }
+
+    /// 0x464930: a lifting building lets go of its addon, which becomes neutral (0x47cb90).
+    pub fn detach_addon(&mut self, d: &Data, b: u32) {
+        let a = self.units[b as usize].ptr_at(0xc0);
+        let un = &self.units[a as usize];
+        let c = un.current_build_unit;
+        if un.secondary_order == 0x25 && un.status & 2 != 0 && c != NIL && self.units[c as usize].status & 1 == 0 {
+            self.cancel_unit(d, c);
+        }
+        self.give_unit(d, a, 0xb);
+        if self.units[a as usize].status & 0x4000_0000 == 0 {
+            self.set_secondary_order(a, 0x17);
+        }
+        self.units[b as usize].set_ptr_at(0xc0, NIL);
+        // 0x48f8a0: the "addon detached" sound (UI).
+        let saved = self.iscript_unit;
+        self.iscript_unit = Some(a);
+        let s = self.units[a as usize].sprite;
+        self.sprite_images_run_anim(d, s, 0x12);
+        self.iscript_unit = saved;
+    }
 }
+
+/// 0x5011ca: unit types and the techs (up to 5, 0x2c ends) a new owner gets from them.
+const GIVE_TECHS: [(u16, [u16; 5]); 23] = [
+    (0x0, [0x0, 0x2c, 0, 0, 0]),
+    (0x20, [0x0, 0x2c, 0, 0, 0]),
+    (0x9, [0x6, 0x7, 0x2, 0x2c, 0]),
+    (0x1, [0x1, 0xa, 0x2c, 0, 0]),
+    (0x2, [0x3, 0x2c, 0, 0, 0]),
+    (0x5, [0x5, 0x2c, 0, 0, 0]),
+    (0x1e, [0x5, 0x2c, 0, 0, 0]),
+    (0x8, [0x9, 0x2c, 0, 0, 0]),
+    (0xc, [0x8, 0x2c, 0, 0, 0]),
+    (0x2d, [0xc, 0x12, 0xd, 0x11, 0x2c]),
+    (0x25, [0xb, 0x2c, 0, 0, 0]),
+    (0x26, [0xb, 0x2c, 0, 0, 0]),
+    (0x29, [0xb, 0x2c, 0, 0, 0]),
+    (0x32, [0xb, 0x2c, 0, 0, 0]),
+    (0x2e, [0xb, 0xe, 0xf, 0x10, 0x2c]),
+    (0x43, [0x17, 0x13, 0x14, 0x2c, 0]),
+    (0x47, [0x15, 0x16, 0x2c, 0, 0]),
+    (0x22, [0x22, 0x18, 0x1e, 0x2c, 0]),
+    (0x3c, [0x19, 0x2c, 0, 0, 0]),
+    (0x3d, [0x1c, 0x2c, 0, 0, 0]),
+    (0x3f, [0x1b, 0x1d, 0x1f, 0x2c, 0]),
+    (0x67, [0x20, 0x2c, 0, 0, 0]),
+    (0x26, [0x20, 0x2c, 0, 0, 0]),
+];
+
+/// 0x5012e2: unit types and the upgrades (up to 4, 0x3d ends) a new owner gets.
+const GIVE_UPGRADES: [(u16, [u16; 4]); 25] = [
+    (0x0, [0x10, 0x3d, 0, 0]),
+    (0x2, [0x11, 0x3d, 0, 0]),
+    (0x9, [0x13, 0x3d, 0, 0]),
+    (0x1, [0x14, 0x15, 0x3d, 0]),
+    (0x8, [0x16, 0x3d, 0, 0]),
+    (0xc, [0x17, 0x3d, 0, 0]),
+    (0x2a, [0x18, 0x19, 0x1a, 0x3d]),
+    (0x25, [0x1b, 0x1c, 0x3d, 0]),
+    (0x26, [0x1d, 0x1e, 0x3d, 0]),
+    (0x2d, [0x1f, 0x3d, 0, 0]),
+    (0x2e, [0x20, 0x3d, 0, 0]),
+    (0x42, [0x21, 0x3d, 0, 0]),
+    (0x41, [0x22, 0x3d, 0, 0]),
+    (0x53, [0x23, 0x24, 0x3d, 0]),
+    (0x45, [0x25, 0x3d, 0, 0]),
+    (0x54, [0x26, 0x27, 0x3d, 0]),
+    (0x43, [0x28, 0x3d, 0, 0]),
+    (0x46, [0x29, 0x2a, 0x3d, 0]),
+    (0x48, [0x2b, 0x3d, 0, 0]),
+    (0x47, [0x2c, 0x3d, 0, 0]),
+    (0x3, [0x36, 0x3d, 0, 0]),
+    (0x27, [0x35, 0x34, 0x3d, 0]),
+    (0x22, [0x33, 0x3d, 0, 0]),
+    (0x3f, [0x31, 0x3d, 0, 0]),
+    (0x3c, [0x2f, 0x3d, 0, 0]),
+];

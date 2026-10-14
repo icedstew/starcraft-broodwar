@@ -805,7 +805,11 @@ pub fn compose_with_cursor(
     if let [u] = scene.selected[..] {
         let mu = &scene.st.units[u as usize];
         let kind = mu.unit_type as usize;
-        crate::ui::draw_grp_rgb(&ui.wireframe, kind, 170, 390, pal, out, w, h);
+        // 0x4568f0: the frame is the shown type's (0 past the grp's frames).
+        let wt = crate::ui::wire_type(&scene.st, u) as usize;
+        let frame = if wt < ui.wireframe.frame_count() { wt } else { 0 };
+        let colors = with_data(scene.a, |d| crate::ui::wireframe_colors(&scene.st, d, u, &ui.twire));
+        crate::ui::draw_grp_rgb_blend(&ui.wireframe, frame, 170, 390, pal, out, w, h, crate::grp::Blend::Colors(&colors));
         let name = ui.stat_txt.get(kind).map_or("", |s| s.split('\0').next().unwrap_or(""));
         ui.font.draw(name, 260, 392, ui.text_color(2), pal, out, w, h);
         let max = scene.a.dat().units.hit_points[kind] >> 8;
@@ -928,9 +932,103 @@ fn key_char(k: minifb::Key) -> Option<char> {
     keys.iter().position(|&x| x == k).map(|i| (b'a' + i as u8) as char)
 }
 
+/// Where a replay viewer's camera looks for one player. 1.16.1 replays don't record
+/// the camera, so it follows what the player does: the map point of their latest
+/// positional command (right-click, targeted order, build, lift) or, after a
+/// selection, the middle of what they selected.
+pub struct Follow {
+    pub player: u8,
+    pub focus: Option<(i32, i32)>,
+}
+
+impl Follow {
+    /// Update the focus after `player` sent packet `p` (already executed).
+    pub fn command(&mut self, st: &bw::State, player: u8, p: &[u8]) {
+        if player != self.player {
+            return;
+        }
+        let u16_at = |o: usize| p.get(o..o + 2).map_or(0, |b| u16::from_le_bytes([b[0], b[1]])) as i32;
+        match p.first() {
+            Some(0x14 | 0x15 | 0x2f) => self.focus = Some((u16_at(1), u16_at(3))),
+            Some(0x0c) => self.focus = Some((u16_at(2) * 32 + 16, u16_at(4) * 32 + 16)),
+            Some(0x09 | 0x0a | 0x0b) => {
+                let sel = bw::select::selection_units(&st.selections[player as usize]);
+                if !sel.is_empty() {
+                    let n = sel.len() as i32;
+                    let (sx, sy) = sel.iter().fold((0, 0), |(x, y), &u| {
+                        let s = &st.sprites[st.units[u as usize].sprite as usize];
+                        (x + s.x as i32, y + s.y as i32)
+                    });
+                    self.focus = Some((sx / n, sy / n));
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// A replay being played in the viewer: its commands and the camera that follows one
+/// of its players.
+pub struct ReplayPlay {
+    pub rep: crate::replay::Replay,
+    pub player_of: [u8; 256],
+    pub players: Vec<u8>,
+    pub next: usize,
+    pub frame: u32,
+    pub follow: Follow,
+}
+
+impl ReplayPlay {
+    pub fn new(rep: crate::replay::Replay) -> ReplayPlay {
+        let mut player_of = [0u8; 256];
+        let mut players = Vec::new();
+        for (i, s) in rep.header.slots.iter().enumerate() {
+            if s.kind == 1 || s.kind == 2 {
+                player_of[s.player_id as usize] = i as u8;
+                players.push(i as u8);
+            }
+        }
+        let first = std::env::var("SCBW_FOLLOW").ok().and_then(|v| v.parse().ok()).unwrap_or_else(|| players.first().copied().unwrap_or(0));
+        ReplayPlay { rep, player_of, players, next: 0, frame: 0, follow: Follow { player: first, focus: None } }
+    }
+
+    /// Ease the camera (top-left of a `vw` x `vh` map view) a quarter of the way toward
+    /// the followed player's focus; unchanged until they have one.
+    pub fn camera_step(&self, cam: (i32, i32), vw: i32, vh: i32) -> (i32, i32) {
+        let Some((fx, fy)) = self.follow.focus else { return cam };
+        let (tx, ty) = (fx - vw / 2, fy - vh / 2);
+        (cam.0 + (tx - cam.0) / 4, cam.1 + (ty - cam.1) / 4)
+    }
+
+    /// Run this frame's commands.
+    pub fn commands(&mut self, scene: &mut Scene) {
+        while self.next < self.rep.commands.len() && self.rep.commands[self.next].frame <= self.frame {
+            let c = &self.rep.commands[self.next];
+            let p = self.player_of[c.player as usize];
+            scene.replay_command(p, &c.data);
+            self.follow.command(&scene.st, p, &c.data);
+            self.next += 1;
+        }
+        self.frame += 1;
+    }
+}
+
 pub fn run(a: &Assets, chk: Chk) -> io::Result<()> {
+    run_with(a, Scene::new(a, chk)?, None)
+}
+
+/// Watch a replay; the camera follows a player (Tab: next player, F: follow on/off).
+pub fn run_replay(a: &Assets, rep: crate::replay::Replay) -> io::Result<()> {
+    let scene = Scene::from_replay(a, &rep)?;
+    run_with(a, scene, Some(ReplayPlay::new(rep)))
+}
+
+fn run_with(a: &Assets, mut scene: Scene, mut replay: Option<ReplayPlay>) -> io::Result<()> {
     use minifb::{Key, Scale, Window, WindowOptions};
-    let mut scene = Scene::new(a, chk)?;
+    let mut following = replay.is_some();
+    if let Some(rp) = replay.as_ref() {
+        scene.local = rp.follow.player;
+    }
     let race = ["zerg", "terran", "protoss"][scene.local_race()];
     let ui = crate::ui::Ui::load(&a.files, race).ok();
     let mut audio = crate::audio::Audio::open(&a.files);
@@ -984,6 +1082,18 @@ pub fn run(a: &Assets, chk: Chk) -> io::Result<()> {
                 scene.hotkey(if ctrl { 0 } else if shift { 2 } else { 1 }, g as u8);
                 continue;
             }
+            if let Some(rp) = replay.as_mut() {
+                match k {
+                    Tab => {
+                        let i = rp.players.iter().position(|&p| p == rp.follow.player).map_or(0, |i| (i + 1) % rp.players.len().max(1));
+                        rp.follow = Follow { player: rp.players.get(i).copied().unwrap_or(0), focus: None };
+                        following = true;
+                    }
+                    F => following = !following,
+                    _ => {}
+                }
+                continue;
+            }
             let Some(c) = key_char(k) else { continue };
             if let Some((b, _)) = card.iter().flatten().find(|(b, en)| *en && hotkey(ui.as_ref(), b) == Some(c)) {
                 pressed = Some(*b);
@@ -995,7 +1105,7 @@ pub fn run(a: &Assets, chk: Chk) -> io::Result<()> {
             }
         }
         let on_card = clicked && cy >= vh - 120 && !on_minimap_pt(cx, cy);
-        if let Some(btn) = pressed {
+        if let Some(btn) = pressed.filter(|_| replay.is_none()) {
             scene.press(&btn, shift);
         }
         if scene.placing.is_some() {
@@ -1051,6 +1161,8 @@ pub fn run(a: &Assets, chk: Chk) -> io::Result<()> {
         let rdown = win.get_mouse_down(minifb::MouseButton::Right);
         if rdown && !rmb_was_down && (scene.targeting.take().is_some() || scene.placing.take().is_some()) {
             // Right-click cancels targeting / placement.
+        } else if replay.is_some() {
+            // Watching a replay: no commands.
         } else if rdown && !rmb_was_down && cy < vh - 120 {
             scene.right_click(map_pt, shift);
         } else if rdown && !rmb_was_down && on_minimap_pt(cx, cy) {
@@ -1065,6 +1177,17 @@ pub fn run(a: &Assets, chk: Chk) -> io::Result<()> {
         vy = vy.clamp(0, (mh - vh + 120).max(0)); // console covers the bottom
         // 0x57f1d0: the screen position in tiles.
         scene.st.screen_tile = ((vx.max(0) / 32) as u16, (vy.max(0) / 32) as u16);
+        if let Some(rp) = replay.as_mut() {
+            rp.commands(&mut scene);
+            // The followed player's view: their selection is shown.
+            scene.selected = bw::select::selection_units(&scene.st.selections[rp.follow.player as usize]).to_vec();
+            scene.local = rp.follow.player;
+            if following {
+                (vx, vy) = rp.camera_step((vx, vy), vw, vh - 120);
+                vx = vx.clamp(0, (mw - vw).max(0));
+                vy = vy.clamp(0, (mh - vh + 120).max(0));
+            }
+        }
         for (id, x, y) in scene.step() {
             // ponytail: on-screen only, no distance falloff or per-frame voice limits yet.
             if let Some(au) = &audio {

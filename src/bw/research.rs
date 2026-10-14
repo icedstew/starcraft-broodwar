@@ -124,6 +124,39 @@ impl State {
         true
     }
 
+    /// 0x453dd0: a dying building drops its research, refunding 3/4 (0x453d30).
+    pub(super) fn abort_research(&mut self, d: &Data, u: u32) {
+        let tech = self.units[u as usize].u8_at(0xc8);
+        if tech == NO_TECH {
+            return;
+        }
+        let t = tech as usize;
+        let p = self.units[u as usize].player as usize;
+        self.players.minerals[p] += (d.dat.techdata.mineral_cost[t] as i32 * 3) >> 2;
+        self.players.gas[p] += (d.dat.techdata.gas_cost[t] as i32 * 3) >> 2;
+        self.players.research_in_progress[p][t >> 3] &= !(1 << (t & 7));
+        let un = &mut self.units[u as usize];
+        un.set_u8_at(0xc8, NO_TECH);
+        un.set_u16_at(0xc6, 0);
+    }
+
+    /// 0x454220: a dying building drops its upgrade, refunding 3/4 (0x4540b0).
+    pub(super) fn abort_upgrade(&mut self, d: &Data, u: u32) {
+        let up = self.units[u as usize].u8_at(0xc9);
+        if up == NO_UPGRADE {
+            return;
+        }
+        let p = self.units[u as usize].player;
+        let (m, g, _) = self.upgrade_cost(d, p, up);
+        self.players.minerals[p as usize] += (m as u16 as i32 * 3) >> 2;
+        self.players.gas[p as usize] += (g as u16 as i32 * 3) >> 2;
+        self.players.upgrade_in_progress[p as usize][(up >> 3) as usize] &= !(1 << (up & 7));
+        let un = &mut self.units[u as usize];
+        un.set_u8_at(0xc9, NO_UPGRADE);
+        un.set_u16_at(0xc6, 0);
+        un.set_u8_at(0xcd, 0);
+    }
+
     /// 0x453e30: stop the research in `u` and refund it.
     pub fn cancel_research(&mut self, d: &Data, u: u32) {
         let tech = self.units[u as usize].u8_at(0xc8);

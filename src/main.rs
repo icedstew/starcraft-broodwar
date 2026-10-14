@@ -263,7 +263,11 @@ fn main() -> std::io::Result<()> {
         }
         Some("view") => {
             let a = view::Assets::load(files)?;
-            view::run(&a, load_chk(&args[1])?)?;
+            if args[1].to_ascii_lowercase().ends_with(".rep") {
+                view::run_replay(&a, replay::Replay::parse(&std::fs::read(&args[1])?)?)?;
+            } else {
+                view::run(&a, load_chk(&args[1])?)?;
+            }
         }
         Some("repdump") => {
             // repdump <rep> <out>: the replay's game setup and commands as text, for
@@ -299,6 +303,7 @@ fn main() -> std::io::Result<()> {
                 }
             }
             let mut ci = 0;
+            let camera = load_camera();
             use std::io::Write;
             for f in 0..frames {
                 while ci < r.commands.len() && r.commands[ci].frame <= f {
@@ -308,6 +313,9 @@ fn main() -> std::io::Result<()> {
                 }
                 scene.st.rng.log = std::env::var("SCBW_RNGLOG_AT").is_ok_and(|v| v == f.to_string());
                 scene.step();
+                if let Some(&(x, y)) = camera.get(&f) {
+                    scene.st.screen_tile = ((x >> 5) as u16, (y >> 5) as u16);
+                }
                 let st = &scene.st;
                 let mut u = st.visible_units.head;
                 while u != bw::list::NIL {
@@ -353,6 +361,35 @@ fn main() -> std::io::Result<()> {
                 }
             }
         }
+        Some("repcam") => {
+            // repcam <rep> <out> [frames]: headless. The camera following a player
+            // (SCBW_FOLLOW, default the first) as "frame x y" lines: the screen position
+            // 1.16.1's 0x49c440 sets after that frame's draw (clamped to the map, 8-pixel
+            // aligned). Fed to native_shots.sh, the emulator and scbw (SCBW_CAMERA).
+            let a = view::Assets::load(files)?;
+            let r = replay::Replay::parse(&std::fs::read(&args[1])?)?;
+            let frames: u32 = args.get(3).and_then(|v| v.parse().ok()).unwrap_or(r.header.frames);
+            let mut scene = view::Scene::from_replay(&a, &r)?;
+            let (mw, mh) = (scene.st.map_px.0 as i32 / 32, scene.st.map_px.1 as i32 / 32);
+            let (maxx, maxy) = ((mw - 20) * 32, (mh - 12) * 32 + 8);
+            let start = scene.st.start_locations[std::env::var("SCBW_FOLLOW").ok().and_then(|v| v.parse::<usize>().ok()).unwrap_or(0)];
+            let mut cam = (start.0 as i32 - 320, start.1 as i32 - 200);
+            let mut rp = view::ReplayPlay::new(r);
+            let mut out = String::new();
+            for f in 0..frames {
+                rp.commands(&mut scene);
+                scene.step();
+                if rp.follow.focus.is_none() {
+                    continue;
+                }
+                cam = rp.camera_step(cam, 640, 400);
+                // 0x49c440
+                let (cx, cy) = (cam.0.clamp(0, maxx), cam.1.clamp(0, maxy));
+                scene.st.screen_tile = ((cx >> 5) as u16, (cy >> 5) as u16);
+                out += &format!("{f} {} {}\n", cx & !7, cy & !7);
+            }
+            std::fs::write(&args[2], out)?;
+        }
         Some("repshot") => {
             // repshot <rep> <shots dir>: play the replay and draw the game screen at each
             // frame listed in <dir>/native/meta.txt ("frame screen_x screen_y", captured from
@@ -377,6 +414,7 @@ fn main() -> std::io::Result<()> {
                     player_of[s.player_id as usize] = i as u8;
                 }
             }
+            let camera = load_camera();
             let last = shots.iter().map(|s| s.0).max().unwrap_or(0);
             let (w, h) = (640usize, 400usize);
             let mut report = String::new();
@@ -391,6 +429,9 @@ fn main() -> std::io::Result<()> {
                     ci += 1;
                 }
                 scene.step();
+                if let Some(&(x, y)) = camera.get(&frame) {
+                    scene.st.screen_tile = ((x >> 5) as u16, (y >> 5) as u16);
+                }
                 let f = scene.st.frame;
                 let Some(&(_, sx, sy)) = shots.iter().find(|s| s.0 == f) else { continue };
                 let mut idx = vec![0u8; w * h];
@@ -754,6 +795,19 @@ fn unit_trace(st: &bw::State, f: u32, u: u32) -> String {
         if un.order_target_unit == bw::list::NIL { "-".to_string() } else { un.order_target_unit.to_string() },
         s.visibility
     )
+}
+
+/// SCBW_CAMERA: a `scbw repcam` file; the screen position set after each frame.
+fn load_camera() -> std::collections::HashMap<u32, (i32, i32)> {
+    let Ok(path) = std::env::var("SCBW_CAMERA") else { return Default::default() };
+    std::fs::read_to_string(path)
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| {
+            let v: Vec<i32> = l.split_whitespace().filter_map(|n| n.parse().ok()).collect();
+            (v.len() == 3).then(|| (v[0] as u32, (v[1], v[2])))
+        })
+        .collect()
 }
 
 fn load_chk(path: &str) -> std::io::Result<map::Chk> {

@@ -746,8 +746,8 @@ impl State {
     }
 
     /// 0x4f6fa0: Attack2, MoveToInfest, MoveToRepair, CarrierMoveToAttack, ReaverMoveToAttack, Harvest2, MoveToFireYamatoGun.
-    fn order_attack2(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x4f6fa0", "Attack2, MoveToInfest, MoveToRepair, CarrierMoveToAttack, ReaverMoveToAttack, Harvest2, MoveToFireYamatoGun");
+    fn order_attack2(&mut self, d: &Data, u: u32) {
+        self.order_obscured(d, u);
     }
 
     /// 0x477d00: AttackFixedRange.

@@ -495,6 +495,53 @@ impl State {
         }
     }
 
+    /// 0x4f6fa0: orders given on a remembered (fogged) unit (Attack2, MoveToInfest,
+    /// MoveToRepair, ...): walk to the spot (movable units), and once it is seen give
+    /// the real order (orders.dat "obscured order") on what is there.
+    pub(super) fn order_obscured(&mut self, d: &Data, u: u32) {
+        let p = self.units[u as usize].order_target_pos;
+        match self.units[u as usize].order_state {
+            0 => {
+                if self.units[u as usize].status & 0x2_0000 != 0 {
+                    let ok = self.set_move_target_xy(d, u, p);
+                    let f = &mut self.units[u as usize].fl;
+                    if f.next_target_waypoint != p {
+                        f.next_target_waypoint = p;
+                    }
+                    if !ok {
+                        return;
+                    }
+                }
+                self.units[u as usize].order_state = 1;
+            }
+            1 => {
+                let i = (p.1 as i32 / 32) * self.terrain.width as i32 + p.0 as i32 / 32;
+                let player = self.units[u as usize].player;
+                if self.terrain.tile_flags[i as usize] & (1 << (player & 0x1f)) != 0 {
+                    return;
+                }
+                let ty = self.units[u as usize].order_unit_type;
+                let t = self.fog_unit_at(d, p, ty);
+                if t != NIL {
+                    let ut = self.units[u as usize].unit_type as usize;
+                    let mut o = d.dat.orders.obscured_order[self.units[u as usize].order as usize];
+                    if o == 8 {
+                        o = d.dat.units.ai_attack_unit[ut];
+                        let sub = self.units[u as usize].subunit;
+                        if sub != NIL && d.dat.units.flags[self.units[sub as usize].unit_type as usize] & 0x10 != 0 {
+                            let so = d.dat.units.ai_attack_unit[self.units[sub as usize].unit_type as usize];
+                            self.queue_front_target(d, sub, so, t);
+                            self.order_done_or_next(d, sub);
+                        }
+                    }
+                    self.queue_front_target(d, u, o, t);
+                }
+                self.order_done_or_next(d, u);
+            }
+            _ => {}
+        }
+    }
+
     /// 0x455f20: right-click again on the unit of type `ty` now seen at `p`.
     fn right_click_revealed(&mut self, d: &Data, u: u32, p: (i16, i16), ty: u16) {
         let action = self.right_click_action(d, u);

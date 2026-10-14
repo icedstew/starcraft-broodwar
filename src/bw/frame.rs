@@ -321,7 +321,19 @@ impl State {
         }
         let gf = d.dat.units.staredit_group_flags[ut];
         if gf & 5 == 0 && gf & 2 != 0 && (self.units[u as usize].status & 2 != 0 || d.dat.units.flags[ut] & 0x20 != 0) {
-            todo_port!("0x4022c0/0x4797b0", "terran building burn-down when hp < 1/3");
+            // 0x4022c0: under 34% hp, Terran buildings burn 0x14 (fp8) a frame.
+            let un = &self.units[u as usize];
+            let mut max = d.dat.units.hit_points[ut] as i32 >> 8;
+            if max == 0 {
+                max = (un.hp + 0xff) >> 8;
+                if max == 0 {
+                    max = 1;
+                }
+            }
+            if ((((un.hp + 0xff) >> 8) * 100) / max) < 0x22 {
+                let p = un.last_attacking_player;
+                self.apply_damage_pub(d, u, 0x14, NIL, p, true);
+            }
         }
     }
 

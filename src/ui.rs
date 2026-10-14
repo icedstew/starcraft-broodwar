@@ -116,6 +116,8 @@ pub struct Ui {
     /// The cursors in 1.16.1's order (0x512708, loaded by 0x4d1560).
     pub cursors: Vec<Grp>,
     pub wireframe: Grp,
+    /// game\twire.pcx (0x68c208): the 24 wireframe colors.
+    pub twire: Vec<u8>,
     pub cmdicons: Grp,
     /// ticon.pcx: 6 states x 16 colors for command icons.
     pub ticon: Vec<u8>,
@@ -150,6 +152,7 @@ impl Ui {
         let icons = Grp::parse(files.read("game/icons.grp")?);
         let cursors = CURSORS.iter().map(|n| files.read(&format!("cursor/{n}")).map(Grp::parse)).collect::<io::Result<Vec<_>>>()?;
         let wireframe = Grp::parse(files.read("unit/wirefram/wirefram.grp")?);
+        let twire = crate::view::pcx(&files.read("game/twire.pcx")?).2;
         let cmdicons = Grp::parse(files.read("unit/cmdbtns/cmdicons.grp")?);
         let ticon = crate::view::pcx(&files.read("unit/cmdbtns/ticon.pcx")?).2;
         let stat_txt = crate::dat::parse_tbl(&files.read("rez/stat_txt.tbl")?);
@@ -159,7 +162,7 @@ impl Ui {
         let cmdbtns = Grp::parse(files.read(&format!("unit/cmdbtns/{r}cmdbtns.grp"))?);
         let pbar_empty = pcx_rgba(&files.read(&format!("game/{r}pbrempt.pcx"))?)?;
         let pbar_full = pcx_rgba(&files.read(&format!("game/{r}pbrfull.pcx"))?)?;
-        Ok(Ui { console, font, icons, cursors, wireframe, cmdicons, ticon, stat_txt, text_colors, statdata, cmdbtns, pbar_empty, pbar_full })
+        Ok(Ui { console, font, icons, cursors, wireframe, twire, cmdicons, ticon, stat_txt, text_colors, statdata, cmdbtns, pbar_empty, pbar_full })
     }
 
     pub fn text_color(&self, c: usize) -> &[u8] {
@@ -199,9 +202,14 @@ impl Ui {
 
 /// Draw a palette-indexed GRP frame onto an RGB buffer (via a scratch buffer).
 pub fn draw_grp_rgb(grp: &Grp, frame: usize, x: i32, y: i32, pal: &[[u8; 3]; 256], dst: &mut [u32], dw: i32, dh: i32) {
+    draw_grp_rgb_blend(grp, frame, x, y, pal, dst, dw, dh, Blend::Normal);
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn draw_grp_rgb_blend(grp: &Grp, frame: usize, x: i32, y: i32, pal: &[[u8; 3]; 256], dst: &mut [u32], dw: i32, dh: i32, blend: Blend) {
     let (w, h) = (grp.w, grp.h);
     let mut tmp = vec![0u8; (w * h) as usize];
-    grp.draw(frame, false, 0, 0, &mut tmp, w, h, Blend::Normal);
+    grp.draw(frame, false, 0, 0, &mut tmp, w, h, blend);
     for (i, &c) in tmp.iter().enumerate() {
         let (px, py) = (x + i as i32 % w, y + i as i32 / w);
         if c != 0 && px >= 0 && py >= 0 && px < dw && py < dh {
@@ -209,4 +217,63 @@ pub fn draw_grp_rgb(grp: &Grp, frame: usize, x: i32, y: i32, pal: &[[u8; 3]; 256
             dst[(py * dw + px) as usize] = (r as u32) << 16 | (g as u32) << 8 | b as u32;
         }
     }
+}
+
+/// statwire.cpp 0x4568f0: the selected unit's wireframe colors. Wireframe pixels 0xc0 /
+/// 0xc1 show shields (0x4566b0), 0xd0..0xd3 hp with the unit's random damage pattern
+/// (0x4567c0), 0xd8..0xdb hp (0x456730); all from twire.pcx.
+pub fn wireframe_colors(st: &crate::bw::State, d: &crate::bw::Data, u: u32, twire: &[u8]) -> [u8; 256] {
+    const HP_ODD: [u8; 40] = [10, 10, 10, 10, 10, 10, 10, 0, 10, 10, 0, 0, 10, 10, 0, 1, 10, 10, 1, 1, 10, 0, 1, 1, 10, 1, 1, 1, 0, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1];
+    const HP_EVEN: [u8; 40] = [10, 10, 10, 10, 10, 10, 10, 0, 10, 10, 0, 0, 10, 0, 0, 0, 10, 0, 0, 1, 0, 0, 0, 1, 0, 0, 1, 1, 0, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1];
+    const SHIELDS: [u8; 16] = [2, 2, 9, 2, 8, 9, 7, 8, 6, 7, 5, 6, 4, 5, 3, 4];
+    const HP4: [u8; 24] = [14, 6, 7, 8, 19, 11, 13, 6, 19, 11, 10, 16, 1, 18, 20, 16, 1, 18, 20, 12, 0, 1, 18, 10];
+    let tw = |i: u8| twire.get(i as usize).copied().unwrap_or(0);
+    let mut t = [0u8; 256];
+    for (i, v) in t.iter_mut().enumerate() {
+        *v = i as u8;
+    }
+    let un = &st.units[u as usize];
+    let ty = wire_type(st, u);
+    let mut max = d.dat.units.hit_points[un.unit_type as usize] as i32 >> 8;
+    let hp = (un.hp + 0xff) >> 8;
+    if max == 0 {
+        max = hp.max(1);
+    }
+    // 0x4567c0
+    let blank = tw(2);
+    let mut c = [blank; 4];
+    let row = (hp * 9 / max) as usize;
+    let seed = un.wireframe_seed as u32;
+    let tbl = if seed & 1 != 0 { &HP_ODD } else { &HP_EVEN };
+    for k in 0..4 {
+        let mut i = (((seed >> k) & 7) * 3 / 7) as usize;
+        while c[i] != blank {
+            i = (i + 1) % 4;
+        }
+        c[i] = tw(tbl[row * 4 + k]);
+    }
+    t[0xd0..0xd4].copy_from_slice(&c);
+    // 0x4566b0
+    let ms = d.dat.units.shields[ty as usize] as i32;
+    if d.dat.units.shield_enable[un.unit_type as usize] != 0 && ms != 0 {
+        let r = ((un.shields >> 8) * 7 / ms) as usize;
+        t[0xc0] = tw(SHIELDS[r * 2]);
+        t[0xc1] = tw(SHIELDS[r * 2 + 1]);
+    } else {
+        t[0xc0] = blank;
+        t[0xc1] = blank;
+    }
+    // 0x456730
+    let r = (hp * 5 / max) as usize;
+    for k in 0..4 {
+        t[0xd8 + k] = tw(HP4[r * 4 + k]);
+    }
+    t
+}
+
+/// 0x47b270: the type shown for `u` (an egg-like morph shows what it becomes).
+pub fn wire_type(st: &crate::bw::State, u: u32) -> u16 {
+    let un = &st.units[u as usize];
+    let q = un.build_queue[un.build_queue_slot as usize % 5];
+    if un.status & 1 == 0 && matches!(q, 0x85 | 0x84 | 0x89 | 0x90 | 0x92) { q } else { un.unit_type }
 }

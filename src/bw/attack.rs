@@ -1094,10 +1094,95 @@ impl State {
         }
         let flags = d.dat.units.flags[t as usize];
         if flags & 1 == 0 && (!self.can_attack(d, u, attacker, true) || flags & 8 != 0) {
-            todo_port!("0x4776c0", "flee from an attacker it can't fight (0x462930, 0x476a50)");
+            // Run from it, if the current order lets the unit flee (orders.dat field 11).
+            if t == 0x67 && un.status & 0x10 != 0 && (un.ai == NIL || un.irradiate_timer != 0) {
+                return;
+            }
+            let mut m = u;
+            if flags & 0x10 != 0 {
+                m = un.subunit;
+            }
+            let mu = &self.units[m as usize];
+            if d.dat.orders.unknown11[mu.order as usize] == 0 || mu.status & 0x2_0000 == 0 {
+                return;
+            }
+            if mu.ai != NIL {
+                todo_port!("0x462930", "AI unit flees only toward its AI destination");
+            }
+            if self.cover_chance_pub(m) == 0xff {
+                return;
+            }
+            let p = self.flee_point(d, attacker, m);
+            self.order_target(d, m, 6, p, NIL);
             return;
         }
         self.set_auto_target(d, u, attacker);
+    }
+
+    /// 0x476a50: a point 192, 128, 64, 32 or 16 pixels from `u`, away from `from`,
+    /// that a ground unit can reach (its own position if none).
+    fn flee_point(&self, _d: &Data, from: u32, u: u32) -> (i16, i16) {
+        let fp = self.unit_sprite_pos(from);
+        let up = self.unit_sprite_pos(u);
+        let dir = crate::game::flingy::direction_to(fp.0 as i32, fp.1 as i32, up.0 as i32, up.1 as i32);
+        let (vx, vy) = crate::game::flingy::direction_table()[dir as usize];
+        for dist in [192, 128, 64, 32, 16] {
+            let x = ((vx * dist) >> 8) + up.0 as i32;
+            let y = ((vy * dist) >> 8) + up.1 as i32;
+            let x = x.clamp(0, self.map_px.0 as i32 - 1);
+            let y = y.clamp(0, self.map_px.1 as i32 - 1);
+            let p = (x as i16, y as i16);
+            if self.units[u as usize].pathing_flags & 1 == 0 {
+                return p;
+            }
+            let r1 = super::path::region_at(&self.sai, x, y);
+            let r2 = super::path::region_at(&self.sai, up.0 as i32, up.1 as i32);
+            let (g1, g2) = (self.sai.regions[r1 as usize].group, self.sai.regions[r2 as usize].group);
+            if g1 != g2 {
+                continue;
+            }
+            // 0x437e70
+            let player = self.units[u as usize].player;
+            if player >= 8 || r1 == r2 {
+                return p;
+            }
+            let reg = &self.sai.regions[r2 as usize];
+            let n = reg.neighbor_count as usize - reg.zero_neighbors as usize;
+            if (0..n).any(|i| self.sai.neighbor(r2 as usize, i) == r1) {
+                return p;
+            }
+            // 0x437070: flood from r1 through walkable neighbors; regions with enemy
+            // strength (AI region data +0x1c / +0x20) stop the flood.
+            // ponytail: the AI region strengths are not ported (always 0), so the flood
+            // is plain reachability; the 10-frame cache (0x69f448) is skipped as it
+            // only matters once strengths change.
+            let n = self.sai.regions.len();
+            let mut map = vec![0u8; n];
+            map[r1 as usize] = 1;
+            loop {
+                let mut grew = false;
+                for r in 1..n {
+                    if map[r] != 1 {
+                        continue;
+                    }
+                    map[r] = 2;
+                    for i in 0..self.sai.regions[r].walkable_neighbors as usize {
+                        let nb = self.sai.neighbor(r, i) as usize;
+                        if map[nb] == 0 {
+                            map[nb] = 1;
+                            grew = true;
+                        }
+                    }
+                }
+                if !grew {
+                    break;
+                }
+            }
+            if map[r2 as usize] == 2 {
+                return p;
+            }
+        }
+        up
     }
 
     /// 0x476e60: nearby armed unit of the same owner joins in.

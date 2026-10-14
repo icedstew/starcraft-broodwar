@@ -138,8 +138,29 @@ impl State {
             self.units[u as usize].subunit = NIL;
             return;
         }
-        if matches!(t, 0x6e | 0x95 | 0x9d) {
-            todo_port!("0x4a0080", "beacons / flags revert to neutral instead of dying");
+        let s = self.units[u as usize].sprite;
+        if matches!(t, 0x6e | 0x95 | 0x9d) && self.sprites[s as usize].flags & super::sprite::sflag::HIDDEN == 0 {
+            // 0x4a0080: a dying gas building turns back into a neutral geyser.
+            if t == 0x95 {
+                todo_port!("0x414560", "extractor: creep under it recedes (0x49def0)");
+            }
+            if self.units[u as usize].status & 1 != 0 {
+                self.modify_completed_counters(d, u, -1, false);
+            }
+            self.units[u as usize].status &= !1;
+            self.transform_unit(d, u, 0xbc);
+            let un = &mut self.units[u as usize];
+            un.order = d.dat.units.ai_human_idle[0xbc];
+            un.order_target_unit = NIL;
+            un.order_target_pos = (0, 0);
+            un.order_state = 0;
+            un.order_unit_type = 0xe4;
+            un.hp = d.dat.units.hit_points[0xbc] as i32;
+            self.change_owner(d, u, 0xb, false);
+            self.set_unit_colors(d, u, 0xb);
+            self.units[u as usize].status |= 1;
+            self.modify_completed_counters(d, u, 1, true);
+            // 0x48e1e0: minimap refresh (UI).
             return;
         }
         self.unit_halt(d, u);
@@ -163,7 +184,26 @@ impl State {
             }
         }
         if self.units[u as usize].status & 2 != 0 {
-            todo_port!("0x49fd00", "building cleanup (addons, nydus, larva, build queue)");
+            // 0x49fd00: a dying building's addon in progress, addon, research, upgrade
+            // and training queue.
+            let un = &self.units[u as usize];
+            let c = un.current_build_unit;
+            if un.secondary_order == 0x25 && c != NIL && self.units[c as usize].status & 1 == 0 {
+                self.cancel_unit(d, c);
+            }
+            if self.units[u as usize].ptr_at(0xc0) != NIL {
+                self.detach_addon(d, u);
+            }
+            self.abort_research(d, u);
+            self.abort_upgrade(d, u);
+            let un = &self.units[u as usize];
+            if un.build_queue[un.build_queue_slot as usize % 5] < 0x6a {
+                self.clear_build_queue(d, u);
+            }
+            // 0x48e6e0: minimap (UI).
+            if d.dat.units.staredit_group_flags[self.units[u as usize].unit_type as usize] & 1 != 0 {
+                todo_port!("0x49fd00", "zerg building: morph done flag, creep recedes (0x47df90)");
+            }
         }
         if flags & 0x20 != 0 && self.units[u as usize].u8_at(0xcb) != 0 {
             // 0x469ec0: the landing spot it had reserved.

@@ -286,6 +286,10 @@ impl State {
         c
     }
 
+    pub(super) fn cover_chance_pub(&self, t: u32) -> u32 {
+        self.cover_chance(t)
+    }
+
     /// 0x476210: miss chance from where `target` stands.
     fn cover_chance(&self, target: u32) -> u32 {
         let t = &self.units[target as usize];
@@ -826,6 +830,10 @@ impl State {
         (lvl + if ultra { 2 } else { 0 }) & 0xff
     }
 
+    pub(super) fn apply_damage_pub(&mut self, d: &Data, t: u32, dmg: i32, source: u32, player: u8, notify: bool) {
+        self.apply_damage(d, t, dmg, source, player, notify);
+    }
+
     /// 0x4797b0: take `dmg` (fp8) hp, killing the unit at 0.
     fn apply_damage(&mut self, d: &Data, t: u32, dmg: i32, source: u32, player: u8, notify: bool) {
         if self.units[t as usize].hp == 0 {
@@ -849,8 +857,22 @@ impl State {
                 self.under_attack_alert(t);
             }
         } else {
-            if self.units[t as usize].status & 0x40 != 0 || self.units[t as usize].loaded_units.iter().any(|&h| h != 0) {
-                todo_port!("0x4797b0", "loaded units die with their transport");
+            // Passengers of a (non-building) transport die with it.
+            let tu = &self.units[t as usize];
+            let tt = tu.unit_type;
+            if tu.status & 0x4000_0000 == 0
+                && (tt != 0x2a || self.players.upgrade_sc[tu.player as usize][0x18] != 0)
+                && d.dat.units.space_provided[tt as usize] != 0
+                && d.dat.units.flags[tt as usize] & 1 == 0
+            {
+                for i in 0..8 {
+                    if let Some(c) = self.loaded_unit(t, i) {
+                        if self.units[c as usize].order != 0 {
+                            self.kill_unit(d, c);
+                            todo_port!("0x488af0", "death and kill score counters");
+                        }
+                    }
+                }
             }
             self.units[t as usize].hp = 0;
             self.kill_unit(d, t);
