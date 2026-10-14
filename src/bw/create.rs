@@ -10,6 +10,11 @@ use crate::todo_port;
 pub const UNIT_LIMIT: u32 = 0x6a4;
 
 impl Data<'_> {
+    /// 0x66a210 non-null: the image has a damage overlay LO file.
+    pub fn has_damage_overlays(&self, image_id: u16) -> bool {
+        matches!(self.lo.get(1).and_then(|k| k.get(image_id as usize)), Some(Some(_)))
+    }
+
     /// 0x4d5c20 (table 0x5240d0): 2 * number of used damage-overlay slots in frame 0 of the
     /// image's damage LO file (slots of (0x7f, 0x7f) are unused).
     pub fn damage_overlay_count(&self, image_id: u16) -> u8 {
@@ -42,6 +47,9 @@ impl State {
         // Drawn and discarded (site 14).
         let _ = self.rng.rand(14);
         let u = self.alloc_unit(d, unit_type, x, y, player)?;
+        if std::env::var_os("SCBW_UNITLOG").is_some() {
+            eprintln!("f{} create u{u} type {unit_type:#x} at {x},{y} p{player}", self.frame);
+        }
         if self.units[u as usize].status & status::GROUNDED_BUILDING != 0 {
             let mut l = self.visible_units;
             list::insert_after_head(&mut self.units, u, &mut l);

@@ -366,17 +366,21 @@ impl State {
         un.build_queue_slot = 0;
     }
 
+    /// 0x48d930: placement result `r`'s error (table 0x513634) to the local player.
+    pub(super) fn placement_error(&mut self, p: u8, r: u8) {
+        const PLACEMENT_ERRORS: [u16; 12] = [0, 853, 852, 854, 856, 860, 861, 862, 859, 858, 857, 855];
+        let e = PLACEMENT_ERRORS.get(r as usize).copied().unwrap_or(0);
+        if !self.replay && e != 0 && p == self.local_player {
+            self.shown_error = e;
+        }
+    }
+
     /// Build command: 0x48e010 (placement check at tile (tx, ty)) then 0x48de70.
     pub fn command_build(&mut self, d: &Data, u: u32, order: u8, tx: i16, ty: i16, t: u16) {
         let p = self.units[u as usize].player;
         let r = self.placement_check(d, u, p, tx, ty, t, 1, false, false, false);
         if r != 0 {
-            // 0x48d930: the placement error (table 0x513634) to the local player.
-            const PLACEMENT_ERRORS: [u16; 12] = [0, 853, 852, 854, 856, 860, 861, 862, 859, 858, 857, 855];
-            let e = PLACEMENT_ERRORS.get(r as usize).copied().unwrap_or(0);
-            if !self.replay && e != 0 && p == self.local_player {
-                self.shown_error = e;
-            }
+            self.placement_error(p, r);
             return;
         }
         let (pw, ph) = placement(d, t);

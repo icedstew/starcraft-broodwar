@@ -256,9 +256,9 @@ impl State {
                 }
                 un.order_process_timer = 8;
                 match order {
-                    5 => todo_port!("0x4790a0", "hidden order 5"),
+                    5 => self.order_bunker_guard(d, u),
                     0x60 => todo_port!("0x4e7b70", "hidden order 0x60"),
-                    0x9c if un.status & 0x20 != 0 => todo_port!("0x4790a0", "hidden order 0x9c"),
+                    0x9c if un.status & 0x20 != 0 => self.order_bunker_guard(d, u),
                     0xa1 => todo_port!("0x4a1ef0", "hidden order 0xa1"),
                     _ => {}
                 }
@@ -337,7 +337,7 @@ impl State {
             return;
         }
         match un.secondary_order {
-            0x25 => todo_port!("0x4e6790", "BuildAddon"),
+            0x25 => self.secondary_build_addon(d, u),
             0x26 => self.secondary_train(d, u),
             0x3f => todo_port!("0x466790", "TrainFighter"),
             0x44 => todo_port!("0x4932d0", "ShieldBattery"),

@@ -612,28 +612,129 @@ impl State {
                             mult *= 3;
                         }
                     }
-                    self.weapon_hit(d, b, mult as u8);
+                    self.weapon_hit(d, b, bu.target, mult as u8);
                 } else if self.units[bu.target as usize].ai != NIL && bu.source != NIL {
                     todo_port!("0x4795d0", "AI notified of a miss");
                 }
             }
             0xf => {
                 if bu.target != NIL {
-                    self.weapon_hit(d, b, 1);
+                    self.weapon_hit(d, b, bu.target, 1);
                 }
+            }
+            2 | 3 | 5 => {
+                if w == 0x6d {
+                    todo_port!("0x48b680", "lurker spines: once per unit per attack (0x64dec8)");
+                    return;
+                }
+                let r = d.dat.weapons.outer_splash[w] as i16;
+                let sp = &self.sprites[bu.sprite as usize];
+                let (x, y) = (sp.x, sp.y);
+                let bx = [x.wrapping_sub(r), y.wrapping_sub(r), x.wrapping_add(r), y.wrapping_add(r)];
+                let start = self.units_in_box(d, bx);
+                for u in self.search.results(start) {
+                    // 0x48b750: 0x64deb8 = 1 (inner radius does full damage).
+                    self.splash_hit(d, b, u, true);
+                }
+                self.search.pop();
             }
             _ => todo_port!("0x48b770", "other weapon explosion types"),
         }
     }
 
+    /// 0x48b570: splash damage to `u` by bullet `b`: full within the inner radius
+    /// (when `inner`), half within the medium one, a quarter within the outer one.
+    fn splash_hit(&mut self, d: &Data, b: u32, u: u32, inner: bool) {
+        let bu = &self.bullets.pool[b as usize];
+        let (w, source, target, player) = (bu.weapon, bu.source, bu.target, bu.player);
+        let wi = w as usize;
+        if u == source && w != 0x54 {
+            return;
+        }
+        let et = d.dat.weapons.explosion_type[wi];
+        if (et == 3 || et == 0x18) && self.units[u as usize].player == player && u != target {
+            return;
+        }
+        if !self.weapon_can_target(d, w, u, u) || !self.splash_within(d, b, u, d.dat.weapons.outer_splash[wi] as u32) {
+            return;
+        }
+        if w == 0x54 {
+            if self.units[u as usize].storm_timer != 0 {
+                return;
+            }
+            self.units[u as usize].storm_timer = 1;
+        }
+        if inner && self.splash_within(d, b, u, d.dat.weapons.inner_splash[wi] as u32) {
+            self.weapon_hit(d, b, u, 1);
+            return;
+        }
+        let un = &self.units[u as usize];
+        if un.status & 0x10 == 0 && (inner || (u != target && un.unit_type != 0x49)) {
+            if self.splash_within(d, b, u, d.dat.weapons.medium_splash[wi] as u32) {
+                self.weapon_hit(d, b, u, 2);
+            } else {
+                self.weapon_hit(d, b, u, 4);
+            }
+        }
+    }
+
+    /// 0x48adb0: the bullet is within `r` of `u`'s box.
+    fn splash_within(&self, d: &Data, b: u32, u: u32, r: u32) -> bool {
+        let us = &self.sprites[self.units[u as usize].sprite as usize];
+        let bs = &self.sprites[self.bullets.pool[b as usize].sprite as usize];
+        let dim = d.dat.units.dimensions[self.units[u as usize].unit_type as usize];
+        let (l, t, rr, bt) = (dim as i16, (dim >> 16) as i16, (dim >> 32) as i16, (dim >> 48) as i16);
+        let (bx, by) = (bs.x as i32, bs.y as i32);
+        let mut dx = bx - us.x.wrapping_add(rr).wrapping_add(1) as i32;
+        if dx < 0 {
+            dx = us.x.wrapping_sub(l) as i32 - bx;
+            if dx < 0 {
+                dx = 0;
+            }
+        }
+        let mut dy = by - bt.wrapping_add(us.y).wrapping_add(1) as i32;
+        if dy < 0 {
+            dy = us.y.wrapping_sub(t) as i32 - by;
+            if dy < 0 {
+                dy = 0;
+            }
+        }
+        super::path::approx_distance(0, dx, 0, dy) <= r
+    }
+
+    /// 0x475ce0: weapon `w` may hit `t` (weapons.dat target flags); `owner` for the
+    /// "own units only" flag.
+    pub(super) fn weapon_can_target(&self, d: &Data, w: u8, t: u32, owner: u32) -> bool {
+        if w >= 0x82 {
+            return false;
+        }
+        let f = d.dat.weapons.target_flags[w as usize];
+        if t == NIL {
+            return f & 0x40 != 0;
+        }
+        let tu = &self.units[t as usize];
+        if tu.status & 0x400_0000 != 0 {
+            return false;
+        }
+        let uf = d.dat.units.flags[tu.unit_type as usize];
+        let air_or_ground = if tu.status & 4 != 0 { 1 } else { 2 };
+        f & air_or_ground != 0
+            && (f & 4 == 0 || uf & 0x4000_0000 != 0)
+            && (f & 0x20 == 0 || uf & 0x4000 == 0)
+            && (f & 8 == 0 || uf & 0x1_0000 != 0)
+            && (f & 0x10 == 0 || uf & 1 == 0)
+            && (f & 0x80 == 0 || uf & 0x4001_0000 != 0)
+            && (f & 0x100 == 0 || self.units[owner as usize].player == tu.player)
+    }
+
     /// 0x479ae0: damage the bullet's target.
-    fn weapon_hit(&mut self, d: &Data, b: u32, divisor: u8) {
+    fn weapon_hit(&mut self, d: &Data, b: u32, target: u32, divisor: u8) {
         let bu = &self.bullets.pool[b as usize];
         if bu.flags & 2 != 0 {
             todo_port!("0x479730", "hallucination hit");
             return;
         }
-        let (w, player, dir, source, target) = (bu.weapon, bu.player, bu.fl.heading, bu.source, bu.target);
+        let (w, player, dir, source) = (bu.weapon, bu.player, bu.fl.heading, bu.source);
         let dmg = self.weapon_damage(d, b);
         self.damage_unit(d, target, dmg, w, divisor as u32, dir, source, player);
     }
@@ -733,12 +834,17 @@ impl State {
         if source != NIL {
             self.attacked_by(d, t, source, notify);
         }
-        todo_port!("0x4797b0", "no-damage game option 0x6d5a6c & 4");
+        // Game option 0x6d5a6c & 4: only human players' attacks do damage.
+        let dmg = if self.game_options & 4 != 0 && self.player_type(player) != 2 { 0 } else { dmg };
         let tu = &mut self.units[t as usize];
         if dmg < tu.hp {
             tu.hp -= dmg;
-            todo_port!("0x4797b0", "damage overlays, AI strength");
-            let _ = player;
+            todo_port!("0x431800", "AI unit strength after damage");
+            let s = self.units[t as usize].sprite;
+            let main = self.sprites[s as usize].main_image;
+            if self.units[t as usize].status & 1 != 0 && main != NIL && d.has_damage_overlays(self.images[main as usize].image_id) {
+                self.update_damage_overlays(d, t);
+            }
             if source != NIL && self.units[source as usize].player != self.units[t as usize].player && notify {
                 self.under_attack_alert(t);
             }

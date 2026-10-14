@@ -306,6 +306,7 @@ fn main() -> std::io::Result<()> {
                     scene.replay_command(player_of[c.player as usize], &c.data);
                     ci += 1;
                 }
+                scene.st.rng.log = std::env::var("SCBW_RNGLOG_AT").is_ok_and(|v| v == f.to_string());
                 scene.step();
                 let st = &scene.st;
                 let mut u = st.visible_units.head;
@@ -322,6 +323,34 @@ fn main() -> std::io::Result<()> {
                 let res: Vec<String> = (0..8).map(|p| format!("{},{}", st.players.minerals[p], st.players.gas[p])).collect();
                 writeln!(t, "f{f} res {}", res.join(" "))?;
                 writeln!(t, "f{f} rng {:#x} {}", st.rng.seed, st.rng.total)?;
+                if let Some(w) = std::env::var("SCBW_WATCH").ok().and_then(|v| v.parse::<u32>().ok()) {
+                    let s = st.units[w as usize].sprite;
+                    let mi = if s == bw::list::NIL { bw::list::NIL } else { st.sprites[s as usize].main_image };
+                    let (an, pc) = if mi == bw::list::NIL { (0, 0) } else { (st.images[mi as usize].iscript.anim, st.images[mi as usize].iscript.pc) };
+                    eprintln!("{} anim {an:#x} pc {pc:#x}", unit_trace(st, f, w));
+                }
+                if let Some(v) = std::env::var("SCBW_FINDPOS").ok() {
+                    // "f,x,y": indices of units (and their subunits) at (x, y) on frame f.
+                    let n: Vec<i32> = v.split(',').filter_map(|x| x.parse().ok()).collect();
+                    if n.len() == 3 && n[0] as u32 == f {
+                        for (i, un) in st.units.iter().enumerate() {
+                            if un.sprite != bw::list::NIL && un.fl.pos == (n[1] as i16, n[2] as i16) {
+                                eprintln!("f{f} unit {i} type {:#x} subunit {}", un.unit_type, un.subunit);
+                            }
+                        }
+                    }
+                }
+                let mut fr = st.free_units.head;
+                let mut ids = Vec::new();
+                while fr != bw::list::NIL && ids.len() < 3 {
+                    ids.push(fr.to_string());
+                    fr = st.units[fr as usize].link.next;
+                }
+                writeln!(t, "f{f} free {}", ids.join(" "))?;
+                if std::env::var("SCBW_RNGSITES_AT").is_ok_and(|v| v == f.to_string() || v == (f as i64 - 1).to_string()) {
+                    let sites: Vec<String> = st.rng.per_site.iter().enumerate().filter(|(_, c)| **c != 0).map(|(i, c)| format!("{i:#x}:{c}")).collect();
+                    writeln!(t, "f{f} rngsites {}", sites.join(" "))?;
+                }
             }
         }
         Some("repshot") => {

@@ -475,6 +475,28 @@ impl State {
     /// Right-click command (0x4c2370 -> 0x4560d0) at `pos` on unit `target` (or NIL;
     /// `unit_type` != 0xe4 for a remembered fog unit).
     #[allow(clippy::too_many_arguments)]
+    /// 0x487fd0: the unit of type `t` whose placement box holds `p` (a right-click on
+    /// what the player remembers under the fog), searched within 0x60 pixels.
+    fn fog_unit_at(&mut self, d: &Data, p: (i16, i16), t: u16) -> u32 {
+        let b = [p.0.wrapping_sub(0x60), p.1.wrapping_sub(0x60), p.0.wrapping_add(0x60), p.1.wrapping_add(0x60)];
+        let mut search = std::mem::replace(&mut self.search, super::collide::UnitSearch::empty());
+        let start = search.units_in_finder_box(self, b);
+        let found = search.results(start);
+        search.pop();
+        self.search = search;
+        // 0x487a90
+        let hit = found.into_iter().find(|&c| {
+            let un = &self.units[c as usize];
+            if un.unit_type != t {
+                return false;
+            }
+            let (w, h) = super::build::placement(d, t);
+            let s = &self.sprites[un.sprite as usize];
+            ((w / 2 + s.x as i32 - p.0 as i32) as u32) < w as u32 && ((h / 2 + s.y as i32 - p.1 as i32) as u32) < h as u32
+        });
+        hit.unwrap_or(NIL)
+    }
+
     pub fn command_right_click(&mut self, d: &Data, player: u8, sel: &[u32], pos: (i16, i16), mut target: u32, mut unit_type: u16, queued: bool) {
         if pos.0 as u16 >= self.map_px.0 || pos.1 as u16 >= self.map_px.1 {
             return;
@@ -486,7 +508,7 @@ impl State {
         } else if unit_type != 0xe4 {
             let i = (pos.1 as i32 / 32) * self.terrain.width as i32 + pos.0 as i32 / 32;
             if self.terrain.tile_flags[i as usize] & (1 << (player & 0x1f)) == 0 {
-                todo_port!("0x487fd0", "right-click on a remembered fog unit");
+                target = self.fog_unit_at(d, pos, unit_type);
                 unit_type = 0xe4;
             }
         }
@@ -717,7 +739,12 @@ impl State {
             _ => false,
         };
         if ok && self.can_issue_order(d, u, order, player).is_ok() {
-            self.command_build(d, u, order, tx, ty, t);
+            // 0x48e190: addons place by the building's spot.
+            if d.dat.units.flags[t as usize] & 2 != 0 {
+                self.command_build_addon(d, u, order, tx, ty, t);
+            } else {
+                self.command_build(d, u, order, tx, ty, t);
+            }
         }
     }
 }
@@ -899,8 +926,16 @@ impl State {
         self.execute_command(d, player, sel, &p);
     }
 
-    /// 0x4865d0: run one command packet from `player`, whose selection is `sel`.
+    /// Run one command packet as the turn loop does (0x487191): with the synced RNG on.
     pub fn execute_command(&mut self, d: &Data, player: u8, sel: &[u32], p: &[u8]) {
+        let was = self.rng.enabled;
+        self.rng.enabled = true;
+        self.receive_command(d, player, sel, p);
+        self.rng.enabled = was;
+    }
+
+    /// 0x4865d0: run one command packet from `player`, whose selection is `sel`.
+    fn receive_command(&mut self, d: &Data, player: u8, sel: &[u32], p: &[u8]) {
         let u16_at = |o: usize| p.get(o..o + 2).map_or(0, |b| u16::from_le_bytes([b[0], b[1]]));
         let byte = |o: usize| p.get(o).copied().unwrap_or(0);
         match byte(0) {
@@ -973,6 +1008,10 @@ impl State {
             0x1e => self.command_return_cargo(d, player, sel, byte(1) != 0),
             0x1f => self.command_train_sel(d, player, sel, u16_at(1)),
             0x2b => self.command_hold(d, player, sel, byte(1) != 0),
+            0x25 => self.command_unsiege(d, player, sel, byte(1) != 0),
+            0x26 => self.command_siege(d, player, sel, byte(1) != 0),
+            0x28 => self.command_unload_all(d, player, sel, byte(1) != 0),
+            0x29 => self.command_unload(d, player, u16_at(1)),
             0x2f => self.command_lift(d, player, sel, u16_at(1) as i16, u16_at(3) as i16),
             0x30 => self.command_research(d, player, sel, byte(1)),
             0x31 => self.command_cancel_research(d, player, sel),

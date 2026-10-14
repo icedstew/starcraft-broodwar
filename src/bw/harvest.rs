@@ -88,7 +88,7 @@ impl State {
     }
 
     /// 0x474a70: queue `order` targeting `t` in front.
-    fn queue_front_target(&mut self, d: &Data, u: u32, order: u8, t: u32) {
+    pub(super) fn queue_front_target(&mut self, d: &Data, u: u32, order: u8, t: u32) {
         let pos = if t != NIL { self.unit_sprite_pos(t) } else { (0, 0) };
         self.queue_front(d, u, order, pos, t);
     }
@@ -425,6 +425,23 @@ impl State {
         un.set_ptr_at(0xd0, NIL);
     }
 
+    /// 0x468ef0: worker `u` lets go of resource `r`: it stops mining it, or leaves its
+    /// wait list.
+    pub(super) fn worker_release(&mut self, d: &Data, u: u32, r: u32) {
+        if self.units[u as usize].u8_at(0xce) != 0 {
+            self.release_mineral(d, u, r);
+            return;
+        }
+        let mut w = self.units[r as usize].ptr_at(0xd4);
+        while w != NIL {
+            if w == u {
+                self.leave_wait_list(u, r);
+                return;
+            }
+            w = self.units[w as usize].ptr_at(0xd8);
+        }
+    }
+
     /// 0x468e40: stop gathering from `m` and hand it to the next waiting worker.
     fn release_mineral(&mut self, d: &Data, u: u32, m: u32) {
         let un = &mut self.units[u as usize];
@@ -489,7 +506,7 @@ impl State {
     }
 
     /// 0x402be0: `u` faces its target waypoint (or is on it).
-    fn facing_target(&self, u: u32) -> bool {
+    pub(super) fn facing_target(&self, u: u32) -> bool {
         let f = &self.units[u as usize].fl;
         if f.next_target_waypoint == f.pos {
             return true;
@@ -1050,7 +1067,7 @@ impl State {
         if self.sprites[s as usize].flags & super::sprite::sflag::HIDDEN != 0 {
             return;
         }
-        self.clear_references_pub(d, u);
+        self.clear_references_visible(d, u);
         self.untarget_bullets_pub(u);
         self.finder_remove(u);
         if self.units[u as usize].status & 2 != 0 {

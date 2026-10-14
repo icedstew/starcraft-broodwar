@@ -575,10 +575,23 @@ def scenario(e, units, move, frames, out):
     minimap = bool(os.environ.get("SCBW_MINIMAP"))
     if minimap:
         minimap_init(e, e.data_root)
+    rnglog_at = os.environ.get("SCBW_RNGLOG_AT")
+    cur = [0]
+    if rnglog_at:
+        # Debug: every sync_rand call on that frame: site, caller, iscript unit (0x6d11fc).
+        def rnglog(e):
+            if rnglog_at in ("all", str(cur[0])):
+                from unicorn.x86_const import UC_X86_REG_EAX, UC_X86_REG_ESP
+                su = e.r32(0x6d11fc)
+                from unicorn.x86_const import UC_X86_REG_ESI
+                print(f"f{cur[0]} rng site {e.uc.reg_read(UC_X86_REG_EAX):#x} from {e.r32(e.uc.reg_read(UC_X86_REG_ESP)):#x} unit {(su - UNITS) // 0x150 if su else '-'} img {e.r16(e.uc.reg_read(UC_X86_REG_ESI) + 8):#x} anim {e.r8(e.uc.reg_read(UC_X86_REG_ESI) + 0x16):#x} pc {e.r16(e.uc.reg_read(UC_X86_REG_ESI) + 0x12):#x}", file=sys.stderr)
+        e.at(0x4dc4a0, rnglog)
+        e.uc.ctl_flush_tb()  # hooks added after code was translated need a flush
     with open(out, "w") as fo:
         ci = 0
         pkt = e.alloc(0x400)
         for f in range(frames):
+            cur[0] = f
             e.w32(0x57eebc, e.r32(0x57f23c))  # net turns: one per frame
             while replay and ci < len(replay["cmds"]) and replay["cmds"][ci][0] <= f:
                 _, p, data = replay["cmds"][ci]
@@ -617,6 +630,15 @@ def scenario(e, units, move, frames, out):
             fo.write(bullet_trace(e, f) + "\n")
             fo.write(f"f{f} res " + " ".join(f"{e.r32(0x57f0f0 + p * 4)},{e.r32(0x57f120 + p * 4)}" for p in range(8 if replay else 2)) + "\n")
             fo.write(f"f{f} rng {e.r32(0x51ca14):#x} {e.r32(0x51ca18)}\n")
+            if replay:  # first free unit (0x628438): unit allocation order
+                fr, ids = e.r32(0x628438), []
+                while fr and len(ids) < 3:
+                    ids.append(str((fr - UNITS) // 0x150))
+                    fr = e.r32(fr + 4)
+                fo.write(f"f{f} free {' '.join(ids)}\n")
+            if os.environ.get("SCBW_RNGSITES_AT") in (str(f), str(f - 1)):
+                sites = struct.unpack("<256I", e.read(0x51c610, 0x400))
+                fo.write(f"f{f} rngsites " + " ".join(f"{i:#x}:{c}" for i, c in enumerate(sites) if c) + "\n")
             if os.environ.get("SCBW_SELTRACE"):
                 row = [(a - UNITS) // 0x150 for a in struct.unpack("<12I", e.read(0x6284e8, 48)) if a]
                 fo.write(f"f{f} psel " + " ".join(map(str, row)) + "\n")

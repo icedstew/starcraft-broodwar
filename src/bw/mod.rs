@@ -4,6 +4,7 @@
 //! translated from the decompiled routines (addresses noted). Unported
 //! callees are explicit `todo_port!` markers, never approximations.
 
+pub mod addon;
 pub mod attack;
 pub mod build;
 pub mod bullet;
@@ -42,8 +43,10 @@ pub mod rng;
 pub mod sai;
 pub mod select;
 pub mod short_path;
+pub mod siege;
 pub mod sprite;
 pub mod train;
+pub mod transport;
 pub mod transform;
 pub mod unit;
 pub mod vision;

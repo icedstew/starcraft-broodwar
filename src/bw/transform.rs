@@ -47,10 +47,43 @@ impl State {
                 self.repulse_init(d, u);
             }
         }
-        if self.units[u as usize].subunit != NIL {
-            todo_port!("0x49f6a0", "transform the subunit (turret) too");
+        let sub = self.units[u as usize].subunit;
+        if sub != NIL {
+            let st = d.dat.units.subunit1[t as usize];
+            self.transform_subunit(d, sub, st);
         }
         // 0x492da0: status overlays; none on the units transformed so far.
+    }
+
+    /// 0x49f6a0: the turret `sub` becomes type `t` and is put back on its base's
+    /// attachment point.
+    fn transform_subunit(&mut self, d: &Data, sub: u32, t: u16) {
+        let cloak = self.units[sub as usize].status & 0x300;
+        self.iscript_unit = Some(sub);
+        self.change_unit_type(d, sub, t);
+        let base = self.units[sub as usize].subunit;
+        self.iscript_unit = Some(base);
+        let ss = self.units[sub as usize].sprite;
+        self.sprites[ss as usize].flags |= 0x10;
+        if cloak != 0 {
+            todo_port!("0x497fd0", "cloaked turret: re-cloak its new images");
+        }
+        let bs = self.units[base as usize].sprite;
+        let mi = self.sprites[bs as usize].main_image;
+        let im = &self.images[mi as usize];
+        let (mut ox, oy) = d.lo_offset(2, im.image_id, im.frame, 0).unwrap_or((0, 0));
+        if im.flags & super::sprite::iflag::FLIPPED != 0 {
+            ox = ox.wrapping_neg();
+        }
+        let smi = self.sprites[ss as usize].main_image;
+        let si = &mut self.images[smi as usize];
+        if si.x != ox || si.y != oy {
+            si.flags |= super::sprite::iflag::REDRAW;
+            si.x = ox;
+            si.y = oy;
+        }
+        let vis = self.sprites[bs as usize].visibility;
+        self.sprite_set_visibility(ss, vis);
     }
 
     /// 0x49f860: 0x49f170 with the unit counters taken out and put back.
@@ -255,7 +288,7 @@ impl State {
     }
 
     /// 0x49e4e0: `u`'s sprite (and its turret's) take `player`'s colours.
-    fn set_unit_colors(&mut self, d: &Data, mut u: u32, player: u8) {
+    pub(super) fn set_unit_colors(&mut self, d: &Data, mut u: u32, player: u8) {
         loop {
             let s = self.units[u as usize].sprite;
             if self.sprites[s as usize].owner != player {

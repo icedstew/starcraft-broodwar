@@ -9,11 +9,13 @@ pub struct Rng {
     /// 0x1410936a8 total draws, 0x1410936b0 per call-site counters (desync diagnostics).
     pub total: u32,
     pub per_site: Vec<u32>,
+    /// Debug (SCBW_RNGLOG_AT): print each draw's site.
+    pub log: bool,
 }
 
 impl Default for Rng {
     fn default() -> Rng {
-        Rng { seed: 0, enabled: false, total: 0, per_site: vec![0; 256] }
+        Rng { seed: 0, enabled: false, total: 0, per_site: vec![0; 256], log: false }
     }
 }
 
@@ -27,6 +29,9 @@ impl Rng {
             *c += 1;
         }
         self.total += 1;
+        if self.log {
+            eprintln!("rng site {site:#x}");
+        }
         self.seed = self.seed.wrapping_mul(0x015A_4E35).wrapping_add(1);
         (self.seed >> 16) & 0x7FFF
     }

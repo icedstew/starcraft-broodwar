@@ -198,6 +198,9 @@ pub fn run(st: &mut State, d: &Data, img: u32, nse: bool, mut distance: Option<&
                 p = a + 2;
                 if !nse {
                     let (lo, hi) = (u8_(a) as i32, u8_(a + 1) as i32);
+                    if st.rng.log {
+                        eprintln!("  waitrand unit {:?} img {img}", st.iscript_unit);
+                    }
                     let r = (st.rng.rand(3) & 0xff) as i32;
                     let rem = r % (hi - lo + 1);
                     st.images[img as usize].iscript.wait = (rem as u8).wrapping_sub(1).wrapping_add(lo as u8);

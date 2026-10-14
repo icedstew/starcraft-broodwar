@@ -51,8 +51,22 @@ impl State {
         if self.units[u as usize].order_flags & 4 != 0 {
             self.hide_unit(d, u);
         }
-        if self.units[u as usize].subunit != NIL {
-            todo_port!("0x479480", "kill the subunit (0x496f00, 0x4a0990)");
+        let sub = self.units[u as usize].subunit;
+        if sub != NIL {
+            // 0x496f00: the turret's image joins the unit's sprite for the death.
+            let ss = self.units[sub as usize].sprite;
+            let s = self.units[u as usize].sprite;
+            if ss != NIL && s != NIL {
+                self.move_main_image(ss, s);
+            }
+            let ssub = self.units[sub as usize].subunit;
+            if ssub != NIL && d.dat.units.flags[self.units[ssub as usize].unit_type as usize] & 0x10 != 0 {
+                self.remove_subunit(d, ssub);
+                self.units[sub as usize].subunit = NIL;
+            }
+            self.remove_unit(d, sub);
+            self.free_unit_sprite(sub);
+            self.units[u as usize].subunit = NIL;
         }
         self.units[u as usize].order_state = 1;
         let s = self.units[u as usize].sprite;
@@ -79,8 +93,10 @@ impl State {
             }
         }
         self.hide_unit(d, u);
-        if self.units[u as usize].subunit != NIL {
-            todo_port!("0x479480", "kill the subunit (0x4a0990)");
+        let sub = self.units[u as usize].subunit;
+        if sub != NIL && d.dat.units.flags[self.units[sub as usize].unit_type as usize] & 0x10 != 0 {
+            self.remove_subunit(d, sub);
+            self.units[u as usize].subunit = NIL;
         }
         self.remove_unit(d, u);
         self.free_unit_sprite(u);
@@ -100,8 +116,30 @@ impl State {
         if self.units[u as usize].ai != NIL {
             todo_port!("0x4a0740", "AI bookkeeping (0x439d60, 0x434c90, 0x4477c0)");
         }
-        if flags & 0x10 != 0 || matches!(t, 0x6e | 0x95 | 0x9d) {
-            todo_port!("0x4a0080", "subunits and special units leave through 0x4a0080");
+        if flags & 0x10 != 0 {
+            // 0x4a0080: a subunit goes to the dead list and out of its owner's units.
+            let mut l = self.dead_units;
+            list::insert_after_head(&mut self.units, u, &mut l);
+            self.dead_units = l;
+            let p = self.units[u as usize].player as usize;
+            let (prev, next) = (self.units[u as usize].player_prev, self.units[u as usize].player_next);
+            if prev != NIL {
+                self.units[prev as usize].player_next = next;
+            }
+            if next != NIL {
+                self.units[next as usize].player_prev = prev;
+            }
+            if self.player_units[p] == u {
+                self.player_units[p] = next;
+            }
+            self.units[u as usize].player_prev = NIL;
+            self.units[u as usize].player_next = NIL;
+            self.modify_unit_counters(d, u, -1);
+            self.units[u as usize].subunit = NIL;
+            return;
+        }
+        if matches!(t, 0x6e | 0x95 | 0x9d) {
+            todo_port!("0x4a0080", "beacons / flags revert to neutral instead of dying");
             return;
         }
         self.unit_halt(d, u);
@@ -128,14 +166,17 @@ impl State {
             todo_port!("0x49fd00", "building cleanup (addons, nydus, larva, build queue)");
         }
         if flags & 0x20 != 0 && self.units[u as usize].u8_at(0xcb) != 0 {
-            todo_port!("0x469ec0", "free the flying building's landing tiles");
+            // 0x469ec0: the landing spot it had reserved.
+            let p = self.units[u as usize].order_target_pos;
+            self.mark_building_tiles(d, u, p, false);
         }
         if self.units[u as usize].path != NIL {
             self.path_delete(u);
         }
         let so = self.units[u as usize].secondary_order;
-        if self.units[u as usize].current_build_unit != NIL && (so == 0x26 || so == 0x3f) {
-            todo_port!("0x4a0740", "kill the unit being trained");
+        let c = self.units[u as usize].current_build_unit;
+        if c != NIL && (so == 0x26 || so == 0x3f) {
+            self.kill_unit(d, c);
         }
         if so != 0x17 {
             self.set_secondary_order(u, 0x17);
@@ -154,7 +195,6 @@ impl State {
 
     /// 0x49f4a0: per-type cleanup (workers' carried resources, mines, nydus, ...).
     fn remove_unit_type_specific(&mut self, d: &Data, u: u32) {
-        let _ = d;
         let t = self.units[u as usize].unit_type;
         match t {
             0x48 | 0x52 | 0x53 | 0x51 => todo_port!("0x466170", "carrier/reaver children"),
@@ -163,20 +203,59 @@ impl State {
                     todo_port!("0x49f4a0", "ghost nuke");
                 }
             }
-            0xb0..=0xb2 => todo_port!("0x468770", "mineral field removal"),
-            0x9c => {
-                let s = self.units[u as usize].ptr_at(0xd0);
-                if s != NIL {
-                    self.free_sprite_images(s);
-                    self.units[u as usize].set_ptr_at(0xd0, NIL);
-                }
-                self.remove_psi_provider(u);
-                self.psi.dirty = true;
-            }
-            0xe | 0x49 | 0x55 | 0x6c | 0x86 => todo_port!("0x49f4a0", "special unit removal"),
             _ => {
-                todo_port!("0x4688b0", "resource container check");
+                // 0x4688b0: minerals and completed gas buildings hold resources.
+                let st = self.units[u as usize].status;
+                if (0xb0..=0xb2).contains(&t) || (st & 1 != 0 && matches!(t, 0x6e | 0x9d | 0x95)) {
+                    self.clear_resource_workers(u);
+                }
+                match t {
+                    0xe => {
+                        let c = self.units[u as usize].connected_unit;
+                        if c != NIL && self.units[c as usize].unit_type == 0x6c {
+                            self.units[c as usize].set_ptr_at(0xd0, NIL);
+                            self.units[c as usize].set_ptr_at(0xd4, NIL);
+                        }
+                    }
+                    0x49 | 0x55 if st & 1 != 0 => todo_port!("0x4652a0", "interceptor / scarab leaves its carrier"),
+                    0x6c => {
+                        let n = self.units[u as usize].ptr_at(0xd0);
+                        if n != NIL {
+                            self.kill_unit(d, n);
+                            self.units[u as usize].set_ptr_at(0xd0, NIL);
+                        }
+                    }
+                    0x86 => {
+                        let o = self.units[u as usize].ptr_at(0xd0);
+                        if o != NIL {
+                            self.units[u as usize].set_ptr_at(0xd0, NIL);
+                            self.units[o as usize].set_ptr_at(0xd0, NIL);
+                            self.kill_unit(d, o);
+                        }
+                    }
+                    0x9c => {
+                        let s = self.units[u as usize].ptr_at(0xd0);
+                        if s != NIL {
+                            self.free_sprite_images(s);
+                            self.units[u as usize].set_ptr_at(0xd0, NIL);
+                        }
+                        self.remove_psi_provider(u);
+                        self.psi.dirty = true;
+                    }
+                    _ => {}
+                }
             }
+        }
+    }
+
+    /// 0x468770: a resource goes away: nobody gathers it and its wait list empties.
+    fn clear_resource_workers(&mut self, r: u32) {
+        self.units[r as usize].set_u8_at(0xd3, 0);
+        let mut w = self.units[r as usize].ptr_at(0xd4);
+        while w != NIL {
+            let next = self.units[w as usize].ptr_at(0xd8);
+            self.leave_wait_list(w, r);
+            w = next;
         }
     }
 
@@ -184,7 +263,7 @@ impl State {
     fn remove_loaded_units(&mut self, d: &Data, u: u32) {
         let un = &self.units[u as usize];
         if un.status & 0x40 != 0 {
-            todo_port!("0x401ea0", "unit inside a transport");
+            self.leave_transport(d, u, true);
             return;
         }
         if un.status & 0x4000_0000 != 0 || d.dat.units.space_provided[un.unit_type as usize] == 0 {
@@ -193,14 +272,26 @@ impl State {
         if un.unit_type == 0x2a && self.players.upgrade_sc[un.player as usize][0x18] == 0 {
             return;
         }
-        if un.loaded_units.iter().any(|&h| h != 0) {
-            todo_port!("0x49fdd0", "kill loaded units");
+        // A bunker lets its passengers out; other transports take them along.
+        let bunker = un.unit_type == 0x7d;
+        for i in 0..8 {
+            if let Some(p) = self.loaded_unit(u, i) {
+                if self.units[p as usize].order != 0 && (!bunker || !self.unload_unit(d, p)) {
+                    self.kill_unit(d, p);
+                }
+            }
         }
         self.units[u as usize].loaded_units = [0; 8];
     }
 
-    pub(super) fn clear_references_pub(&mut self, d: &Data, dead: u32) {
-        self.clear_references(d, dead);
+    /// The visible-units half of 0x49eb70, as inlined in 0x493ca0 (hiding a unit).
+    pub(super) fn clear_references_visible(&mut self, d: &Data, u: u32) {
+        let mut o = self.visible_units.head;
+        while o != NIL {
+            let next = self.units[o as usize].link.next;
+            self.forget_unit(d, o, u);
+            o = next;
+        }
     }
 
     pub(super) fn forget_unit_pub(&mut self, d: &Data, o: u32, dead: u32) {
@@ -213,12 +304,7 @@ impl State {
 
     /// 0x49eb70(1): every unit forgets `dead` (and the UI drops it).
     fn clear_references(&mut self, d: &Data, dead: u32) {
-        let mut o = self.visible_units.head;
-        while o != NIL {
-            let next = self.units[o as usize].link.next;
-            self.forget_unit(d, o, dead);
-            o = next;
-        }
+        self.clear_references_visible(d, dead);
         todo_port!("0x49eb70", "selection / unit portrait UI (0x68ac98)");
         let mut o = self.hidden_units.head;
         while o != NIL {
@@ -227,8 +313,9 @@ impl State {
             o = next;
         }
         let t = self.units[dead as usize].unit_type as usize;
-        if d.dat.units.flags[t] & 8 != 0 && self.units[dead as usize].u16_at(0xd0) != 0 {
-            todo_port!("0x468ef0", "worker releases its resource target");
+        let r = self.units[dead as usize].ptr_at(0xd0);
+        if d.dat.units.flags[t] & 8 != 0 && r != NIL {
+            self.worker_release(d, dead, r);
         }
     }
 
@@ -455,8 +542,163 @@ impl State {
     pub fn set_unit_hp(&mut self, d: &Data, u: u32, hp: i32) {
         let max = d.dat.units.hit_points[self.units[u as usize].unit_type as usize] as i32;
         self.units[u as usize].hp = hp.min(max);
-        if self.units[u as usize].status & 1 != 0 {
-            todo_port!("0x467340", "damage overlays (0x4e6090) and AI strength (0x431800)");
+        self.hp_changed(d, u);
+    }
+
+    /// The tail of 0x467340 after the hp is stored: damage flames follow the hp.
+    pub(super) fn hp_changed(&mut self, d: &Data, u: u32) {
+        if self.units[u as usize].status & 1 == 0 {
+            return;
         }
+        let s = self.units[u as usize].sprite;
+        let main = self.sprites[s as usize].main_image;
+        if main != NIL && d.has_damage_overlays(self.images[main as usize].image_id) {
+            self.update_damage_overlays(d, u);
+        }
+        todo_port!("0x431800", "AI unit strength after an hp change");
+    }
+
+    /// 0x4e6090: as many damage flames as the hp below two thirds calls for, one level
+    /// (+0xa7) per step: flames go out (0x499580) or appear (0x4993c0).
+    pub(super) fn update_damage_overlays(&mut self, d: &Data, u: u32) {
+        let s = self.units[u as usize].sprite;
+        let main = self.sprites[s as usize].main_image;
+        let max = d.dat.units.hit_points[self.units[u as usize].unit_type as usize] as i32;
+        let third = max / 3;
+        let rest = (max - third) as u32 as u64;
+        let step = rest / (d.damage_overlay_count(self.images[main as usize].image_id) as u64 + 1);
+        let hp = self.units[u as usize].hp;
+        let level = (((hp - (rest % step) as i32) - third - 1) / step as i32).max(0) as u8;
+        let mut cur = self.units[u as usize].building_overlay_state;
+        while cur < level {
+            self.remove_damage_overlay(d, s);
+            cur += 1;
+            self.units[u as usize].building_overlay_state = cur;
+        }
+        while cur > level {
+            self.add_damage_overlay(d, s);
+            cur -= 1;
+            self.units[u as usize].building_overlay_state = cur;
+        }
+    }
+
+    /// The damage LO point `idx` of sprite `s`'s main image (x mirrored when flipped).
+    fn damage_point(&self, d: &Data, s: u32, idx: u16) -> (i8, i8) {
+        let main = self.sprites[s as usize].main_image;
+        let img = &self.images[main as usize];
+        let (mut x, y) = d.lo_offset(1, img.image_id, img.frame, idx as i8).unwrap_or((0, 0));
+        if img.flags & super::sprite::iflag::FLIPPED != 0 {
+            x = x.wrapping_neg();
+        }
+        (x, y)
+    }
+
+    /// 0x4993c0: one more flame: a small one (images 0x1c2..) grows into a big one
+    /// (0x1d8..); otherwise a new small flame at a random free damage point (RNG site 8).
+    fn add_damage_overlay(&mut self, d: &Data, s: u32) {
+        let mut i = self.sprites[s as usize].images.head;
+        while i != NIL {
+            let id = self.images[i as usize].image_id;
+            if (0x1c2..0x1d8).contains(&id) {
+                let idx = id - 0x1c2;
+                let (x, y) = self.damage_point(d, s, idx);
+                self.destroy_image(i);
+                let head = self.sprites[s as usize].images.head;
+                self.create_image(d, s, head, idx + 0x1d8, x, y, 0);
+                return;
+            }
+            i = self.images[i as usize].link.next;
+        }
+        let r = self.rng.rand(8);
+        let main = self.sprites[s as usize].main_image;
+        let slots = (d.damage_overlay_count(self.images[main as usize].image_id) >> 1) as u32;
+        if slots == 0 {
+            return;
+        }
+        let mut idx: u16 = 0;
+        let mut count = 0u32;
+        loop {
+            if idx > 0x15 {
+                idx = 0;
+            }
+            let (x, y) = self.damage_point(d, s, idx);
+            if x != 0x7f || y != 0x7f {
+                count += 1;
+                let mut big = false;
+                let mut j = self.sprites[s as usize].images.head;
+                while j != NIL {
+                    if self.images[j as usize].image_id == idx + 0x1d8 {
+                        big = true;
+                        break;
+                    }
+                    j = self.images[j as usize].link.next;
+                }
+                if !big && r % slots + 1 <= count {
+                    let head = self.sprites[s as usize].images.head;
+                    self.create_image(d, s, head, idx + 0x1c2, x, y, 0);
+                    return;
+                }
+            }
+            idx += 1;
+        }
+    }
+
+    /// 0x499580: one flame less: a big flame shrinks back to a small one, else a small
+    /// one goes out.
+    fn remove_damage_overlay(&mut self, d: &Data, s: u32) {
+        let main = self.sprites[s as usize].main_image;
+        if main == NIL || !d.has_damage_overlays(self.images[main as usize].image_id) {
+            return;
+        }
+        let mut i = self.sprites[s as usize].images.head;
+        while i != NIL {
+            let id = self.images[i as usize].image_id;
+            if (0x1d8..0x1ee).contains(&id) {
+                let idx = id - 0x1d8;
+                let (x, y) = self.damage_point(d, s, idx);
+                self.destroy_image(i);
+                let head = self.sprites[s as usize].images.head;
+                self.create_image(d, s, head, idx + 0x1c2, x, y, 0);
+                return;
+            }
+            i = self.images[i as usize].link.next;
+        }
+        let mut i = self.sprites[s as usize].images.head;
+        while i != NIL {
+            let id = self.images[i as usize].image_id;
+            if (0x1c2..=0x1d7).contains(&id) {
+                self.destroy_image(i);
+                return;
+            }
+            i = self.images[i as usize].link.next;
+        }
+    }
+
+    /// 0x4a0990: a turret (and its own turret) leaves the game with its sprite.
+    fn remove_subunit(&mut self, d: &Data, u: u32) {
+        let sub = self.units[u as usize].subunit;
+        if sub != NIL && d.dat.units.flags[self.units[sub as usize].unit_type as usize] & 0x10 != 0 {
+            self.remove_subunit(d, sub);
+            self.units[u as usize].subunit = NIL;
+        }
+        self.remove_unit(d, u);
+        self.free_unit_sprite(u);
+    }
+
+    /// 0x496f00: move sprite `from`'s main image to the front of sprite `to`.
+    fn move_main_image(&mut self, from: u32, to: u32) {
+        let img = self.sprites[from as usize].main_image;
+        if img == NIL {
+            return;
+        }
+        self.sprites[from as usize].main_image = NIL;
+        let mut l = self.sprites[from as usize].images;
+        list::remove(&mut self.images, img, &mut l);
+        self.sprites[from as usize].images = l;
+        let mut l = self.sprites[to as usize].images;
+        list::insert_after_head(&mut self.images, img, &mut l);
+        self.sprites[to as usize].images = l;
+        self.images[img as usize].flags &= !0x8;
+        self.images[img as usize].sprite = to;
     }
 }

@@ -218,19 +218,236 @@ impl State {
     }
 
     /// 0x4777f0: TurretGuard.
-    fn order_turret_guard(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x4777f0", "TurretGuard");
+    fn order_turret_guard(&mut self, d: &Data, u: u32) {
+        let p = self.units[self.units[u as usize].subunit as usize].fl.next_target_waypoint;
+        if self.units[u as usize].fl.next_target_waypoint != p {
+            self.units[u as usize].fl.next_target_waypoint = p;
+        }
+        self.order_player_guard(d, u);
     }
 
-    /// 0x477980: TurretAttack.
-    fn order_turret_attack(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x477980", "TurretAttack");
+    /// 0x477980: TurretAttack: aim at and fire on the order target while the base
+    /// allows it; back to TurretGuard (4) when the target is gone or out of reach.
+    fn order_turret_attack(&mut self, d: &Data, u: u32) {
+        self.pick_better_target(d, u);
+        let t = self.units[u as usize].order_target_unit;
+        if t != NIL {
+            self.units[u as usize].order_target_pos = self.unit_sprite_pos(t);
+        }
+        if !self.can_attack(d, u, t, true) || !self.target_visible(t, u) {
+            self.units[u as usize].order_flags |= 1;
+            // 0x474810 inlined: drop interruptible orders and TurretGuards, queue one.
+            self.issue_order(d, u, 4, true, (0, 0), NIL, 0xe4);
+            self.order_nothing(d, u);
+            return;
+        }
+        let base = self.units[u as usize].subunit;
+        if self.units[u as usize].unit_type == 6 && self.units[base as usize].ai != NIL {
+            todo_port!("0x477b0e", "AI siege tank sieges up for its turret's target");
+        }
+        if !self.target_in_reach(d, u, t) {
+            let bt = self.units[base as usize].unit_type as usize;
+            if self.units[base as usize].order != d.dat.units.ai_attack_unit[bt] || self.right_click_kind(d, base) == 3 {
+                self.start_order_now(d, u, 4);
+                return;
+            }
+        }
+        let p = self.units[u as usize].order_target_pos;
+        if self.units[u as usize].fl.next_target_waypoint != p {
+            self.units[u as usize].fl.next_target_waypoint = p;
+        }
+        if self.units[base as usize].fl.flags & 2 != 0 {
+            return;
+        }
+        self.fire(d, u, 5);
     }
 
 
-    /// 0x4673d0: Repair.
-    fn order_repair(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x4673d0", "Repair");
+    /// 0x4673d0: Repair: SCVs walk to a damaged mechanical Terran unit and pay for each
+    /// repair tick (+0xcc counts the frames until the next payment).
+    fn order_repair(&mut self, d: &Data, u: u32) {
+        let t = self.units[u as usize].order_target_unit;
+        let stop = t == NIL || {
+            let tu = &self.units[t as usize];
+            let tt = tu.unit_type as usize;
+            tu.hp >= d.dat.units.hit_points[tt] as i32
+                || tu.stasis_timer != 0
+                || (self.units[u as usize].ai != NIL && tu.status & 0x2_0000 != 0 && tu.order_target_unit != u)
+                || tu.status & 0x40 != 0
+                || d.dat.units.flags[tt] & 0x4000_0000 == 0
+                || tu.status & 1 == 0
+        };
+        if stop {
+            self.repair_finish(d, u, t);
+            return;
+        }
+        let g = d.dat.units.staredit_group_flags[self.units[t as usize].unit_type as usize];
+        if g & 5 != 0 || g & 2 == 0 {
+            let s = self.units[u as usize].sprite;
+            self.sprite_images_run_anim(d, s, 0xc);
+            self.order_done_or_next(d, u);
+            return;
+        }
+        let s = self.units[u as usize].sprite;
+        let tp = self.unit_sprite_pos(t);
+        let face = |st: &mut State| {
+            let f = &mut st.units[u as usize].fl;
+            if f.next_target_waypoint != tp {
+                f.next_target_waypoint = tp;
+            }
+            // 0x479fe0
+            st.units[u as usize].order_target_unit = t;
+            st.units[u as usize].order_target_pos = tp;
+        };
+        match self.units[u as usize].order_state {
+            0 | 1 => {
+                if self.units[u as usize].order_state == 0 {
+                    // 0x466d10 / 0x466ee0: can the first tick be paid (error otherwise).
+                    let (m, g, _) = self.repair_tick_cost(d, t);
+                    let p = self.units[u as usize].player;
+                    let race = self.player_races[self.local_player as usize] as u16;
+                    if self.players.minerals[p as usize] < m {
+                        self.local_error(p, 0x93 + race, 0x352);
+                    } else if self.players.gas[p as usize] < g {
+                        self.local_error(p, 0x96 + race, 0x353);
+                    }
+                    self.units[u as usize].set_u16_at(0xcc, 0);
+                    self.units[u as usize].order_state = 1;
+                }
+                if self.units[t as usize].status & 1 != 0 {
+                    if !self.move_to_unit_aim(d, u, t) {
+                        return;
+                    }
+                    self.units[u as usize].order_target_unit = t;
+                    self.units[u as usize].order_target_pos = tp;
+                    self.units[u as usize].order_state = 6;
+                } else {
+                    self.order_with_target(d, u, 0x21, t);
+                }
+                return;
+            }
+            6 => {
+                if self.unit_at_move_target(u) == 0 {
+                    self.follow_move(d, u, t);
+                    return;
+                }
+                if !self.box_distance_within(d, u, 5, t) {
+                    self.units[u as usize].order_state = 1;
+                    return;
+                }
+                face(self);
+                self.units[u as usize].order_state = 7;
+            }
+            7 => {
+                if !self.box_distance_within(d, u, 5, t) {
+                    self.units[u as usize].order_state = 1;
+                    return;
+                }
+                face(self);
+                let f = &self.units[u as usize].fl;
+                let facing = f.next_target_waypoint == f.pos || {
+                    let sp = (self.sprites[s as usize].x, self.sprites[s as usize].y);
+                    let dir = crate::game::flingy::direction_to(sp.0 as i32, sp.1 as i32, f.next_target_waypoint.0 as i32, f.next_target_waypoint.1 as i32);
+                    let mut diff = f.heading as i32 - dir as i32;
+                    if diff < 0 {
+                        diff += 0x100;
+                    }
+                    if diff > 0x80 {
+                        diff = 0x100 - diff;
+                    }
+                    let w = self.ground_weapon(d, u);
+                    diff <= d.dat.weapons.attack_angle[w as usize] as i32
+                };
+                if facing {
+                    self.sprite_images_run_anim(d, s, 0xf);
+                    self.units[u as usize].order_state = 8;
+                }
+            }
+            8 => {
+                face(self);
+                if !self.box_distance_within(d, u, 5, t) || self.units[t as usize].order == 0x4a {
+                    self.sprite_images_run_anim(d, s, 8);
+                    self.units[u as usize].order_state = 1;
+                }
+            }
+            _ => return,
+        }
+        let timer = self.units[u as usize].u16_at(0xcc);
+        self.units[u as usize].set_u16_at(0xcc, timer.wrapping_sub(1));
+        if timer == 0 && !self.repair_pay(d, u, t) {
+            self.sprite_images_run_anim(d, s, 0xc);
+            self.order_done_or_next(d, u);
+            return;
+        }
+        let mut gain = self.units[t as usize].hp_gain as i32;
+        if self.game_options & 2 != 0 {
+            gain = (gain << 4) & 0xffff;
+        }
+        let hp = self.units[t as usize].hp + gain;
+        self.set_unit_hp(d, t, hp);
+        if self.units[t as usize].hp >= d.dat.units.hit_points[self.units[t as usize].unit_type as usize] as i32 {
+            self.repair_finish(d, u, t);
+        }
+    }
+
+    /// The end of Repair (0x4673d0): stop the repair animation, next order or idle, and
+    /// the target forgets its repairer (+0x80).
+    fn repair_finish(&mut self, d: &Data, u: u32, t: u32) {
+        let s = self.units[u as usize].sprite;
+        self.sprite_images_run_anim(d, s, 0xc);
+        if self.units[u as usize].order_queue_head != NIL {
+            self.units[u as usize].order_flags |= 1;
+            self.order_nothing(d, u);
+        } else {
+            let o = if self.units[u as usize].ai != NIL { 0x9c } else { d.dat.units.ai_return_to_idle[self.units[u as usize].unit_type as usize] };
+            self.start_order_now(d, u, o);
+        }
+        if t != NIL && self.units[t as usize].status & 0x40 == 0 {
+            self.units[t as usize].connected_unit = NIL;
+        }
+    }
+
+    /// 0x466d10: one repair tick of `t`: (minerals, gas, frames until the next tick).
+    fn repair_tick_cost(&self, d: &Data, t: u32) -> (i32, i32, i16) {
+        let tt = self.units[t as usize].unit_type as usize;
+        let m = d.dat.units.mineral_cost[tt] as u32;
+        let g = d.dat.units.gas_cost[tt] as u32;
+        let small = if m == 0 || g == 0 { m.max(g) } else { m.min(g) };
+        if small == 0 {
+            return (0, 0, -1);
+        }
+        let max = d.dat.units.hit_points[tt] as i32;
+        let cheat = self.game_options & 2 != 0;
+        let gain = |v: u32| if cheat { (v << 4) & 0xffff } else { v };
+        let hg = self.units[t as usize].hp_gain as u32;
+        let time = ((max * 3) / (gain(hg) * small) as i32) as i16;
+        if time == 0 {
+            let per = |c: u32| if c == 0 { 0 } else { ((gain(hg) * c) as i32 / (max * 3)).max(1) };
+            (per(m), per(g), 1)
+        } else if small == m {
+            ((1), (g / m) as i32, time)
+        } else {
+            ((m / g) as i32, 1, time)
+        }
+    }
+
+    /// 0x466fb0: pay the next repair tick, or false when the player can't.
+    fn repair_pay(&mut self, d: &Data, u: u32, t: u32) -> bool {
+        let (m, g, time) = self.repair_tick_cost(d, t);
+        let p = self.units[u as usize].player as usize;
+        let race = self.player_races[self.local_player as usize] as u16;
+        if self.players.minerals[p] < m {
+            self.local_error(p as u8, 0x93 + race, 0x352);
+            return false;
+        }
+        if self.players.gas[p] < g {
+            self.local_error(p as u8, 0x96 + race, 0x353);
+            return false;
+        }
+        self.units[u as usize].set_u16_at(0xcc, time as u16);
+        self.players.minerals[p] -= m;
+        self.players.gas[p] -= g;
+        true
     }
 
 
@@ -269,16 +486,6 @@ impl State {
     /// 0x493920: Interrupted.
     fn order_interrupted(&mut self, _d: &Data, _u: u32) {
         todo_port!("0x493920", "Interrupted");
-    }
-
-    /// 0x464bd0: Sieging.
-    fn order_sieging(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x464bd0", "Sieging");
-    }
-
-    /// 0x464ae0: Unsieging.
-    fn order_unsieging(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x464ae0", "Unsieging");
     }
 
     /// 0x4948b0: ArchonWarp.
@@ -660,8 +867,53 @@ impl State {
     }
 
     /// 0x47c4f0: StayInRange.
-    fn order_stay_in_range(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x47c4f0", "StayInRange");
+    fn order_stay_in_range(&mut self, d: &Data, u: u32) {
+        let t = self.units[u as usize].order_target_unit;
+        if t == NIL {
+            self.unit_halt_facing(d, u);
+            self.order_done_or_next(d, u);
+            return;
+        }
+        self.units[u as usize].order_target_pos = self.unit_sprite_pos(t);
+        if !self.can_attack(d, u, t, true) {
+            let un = &self.units[u as usize];
+            if un.status & 0x800_0000 == 0 && un.ai == NIL {
+                let p = un.order_target_pos;
+                self.order_queue_front(d, u, 6, p);
+            }
+            self.order_done_or_next(d, u);
+            return;
+        }
+        if self.units[u as usize].order_state != 0 {
+            if self.target_in_reach(d, u, t) {
+                self.unit_halt_facing(d, u);
+            } else if !self.chase(d, u, t) {
+                return;
+            }
+        } else {
+            if !self.target_in_reach(d, u, t) && !self.move_to_unit(d, u, t) {
+                return;
+            }
+            self.units[u as usize].order_state = 1;
+        }
+        // Goliaths and tanks turn the body toward a target more than 0x1f off.
+        let un = &self.units[u as usize];
+        if matches!(un.unit_type, 3 | 0x11) && un.fl.flags & 2 == 0 {
+            let s = &self.sprites[un.sprite as usize];
+            let tp = un.order_target_pos;
+            let dir = crate::game::flingy::direction_to(s.x as i32, s.y as i32, tp.0 as i32, tp.1 as i32);
+            let mut diff = dir.wrapping_sub(un.fl.heading) as i8;
+            if diff < -0x7f {
+                diff = -0x80;
+            }
+            if (diff as i32).abs() >= 0x20 {
+                // 0x494bb0
+                let f = &mut self.units[u as usize].fl;
+                if f.next_target_waypoint != tp {
+                    f.next_target_waypoint = tp;
+                }
+            }
+        }
     }
 
 
@@ -675,10 +927,6 @@ impl State {
         todo_port!("inline", "InfestingCommandCenter");
     }
 
-    /// 0x4e6880: PlaceAddon.
-    fn order_place_addon(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x4e6880", "PlaceAddon");
-    }
 
     /// 0x45d0d0: ZergBuildingMorph.
     fn order_zerg_building_morph(&mut self, _d: &Data, _u: u32) {
@@ -780,7 +1028,7 @@ impl State {
 
     /// 0x4eb900: follow `t` while it is in sight (within 0x1c0 when not seen),
     /// unless the unit just got an order (+0xe3).
-    fn follow_move(&mut self, d: &Data, u: u32, t: u32) -> bool {
+    pub(super) fn follow_move(&mut self, d: &Data, u: u32, t: u32) -> bool {
         if self.units[u as usize].recent_order_timer != 0 {
             return true;
         }
@@ -851,10 +1099,6 @@ impl State {
 
 
 
-    /// 0x4e7cf0: EnterTransport.
-    fn order_enter_transport(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x4e7cf0", "EnterTransport");
-    }
 
     /// 0x4e7300: PickupIdle.
     fn order_pickup_idle(&mut self, _d: &Data, _u: u32) {
@@ -866,10 +1110,6 @@ impl State {
         todo_port!("0x4e75d0", "PickupTransport");
     }
 
-    /// 0x4e73b0: PickupBunker.
-    fn order_pickup_bunker(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x4e73b0", "PickupBunker");
-    }
 
     /// 0x4e7b70: Pickup4.
     fn order_pickup4(&mut self, _d: &Data, _u: u32) {
@@ -882,8 +1122,26 @@ impl State {
     }
 
     /// 0x47bab0: WatchTarget.
-    fn order_watch_target(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x47bab0", "WatchTarget");
+    fn order_watch_target(&mut self, d: &Data, u: u32) {
+        let t = self.units[u as usize].order_target_unit;
+        if t != NIL && self.can_attack(d, u, t, true) {
+            if self.target_in_reach(d, u, t) || self.right_click_kind(d, u) != 3 {
+                return;
+            }
+        }
+        // 0x475350
+        if self.units[u as usize].order_queue_head != NIL {
+            self.order_nothing(d, u);
+        } else if self.units[u as usize].ai != NIL {
+            self.order_now(d, u, 0x9c);
+        } else {
+            // 0x475260
+            let p = self.units[u as usize].order_target_pos;
+            let o = d.dat.units.ai_return_to_idle[self.units[u as usize].unit_type as usize];
+            self.units[u as usize].order_flags |= 1;
+            self.issue_order(d, u, o, true, p, NIL, 0xe4);
+            self.order_nothing(d, u);
+        }
     }
 
     /// inline: InitCreepGrowth.
@@ -976,16 +1234,6 @@ impl State {
         }
     }
 
-    /// 0x4e80d0: Unload.
-    fn order_unload(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x4e80d0", "Unload");
-    }
-
-    /// 0x4e7700: MoveUnload.
-    fn order_move_unload(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x4e7700", "MoveUnload");
-    }
-
     /// 0x492850: FireYamatoGun, CastLockdown, CastDarkSwarm, CastParasite, CastSpawnBroodlings, CastEMPShockwave, CastPsionicStorm, CastIrradiate, CastPlague, CastConsume, CastEnsnare, CastStasisField, CastRestoration, CastDisruptionWeb, CastOpticalFlare, CastMaelstrom.
     fn order_fire_yamato_gun(&mut self, _d: &Data, _u: u32) {
         todo_port!("0x492850", "FireYamatoGun, CastLockdown, CastDarkSwarm, CastParasite, CastSpawnBroodlings, CastEMPShockwave, CastPsionicStorm, CastIrradiate, CastPlague, CastConsume, CastEnsnare, CastStasisField, CastRestoration, CastDisruptionWeb, CastOpticalFlare, CastMaelstrom");
@@ -1072,8 +1320,83 @@ impl State {
     }
 
     /// 0x4780f0: Patrol.
-    fn order_patrol(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x4780f0", "Patrol");
+    fn order_patrol(&mut self, d: &Data, u: u32) {
+        if self.units[u as usize].order_state == 0 {
+            let head = self.units[u as usize].order_queue_head;
+            if head == NIL || self.orders[head as usize].order != 0x98 {
+                // First call: this leg queued as a Patrol order, then the way back.
+                let (pos, target) = (self.units[u as usize].order_target_pos, self.units[u as usize].order_target_unit);
+                self.units[u as usize].order_flags |= 1;
+                self.issue_order(d, u, 0x98, true, pos, target, 0xe4);
+                self.order_nothing(d, u);
+                let back = self.unit_sprite_pos(u);
+                self.order_queue_append(d, u, 0x98, 0xe4, back, NIL);
+                return;
+            }
+            let p = self.units[u as usize].order_target_pos;
+            let r = self.set_move_target_xy(d, u, p);
+            let f = &mut self.units[u as usize].fl;
+            if f.next_target_waypoint != p {
+                f.next_target_waypoint = p;
+            }
+            if !r {
+                return;
+            }
+            self.units[u as usize].order_state = 1;
+        }
+        let at = self.units[u as usize].auto_target;
+        if at != NIL
+            && self.is_enemy(u, at)
+            && self.sprites[self.units[at as usize].sprite as usize].flags & super::sprite::sflag::HIDDEN == 0
+            && self.units[at as usize].status & 0x400_0000 == 0
+            && !self.cloaked_from(at, u)
+        {
+            self.patrol_attack(d, u, at, true);
+            return;
+        }
+        if self.units[u as usize].main_order_timer != 0 {
+            return;
+        }
+        self.units[u as usize].main_order_timer = 0xf;
+        if self.units[u as usize].unit_type == 0x22 && self.units[u as usize].order_target_unit == NIL {
+            todo_port!("0x4422a0", "patrolling medics look for units to heal");
+        }
+        if self.units[u as usize].fl.move_target == self.unit_sprite_pos(u) {
+            // 0x4748e0: queue the way back, then the next leg.
+            let back = if self.unit_at_move_target(u) == 2 { self.units[u as usize].order_target_pos } else { self.unit_sprite_pos(u) };
+            self.order_queue_append(d, u, 0x98, 0xe4, back, NIL);
+            self.order_next_or_idle(d, u);
+            return;
+        }
+        if self.acquisition_range(u) as u8 == 0 {
+            return;
+        }
+        let t = self.find_auto_target(d, u);
+        if t != NIL {
+            self.patrol_attack(d, u, t, false);
+        }
+    }
+
+    /// The common end of Patrol's attacks: this leg queued again and the unit's attack
+    /// order on `t` before it (0x474540, 0x4747e0), then the attack starts (0x475420) and
+    /// the unit is marked auto-targeting (0x4026a0).
+    fn patrol_attack(&mut self, d: &Data, u: u32, t: u32, clear_auto: bool) {
+        let (pos, target) = (self.units[u as usize].order_target_pos, self.units[u as usize].order_target_unit);
+        let head = self.units[u as usize].order_queue_head;
+        self.order_insert_before(d, u, 0x98, 0xe4, pos, target, head);
+        let attack = d.dat.units.ai_attack_unit[self.units[u as usize].unit_type as usize];
+        let head = self.units[u as usize].order_queue_head;
+        let tp = self.unit_sprite_pos(t);
+        self.order_insert_before(d, u, attack, 0xe4, tp, t, head);
+        if clear_auto {
+            self.units[u as usize].auto_target = NIL;
+        }
+        self.order_next_or_idle(d, u);
+        self.units[u as usize].status |= 0x800_0000;
+        let sub = self.units[u as usize].subunit;
+        if sub != NIL {
+            self.units[sub as usize].status |= 0x800_0000;
+        }
     }
 
     /// 0x4e4210: CTFCOPInit.

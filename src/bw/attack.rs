@@ -13,7 +13,7 @@ impl State {
     }
 
     /// The unit that holds the weapons: the turret if `u` has one.
-    fn weapon_unit(&self, d: &Data, u: u32) -> u32 {
+    pub(super) fn weapon_unit(&self, d: &Data, u: u32) -> u32 {
         let sub = self.units[u as usize].subunit;
         if self.is_turret(d, sub) { sub } else { u }
     }
@@ -28,7 +28,7 @@ impl State {
     }
 
     /// Weapon `u` would use against `target` (air weapon for air targets).
-    fn weapon_against(&self, d: &Data, u: u32, target: u32) -> u8 {
+    pub(super) fn weapon_against(&self, d: &Data, u: u32, target: u32) -> u8 {
         let w = self.weapon_unit(d, u);
         if self.units[target as usize].status & 4 != 0 {
             d.dat.units.air_weapon[self.units[w as usize].unit_type as usize]
@@ -44,7 +44,7 @@ impl State {
     }
 
     /// 0x4e5e30: `target` is visible to `u`'s owner.
-    fn target_visible(&self, target: u32, u: u32) -> bool {
+    pub(super) fn target_visible(&self, target: u32, u: u32) -> bool {
         let bit = 1u32 << (self.units[u as usize].player & 0x1f);
         let t = &self.units[target as usize];
         if t.status & 0x300 != 0 && t.visibility & bit == 0 {
@@ -107,7 +107,7 @@ impl State {
     }
 
     /// 0x475870: weapon range in pixels with range upgrades and the bunker bonus.
-    fn weapon_range(&self, d: &Data, u: u32, weapon: u8) -> u32 {
+    pub(super) fn weapon_range(&self, d: &Data, u: u32, weapon: u8) -> u32 {
         let un = &self.units[u as usize];
         let base = d.dat.weapons.max_range[weapon as usize];
         let mut bonus = if un.status & 0x20 != 0 { 0x40 } else { 0 };
@@ -134,7 +134,7 @@ impl State {
 
     /// 0x4763d0: `target` is within `range` of `u`, plus `u`'s stopping distance when
     /// it moves and the target is not moving the same way.
-    fn in_attack_range(&self, d: &Data, u: u32, mut range: u32, target: u32) -> bool {
+    pub(super) fn in_attack_range(&self, d: &Data, u: u32, mut range: u32, target: u32) -> bool {
         let f = &self.units[u as usize].fl;
         if f.flags & 2 != 0 {
             let tf = &self.units[target as usize].fl;
@@ -234,7 +234,7 @@ impl State {
 
     /// 0x4eb900: chase `target` unless recently ordered; give up when it is out of
     /// sight and far.
-    fn chase(&mut self, d: &Data, u: u32, target: u32) -> bool {
+    pub(super) fn chase(&mut self, d: &Data, u: u32, target: u32) -> bool {
         if self.units[u as usize].recent_order_timer != 0 {
             return true;
         }
@@ -298,18 +298,7 @@ impl State {
             un.fl.next_target_waypoint = tp;
         }
         if un.order_state == 0 {
-            let w = self.weapon_against(d, u, target);
-            let wu = self.weapon_unit(d, u);
-            let in_range = self.target_visible(target, u)
-                && w < NO_WEAPON
-                && {
-                    let min = d.dat.weapons.min_range[w as usize];
-                    (min == 0 || !self.box_distance_within(d, wu, min, target)) && {
-                        let r = self.weapon_range(d, u, w);
-                        self.in_attack_range(d, u, r, target)
-                    }
-                };
-            if !in_range && !self.move_to_unit(d, u, self.units[u as usize].order_target_unit) {
+            if !self.target_in_reach(d, u, target) && !self.move_to_unit(d, u, self.units[u as usize].order_target_unit) {
                 return false;
             }
             self.units[u as usize].order_state = 1;
@@ -340,6 +329,24 @@ impl State {
             self.approach(d, u, target);
         }
         false
+    }
+
+    /// Inline in 0x478540, 0x477980 and 0x47c4f0: `target` is seen and `u` can hit it
+    /// from where it stands (outside the weapon's minimum range, inside its range).
+    pub(super) fn target_in_reach(&self, d: &Data, u: u32, target: u32) -> bool {
+        if !self.target_visible(target, u) {
+            return false;
+        }
+        let w = self.weapon_against(d, u, target);
+        if w >= NO_WEAPON {
+            return false;
+        }
+        let min = d.dat.weapons.min_range[w as usize];
+        if min != 0 && self.box_distance_within(d, self.weapon_unit(d, u), min, target) {
+            return false;
+        }
+        let r = self.weapon_range(d, u, w);
+        self.in_attack_range(d, u, r, target)
     }
 
     /// 0x442160: how much `u` wants to attack `t` (0 best .. 5 never).
@@ -619,7 +626,7 @@ impl State {
     }
 
     /// 0x477510: an auto-targeting unit (status 0x8000000) switches to a better target.
-    fn pick_better_target(&mut self, d: &Data, u: u32) {
+    pub(super) fn pick_better_target(&mut self, d: &Data, u: u32) {
         if self.units[u as usize].status & 0x800_0000 == 0 {
             return;
         }
@@ -703,6 +710,7 @@ impl State {
     /// 0x476ed0: fire at the order target with the right weapon, starting `anim`
     /// (`anim + 1` for air targets).
     pub fn fire(&mut self, d: &Data, u: u32, anim: u8) {
+        self.bullets.spin_source = NIL;
         let st = self.units[u as usize].status;
         if st & 0x8000 != 0 {
             return;
@@ -760,7 +768,7 @@ impl State {
     }
 
     /// 0x475dc0: weapon cooldown with acid spores, stim/adrenal and ensnare.
-    fn weapon_cooldown(&self, d: &Data, u: u32, w: u8) -> u8 {
+    pub(super) fn weapon_cooldown(&self, d: &Data, u: u32, w: u8) -> u8 {
         let un = &self.units[u as usize];
         let base = d.dat.weapons.cooldown[w as usize] as u32;
         let mut c = base;

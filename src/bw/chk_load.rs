@@ -371,7 +371,7 @@ impl State {
             if un.hp > max as i32 {
                 un.hp = max as i32;
             }
-            todo_port!("0x467340", "damage overlays (0x4e6090) and AI strength (0x431800) after setting hp");
+            self.hp_changed(d, u);
         }
         let max_sh = d.dat.units.shields[ut] as u32;
         let sh = (p[6] as u32 * max_sh) / 100;

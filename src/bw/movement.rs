@@ -404,9 +404,8 @@ impl State {
     /// 0x46be80: subunit (turret) follows its parent's direction.
     fn mv_subunit(&mut self, d: &Data, u: u32) -> bool {
         self.moved_flag = false;
-        let t = self.units[u as usize].fl.move_target;
-        let _ = t;
-        todo_port!("0x46be80", "4eb820 call with the subunit's current target (EBX/EDI from caller context)");
+        let p = self.unit_sprite_pos(u);
+        self.set_move_target_xy(d, u, p);
         let f = &mut self.units[u as usize].fl;
         let diff = f.desired_dir.wrapping_sub(f.heading) as i8;
         if diff > -0xb && diff < 0xb {

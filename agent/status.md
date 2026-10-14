@@ -15,33 +15,29 @@ runtime from the user's 1.16.1 install (`~/Downloads/StarCraft-BroodWar_1.16.1`,
 
 ## Where the work is (updated 2026-10-14)
 
-Committed this session: replay playback in emulator + scbw (330f38a), research and
-upgrades + fog of war (4a62573), right-click marker (027eb9f), status panel training
-queue / research / upgrade (b69d438). Suite: 65/65 MATCH (agent/tools/suite.sh).
+**tl1412 replay** (`agent/tools/repcmp.sh <rep> <frames>`): the emulator equals the real
+1.16.1 (native traces, `re/native_trace_gdb.py`), and scbw equals the emulator through
+frame ~10379. Ported along the way this session: addons (addon.rs), transports / bunkers
+and Unload (transport.rs), siege mode (siege.rs), turret orders (TurretGuard /
+TurretAttack), StayInRange, WatchTarget, BunkerGuard, subunit death, damage overlays,
+splash damage (0x48b570), Repair, Patrol, worker resource release on death, resource
+holder removal (0x49f4a0), and the turret mode switch (0x49f6a0). Replay commands now
+run with the synced RNG on (as the turn loop 0x487191 does).
 
-**tl1412 replay**: emulator and scbw agree frame for frame until a player leaves at
-frame 24642 (0x48a1c0 "player left" not ported). BUT both disagree with the real game:
-in the emulator/scbw the workers jam on one mineral and get stuck (order 0x5a
-ReturnMinerals in movement state 0xc, "unstack" loop), so the economy stalls (player 0
-has 0 gas all game), while the native screenshots show normal mining. So the emulator's
-replay setup differs from the real game's. Suspects: a game-init step re_emu_game.py's
-`game_init` skips (0x4ef100 calls after the map load: 0x4a9a30, 0x4de9a0, 0x49cc40,
-0x4a9d80/0x4a9250, 0x4ee180, 0x4ed2b0 -- e.g. mineral resource areas), or unit order /
-unique ids differing from the real game's so command handles hit other units. Get ground
-truth: extend re/native_shots_gdb.py to dump the unit table (0x59cca8, 0x150 each) and
-resources (0x57f0f0) at early frames from the real game and diff against `$W/ra`.
+Debug aids: `SCBW_WATCH=<unit>` (per-frame line + main image anim/pc on stderr),
+`SCBW_FINDPOS=f,x,y` (unit indices at a position), `SCBW_RNGSITES_AT=f`, and
+`SCBW_RNGLOG_AT=f` (every RNG draw on frame f; the emulator also prints the iscript unit,
+image id, anim and pc for each).
 
 User requests still open: screenshot tests must become exact and follow a player's
-camera (lower priority: "focus on decomp"); selection target flash (sprite +0xf timer
-drawing) after right-click is set but not drawn yet.
+camera (lower priority: "focus on decomp"); selection target flash drawing.
 
 ## Next steps
 
-1. Finish/verify HoldPosition, commit, continue the tl1412 divergence chase to the end.
-2. Expected next todos on this replay (commands it uses, from `scbw rep`): siege/unsiege
-   (0x25/0x26), lift (0x2f), research (0x30) and upgrades (0x32), cloak (0x21/0x22),
-   unload (0x28/0x29), cancel train (0x20, ported), stop (0x1a). Grep `todo_port!` for the
-   address the trace stops on.
+1. Continue the tl1412 divergence chase to the end (player leave 0x48a1c0 near
+   f24642). Grep `todo_port!` for the address the trace stops on.
+2. Remaining todos seen on the way: lurker spines splash (0x48b680), AI paths, cloak,
+   interceptor/scarab removal (0x4652a0), ghost nuke cleanup.
 3. Then the other 14 replays in `~/games/Starcraft/broodwar-reps-116/` (PvZ, ZvT, 2v2 top
    vs bottom; `rep` shows game type: 2 melee, 10 top-vs-bottom). Non-melee game types
    currently get melee starting units (`view.rs::new_game`, marked ponytail): port the
