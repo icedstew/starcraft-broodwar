@@ -216,7 +216,7 @@ impl State {
         self.update_unit_timers(d, u);
         self.execute_hidden_order(d, u);
         match self.units[u as usize].secondary_order {
-            0x3f => todo_port!("0x466790", "TrainFighter"),
+            0x3f => self.secondary_train_fighter(d, u),
             0x6d => self.secondary_cloak(u),
             0x6e => self.set_secondary_order(u, 0x17),
             _ => {}
@@ -393,7 +393,7 @@ impl State {
         match un.secondary_order {
             0x25 => self.secondary_build_addon(d, u),
             0x26 => self.secondary_train(d, u),
-            0x3f => todo_port!("0x466790", "TrainFighter"),
+            0x3f => self.secondary_train_fighter(d, u),
             0x44 => todo_port!("0x4932d0", "ShieldBattery"),
             0x4e => self.hatchery_spawn_larva(d, u),
             0x66 => self.secondary_spread_creep(d, u),

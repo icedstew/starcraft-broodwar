@@ -10,6 +10,7 @@ pub mod build;
 pub mod bullet;
 pub mod buttons;
 pub mod burrow;
+pub mod fighters;
 pub mod chk_load;
 pub mod cloak;
 pub mod command;

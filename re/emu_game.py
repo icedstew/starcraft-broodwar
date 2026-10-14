@@ -105,8 +105,20 @@ def load_replay(path):
     return r
 
 
+def install_ptd(e):
+    """__getptd (0x4059e4) reads TLS: return one static per-thread block instead, with
+    MSVC's initial rand state (_holdrand at +0x14 = 1). Installed once, before the
+    scenario loads (map-placed zerg buildings spread creep with rand)."""
+    if e.r8(0x4059e4) == 0xb8:
+        return
+    ptd = e.alloc(0x8c)
+    e.w32(ptd + 0x14, 1)
+    e.write(0x4059e4, b"\xb8" + struct.pack("<I", ptd) + b"\xc3")
+
+
 def game_init(e, f, md):
     """0x4eee00 with the scenario taken from memory (replay-style CHK, 0x4bf520)."""
+    install_ptd(e)
     rd = lambda n: open(os.path.join(md, n), "rb").read()
     if os.environ.get("SCBW_REPLAY"):
         e.w8(0x58f440, 1)  # Brood War game (BW maps need it to load)
@@ -414,13 +426,9 @@ def scenario(e, units, move, frames, out):
     e.call(0x4c3ed0)  # alliances and shared vision at game start
     # 0x49e530 shows a placement error to the owning player (UI only): skip it.
     e.write(0x49e530, b"\xc2\x04\x00")
-    # __getptd (0x4059e4) reads TLS: return one static per-thread block instead, with
-    # MSVC's initial rand state (_holdrand at +0x14 = 1).
     e.w32(0x57f0b0, 1)  # local player 0's vision mask
     e.w32(0x57eeb8, 0x100)  # and explored mask
-    ptd = e.alloc(0x8c)
-    e.w32(ptd + 0x14, 1)
-    e.write(0x4059e4, b"\xb8" + struct.pack("<I", ptd) + b"\xc3")
+    install_ptd(e)
     if replay:
         e.w32(0x6d0f14, 1)
         # The end of 0x4ef100 for replays: everyone's vision and exploration shown.

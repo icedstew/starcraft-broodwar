@@ -1216,6 +1216,7 @@ impl State {
             0x1a => self.command_stop(d, player, sel, byte(1) != 0),
             0x1e => self.command_return_cargo(d, player, sel, byte(1) != 0),
             0x1f => self.command_train_sel(d, player, sel, u16_at(1)),
+            0x27 => self.command_train_fighter(d, player, sel),
             0x2b => self.command_hold(d, player, sel, byte(1) != 0),
             0x2c => self.command_burrow(d, player, sel, byte(1) != 0),
             0x2d => self.command_unburrow(d, player, sel),

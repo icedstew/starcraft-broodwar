@@ -238,7 +238,7 @@ impl State {
     }
 
     /// 0x468200: create the unit being trained (hidden until done).
-    fn create_trainee(&mut self, d: &Data, b: u32, t: u16, show_error: bool) -> u32 {
+    pub(super) fn create_trainee(&mut self, d: &Data, b: u32, t: u16, show_error: bool) -> u32 {
         let bu = &self.units[b as usize];
         let ok_builder = bu.status & 2 != 0 || matches!(bu.unit_type, 0x48 | 0x52 | 0x53 | 0x51 | 0x24);
         let p = bu.player;
@@ -298,15 +298,12 @@ impl State {
         }
         let r = bu.rally_unit;
         if r != NIL && self.units[c as usize].player == self.units[r as usize].player {
-            todo_port!("0x466f50", "rally on a unit: Follow (0x31)");
-            return;
+            return self.order_with_target(d, c, 0x31, r);
         }
         let p = bu.rally_pos;
         self.order_target(d, c, 6, p, NIL);
     }
 
-    /// 0x468280: cancel a unit under construction or in production: refund it (75% for
-    /// buildings), then cocoons turn back into their unit and anything else dies.
     /// 0x45d410: cancel a building morph (hatchery to lair, creep colony to sunken, ...):
     /// 3/4 of the queued type's cost back, the building completes again as it was.
     fn cancel_building_morph(&mut self, d: &Data, c: u32) {
@@ -392,6 +389,8 @@ impl State {
         todo_port!("0x47de40", "creep under the cancelled building starts to recede");
     }
 
+    /// 0x468280: cancel a unit under construction or in production: refund it (75% for
+    /// buildings), then cocoons turn back into their unit and anything else dies.
     pub(super) fn cancel_unit(&mut self, d: &Data, c: u32) {
         let un = &self.units[c as usize];
         if un.sprite == NIL || un.order == 0 || un.status & 1 != 0 {
