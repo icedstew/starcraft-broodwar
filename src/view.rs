@@ -364,8 +364,6 @@ impl<'a> Scene<'a> {
                 out[(y * vw + x) as usize] = row[sx as usize];
             }
         }
-        // 0x4bd580 -> 0x4808e0: fog of war shades the terrain before sprites are drawn.
-        self.fog.shade(&self.st, &self.dark, vx, vy, out, vw as usize, vh as usize);
         // Sprites by elevation, then tile row (row lists as the game keeps them).
         let mut order: Vec<u32> = Vec::new();
         for l in &self.st.sprite_rows {
@@ -380,6 +378,9 @@ impl<'a> Scene<'a> {
             self.sprite_seen(s) && (sp.x as i32 - vx).abs() < vw + 256 && (sp.y as i32 - vy).abs() < vh + 256
         });
         order.sort_by_key(|&s| self.st.sprites[s as usize].elevation);
+        // 0x4bd580: sprites (0x498d40), then fog of war over terrain and sprites alike
+        // (0x4808e0), then the right-click marker (0x488180) unshaded.
+        let fogged = order.len();
         // 0x488180: the right-click marker is drawn on top while shown, though its
         // sprite stays hidden.
         if let (true, Some(t)) = (self.st.marker_shown, self.st.marker_thingy) {
@@ -401,7 +402,11 @@ impl<'a> Scene<'a> {
                 (un.sprite, (c, u))
             })
             .collect();
-        for s in order {
+        let total = order.len();
+        for (k, s) in order.into_iter().enumerate() {
+            if k == fogged {
+                self.fog.shade(&self.st, &self.dark, vx, vy, out, vw as usize, vh as usize);
+            }
             let sp = &self.st.sprites[s as usize];
             if let Some(&(c, _)) = circled.get(&s) {
                 let id = sp.sprite_id as usize;
@@ -464,6 +469,9 @@ impl<'a> Scene<'a> {
                     });
                 }
             }
+        }
+        if total == fogged {
+            self.fog.shade(&self.st, &self.dark, vx, vy, out, vw as usize, vh as usize);
         }
     }
 
@@ -701,17 +709,14 @@ fn new_game(a: &Assets, chk: &Chk, rep: Option<&crate::replay::Header>) -> io::R
         st.init_acquisition_ranges(d);
         st.init_psi(&a.bw.psi_grp);
         st.init_thingies(d);
-        st.load_terrain(&ts, w as u16, h as u16, chk.section(b"MTXM").unwrap_or(&[]));
-        if let Some(doodads) = chk.section(b"THG2") {
-            st.chk_doodads(d, doodads, Default::default());
-        }
+        st.load_terrain(&ts, w as u16, h as u16, &chk.mtxm());
         let melee = match rep {
             // ponytail: only melee (game type 2) starts are set up; other types (top vs
             // bottom, UMS, ...) get melee starting units too.
             Some(_) => true,
             None => is_melee_map(chk) && std::env::var("SCBW_NOMELEE").is_err(),
         };
-        let units = chk.section(b"UNIT").unwrap_or(&[]);
+        let units = chk.section(b"UNIT").unwrap_or(&[]); // start locations: the last UNIT handler call sets them
         if let Some(h) = rep {
             // 0x4ef100: a replay's game uses the seed in its header (0x6d0f38).
             st.rng.seed = h.start_time;
@@ -761,8 +766,15 @@ fn new_game(a: &Assets, chk: &Chk, rep: Option<&crate::replay::Header>) -> io::R
         };
         st.init_alliances(Default::default());
         // 0x4eee00 loads the scenario right after 0x4ef100 seeds the RNG, with it on.
+        // Handler order (table 0x5001e8): MTXM, THG2 (its unit doodads draw from the
+        // RNG too), UNIT.
         st.rng.enabled = true;
-        st.chk_units(d, units, Default::default());
+        for doodads in chk.sections(b"THG2") {
+            st.chk_doodads(d, doodads, Default::default());
+        }
+        for units in chk.sections(b"UNIT") {
+            st.chk_units(d, units, Default::default());
+        }
         st.rng.enabled = false;
         if melee {
             st.rng.enabled = true;

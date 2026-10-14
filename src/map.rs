@@ -1,18 +1,18 @@
 //! Scenario (.chk) parsing and terrain rendering.
 
 use crate::storage::Storage;
-use std::collections::HashMap;
 use std::io;
 
 pub const TILESETS: [&str; 8] = ["badlands", "platform", "install", "ashworld", "jungle", "desert", "ice", "twilight"];
 
 pub struct Chk {
-    sections: HashMap<[u8; 4], Vec<u8>>,
+    /// Every section in file order: 0x413550 runs a tag's handler once per instance.
+    sections: Vec<([u8; 4], Vec<u8>)>,
 }
 
 impl Chk {
     pub fn parse(d: &[u8]) -> Chk {
-        let mut sections = HashMap::new();
+        let mut sections = Vec::new();
         let mut i = 0;
         while i + 8 <= d.len() {
             let tag: [u8; 4] = d[i..i + 4].try_into().unwrap();
@@ -24,14 +24,35 @@ impl Chk {
                 continue;
             }
             let end = (i + len as usize).min(d.len());
-            sections.insert(tag, d[i..end].to_vec()); // ponytail: last-wins; BW overlays MTXM partially
+            sections.push((tag, d[i..end].to_vec()));
             i = end;
         }
         Chk { sections }
     }
 
+    /// The last instance of `tag`: what the handlers that copy a section into fixed
+    /// globals end up with.
     pub fn section(&self, tag: &[u8; 4]) -> Option<&[u8]> {
-        self.sections.get(tag).map(Vec::as_slice)
+        self.sections(tag).last()
+    }
+
+    /// Every instance of `tag` in file order (UNIT / THG2 handlers act on each).
+    pub fn sections<'a>(&'a self, tag: &[u8; 4]) -> impl DoubleEndedIterator<Item = &'a [u8]> + use<'a> {
+        let tag = *tag;
+        self.sections.iter().filter(move |(t, _)| *t == tag).map(|(_, d)| d.as_slice())
+    }
+
+    /// MTXM as the handler 0x4cd0b0 leaves it: each instance is copied over the start
+    /// of the tile buffer (0x5993c4), so a short later one patches the first tiles.
+    pub fn mtxm(&self) -> Vec<u8> {
+        let mut m = Vec::new();
+        for s in self.sections(b"MTXM").filter(|s| s.len() <= 0x20000) {
+            if m.len() < s.len() {
+                m.resize(s.len(), 0);
+            }
+            m[..s.len()].copy_from_slice(s);
+        }
+        m
     }
 
     fn u16s(&self, tag: &[u8; 4]) -> Vec<u16> {
@@ -78,7 +99,7 @@ impl Chk {
     /// Megatile ids, row-major, padded to width*height.
     pub fn tiles(&self) -> Vec<u16> {
         let (w, h) = self.dims();
-        let mut t = self.u16s(b"MTXM");
+        let mut t: Vec<u16> = self.mtxm().chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
         t.resize(w * h, 0);
         t
     }

@@ -80,12 +80,15 @@ impl State {
         (self.crt_seed >> 16) & 0x7fff
     }
 
-    /// 0x47d230 inverted: the local player sees tile index `i`.
+    /// 0x47d230 inverted: the local player sees tile index `i`. A replay asks whether
+    /// any shown player (0x6d0f18, kept in `local_vision_mask`) sees it; 0x6d0f1c (the
+    /// replay vision menu's "all players", not ported) is 0.
     fn tile_seen_locally(&self, i: usize) -> bool {
+        let fog = self.terrain.tile_flags[i] as u8;
         if self.replay {
-            todo_port!("0x47d230", "replay vision for creep display");
+            return !fog & self.local_vision_mask != 0;
         }
-        self.terrain.tile_flags[i] & self.local_vision_mask as u32 == 0
+        fog & self.local_vision_mask == 0
     }
 
     /// 0x47e2d0: tile (x, y) became `tile`; `kind` 0 creep added, 1 removed, 2 edge.

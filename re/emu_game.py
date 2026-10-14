@@ -208,6 +208,9 @@ def tile_trace(e, f):
     n = e.r16(0x57f1d4) * e.r16(0x57f1d6)
     m = bytes(e.uc.mem_read(e.r32(0x5993c4), n * 2))
     fl = bytes(e.uc.mem_read(e.r32(0x6d1260), n * 4))
+    if os.environ.get("TILEDUMP") and f == int(os.environ.get("TILEDUMP_AT", "0")):
+        # TILEDUMP=<file>: raw tile map + tile flags at frame TILEDUMP_AT (vs `scbw reptrace`)
+        open(os.environ["TILEDUMP"], "wb").write(m + fl)
     h = 0x811c9dc5
     for i in range(n):
         for x in (m[i * 2], m[i * 2 + 1], fl[i * 4 + 2], fl[i * 4 + 3]):

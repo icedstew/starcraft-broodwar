@@ -104,12 +104,12 @@ fn main() -> std::io::Result<()> {
                     cv5: files.read(&format!("tileset/{name}.cv5"))?,
                 };
                 let (w, h) = chk.dims();
-                let ok = st.load_terrain(&ts, w as u16, h as u16, chk.section(b"MTXM").unwrap_or(&[]));
+                let ok = st.load_terrain(&ts, w as u16, h as u16, &chk.mtxm());
                 println!("map {w}x{h}: {} regions (ok {ok})", st.sai.region_count);
-                if let Some(doodads) = chk.section(b"THG2") {
+                for doodads in chk.sections(b"THG2") {
                     st.chk_doodads(&d, doodads, Default::default());
                 }
-                if let Some(units) = chk.section(b"UNIT") {
+                for units in chk.sections(b"UNIT") {
                     st.chk_units(&d, units, Default::default());
                     println!("map units: {}", st.unit_count);
                 }
@@ -703,7 +703,7 @@ fn main() -> std::io::Result<()> {
                 cv5: cv5.clone(),
             };
             let (w, h) = chk.dims();
-            let mtxm = chk.section(b"MTXM").unwrap_or(&[]).to_vec();
+            let mtxm = chk.mtxm();
             let mut m = bw::map::GameMap::new(w as u16, h as u16, &ts);
             m.load_mtxm(&ts, &mtxm);
             m.build_minitiles(&ts);
@@ -802,6 +802,15 @@ fn fog_trace(st: &bw::State, f: u32) -> String {
 
 fn tile_trace(st: &bw::State, f: u32) -> String {
     let m = &st.terrain;
+    if let Ok(path) = std::env::var("TILEDUMP") {
+        // Raw tile map + tile flags at frame TILEDUMP_AT, as re/emu_game.py writes them.
+        if std::env::var("TILEDUMP_AT").ok().and_then(|v| v.parse().ok()).unwrap_or(0) == f {
+            let n = m.width as usize * m.height as usize;
+            let mut out: Vec<u8> = m.mtxm[..n].iter().flat_map(|t| t.to_le_bytes()).collect();
+            out.extend(m.tile_flags[..n].iter().flat_map(|t| t.to_le_bytes()));
+            let _ = std::fs::write(path, out);
+        }
+    }
     let mut x = 0x811c9dc5u32;
     for i in 0..m.width as usize * m.height as usize {
         let [a, b] = m.mtxm[i].to_le_bytes();
