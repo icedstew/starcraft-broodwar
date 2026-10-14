@@ -371,6 +371,14 @@ impl<'a> Scene<'a> {
             self.sprite_seen(s) && (sp.x as i32 - vx).abs() < vw + 256 && (sp.y as i32 - vy).abs() < vh + 256
         });
         order.sort_by_key(|&s| self.st.sprites[s as usize].elevation);
+        // 0x488180: the right-click marker is drawn on top while shown, though its
+        // sprite stays hidden.
+        if let (true, Some(t)) = (self.st.marker_shown, self.st.marker_thingy) {
+            let s = self.st.thingies[t as usize].sprite;
+            if s != NIL {
+                order.push(s);
+            }
+        }
         // Selection circles (0x4d7070 / 0x4d6810): image 0x231 + the sprite's circle size,
         // below the sprite, colored from tselect.pcx by 0x581d6a (own 0, ally 1, enemy 2).
         let sp_dat = &self.a.dat().sprites;
@@ -464,6 +472,7 @@ impl<'a> Scene<'a> {
     /// Right-click at map point `p` (0x4c2370).
     pub fn right_click(&mut self, p: (i32, i32), queued: bool) {
         let t = self.unit_at(p.0, p.1).unwrap_or(NIL);
+        self.click_feedback(p, t);
         let (sel, me) = (self.sim_selection(), self.local);
         let st = &mut self.st;
         with_data(self.a, |d| st.command_right_click(d, me, &sel, (p.0 as i16, p.1 as i16), t, 0xe4, queued));
@@ -521,9 +530,23 @@ impl<'a> Scene<'a> {
     }
 
     /// A map click while targeting (0x46f5b0).
+    /// 0x456490: the clicked unit's selection circle flashes (sprite +0xf), or the
+    /// marker shows where the ground was clicked. (Fog sprites, 0x487a10, are not
+    /// ported.)
+    fn click_feedback(&mut self, p: (i32, i32), t: u32) {
+        if t != NIL {
+            let s = self.st.units[t as usize].sprite;
+            self.st.sprites[s as usize].selection_timer = 0x1f;
+            return;
+        }
+        let st = &mut self.st;
+        with_data(self.a, |d| st.show_marker(d, p.0 as i16, p.1 as i16));
+    }
+
     pub fn target_click(&mut self, p: (i32, i32), queued: bool) {
         let Some(modes) = self.targeting.take() else { return };
         let t = self.unit_at(p.0, p.1).unwrap_or(NIL);
+        self.click_feedback(p, t);
         let (sel, me) = (self.sim_selection(), self.local);
         let st = &mut self.st;
         let r = with_data(self.a, |d| st.target_click(d, me, &sel, modes, (p.0 as i16, p.1 as i16), t, 0xe4, queued));

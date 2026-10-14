@@ -133,6 +133,8 @@ pub struct State {
     pub active_thingies: List,
     /// 0x652918: placeholder sprite 0x13e made by 0x488550.
     pub marker_thingy: Option<u32>,
+    /// 0x652920: the right-click marker is shown (drawn by 0x488180 though hidden).
+    pub marker_shown: bool,
     pub units: Vec<Unit>,
     pub free_units: List,      // 0x140e77fe0 / 0x140e77fd8
     pub visible_units: List,   // 0x140e77fc8 / 0x140e78078
@@ -297,6 +299,7 @@ impl State {
             free_thingies,
             active_thingies: List::default(),
             marker_thingy: None,
+            marker_shown: false,
             units,
             free_units,
             visible_units: List::default(),

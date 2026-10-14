@@ -503,6 +503,31 @@ impl State {
         }
     }
 
+    /// 0x488660: show the right-click marker at map point (x, y): the marker sprite
+    /// moves there (one pixel down-right, as the original increments both) and its
+    /// images restart animation 2.
+    pub fn show_marker(&mut self, d: &Data, x: i16, y: i16) {
+        let Some(t) = self.marker_thingy else { return };
+        let s = self.thingies[t as usize].sprite;
+        self.marker_shown = false;
+        self.move_sprite(s, x.wrapping_add(1), y.wrapping_add(1));
+        let mut i = self.sprites[s as usize].images.head;
+        while i != NIL {
+            let next = self.images[i as usize].link.next;
+            if self.images[i as usize].flags & super::sprite::iflag::HAS_ISCRIPT_ANIMATIONS != 0 {
+                let header = self.images[i as usize].iscript.header as usize;
+                let st = &mut self.images[i as usize].iscript;
+                st.anim = 2;
+                st.pc = d.iscript_u16(header + 0xc);
+                st.wait = 0;
+                st.ret = 0;
+                super::iscript::run(self, d, i, false, None);
+            }
+            i = next;
+        }
+        self.marker_shown = true;
+    }
+
     /// 0x488550 tail: the hidden placeholder sprite 0x13e created with the pools.
     pub fn init_thingies(&mut self, d: &Data) {
         let Some(t) = self.create_thingy(d, 0x13e, 0, 0, 0) else { return };
