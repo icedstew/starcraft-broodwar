@@ -202,7 +202,14 @@ impl State {
             }
             // 0x48e6e0: minimap (UI).
             if d.dat.units.staredit_group_flags[self.units[u as usize].unit_type as usize] & 1 != 0 {
-                todo_port!("0x49fd00", "zerg building: morph done flag, creep recedes (0x47df90)");
+                // A dying lair / hive / ... morph counts as complete; while its creep cannot
+                // all be queued to recede it stays (0x4000) for the dead-unit step to retry.
+                if self.morphing_zerg_building(u) {
+                    self.units[u as usize].status |= 1;
+                }
+                if !self.creep_recede_unit(d, u) {
+                    self.units[u as usize].status |= 0x4000;
+                }
             }
         }
         if flags & 0x20 != 0 && self.units[u as usize].u8_at(0xcb) != 0 {

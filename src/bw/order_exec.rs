@@ -488,15 +488,7 @@ impl State {
         todo_port!("0x493920", "Interrupted");
     }
 
-    /// 0x4948b0: ArchonWarp.
-    fn order_archon_warp(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x4948b0", "ArchonWarp");
-    }
 
-    /// 0x493b10: CompletingArchonSummon.
-    fn order_completing_archon_summon(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x493b10", "CompletingArchonSummon");
-    }
 
     /// 0x4e6700: NukeTrain.
     fn order_nuke_train(&mut self, _d: &Data, _u: u32) {

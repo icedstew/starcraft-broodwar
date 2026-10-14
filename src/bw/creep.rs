@@ -6,8 +6,8 @@
 //! (`terrain.creep_saved`). The edge byte map (0x6d0e80) and the 0x413b30 neighbour
 //! walk only drive the creep edge graphics, so they are not kept here.
 
+use super::list::NIL;
 use super::{Data, State};
-use crate::todo_port;
 
 impl State {
     /// 0x413f20: tile (x, y) has creep.
@@ -125,7 +125,12 @@ impl State {
         for (dx, dy) in [(-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)] {
             let (cx, cy) = ((x + dx) as u32, (y + dy) as u32);
             if cx < w && cy < h && self.creep_at(cx as i32, cy as i32) && self.terrain.tile_flags[(cy * w + cx) as usize] & 0x1000_0000 != 0 {
-                todo_port!("0x47dc10", "creep recession lists (0x658ae8)");
+                let Some(n) = self.creep_rec.find(cx as u8, cy as u8) else { continue };
+                let b = self.creep_neighbours(cx, cy) as u8;
+                if b != self.creep_rec.nodes[n as usize].bucket {
+                    self.creep_rec.unlink(n);
+                    self.creep_rec.push(n, b);
+                }
             }
         }
     }
@@ -141,10 +146,150 @@ impl State {
             for tx in l..=r {
                 let dx = tx * 32 - x + 0x10;
                 if self.terrain.tile_flags[(ty * w + tx) as usize] & 0x1000_0000 != 0 && (!ellipse || dy * dy * 0x100 + dx * dx * 100 < 0x9c_4001) {
-                    todo_port!("0x47d540", "creep tile stops receding");
+                    self.unmark_receding(tx, ty);
                 }
             }
         }
+    }
+
+    /// 0x47dd60: creep tile (x, y) starts waiting to recede (false when no node is free).
+    fn mark_receding(&mut self, x: i32, y: i32) -> bool {
+        let r = &mut self.creep_rec;
+        if r.counts[9] == 0 {
+            return false;
+        }
+        let n = r.heads[9];
+        r.unlink(n);
+        r.nodes[n as usize].x = x as u8;
+        r.nodes[n as usize].y = y as u8;
+        let b = self.creep_neighbours(x as u32, y as u32) as u8;
+        self.creep_rec.push(n, b);
+        self.creep_rec.hash_insert(n);
+        let w = self.terrain.width as i32;
+        self.terrain.tile_flags[(y * w + x) as usize] |= 0x1000_0000;
+        true
+    }
+
+    /// 0x47d540: creep tile (x, y) no longer recedes.
+    fn unmark_receding(&mut self, x: i32, y: i32) -> bool {
+        let r = &mut self.creep_rec;
+        let Some(n) = r.find(x as u8, y as u8) else { return false };
+        r.unlink(n);
+        r.hash_remove(n);
+        r.push(n, 9);
+        let w = self.terrain.width as i32;
+        self.terrain.tile_flags[(y * w + x) as usize] &= !0x1000_0000;
+        true
+    }
+
+    /// 0x47e130: one creep tile recedes: a random one among those with the fewest creep
+    /// neighbours.
+    pub(super) fn recede_one(&mut self) {
+        let Some(b) = (0..9).find(|&b| self.creep_rec.counts[b] != 0) else { return };
+        let rnd = self.rng.rand(0x1b);
+        let r = &mut self.creep_rec;
+        let mut n = r.heads[b];
+        for _ in 0..((r.counts[b] as u32 * rnd) >> 15) {
+            n = r.nodes[n as usize].next;
+        }
+        r.unlink(n);
+        r.hash_remove(n);
+        let (x, y) = (r.nodes[n as usize].x as i32, r.nodes[n as usize].y as i32);
+        let w = self.terrain.width as i32;
+        self.terrain.tile_flags[(y * w + x) as usize] &= !0x1000_0000;
+        self.remove_creep_tile(x, y);
+        // 0x47d290 / 0x413b30: creep edges (UI).
+        self.creep_rec.push(n, 9);
+    }
+
+    /// 0x413fa0 with 0x413aa0: the tile under the creep comes back.
+    fn remove_creep_tile(&mut self, x: i32, y: i32) {
+        let i = (y * self.terrain.width as i32 + x) as usize;
+        let saved = self.terrain.creep_saved[i];
+        if saved == 0 {
+            return;
+        }
+        self.terrain.mtxm[i] = saved;
+        self.terrain.creep_saved[i] = 0;
+        self.creep_tile_changed(x, y, 1, saved);
+    }
+
+    /// 0x47de40 / 0x47df90: the creep a removed `t` at (x, y) kept alive starts to
+    /// recede, tile by tile, unless another source covers it. False when the pool ran
+    /// out (the caller tries again later).
+    pub(super) fn creep_start_receding(&mut self, d: &Data, t: u16, x: i32, y: i32, colony: bool) -> bool {
+        let ([l, top, r, b], ellipse) = self.creep_box(d, t, x, y, colony);
+        let w = self.terrain.width as i32;
+        let mask = if t != 0x95 { 0x1800_0000 } else { 0x1000_0000 };
+        let mut dy = top * 32 - y + 0x10;
+        for ty in top..=b {
+            let mut dx = l * 32 - x + 0x10;
+            for tx in l..=r {
+                let f = self.terrain.tile_flags[(ty * w + tx) as usize];
+                if self.creep_at(tx, ty)
+                    && (!ellipse || dy * dy * 0x100 + dx * dx * 100 < 0x9c_4001)
+                    && f & mask == 0
+                    && !self.creep_source_covers(d, tx, ty)
+                    && !self.mark_receding(tx, ty)
+                {
+                    return false;
+                }
+                dx += 32;
+            }
+            dy += 32;
+        }
+        self.dead_removal_counter = 0;
+        true
+    }
+
+    /// 0x47df90: `u`'s creep starts to recede (a completed colony counts as one).
+    pub(super) fn creep_recede_unit(&mut self, d: &Data, u: u32) -> bool {
+        let un = &self.units[u as usize];
+        let (t, p, done) = (un.unit_type, un.fl.pos, un.status & 1 != 0);
+        self.creep_start_receding(d, t, p.0 as i32, p.1 as i32, done)
+    }
+
+    /// 0x413d10 with 0x47d860: a zerg building (other than the one going away) keeps
+    /// creep on tile (tx, ty).
+    fn creep_source_covers(&mut self, d: &Data, tx: i32, ty: i32) -> bool {
+        // 0x413d10: a 0x500 x 0x320 box around the tile's centre, clamped to the map
+        // (the far edge only when the near one was not clamped).
+        let (cx, cy) = (tx * 32 + 0x10, ty * 32 + 0x10);
+        let mut b = [cx - 0x280, cy - 0x190, cx + 0x280, cy + 0x190];
+        if b[0] < 0 {
+            b[0] = 0;
+        } else if b[2] >= self.terrain.width as i32 * 32 {
+            b[2] = self.terrain.width as i32 * 32 - 1;
+        }
+        if b[1] < 0 {
+            b[1] = 0;
+        } else if b[3] >= self.terrain.height as i32 * 32 {
+            b[3] = self.terrain.height as i32 * 32 - 1;
+        }
+        // 0x47d860: any grounded building whose creep (0x414180) reaches the tile.
+        let start = self.units_in_finder_box_now([b[0] as i16, b[1] as i16, b[2] as i16, b[3] as i16]);
+        let found = self.search.results(start);
+        self.search.pop();
+        found.into_iter().any(|u| {
+            let un = &self.units[u as usize];
+            if un.status & 2 == 0 {
+                return false;
+            }
+            let t = un.unit_type;
+            // 0x414180: a zerg building.
+            if d.dat.units.flags[t as usize] & 1 == 0 || d.dat.units.staredit_group_flags[t as usize] & 1 == 0 {
+                return false;
+            }
+            let (x, y) = self.unit_sprite_pos(u);
+            let (x, y) = (x as i32, y as i32);
+            let ([l, top, r, bot], _) = self.creep_box(d, t, x, y, un.status & 1 != 0);
+            if tx < l || tx > r || ty < top || ty > bot {
+                return false;
+            }
+            let (dy, dx) = (ty * 32 - y + 0x10, tx * 32 - x + 0x10);
+            // 0x413850
+            dy * dy * 0x100 + dx * dx * 100 <= 0x9c_4000
+        })
     }
 
     /// 0x45ce90: creep under a finished Zerg building `t` at (x, y) (creep sources, and
@@ -284,5 +429,126 @@ impl State {
             *f = if raw & 0x7ff0 == 0x10 { *f | 0x4000_0000 } else { *f & !0x4000_0000 };
             // 0x413b30 edges and 0x59cb58 redraw: UI.
         }
+    }
+}
+
+/// One creep-recession node (0x659b10, 0x400 of 0x14 bytes).
+#[derive(Clone, Copy, Debug)]
+pub struct RecedeNode {
+    next: u32,
+    prev: u32,
+    hnext: u32,
+    hprev: u32,
+    x: u8,
+    y: u8,
+    /// Neighbour-count bucket 0..=8, 9 = free.
+    bucket: u8,
+}
+
+/// Creep tiles waiting to recede (0x47d660): buckets by creep-neighbour count
+/// (0x658ae8, counts 0x65eb14; bucket 9 is the free list) and a tile hash (0x658b10).
+#[derive(Clone, Debug)]
+pub struct Recession {
+    nodes: Vec<RecedeNode>,
+    heads: [u32; 10],
+    counts: [u16; 10],
+    hash: Vec<u32>,
+}
+
+impl Recession {
+    /// 0x47d660: every node free, pushed in pool order (the last one heads the list).
+    pub fn new() -> Recession {
+        let mut r = Recession {
+            nodes: vec![RecedeNode { next: NIL, prev: NIL, hnext: NIL, hprev: NIL, x: 0, y: 0, bucket: 9 }; 0x400],
+            heads: [NIL; 10],
+            counts: [0; 10],
+            hash: vec![NIL; 0x400],
+        };
+        for n in 0..0x400 {
+            r.push(n, 9);
+        }
+        r
+    }
+
+    /// 0x65eb26: free nodes.
+    pub fn free(&self) -> u16 {
+        self.counts[9]
+    }
+
+    fn key(x: u8, y: u8) -> usize {
+        (y as usize * 0x11 + x as usize) & 0x3ff
+    }
+
+    /// Insert node `n` at the head of bucket `b`.
+    fn push(&mut self, n: u32, b: u8) {
+        let head = self.heads[b as usize];
+        let node = &mut self.nodes[n as usize];
+        node.bucket = b;
+        node.next = head;
+        node.prev = NIL;
+        if head != NIL {
+            self.nodes[head as usize].prev = n;
+        }
+        self.heads[b as usize] = n;
+        self.counts[b as usize] += 1;
+    }
+
+    /// Unlink node `n` from its bucket.
+    fn unlink(&mut self, n: u32) {
+        let RecedeNode { next, prev, bucket, .. } = self.nodes[n as usize];
+        self.counts[bucket as usize] -= 1;
+        if self.heads[bucket as usize] == n {
+            self.heads[bucket as usize] = next;
+        }
+        if next != NIL {
+            self.nodes[next as usize].prev = prev;
+        }
+        if prev != NIL {
+            self.nodes[prev as usize].next = next;
+        }
+        self.nodes[n as usize].next = NIL;
+        self.nodes[n as usize].prev = NIL;
+    }
+
+    /// 0x47d5f0: hash node `n` by its tile.
+    fn hash_insert(&mut self, n: u32) {
+        let k = Self::key(self.nodes[n as usize].x, self.nodes[n as usize].y);
+        let head = self.hash[k];
+        self.nodes[n as usize].hnext = head;
+        self.nodes[n as usize].hprev = NIL;
+        if head != NIL {
+            self.nodes[head as usize].hprev = n;
+        }
+        self.hash[k] = n;
+    }
+
+    /// 0x47d320: unhash node `n`.
+    fn hash_remove(&mut self, n: u32) {
+        let RecedeNode { hnext, hprev, x, y, .. } = self.nodes[n as usize];
+        let k = Self::key(x, y);
+        if self.hash[k] == n {
+            self.hash[k] = hnext;
+        }
+        if hnext != NIL {
+            self.nodes[hnext as usize].hprev = hprev;
+        }
+        if hprev != NIL {
+            self.nodes[hprev as usize].hnext = hnext;
+        }
+        self.nodes[n as usize].hnext = NIL;
+        self.nodes[n as usize].hprev = NIL;
+    }
+
+    /// 0x47d2c0: the node of tile (x, y).
+    fn find(&self, x: u8, y: u8) -> Option<u32> {
+        let mut n = self.hash[Self::key(x, y)];
+        while n != NIL {
+            let node = &self.nodes[n as usize];
+            if node.x == x && node.y == y {
+                return Some(n);
+            }
+            n = node.hnext;
+        }
+        None
     }
 }

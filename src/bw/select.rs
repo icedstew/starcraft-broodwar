@@ -375,7 +375,7 @@ impl State {
     }
 
     /// 0x42ff80 over this state's finder.
-    fn units_in_finder_box_now(&mut self, b: [i16; 4]) -> usize {
+    pub(super) fn units_in_finder_box_now(&mut self, b: [i16; 4]) -> usize {
         let mut search = std::mem::replace(&mut self.search, super::collide::UnitSearch::empty());
         let start = search.units_in_finder_box(self, b);
         self.search = search;

@@ -34,7 +34,10 @@ impl State {
             self.random_event_timer -= 1;
             return;
         }
-        todo_port!("0x47e410", "reload from table 0x513c24[0x65eb26 >> 7], then 0x47e130");
+        // 0x513c24: fewer free recession nodes, more frequent recession steps.
+        const DELAY: [u8; 9] = [1, 3, 5, 6, 7, 8, 9, 9, 9];
+        self.random_event_timer = DELAY[(self.creep_rec.free() >> 7) as usize] as u32;
+        self.recede_one();
     }
 
     /// 0x4ed000 update_units.
@@ -170,8 +173,9 @@ impl State {
                 return;
             }
             self.dead_removal_counter = 3;
-            todo_port!("0x47df90", "delayed dead-unit removal check");
-            return;
+            if !self.creep_recede_unit(d, u) {
+                return;
+            }
         }
         if self.units[u as usize].sprite == NIL {
             self.free_unit(d, u);

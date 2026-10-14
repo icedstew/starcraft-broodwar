@@ -366,7 +366,7 @@ impl State {
     }
 
     /// 0x4e5d60: show button set `set` unless the unit is disabled.
-    fn set_button_set(&mut self, d: &Data, u: u32, set: u16) {
+    pub(super) fn set_button_set(&mut self, d: &Data, u: u32, set: u16) {
         if !self.disabled(u) || d.dat.units.flags[self.units[u as usize].unit_type as usize] & 1 != 0 || set == 0xe4 {
             self.units[u as usize].button_set = set;
         }

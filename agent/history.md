@@ -3,6 +3,21 @@
 Short log of what was done and decided, so a new agent knows why things are the way they
 are. Commit hashes refer to `git log`.
 
+## 2026-10-14 (later) — the other 14 replays, rendering fixes
+
+- User reports from the tl1412_p0 screenshots: minerals at the fog edge full bright
+  (fog now shades sprites, 0x4bd580 order), gas canister offset (0x4d5a00), z-order
+  (0x42d4c0 heap), tank turrets (same z-order fix). All verified against native shots.
+- Ran all 15 1.16.1 replays through repcmp (OUT=<dir> for parallel runs). Fixed on the
+  way: duplicate CHK sections (MTXM overlay), replay creep flags, THG2 under the RNG,
+  game templates (Templates\*.got; UMS starts via header +0x271), alliance / vision
+  commands, burrow, zerg building morph / cancel, TowerGuard / TowerAttack, train
+  fighter, rally on units, creep recession (0x47e130 pool), archon merge. Emulator
+  harness: message list skipped, CRT list sentinels, rand stub before CHK load.
+- User report "desync around f17044": scbw == emulator there; native diverges at
+  f16797 (vision one frame later than the emulator). Native trace capture with
+  CAP_START / fog lines in progress (re/native_trace_gdb.py).
+
 ## 2026-10-13 / 14 — replays as the test driver (uncommitted, see status.md)
 
 - User: "lets use these reps for screenshot testing ... then write a script to do the same

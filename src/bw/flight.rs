@@ -120,7 +120,7 @@ impl State {
             self.units[u as usize].fl.next_target_waypoint = p;
         }
         if t == 0x82 {
-            todo_port!("0x47df90", "infested command center lifting off its creep");
+            self.creep_recede_unit(d, u);
         }
         self.units[u as usize].order = 0x4a;
     }

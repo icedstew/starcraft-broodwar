@@ -9,6 +9,7 @@ pub mod attack;
 pub mod build;
 pub mod bullet;
 pub mod buttons;
+pub mod archon;
 pub mod burrow;
 pub mod fighters;
 pub mod chk_load;
@@ -171,6 +172,8 @@ pub struct State {
     pub is_100th_frame: bool,
     /// 0x65eb10 random event countdown (random_event_tick 0x47e410).
     pub random_event_timer: u32,
+    /// Creep tiles waiting to recede (0x658ae8 / 0x659b10 / 0x658b10).
+    pub creep_rec: creep::Recession,
     /// update_units stagger countdowns (150 / 300 frames).
     pub stagger_150: u32,
     pub stagger_300: u32,
@@ -332,6 +335,7 @@ impl State {
             counter_100: 0,
             is_100th_frame: false,
             random_event_timer: 0,
+            creep_rec: creep::Recession::new(),
             stagger_150: 10, // 0x59cca4 = 10 (0x49f380)
             stagger_300: 0x96, // 0x6283e8 = 0x96
             finder_ring: 0,

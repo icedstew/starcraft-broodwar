@@ -386,7 +386,7 @@ impl State {
         let idle = d.dat.units.ai_return_to_idle[0x29];
         self.issue_order(d, c, idle, false, (0, 0), NIL, 0xe4);
         self.set_unit_hp(d, c, hp);
-        todo_port!("0x47de40", "creep under the cancelled building starts to recede");
+        self.creep_start_receding(d, t, x as i32, y as i32, false);
     }
 
     /// 0x468280: cancel a unit under construction or in production: refund it (75% for
