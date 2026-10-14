@@ -91,7 +91,7 @@ impl State {
     }
 
     /// 0x42d190 / 0x453f70 (minerals, gas, time) of the next level of `up` for `player`.
-    fn upgrade_cost(&self, d: &Data, player: u8, up: u8) -> (i32, i32, u16) {
+    pub fn upgrade_cost(&self, d: &Data, player: u8, up: u8) -> (i32, i32, u16) {
         let lvl = self.players.upgrade_level(player, up as usize) as u16;
         let ud = &d.dat.upgrades;
         let i = up as usize;

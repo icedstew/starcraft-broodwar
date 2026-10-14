@@ -17,6 +17,7 @@ mod replay;
 mod statdata;
 mod ui;
 mod view;
+mod voices;
 
 use std::path::PathBuf;
 
@@ -625,6 +626,52 @@ fn main() -> std::io::Result<()> {
             let n: Vec<i32> = args[2..6].iter().map(|v| v.parse().unwrap_or(0)).collect();
             let t = std::time::Instant::now();
             println!("{:?} in {:?}", g.find((n[0], n[1]), (n[2], n[3])), t.elapsed());
+        }
+        Some("sndcheck") => {
+            // sndcheck: read and decode every sfxdata.dat sound (headless); print failures.
+            let a = view::Assets::load(files)?;
+            let names = dat::parse_tbl(&a.files.read("arr/sfxdata.tbl")?);
+            let (mut ok, mut bad) = (0, 0);
+            for (id, &file) in a.dat().sfxdata.file.iter().enumerate() {
+                let Some(name) = (file as usize).checked_sub(1).and_then(|i| names.get(i)) else { continue };
+                let path = format!("sound/{}", name.replace('\\', "/"));
+                match a.files.read(&path) {
+                    Ok(data) => match rodio::Decoder::new(std::io::Cursor::new(data)) {
+                        Ok(dec) => {
+                            use rodio::Source;
+                            let (sr, ch) = (dec.sample_rate(), dec.channels());
+                            let n = dec.count();
+                            if n == 0 {
+                                bad += 1;
+                                println!("{id:#x} {path}: no samples ({sr} Hz, {ch} ch)");
+                            } else {
+                                ok += 1;
+                                if id < 3 || std::env::var("SND_ALL").is_ok() {
+                                    println!("{id:#x} {path}: {n} samples {sr} Hz {ch} ch");
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            bad += 1;
+                            println!("{id:#x} {path}: decode: {e}");
+                        }
+                    },
+                    Err(e) => {
+                        bad += 1;
+                        println!("{id:#x} {path}: read: {e}");
+                    }
+                }
+            }
+            println!("{ok} ok, {bad} failed");
+            // The mixing path the viewer uses, without a device.
+            if let Ok(data) = a.files.read("sound/Misc/Buzz.wav") {
+                use rodio::Source;
+                let (mx, src) = rodio::mixer::mixer(std::num::NonZero::new(2).unwrap(), std::num::NonZero::new(48000).unwrap());
+                mx.add(rodio::Decoder::new(std::io::Cursor::new(data)).unwrap().amplify(0.6));
+                let v: Vec<f32> = src.take(48000).collect();
+                let peak = v.iter().fold(0f32, |m, x| m.max(x.abs()));
+                println!("mixer: {} samples, peak {peak}", v.len());
+            }
         }
         Some("units") => {
             let chk = load_chk(&args[1])?;

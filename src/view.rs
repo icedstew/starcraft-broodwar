@@ -90,6 +90,8 @@ fn with_data<R>(a: &Assets, f: impl FnOnce(&bw::Data) -> R) -> R {
 pub struct Scene<'a> {
     pub st: bw::State,
     pub selected: Vec<u32>,
+    /// Unit voices (selection and acknowledgement lines).
+    pub voices: crate::voices::Voices,
     /// 0x59724c: the selection last sent to the simulation as select commands.
     sent_selection: Vec<u32>,
     /// Command card submenu (button set index) opened by a Menu button, e.g. SCV "Build".
@@ -185,7 +187,7 @@ impl<'a> Scene<'a> {
             st.game_step(d);
             minimap.refresh(d, &mut st)
         });
-        Ok(Scene { st, minimap, selected: Vec::new(), sent_selection: Vec::new(), card_menu: None, placing: None, targeting: None, error: 0, error_frames: 0, place_ok: false, drag_box: None, a, chk, ts, terrain, player_colors, local, shadow, dark, fog: crate::fog::Fog::new(), tselect, thpbar, remaps })
+        Ok(Scene { st, minimap, selected: Vec::new(), voices: crate::voices::Voices::new(), sent_selection: Vec::new(), card_menu: None, placing: None, targeting: None, error: 0, error_frames: 0, place_ok: false, drag_box: None, a, chk, ts, terrain, player_colors, local, shadow, dark, fog: crate::fog::Fog::new(), tselect, thpbar, remaps })
     }
 
     /// Send the local selection to the simulation (0x4c0860) and return the local
@@ -272,6 +274,7 @@ impl<'a> Scene<'a> {
             self.minimap.update(d, st);
         });
         self.st.alert_tick();
+        self.voices.tick();
         // 0x4a4e40 runs on a 200 ms timer: about every fifth frame at 42 ms.
         if self.st.frame % 5 == 0 {
             self.minimap.blink_phase = !self.minimap.blink_phase;
@@ -481,6 +484,33 @@ impl<'a> Scene<'a> {
         let (sel, me) = (self.sim_selection(), self.local);
         let st = &mut self.st;
         with_data(self.a, |d| st.command_right_click(d, me, &sel, (p.0 as i16, p.1 as i16), t, 0xe4, queued));
+        self.voice_yes();
+    }
+
+    /// 0x4563a0 / 0x48f4d0: the status unit (first selected) acknowledges an order.
+    pub fn voice_yes(&mut self) {
+        let Some(&u) = self.selected.first() else { return };
+        let (st, v) = (&self.st, &mut self.voices);
+        if let Some(id) = with_data(self.a, |d| v.yes(st, d, u)) {
+            self.st.ui_sounds.push(id);
+        }
+    }
+
+    /// 0x49aef0 / 0x48f910: the highest-ranked selected unit (units.dat rank + its
+    /// rank increase, 0x49a350) answers a new selection.
+    pub fn voice_what(&mut self) {
+        let st = &self.st;
+        let best = with_data(self.a, |d| {
+            self.selected.iter().copied().max_by_key(|&u| {
+                let un = &st.units[u as usize];
+                d.dat.units.rank[un.unit_type as usize] as u32 + un.u8_at(0x8e) as u32
+            })
+        });
+        let Some(u) = best else { return };
+        let (st, v) = (&self.st, &mut self.voices);
+        if let Some(id) = with_data(self.a, |d| v.what(st, d, u)) {
+            self.st.ui_sounds.push(id);
+        }
     }
 
     /// The status bar's selection (active unit, count).
@@ -526,7 +556,8 @@ impl<'a> Scene<'a> {
             }
             Target { ground, unit, fog } => self.targeting = Some((ground, unit, fog)),
             Place { order, unit_type } => self.placing = Some((order, unit_type)),
-            Menu(m) => self.card_menu = Some(m),
+            // 0x459af0 / 0x4599a0: set 0xe4 means the selected unit's own button set.
+            Menu(m) => self.card_menu = (m != 0xe4).then_some(m),
             CancelTargeting => self.targeting = Option::None,
             CancelPlacement => self.placing = Option::None,
             SelectLarvae(l) => self.selected = l,
@@ -559,6 +590,7 @@ impl<'a> Scene<'a> {
             self.show_error(e);
         }
         self.card_menu = Option::None;
+        self.voice_yes();
     }
 
     /// Placement tile for building `t` with the cursor at map point `p`.
@@ -594,9 +626,14 @@ impl<'a> Scene<'a> {
 
     /// The selected building's statdata panel, if it shows one.
     pub fn status_panel(&self, ui: &crate::ui::Ui) -> Option<(crate::statdata::Panel, Vec<(i16, crate::statdata::Show)>)> {
+        if self.selected.len() > 1 {
+            return Some((crate::statdata::Panel::Group, crate::statdata::group_panel(&self.selected)));
+        }
         let [u] = self.selected[..] else { return None };
         let st = &self.st;
-        with_data(self.a, |d| crate::statdata::building_panel(st, d, &ui.stat_txt, u))
+        with_data(self.a, |d| {
+            crate::statdata::building_panel(st, d, &ui.stat_txt, u).or_else(|| Some((crate::statdata::Panel::Unit, crate::statdata::unit_panel(st, d, &ui.stat_txt, u))))
+        })
     }
 
     /// A click at screen (x, y) on a status panel button (0x4573a0); true if handled.
@@ -801,25 +838,6 @@ pub fn compose_with_cursor(
         ui.font.draw(text, x + 16, 4, col, pal, out, w, h);
         x += 66;
     }
-    // Selected unit panel.
-    if let [u] = scene.selected[..] {
-        let mu = &scene.st.units[u as usize];
-        let kind = mu.unit_type as usize;
-        // 0x4568f0: the frame is the shown type's (0 past the grp's frames).
-        let wt = crate::ui::wire_type(&scene.st, u) as usize;
-        let frame = if wt < ui.wireframe.frame_count() { wt } else { 0 };
-        let colors = with_data(scene.a, |d| crate::ui::wireframe_colors(&scene.st, d, u, &ui.twire));
-        crate::ui::draw_grp_rgb_blend(&ui.wireframe, frame, 170, 390, pal, out, w, h, crate::grp::Blend::Colors(&colors));
-        let name = ui.stat_txt.get(kind).map_or("", |s| s.split('\0').next().unwrap_or(""));
-        ui.font.draw(name, 260, 392, ui.text_color(2), pal, out, w, h);
-        let max = scene.a.dat().units.hit_points[kind] >> 8;
-        if max > 0 {
-            let hp = format!("{}/{}", (mu.hp.max(0) as u32).div_ceil(256), max);
-            ui.font.draw(&hp, 176, 456, ui.text_color(3), pal, out, w, h);
-        }
-    } else if !scene.selected.is_empty() {
-        ui.font.draw(&format!("{} units", scene.selected.len()), 260, 392, ui.text_color(2), pal, out, w, h);
-    }
     // Building panels of statdata.cpp (training queue, research, upgrade).
     if let Some((_, ctls)) = scene.status_panel(ui) {
         let sd = &ui.statdata;
@@ -828,8 +846,29 @@ pub fn compose_with_cursor(
             let (cw, ch) = (r - l + 1, b - t + 1);
             match show {
                 crate::statdata::Show::Text(s) => {
-                    let tw = ui.font.width(s);
-                    ui.font.draw(s, l + (cw - tw) / 2, t + (ch - ui.font.height) / 2, ui.text_color(2), pal, out, w, h);
+                    let tw = coded_width(ui, s);
+                    draw_coded(ui, s, l + (cw - tw) / 2, t + (ch - ui.font.height) / 2, pal, out, w, h);
+                }
+                crate::statdata::Show::Wireframe => {
+                    let [u] = scene.selected[..] else { continue };
+                    // 0x4568f0: the frame is the shown type's (0 past the grp's frames).
+                    let wt = crate::ui::wire_type(&scene.st, u) as usize;
+                    let frame = if wt < ui.wireframe.frame_count() { wt } else { 0 };
+                    let colors = with_data(scene.a, |d| crate::ui::wireframe_colors(&scene.st, d, u, &ui.twire));
+                    crate::ui::draw_grp_rgb_blend(&ui.wireframe, frame, l, t, pal, out, w, h, crate::grp::Blend::Colors(&colors));
+                }
+                crate::statdata::Show::GroupWire(u) => {
+                    let wt = crate::ui::wire_type(&scene.st, *u) as usize;
+                    let frame = if wt < ui.grpwire.frame_count() { wt } else { 0 };
+                    let colors = with_data(scene.a, |d| crate::ui::wireframe_colors(&scene.st, d, *u, &ui.twire));
+                    crate::ui::draw_grp_rgb_blend(&ui.grpwire, frame, l, t, pal, out, w, h, crate::grp::Blend::Colors(&colors));
+                }
+                crate::statdata::Show::Info { icon, level } => {
+                    crate::ui::draw_grp_rgb(&ui.cmdbtns, 2, l, t, pal, out, w, h);
+                    ui.draw_cmd_icon(*icon as usize, 0, l + 2, t + 1, pal, out, w, h);
+                    let n = format!("{level} ");
+                    let tw = ui.font.width(&n);
+                    ui.font.draw(&n, r - tw, b - ui.font.height, ui.text_color(2), pal, out, w, h);
                 }
                 crate::statdata::Show::Progress(v) => {
                     // 0x456b40: the empty bar, then the full one clipped to the percentage.
@@ -911,8 +950,86 @@ pub fn compose_with_cursor(
             ui.draw_cmd_icon(b.icon as usize, if *enabled { 0 } else { 1 }, bx + 2, by + 1, pal, out, w, h);
         }
     }
+    // 0x4593a0: the hovered button's tooltip.
+    if let Some((_, _, cx, cy)) = cursor {
+        for (i, slot) in scene.card().iter().enumerate() {
+            let Some((b, enabled)) = slot else { continue };
+            let (bx, by) = card_slot(i as u16 + 1);
+            if (bx..bx + 40).contains(&cx) && (by..by + 36).contains(&cy) {
+                draw_tooltip(scene, ui, b, *enabled, bx, by, pal, out, w, h);
+            }
+        }
+    }
     if let Some((kind, counter, cx, cy)) = cursor {
         ui.draw_cursor(kind, counter, cx, cy, pal, out, w, h);
+    }
+}
+
+/// 0x4593a0 / 0x459150 / 0x459030: a command button's tooltip: its stat_txt string
+/// (after the hotkey and kind bytes) and, for enabled buttons, the cost: minerals, gas
+/// and supply for units (kind 1), the current level's cost and the next level for
+/// upgrades (2), minerals, gas and energy for techs (3).
+#[allow(clippy::too_many_arguments)]
+fn draw_tooltip(scene: &Scene, ui: &crate::ui::Ui, b: &bw::buttons::Button, enabled: bool, bx: i32, by: i32, pal: &[[u8; 3]; 256], out: &mut [u32], w: i32, h: i32) {
+    let id = if enabled { b.enabled_str } else { b.disabled_str };
+    let Some(raw) = (id as usize).checked_sub(1).and_then(|i| ui.stat_txt.get(i)) else { return };
+    let raw = raw.split('\0').next().unwrap_or("");
+    let kind = raw.chars().nth(1).map_or(0, |c| c as u32);
+    let mut text: String = raw.chars().skip(2).collect();
+    let me = scene.local_player();
+    let dat = scene.a.dat();
+    let v = b.act_var as usize;
+    // (minerals, gas, supply, energy)
+    let mut cost = (0i32, 0i32, 0i32, 0i32);
+    if enabled {
+        match kind {
+            1 if v < dat.units.mineral_cost.len() => {
+                let two = dat.units.flags[v] & 0x400 != 0;
+                let sup = dat.units.supply_required[v] as i32 * if two { 2 } else { 1 };
+                cost = (dat.units.mineral_cost[v] as i32, dat.units.gas_cost[v] as i32, sup / 2, 0);
+            }
+            2 if v < dat.upgrades.icon.len() => {
+                let (m, g, _) = with_data(scene.a, |d| scene.st.upgrade_cost(d, me, v as u8));
+                cost = (m, g, 0, 0);
+                if dat.upgrades.max_level[v] > 1 {
+                    let lvl = scene.st.players.upgrade_level(me, v) as i32 + 1;
+                    text = format!("{text}\n{} {lvl}", ui.stat_txt.get(0x31a).map_or("", |s| s.split('\0').next().unwrap_or("")));
+                }
+            }
+            3 if v < dat.techdata.icon.len() => {
+                cost = (dat.techdata.mineral_cost[v] as i32, dat.techdata.gas_cost[v] as i32, 0, dat.techdata.energy_cost[v] as i32);
+            }
+            _ => {}
+        }
+    }
+    let lines: Vec<&str> = text.split('\n').collect();
+    let lh = ui.font.height + 1;
+    let tw = lines.iter().map(|l| coded_width(ui, l)).max().unwrap_or(0);
+    let has_cost = cost != (0, 0, 0, 0);
+    let bw_ = (tw + 8).max(if has_cost { 150 } else { 0 });
+    let bh = lines.len() as i32 * lh + if has_cost { 14 } else { 0 } + 4;
+    let x0 = (bx + 40 - bw_).clamp(0, w - bw_);
+    let y0 = by - bh - 4;
+    for y in y0.max(0)..(y0 + bh).min(h) {
+        for x in x0..(x0 + bw_).min(w) {
+            out[(y * w + x) as usize] = 0;
+        }
+    }
+    for (k, l) in lines.iter().enumerate() {
+        draw_coded(ui, l, x0 + 4, y0 + 2 + k as i32 * lh, pal, out, w, h);
+    }
+    if has_cost {
+        let race = scene.local_race();
+        let y = y0 + 2 + lines.len() as i32 * lh;
+        let mut x = x0 + 4;
+        for (icon, n, show) in [(0, cost.0, true), (1 + race, cost.1, true), (4 + race, cost.2, cost.2 != 0), (7, cost.3, cost.3 != 0)] {
+            if !show {
+                continue;
+            }
+            ui.draw_icon(icon, x, y, pal, out, w, h);
+            ui.font.draw(&n.to_string(), x + 16, y + 2, ui.text_color(2), pal, out, w, h);
+            x += 36;
+        }
     }
 }
 
@@ -1155,7 +1272,11 @@ fn run_with(a: &Assets, mut scene: Scene, mut replay: Option<ReplayPlay>) -> io:
                     scene.card_menu = None;
                     scene.placing = None;
                 }
+                let changed = scene.selected != hits;
                 scene.selected = hits;
+                if changed || !scene.selected.is_empty() {
+                    scene.voice_what();
+                }
             }
         }
         let rdown = win.get_mouse_down(minifb::MouseButton::Right);
@@ -1192,13 +1313,13 @@ fn run_with(a: &Assets, mut scene: Scene, mut replay: Option<ReplayPlay>) -> io:
             // ponytail: on-screen only, no distance falloff or per-frame voice limits yet.
             if let Some(au) = &audio {
                 if (vx..vx + vw).contains(&x) && (vy..vy + vh).contains(&y) {
-                    au.play(&a.files, a.dat(), id, 0.6);
+                    au.play(&a.files, a.dat(), id, 1.0);
                 }
             }
         }
         for id in std::mem::take(&mut scene.st.ui_sounds) {
             if let Some(au) = &audio {
-                au.play(&a.files, a.dat(), id, 0.8);
+                au.play(&a.files, a.dat(), id, 1.0);
             }
         }
         let kind = scene.cursor_kind(cx, cy, vx, vy, drag_start.is_some());
@@ -1207,4 +1328,31 @@ fn run_with(a: &Assets, mut scene: Scene, mut replay: Option<ReplayPlay>) -> io:
         win.update_with_buffer(&rgb, vw as usize, vh as usize).map_err(|e| io::Error::other(e.to_string()))?;
     }
     Ok(())
+}
+
+/// Width of text with tfontgam color codes (bytes below 0x20 draw nothing).
+fn coded_width(ui: &crate::ui::Ui, s: &str) -> i32 {
+    ui.font.width(&s.chars().filter(|c| *c >= ' ').collect::<String>())
+}
+
+/// Text with color codes: code `c` switches to tfontgam row `c - 2` (default 2).
+#[allow(clippy::too_many_arguments)]
+fn draw_coded(ui: &crate::ui::Ui, s: &str, mut x: i32, y: i32, pal: &[[u8; 3]; 256], out: &mut [u32], w: i32, h: i32) {
+    let mut color = 2usize;
+    let mut run = String::new();
+    for ch in s.chars() {
+        if (ch as u32) < 0x20 {
+            if !run.is_empty() {
+                ui.font.draw(&run, x, y, ui.text_color(color - 2), pal, out, w, h);
+                x += ui.font.width(&run);
+                run.clear();
+            }
+            color = (ch as usize).max(2);
+        } else {
+            run.push(ch);
+        }
+    }
+    if !run.is_empty() {
+        ui.font.draw(&run, x, y, ui.text_color(color - 2), pal, out, w, h);
+    }
 }

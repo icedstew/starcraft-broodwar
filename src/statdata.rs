@@ -1,6 +1,7 @@
 //! The selected unit's status panel (1.16.1 statdata.cpp): the `rez\statdata.bin` dialog
 //! and the building panels that show a training queue, research or upgrade progress.
 
+use crate::bw::list::NIL;
 use crate::bw::{Data, State};
 
 /// One control of a 1.16.1 dialog `.bin` (0x56 bytes each).
@@ -65,6 +66,13 @@ pub enum Show {
     /// A button: background frame `bg` of the race's cmdbtns.grp and an icon:
     /// a cmdicons.grp frame (set 3, enabled) or a cmdbtns.grp frame (set 6, disabled).
     Button { bg: u16, icon: u16, cmdicon: bool },
+    /// An info button (ids 9..12, 0x425600 and kin): a cmdicons.grp icon and the
+    /// upgrade level / count shown with it ("%d ").
+    Info { icon: u16, level: u8 },
+    /// The unit's wireframe (control 1, statwire.cpp).
+    Wireframe,
+    /// A small wireframe of selected unit `u` (multiple selection, ids 33..44).
+    GroupWire(u32),
 }
 
 /// Panel ids remembered in 0x68c1e5 (5 training, 7 research, 8 upgrade).
@@ -73,6 +81,10 @@ pub enum Panel {
     Training,
     Research,
     Upgrade,
+    /// 0x426f50: a unit's (or idle building's) stats.
+    Unit,
+    /// 0x425960: several units selected.
+    Group,
 }
 
 /// Race index used for race-specific strings (0x6637a0 group flags: zerg 0, terran 1,
@@ -240,4 +252,165 @@ pub fn click(panel: Panel, id: i16) -> Option<Vec<u8>> {
         (Panel::Upgrade, 15) => Some(vec![0x33]),
         _ => None,
     }
+}
+
+/// 0x426f50: a selected unit's panel: wireframe (1), name (-5), hit points (-7),
+/// energy (-8), status line (-20), kills (-21) and the info buttons (9..12).
+pub fn unit_panel(st: &State, d: &Data, strings: &[String], u: u32) -> Vec<(i16, Show)> {
+    let un = &st.units[u as usize];
+    let t = un.unit_type;
+    let ts = t as usize;
+    let mine = st.replay || un.player == st.local_player;
+    let halluc_own = un.status & 0x4000_0000 != 0 && mine;
+    let flags = d.dat.units.flags[ts];
+    let shown = crate::ui::wire_type(st, u);
+    let mut out = vec![(1, Show::Wireframe)];
+    // 0x426c60: info buttons.
+    let mut slot = 0i16;
+    if !halluc_own {
+        let mut push = |slot: &mut i16, icon: u16, level: u8| {
+            out.push((9 + *slot, Show::Info { icon, level }));
+            *slot += 1;
+        };
+        let armor_up = d.dat.units.armor_upgrade[shown as usize];
+        if armor_up != 0x3c {
+            // 0x425600
+            push(&mut slot, d.dat.upgrades.icon[armor_up as usize], st.armor_level(d, u) as u8);
+        }
+        if d.dat.units.shield_enable[ts] != 0 {
+            // 0x425510: Plasma Shields
+            push(&mut slot, 0x136, st.players.upgrade_sc[un.player as usize][0xf]);
+        }
+        let sub = un.subunit;
+        let sub_w = |table: &[u8]| if sub != NIL { table[st.units[sub as usize].unit_type as usize] } else { 0x82 };
+        let burrowed_lurker_off = t == 0x67 && un.status & 0x10 == 0;
+        let gw = d.dat.units.ground_weapon[ts];
+        let gw = if gw == 0x82 { sub_w(&d.dat.units.ground_weapon) } else { gw };
+        let weapon_level = |w: u8| {
+            let up = d.dat.weapons.damage_upgrade[w as usize] as usize;
+            st.players.upgrade_level(un.player, up)
+        };
+        if !burrowed_lurker_off && gw != 0x82 {
+            push(&mut slot, d.dat.weapons.icon[gw as usize], weapon_level(gw));
+        }
+        let aw = d.dat.units.air_weapon[ts];
+        let aw = if aw == 0x82 { sub_w(&d.dat.units.air_weapon) } else { aw };
+        let gw_cmp = if burrowed_lurker_off { 0x82 } else { gw };
+        if aw != 0x82 && aw != gw_cmp {
+            push(&mut slot, d.dat.weapons.icon[aw as usize], weapon_level(aw));
+        }
+        match t {
+            0x48 | 0x52 => push(&mut slot, 0x49, un.u8_at(0xc9).wrapping_add(un.u8_at(0xc8))),
+            0x53 | 0x51 => push(&mut slot, 0x55, un.u8_at(0xc8)),
+            _ => {}
+        }
+        if (t == 2 || t == 0x13) && st.can_use_tech(d, u, 3, un.player) == Ok(1) {
+            // 0x426300: spider mines
+            push(&mut slot, 0xd, un.u8_at(0xc0));
+        }
+        if shown == 0x6c {
+            // 0x425310: a nuke in the silo
+            push(&mut slot, 0xe, (un.ptr_at(0xd0) != NIL) as u8);
+        }
+    }
+    // 0x425b50: the status line.
+    let status = if halluc_own {
+        Some(stat(strings, 0x341))
+    } else if flags & 1 != 0 && un.status & 1 != 0 && disabled(st, u) && un.u8_at(0xc8) == 0x2c && un.u8_at(0xc9) == 0x3d {
+        Some(stat(strings, 0x33c + race_index(d, t)))
+    } else if un.status & 1 != 0 && un.acid_spore_count != 0 {
+        Some(format!("{} ({})", stat(strings, 0x515), un.acid_spore_count))
+    } else if un.status & 1 != 0 && un.is_blind != 0 {
+        Some(stat(strings, 0x514))
+    } else if un.status & 1 != 0 && un.parasite_flags != 0 {
+        Some(stat(strings, 0x33c))
+    } else if flags & 0x8000 != 0 && un.status & 1 != 0 && !disabled(st, u) && un.is_blind == 0 {
+        Some(stat(strings, 0x340))
+    } else if flags & 1 == 0 {
+        rank(st, d, strings, u)
+    } else {
+        None
+    };
+    if let Some(s) = status {
+        out.push((-20, Show::Text(s)));
+    }
+    // 0x425dd0: kills, for units that can fight.
+    if !(t == 0x2f || t == 0x32 || halluc_own) && (can_fight(st, d, u) || un.u8_at(0x8f) != 0) {
+        out.push((-21, Show::Text(format!("{} {}", stat(strings, 0x2fd), un.u8_at(0x8f)))));
+    }
+    // 0x4263e0: hit points (red under 34%, yellow under 67%), shields first.
+    let max_hp = d.dat.units.hit_points[ts] as i32 >> 8;
+    let max_sh = d.dat.units.shields[shown as usize] as i32;
+    if max_hp < 10000 && max_sh < 10000 && un.status & 0x400_0000 == 0 {
+        let hp = (un.hp + 0xff) >> 8;
+        let m = if max_hp == 0 { hp.max(1) } else { max_hp };
+        let pct = hp * 100 / m;
+        let c = if pct < 0x22 { '\x06' } else if pct < 0x43 { '\x03' } else { '\x07' };
+        let s = if d.dat.units.shield_enable[ts] == 0 {
+            format!("{c}{hp}/{max_hp}")
+        } else {
+            format!("{}/{} {c}{hp}/{max_hp}", un.shields >> 8, max_sh)
+        };
+        out.push((-7, Show::Text(s)));
+    }
+    // 0x425a30: energy (or a hallucination's / broodling's time left).
+    if flags & 0x20_0000 != 0 && un.status & 0x4000_0000 == 0 && mine {
+        out.push((-8, Show::Text(format!("\x04{}/{}", un.energy >> 8, st.max_energy(d, u) >> 8))));
+    } else if (un.status & 0x4000_0000 != 0 || t == 0x28) && mine {
+        let total = if un.status & 0x4000_0000 != 0 { 0x546 } else { 0x708 };
+        out.push((-8, Show::Text(format!("\x04{}/{}", un.remove_timer / 10, total / 10))));
+    }
+    // 0x47b090: the name (heroes and the like have their own string table entry).
+    out.push((-5, Show::Text(stat(strings, t + 1))));
+    out
+}
+
+/// 0x42f370: a Terran unit's rank, a hero's title.
+fn rank(st: &State, d: &Data, strings: &[String], u: u32) -> Option<String> {
+    let un = &st.units[u as usize];
+    let t = un.unit_type;
+    let ts = t as usize;
+    let flags = d.dat.units.flags[ts];
+    if flags & 0x800 != 0 || t == 0xf || t == 0xd {
+        return None;
+    }
+    if t == 0x52 {
+        // ponytail: the hero carrier's own name table (0x660304) is not loaded.
+        return Some(stat(strings, 0x23c));
+    }
+    if matches!(t, 0xc | 0x1d | 0x1c) && flags & 0x40 != 0 {
+        return Some(stat(strings, 0x23b));
+    }
+    if race_index(d, t) != 1 {
+        return None;
+    }
+    let r = d.dat.units.rank[ts].wrapping_add(un.u8_at(0x8e)) as u16;
+    Some(stat(strings, r + 0x516))
+}
+
+/// 0x476180: the unit (or its turret) has a weapon, or carries interceptors / scarabs.
+fn can_fight(st: &State, d: &Data, u: u32) -> bool {
+    let un = &st.units[u as usize];
+    let t = un.unit_type as usize;
+    let gw = if un.unit_type == 0x67 && un.status & 0x10 == 0 { 0x82 } else { d.dat.units.ground_weapon[t] };
+    if gw != 0x82 || d.dat.units.air_weapon[t] != 0x82 {
+        return true;
+    }
+    match un.unit_type {
+        0x48 | 0x52 if un.u8_at(0xc9).wrapping_add(un.u8_at(0xc8)) != 0 => return true,
+        0x53 | 0x51 if un.u8_at(0xc8) != 0 => return true,
+        _ => {}
+    }
+    let sub = un.subunit;
+    if sub == NIL {
+        return false;
+    }
+    let st_ = st.units[sub as usize].unit_type as usize;
+    d.dat.units.ground_weapon[st_] != 0x82 || d.dat.units.air_weapon[st_] != 0x82
+}
+
+/// 0x425960: a multiple selection: each unit's small wireframe in ids 33.. (order of
+/// the selection).
+pub fn group_panel(sel: &[u32]) -> Vec<(i16, Show)> {
+    sel.iter().take(12).enumerate().map(|(i, &u)| (33 + i as i16, Show::GroupWire(u))).collect()
 }

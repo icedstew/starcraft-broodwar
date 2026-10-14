@@ -160,6 +160,8 @@ pub struct State {
     pub tileset: u16,
     pub local_player: u8,
     pub replay: bool,
+    /// 0x58d700: player has left (2).
+    pub player_left: [u8; 12],
     pub reveal_all: bool,
     pub frame: u32,
     /// game_step 100-frame countdown (1.16.1 0x51ce98) and its "is 100th frame" flag (0x51ce9c).
@@ -342,6 +344,7 @@ impl State {
             game_options: 0,
             forward_offsets: Vec::new(),
             game_type: 0,
+            player_left: [0; 12],
             ally_computers: 0,
             dead_removal_counter: 0,
             finder_rows: [[0; 0x20]; 0x20],

@@ -36,12 +36,18 @@ impl Audio {
             .clone()
     }
 
-    /// `pan_volume`: 0.0..=1.0 attenuation for distance from the screen.
+    /// `pan_volume`: 0.0..=1.0 attenuation for distance from the screen (1.0 on screen).
+    /// As 0x48ed50: the volume is the larger of the distance volume (99 on screen) and
+    /// the sound's sfxdata.dat minimum volume; under 11 it isn't played.
     pub fn play(&self, files: &Storage, dat: &Dat, id: u16, pan_volume: f32) {
+        let min = dat.sfxdata.volume.get(id as usize).copied().unwrap_or(0) as f32;
+        let vol = (pan_volume * 99.0).max(min);
+        if vol < 11.0 {
+            return;
+        }
         let Some(data) = self.wav(files, dat, id) else { return };
-        let vol = dat.sfxdata.volume.get(id as usize).copied().unwrap_or(100).max(1) as f32 / 100.0;
         if let Ok(src) = rodio::Decoder::new(Cursor::new(data)) {
-            self.sink.mixer().add(src.amplify(vol * pan_volume));
+            self.sink.mixer().add(src.amplify(vol / 100.0));
         }
     }
 

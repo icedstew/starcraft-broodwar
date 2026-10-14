@@ -297,7 +297,7 @@ impl State {
             un.cycle_counter = un.cycle_counter.wrapping_add(1);
             if un.cycle_counter > 7 {
                 un.cycle_counter = 0;
-                todo_port!("0x492f70", "8-frame status timers (stim, ensnare, lockdown, ...)");
+                self.status_timers(d, u);
             }
         }
         if self.units[u as usize].status & super::unit::status::COMPLETED == 0 {
@@ -334,6 +334,48 @@ impl State {
                 let p = un.last_attacking_player;
                 self.apply_damage_pub(d, u, 0x14, NIL, p, true);
             }
+        }
+    }
+
+    /// 0x492f70: every 8 frames the spell timers count down and end their effects.
+    fn status_timers(&mut self, d: &Data, u: u32) {
+        let dec = |v: &mut u8| -> bool {
+            if *v == 0 {
+                return false;
+            }
+            *v -= 1;
+            *v == 0
+        };
+        if dec(&mut self.units[u as usize].stasis_timer) {
+            todo_port!("0x4f62d0", "stasis ends");
+        }
+        if dec(&mut self.units[u as usize].stim_timer) {
+            self.update_speed(d, u);
+        }
+        if dec(&mut self.units[u as usize].ensnare_timer) {
+            todo_port!("0x4e5cf0", "ensnare overlay removed");
+            self.units[u as usize].ensnare_timer = 0;
+            self.update_speed(d, u);
+        }
+        if dec(&mut self.units[u as usize].defense_matrix_timer) {
+            todo_port!("0x454ed0", "defensive matrix ends");
+        }
+        if self.units[u as usize].irradiate_timer != 0 {
+            todo_port!("0x4555c0", "irradiate damage and end");
+        }
+        if dec(&mut self.units[u as usize].lockdown_timer) {
+            todo_port!("0x454d90", "lockdown ends");
+        }
+        if dec(&mut self.units[u as usize].maelstrom_timer) {
+            todo_port!("0x454d20", "maelstrom ends");
+        }
+        if self.units[u as usize].plague_timer != 0 {
+            todo_port!("0x492f70", "plague damage and end");
+        }
+        let st = &mut self.units[u as usize].storm_timer;
+        *st = st.saturating_sub(1);
+        if self.units[u as usize].acid_spore_count != 0 {
+            todo_port!("0x4f42c0", "acid spore timers");
         }
     }
 

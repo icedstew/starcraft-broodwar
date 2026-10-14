@@ -48,11 +48,48 @@ class Mem:
 fo = open(os.path.join(OUT, "trace.txt"), "w")
 
 
+# CAP_CAMERA (a `scbw repcam` file): after each step the screen moves like a player's
+# camera, through the game's own 0x49c440 (as in native_shots_gdb.py).
+CAM = {}
+if os.environ.get("CAP_CAMERA"):
+    for line in open(os.environ["CAP_CAMERA"]):
+        f_, x_, y_ = map(int, line.split())
+        CAM[f_] = (x_, y_)
+REGS = ["eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi", "eip", "eflags"]
+saved = [None]
+
+
+def move_screen(f):
+    if f not in CAM:
+        return
+    x, y = CAM[f]
+    regs = {r: int(gdb.parse_and_eval("$" + r)) & 0xffffffff for r in REGS}
+    saved[0] = regs
+    esp = regs["esp"] - 4
+    gdb.selected_inferior().write_memory(esp, struct.pack("<I", regs["eip"]))
+    gdb.execute("set $esp = %d" % esp)
+    gdb.execute("set $eax = %d" % x)
+    gdb.execute("set $ecx = %d" % y)
+    gdb.execute("set $eip = 0x49c440")
+
+
 class Step(gdb.Breakpoint):
     def stop(self):
+        if saved[0] is not None:  # back from 0x49c440
+            for r, v in saved[0].items():
+                gdb.execute("set $%s = %d" % (r, v))
+            saved[0] = None
+            return False
         e = Mem()
         k = e.r32(0x57f23c)
         f = k - 1
+        try:
+            self.trace(e, f)
+        finally:
+            move_screen(f)
+        return False
+
+    def trace(self, e, f):
         if f < 0 or f > END:
             return False
         a = e.r32(0x628430)  # visible units, in list order like the emulator's trace

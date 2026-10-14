@@ -806,6 +806,23 @@ impl State {
         }
     }
 
+    /// 0x4c2f30: Stim Packs: units that may use it (tech 0) and have more than 10 hp
+    /// lose 10 hp and are stimmed for 37 (x8) frames.
+    pub fn command_stim(&mut self, d: &Data, player: u8, sel: &[u32]) {
+        for u in self.live_selection(sel) {
+            if self.can_use_tech(d, u, 0, player) != Ok(1) || self.units[u as usize].hp <= 0xa00 {
+                continue;
+            }
+            // An unused synced random number (call site 0x1f), then the stim sound (UI).
+            self.rng.rand(0x1f);
+            self.apply_damage_pub(d, u, 0xa00, NIL, 0xff, true);
+            if self.units[u as usize].stim_timer < 0x25 {
+                self.units[u as usize].stim_timer = 0x25;
+                self.update_speed(d, u);
+            }
+        }
+    }
+
     /// Stop command (0x4c2190): the 0x46dc20 checks for order 1 (Stop).
     pub fn command_stop(&mut self, d: &Data, player: u8, sel: &[u32], queued: bool) {
         for u in self.live_selection(sel) {
@@ -1148,6 +1165,13 @@ impl State {
             0x1e => self.command_return_cargo(d, player, sel, byte(1) != 0),
             0x1f => self.command_train_sel(d, player, sel, u16_at(1)),
             0x2b => self.command_hold(d, player, sel, byte(1) != 0),
+            0x36 => self.command_stim(d, player, sel),
+            0x57 => {
+                // 0x4c2e90: only replays act on it (0x4c4d60 -> 0x48a1c0; the message is UI).
+                if self.replay {
+                    self.leave_game(d, player);
+                }
+            }
             0x21 => self.command_cloak(d, player, sel),
             0x22 => self.command_decloak(d, player, sel),
             0x25 => self.command_unsiege(d, player, sel, byte(1) != 0),

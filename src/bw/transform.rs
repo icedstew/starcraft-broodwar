@@ -397,18 +397,49 @@ impl State {
         }
     }
 
-    /// 0x464930: a lifting building lets go of its addon, which becomes neutral (0x47cb90).
-    pub fn detach_addon(&mut self, d: &Data, b: u32) {
-        let a = self.units[b as usize].ptr_at(0xc0);
-        let un = &self.units[a as usize];
+    /// 0x47cb90: `u` becomes neutral (its addon in progress is cancelled).
+    pub fn make_neutral(&mut self, d: &Data, u: u32) {
+        let un = &self.units[u as usize];
         let c = un.current_build_unit;
         if un.secondary_order == 0x25 && un.status & 2 != 0 && c != NIL && self.units[c as usize].status & 1 == 0 {
             self.cancel_unit(d, c);
         }
-        self.give_unit(d, a, 0xb);
-        if self.units[a as usize].status & 0x4000_0000 == 0 {
-            self.set_secondary_order(a, 0x17);
+        self.give_unit(d, u, 0xb);
+        if self.units[u as usize].status & 0x4000_0000 == 0 {
+            self.set_secondary_order(u, 0x17);
         }
+    }
+
+    /// 0x48a1c0: `player` leaves the game: their units become neutral (0x489fc0).
+    pub fn leave_game(&mut self, d: &Data, player: u8) {
+        let p = player as usize;
+        if self.player_left[p] != 0 {
+            return;
+        }
+        self.player_left[p] = 2;
+        // ponytail: team melee (0x57f0b4 / 0x596875, the whole team's slots) and the
+        // game variants 4 / 5 of 0x59686d (units die instead) are not tracked yet.
+        match self.player_types[p] {
+            1 => self.player_types[p] = 0xb,
+            2 => self.player_types[p] = 10,
+            _ => {}
+        }
+        let mut u = self.player_units[p];
+        while u != NIL {
+            let next = self.units[u as usize].player_next;
+            self.make_neutral(d, u);
+            u = next;
+        }
+        if self.replay {
+            // 0x6d0f18 / 0x57f0b0 / 0x57eeb8: the replay stops showing their vision.
+            self.local_vision_mask &= !(1u8 << (player & 7));
+        }
+    }
+
+    /// 0x464930: a lifting building lets go of its addon, which becomes neutral (0x47cb90).
+    pub fn detach_addon(&mut self, d: &Data, b: u32) {
+        let a = self.units[b as usize].ptr_at(0xc0);
+        self.make_neutral(d, a);
         self.units[b as usize].set_ptr_at(0xc0, NIL);
         // 0x48f8a0: the "addon detached" sound (UI).
         let saved = self.iscript_unit;

@@ -819,7 +819,7 @@ impl State {
     }
 
     /// 0x453fc0: armor upgrade level (+2 for ultralisks with chitinous plating in BW).
-    fn armor_level(&self, d: &Data, t: u32) -> u32 {
+    pub fn armor_level(&self, d: &Data, t: u32) -> u32 {
         let tu = &self.units[t as usize];
         let p = tu.player as usize;
         let up = d.dat.units.armor_upgrade[tu.unit_type as usize] as usize;
