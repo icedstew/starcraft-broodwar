@@ -12,6 +12,13 @@ pub struct ScenarioModes {
     pub flag_596877: bool,
 }
 
+impl ScenarioModes {
+    /// The template fields the loaders test (0x59686d, 0x596871, 0x596877).
+    pub fn of_template(t: &[u8; 0x20]) -> ScenarioModes {
+        ScenarioModes { flag_59686d: t[8] != 0, flag_596871: t[0xc] != 0, flag_596877: t[0x12] != 0 }
+    }
+}
+
 fn u16_at(e: &[u8], o: usize) -> u16 {
     u16::from_le_bytes([e[o], e[o + 1]])
 }
@@ -28,7 +35,7 @@ impl State {
         for p in (0..12).rev() {
             a[11][p] = 1;
             a[p][11] = 1;
-            if self.ally_computers == 1 && !modes.flag_596877 {
+            if self.template[0xf] == 1 && !modes.flag_596877 {
                 for q in (0..8).rev() {
                     if q != p && ty[p] == 1 && ty[q] == 1 {
                         a[p][q] = 2;
@@ -54,7 +61,7 @@ impl State {
                 self.force_vision(f, props & 8 != 0);
             }
         }
-        if self.game_type == 0xf {
+        if self.template[0] == 0xf {
             for p in 0..11 {
                 for q in 0..11 {
                     if ty[p] != 0 && ty[q] != 0 {
@@ -252,14 +259,18 @@ impl State {
         Some(u)
     }
 
-    /// 0x49da40: melee starting units (`mode` = 0x596871: 1 workers only, 2 town hall
-    /// and workers) for every human and computer player at its start location.
-    pub fn melee_start_units(&mut self, d: &Data, mode: u8) {
+    /// 0x49da40: starting units (`mode` = 0x596871: 1 workers only, 2 town hall and
+    /// workers) for every human and computer player at its start location. With map
+    /// settings (template +8 / +0xc / +0x12 all 0), players flagged in 0x59bda8 get a
+    /// town hall and workers.
+    pub fn melee_start_units(&mut self, d: &Data, template_mode: u8) {
         for p in (0..8u8).rev() {
             let ty = self.player_type(p);
             if ty != 2 && ty != 1 {
                 continue;
             }
+            let t = &self.template;
+            let mode = if t[8] == 0 && template_mode == 0 && t[0x12] == 0 && self.melee_map_units[p as usize] != 0 { 2 } else { template_mode };
             let race = self.player_races[p as usize];
             if mode == 2 {
                 self.start_town_hall(d, race, p);

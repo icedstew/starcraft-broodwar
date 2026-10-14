@@ -9,6 +9,7 @@ pub mod attack;
 pub mod build;
 pub mod bullet;
 pub mod buttons;
+pub mod burrow;
 pub mod chk_load;
 pub mod cloak;
 pub mod command;
@@ -196,9 +197,10 @@ pub struct State {
     pub bullets: bullet::Bullets,
     /// 0x513a18: sight shapes per sight range.
     pub sights: Vec<vision::Sight>,
-    /// 0x596865: game type; 0x596874: ally computer players.
-    pub game_type: u8,
-    pub ally_computers: u8,
+    /// 0x596865: the game template (a Templates\\*.got entry): +0 game type, +2 sub
+    /// type, +8 victory condition (0x59686d), +0xc starting units (0x596871), +0xf
+    /// alliances allowed (0x596874), +0x10 teams (0x596875), +0x12 (0x596877).
+    pub template: [u8; 0x20],
     /// 0x658ae4: shared countdown for 0x4000-status dead-unit removal.
     pub dead_removal_counter: u32,
     /// 0x64dec8 ring rows, 0x64dea8, 0x6957d0.
@@ -343,9 +345,8 @@ impl State {
             cloak_list_head: NIL,
             game_options: 0,
             forward_offsets: Vec::new(),
-            game_type: 0,
+            template: [0; 0x20],
             player_left: [0; 12],
-            ally_computers: 0,
             dead_removal_counter: 0,
             finder_rows: [[0; 0x20]; 0x20],
             finder_64dea8: 0,

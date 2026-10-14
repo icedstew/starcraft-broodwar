@@ -46,6 +46,11 @@ fn main() -> std::io::Result<()> {
         let h = &r.header;
         println!("map {:?} {}x{}, {} frames, title {:?}, host {:?}", h.map_name, h.map_width, h.map_height, h.frames, h.title, h.host);
         println!("seed {:#x}, game type {} / {}", h.start_time, h.game_type, h.sub_type);
+        if std::env::var_os("REPHDR").is_some() {
+            for (i, c) in h.raw.chunks(16).enumerate() {
+                println!("  {:03x}: {}", i * 16, c.iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(" "));
+            }
+        }
         for (i, s) in h.slots.iter().enumerate().filter(|(_, s)| !s.name.is_empty()) {
             println!("  player {i}: id {} storm {} type {} race {} team {} {:?}", s.slot_id, s.player_id, s.kind, s.race, s.team, s.name);
         }
@@ -276,6 +281,12 @@ fn main() -> std::io::Result<()> {
             // "cmd <frame> <player index> <hex bytes>".
             let r = replay::Replay::parse(&std::fs::read(&args[1])?)?;
             let mut o = format!("seed {:#x}\n", r.header.start_time);
+            // "template <hex>": 0x596865 for the header's game type; "mapunits <hex>":
+            // 0x59bda8 (header +0x271).
+            let a = view::Assets::load(files)?;
+            let t = view::load_template(&a, r.header.game_type, r.header.sub_type);
+            let hex = |b: &[u8]| b.iter().map(|b| format!("{b:02x}")).collect::<String>();
+            o += &format!("template {}\nmapunits {}\n", hex(&t), hex(&r.header.raw[0x271..0x279]));
             let mut player_of = [0u8; 256];
             for (i, s) in r.header.slots.iter().enumerate().take(8) {
                 o += &format!("player {i} {} {}\n", s.kind, s.race);

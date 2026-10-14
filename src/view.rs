@@ -713,12 +713,16 @@ fn new_game(a: &Assets, chk: &Chk, rep: Option<&crate::replay::Header>) -> io::R
         st.init_psi(&a.bw.psi_grp);
         st.init_thingies(d);
         st.load_terrain(&ts, w as u16, h as u16, &chk.mtxm());
-        let melee = match rep {
-            // ponytail: only melee (game type 2) starts are set up; other types (top vs
-            // bottom, UMS, ...) get melee starting units too.
-            Some(_) => true,
-            None => is_melee_map(chk) && std::env::var("SCBW_NOMELEE").is_err(),
+        let melee = rep.is_none() && is_melee_map(chk) && std::env::var("SCBW_NOMELEE").is_err();
+        // 0x596865: the game's template (a replay keeps its game type and sub type; a
+        // map played here is Melee, or Use Map Settings when it is not a melee map).
+        let (gt, sub) = match rep {
+            Some(h) => (h.game_type, h.sub_type),
+            None if melee => (2, 1),
+            None => (10, 1),
         };
+        st.template = load_template(a, gt, sub);
+        let modes = bw::chk_load::ScenarioModes::of_template(&st.template);
         let units = chk.section(b"UNIT").unwrap_or(&[]); // start locations: the last UNIT handler call sets them
         if let Some(h) = rep {
             // 0x4ef100: a replay's game uses the seed in its header (0x6d0f38).
@@ -732,6 +736,8 @@ fn new_game(a: &Assets, chk: &Chk, rep: Option<&crate::replay::Header>) -> io::R
                 st.players.minerals[p] = 50;
             }
             st.replay = true;
+            // 0x4ef100: 0x59bda8 from the header (0x6d11a1).
+            st.melee_map_units.copy_from_slice(&h.raw[0x271..0x279]);
             // Header byte 0: 1 = Brood War (0x58f440).
             st.is_expansion = h.engine == 1;
             st.local_player = h.slots.iter().position(|s| s.kind == 2).unwrap_or(0) as u8;
@@ -767,7 +773,7 @@ fn new_game(a: &Assets, chk: &Chk, rep: Option<&crate::replay::Header>) -> io::R
             Some(h) => h.slots.iter().take(8).enumerate().filter(|(_, s)| s.kind == 2 || s.kind == 1).fold(0, |m, (p, _)| m | 1 << p),
             None => 1 << st.local_player,
         };
-        st.init_alliances(Default::default());
+        st.init_alliances(modes);
         // 0x4eee00 loads the scenario right after 0x4ef100 seeds the RNG, with it on.
         // Handler order (table 0x5001e8): MTXM, THG2 (its unit doodads draw from the
         // RNG too), UNIT.
@@ -776,16 +782,37 @@ fn new_game(a: &Assets, chk: &Chk, rep: Option<&crate::replay::Header>) -> io::R
             st.chk_doodads(d, doodads, Default::default());
         }
         for units in chk.sections(b"UNIT") {
-            st.chk_units(d, units, Default::default());
+            st.chk_units(d, units, modes);
         }
         st.rng.enabled = false;
-        if melee {
-            st.rng.enabled = true;
-            st.melee_start_units(d, 2);
-            st.rng.enabled = false;
-        }
+        // 0x4bf520: 0x49da40 starting units (team melee with shared bases 0x49d8e0 is
+        // not ported).
+        st.rng.enabled = true;
+        st.melee_start_units(d, st.template[0xc]);
+        st.rng.enabled = false;
     });
     Ok(st)
+}
+
+/// 0x4aaea0: the template (Templates\\*.got, listed in templates.lst) of a game type
+/// and sub type; game type 0xff when there is none.
+pub fn load_template(a: &Assets, game_type: u16, sub_type: u16) -> [u8; 0x20] {
+    let mut t = [0u8; 0x20];
+    t[0] = 0xff;
+    let Ok(list) = a.files.read("Templates\\templates.lst") else { return t };
+    for name in String::from_utf8_lossy(&list).lines() {
+        let name = name.trim().trim_matches('"');
+        let Ok(f) = a.files.read(&format!("Templates\\{name}")) else { continue };
+        if f.len() < 0x61 || f[0] != 3 {
+            continue;
+        }
+        let g = &f[0x41..0x61];
+        if u16::from_le_bytes([g[0], g[1]]) == game_type && u16::from_le_bytes([g[2], g[3]]) == sub_type {
+            t.copy_from_slice(g);
+            return t;
+        }
+    }
+    t
 }
 
 /// 0x42d4c0: draw-order key: elevation, then y (elevation < 5 only), sprite flag 0x10,

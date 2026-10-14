@@ -1317,20 +1317,8 @@ impl State {
         todo_port!("0x492850", "FireYamatoGun, CastLockdown, CastDarkSwarm, CastParasite, CastSpawnBroodlings, CastEMPShockwave, CastPsionicStorm, CastIrradiate, CastPlague, CastConsume, CastEnsnare, CastStasisField, CastRestoration, CastDisruptionWeb, CastOpticalFlare, CastMaelstrom");
     }
 
-    /// inline: Burrowing.
-    fn order_burrowing(&mut self, _d: &Data, _u: u32) {
-        todo_port!("inline", "Burrowing");
-    }
 
-    /// inline: Burrowed.
-    fn order_burrowed(&mut self, _d: &Data, _u: u32) {
-        todo_port!("inline", "Burrowed");
-    }
 
-    /// inline: Unburrowing.
-    fn order_unburrowing(&mut self, _d: &Data, _u: u32) {
-        todo_port!("inline", "Unburrowing");
-    }
 
     /// 0x464730: NukeLaunch.
     fn order_nuke_launch(&mut self, _d: &Data, _u: u32) {

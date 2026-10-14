@@ -98,6 +98,8 @@ def load_replay(path):
             r["seed"] = int(w[1], 0)
         elif w[0] == "player":
             r["players"].append((int(w[1]), int(w[2]), int(w[3])))
+        elif w[0] in ("template", "mapunits"):
+            r[w[0]] = bytes.fromhex(w[1])
         elif w[0] == "cmd":
             r["cmds"].append((int(w[1]), int(w[2]), bytes.fromhex(w[3])))
     return r
@@ -153,6 +155,12 @@ def game_init(e, f, md):
                         e.w8(0x57eee8 + pl * 0x24 + 1, race)
                     e.w32(0x51ca14, r["seed"])
                     e.w32(0x51ca18, 0)
+                    # The game's template (0x596865) and 0x59bda8 (header +0x271), which
+                    # the UNIT loader and 0x49da40 consult.
+                    if "template" in r:
+                        e.write(0x596865, r["template"])
+                    if "mapunits" in r:
+                        e.write(0x59bda8, r["mapunits"])
                     e.w32(0x6d11c8, 1)
                 e.w32(0x6d0f14, 1)
                 e.w32(0x6d0f24, p)
@@ -427,7 +435,8 @@ def scenario(e, units, move, frames, out):
         for tbl in (0x6d1238, 0x6d1220):  # string tables (stat_txt, network): empty, so
             if not e.r32(tbl):              # messages fall back to the default string
                 e.w32(tbl, e.alloc(0x10))
-        e.w8(0x596871, 2)
+        if "template" not in replay:  # old repdumps: a melee game
+            e.w8(0x596871, 2)
         e.w32(0x6d11c8, 1)
         e.call(0x49da40)
         e.w32(0x6d11c8, 0)

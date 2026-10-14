@@ -88,6 +88,8 @@ pub struct Header {
     pub host: String,
     pub map_name: String,
     pub slots: Vec<Slot>,
+    /// The whole 0x279-byte header as loaded to 0x6d0f30.
+    pub raw: Vec<u8>,
 }
 
 /// A raw game command as it goes through the network/replay stream.
@@ -166,6 +168,7 @@ fn parse_header(d: &[u8]) -> Header {
         host: cstr(&d[0x48..0x48 + 24]),
         map_name: cstr(&d[0x61..0x61 + 26]),
         slots,
+        raw: d.to_vec(),
     }
 }
 

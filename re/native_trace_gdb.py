@@ -105,6 +105,7 @@ class Step(gdb.Breakpoint):
             fo.write(emu_game.unit_trace(e, f, (a - emu_game.UNITS) // 0x150) + "\n")
             a = e.r32(a + 4)
         fo.write(emu_game.thingy_trace(e, f) + "\n")
+        fo.write(emu_game.fog_trace(e, f) + "\n")
         fo.write(f"f{f} res " + " ".join(f"{e.r32(0x57f0f0 + p * 4)},{e.r32(0x57f120 + p * 4)}" for p in range(8)) + "\n")
         fo.write(f"f{f} rng {e.r32(0x51ca14):#x} {e.r32(0x51ca18)}\n")
         if f == 0:  # per call-site draw counts so far (0x51c610)

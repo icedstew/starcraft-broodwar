@@ -1084,6 +1084,56 @@ impl State {
     }
 
     /// Run one command packet as the turn loop does (0x487191): with the synced RNG on.
+    /// 0x4bf9c0: share vision with the players in `mask`. Outside replays only with
+    /// observers or when the template allows alliances (+0xf == 1, +0x12 == 0).
+    fn command_vision(&mut self, player: u8, mask: u16) {
+        if !self.replay {
+            for p in (0..8u8).rev() {
+                if mask & (1 << p) == 0 {
+                    continue;
+                }
+                if self.player_types[player as usize] == 9 {
+                    return;
+                }
+                if self.player_types[p as usize] != 9 && (self.template[0xf] != 1 || self.template[0x12] != 0) {
+                    return;
+                }
+            }
+        }
+        let v = &mut self.player_vision[player as usize];
+        *v = (*v & 0xff00) | (mask as u32 & 0xff) | 1 << player;
+    }
+
+    /// 0x4c28a0: set `player`'s alliance with each of the 12 players (2 bits each), then
+    /// 0x4c04d0: their units drop targets that are now allied.
+    fn command_alliance(&mut self, d: &Data, player: u8, mut v: u32) {
+        if self.template[0xf] != 1 || self.template[0x12] != 0 {
+            return;
+        }
+        for q in 0..12 {
+            self.alliances[player as usize][q] = (v & 3) as u8;
+            v >>= 2;
+        }
+        // 0x49b870: selection circle colors and the local selection (UI).
+        let p = player as usize;
+        let mut u = self.player_units[p];
+        while u != NIL {
+            let un = &self.units[u as usize];
+            let t = un.order_target_unit;
+            if t != NIL && d.dat.orders.use_weapon_targeting[un.order as usize] != 0 && self.alliances[p][self.units[t as usize].player as usize] != 0 {
+                let mut o = self.units[t as usize].player;
+                if o == 0xb {
+                    o = self.sprites[self.units[t as usize].sprite as usize].owner;
+                }
+                if self.alliances[un.player as usize][o as usize] != 0 {
+                    self.units[u as usize].order_target_unit = NIL;
+                }
+            }
+            u = self.units[u as usize].player_next;
+        }
+        // 0x48fdb0: the local player's alliance dialog (UI).
+    }
+
     pub fn execute_command(&mut self, d: &Data, player: u8, sel: &[u32], p: &[u8]) {
         let was = self.rng.enabled;
         self.rng.enabled = true;
@@ -1096,6 +1146,8 @@ impl State {
         let u16_at = |o: usize| p.get(o..o + 2).map_or(0, |b| u16::from_le_bytes([b[0], b[1]]));
         let byte = |o: usize| p.get(o).copied().unwrap_or(0);
         match byte(0) {
+            0x0d => self.command_vision(player, u16_at(1)),
+            0x0e => self.command_alliance(d, player, u32::from_le_bytes([byte(1), byte(2), byte(3), byte(4)])),
             0x0c => {
                 // 0x4c23c0
                 let (order, tx, ty, t) = (byte(1), u16_at(2), u16_at(4), u16_at(6));
@@ -1165,6 +1217,8 @@ impl State {
             0x1e => self.command_return_cargo(d, player, sel, byte(1) != 0),
             0x1f => self.command_train_sel(d, player, sel, u16_at(1)),
             0x2b => self.command_hold(d, player, sel, byte(1) != 0),
+            0x2c => self.command_burrow(d, player, sel, byte(1) != 0),
+            0x2d => self.command_unburrow(d, player, sel),
             0x36 => self.command_stim(d, player, sel),
             0x57 => {
                 // 0x4c2e90: only replays act on it (0x4c4d60 -> 0x48a1c0; the message is UI).
