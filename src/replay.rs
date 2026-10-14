@@ -75,6 +75,8 @@ pub struct Slot {
 
 #[derive(Debug, Clone)]
 pub struct Header {
+    /// 0 StarCraft, 1 Brood War.
+    pub engine: u8,
     pub frames: u32,
     pub start_time: u32,
     pub title: String,
@@ -152,6 +154,7 @@ fn parse_header(d: &[u8]) -> Header {
         })
         .collect();
     Header {
+        engine: d[0],
         frames: u32_at(0x01),
         start_time: u32_at(0x08),
         title: cstr(&d[0x18..0x18 + 28]),

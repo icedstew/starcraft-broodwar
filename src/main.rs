@@ -260,6 +260,65 @@ fn main() -> std::io::Result<()> {
             let a = view::Assets::load(files)?;
             view::run(&a, load_chk(&args[1])?)?;
         }
+        Some("repdump") => {
+            // repdump <rep> <out>: the replay's game setup and commands as text, for
+            // re/emu_game.py (SCBW_REPLAY): "seed", "player <index> <type> <race>",
+            // "cmd <frame> <player index> <hex bytes>".
+            let r = replay::Replay::parse(&std::fs::read(&args[1])?)?;
+            let mut o = format!("seed {:#x}\n", r.header.start_time);
+            let mut player_of = [0u8; 256];
+            for (i, s) in r.header.slots.iter().enumerate().take(8) {
+                o += &format!("player {i} {} {}\n", s.kind, s.race);
+                if s.kind == 1 || s.kind == 2 {
+                    player_of[s.player_id as usize] = i as u8;
+                }
+            }
+            for c in &r.commands {
+                let hex: String = c.data.iter().map(|b| format!("{b:02x}")).collect();
+                o += &format!("cmd {} {} {hex}\n", c.frame, player_of[c.player as usize]);
+            }
+            std::fs::write(&args[2], o)?;
+        }
+        Some("reptrace") => {
+            // reptrace <rep> <frames> <trace>: play the replay headless, writing the same
+            // per-frame trace as re/emu_game.py with SCBW_REPLAY.
+            let a = view::Assets::load(files)?;
+            let r = replay::Replay::parse(&std::fs::read(&args[1])?)?;
+            let frames: u32 = args[2].parse().unwrap_or(100);
+            let mut t = std::io::BufWriter::new(std::fs::File::create(&args[3])?);
+            let mut scene = view::Scene::from_replay(&a, &r)?;
+            let mut player_of = [0u8; 256];
+            for (i, s) in r.header.slots.iter().enumerate() {
+                if s.kind == 1 || s.kind == 2 {
+                    player_of[s.player_id as usize] = i as u8;
+                }
+            }
+            let mut ci = 0;
+            use std::io::Write;
+            for f in 0..frames {
+                while ci < r.commands.len() && r.commands[ci].frame <= f {
+                    let c = &r.commands[ci];
+                    scene.replay_command(player_of[c.player as usize], &c.data);
+                    ci += 1;
+                }
+                scene.step();
+                let st = &scene.st;
+                let mut u = st.visible_units.head;
+                while u != bw::list::NIL {
+                    writeln!(t, "{}", unit_trace(st, f, u))?;
+                    u = st.units[u as usize].link.next;
+                }
+                writeln!(t, "{}", thingy_trace(st, f))?;
+                writeln!(t, "{}", fog_trace(st, f))?;
+                if f % 25 == 0 {
+                    writeln!(t, "{}", tile_trace(st, f))?;
+                }
+                writeln!(t, "{}", bullet_trace(st, f))?;
+                let res: Vec<String> = (0..8).map(|p| format!("{},{}", st.players.minerals[p], st.players.gas[p])).collect();
+                writeln!(t, "f{f} res {}", res.join(" "))?;
+                writeln!(t, "f{f} rng {:#x} {}", st.rng.seed, st.rng.total)?;
+            }
+        }
         Some("repshot") => {
             // repshot <rep> <shots dir>: play the replay and draw the game screen at each
             // frame listed in <dir>/native/meta.txt ("frame screen_x screen_y", captured from

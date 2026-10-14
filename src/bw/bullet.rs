@@ -241,7 +241,7 @@ impl State {
                 if owner != NIL {
                     self.units[owner as usize].status |= 0x8000_0000;
                     self.units[owner as usize].order_flags |= 4;
-                    todo_port!("0x475710", "kill the self-destructing source");
+                    self.kill_unit(d, owner);
                 }
             }
             8 => {

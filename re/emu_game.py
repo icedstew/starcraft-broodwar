@@ -24,6 +24,8 @@ class Files:
         h["storm.dll#265"] = self.sfile_size        # SFileGetFileSize(handle, *high)
         h["storm.dll#269"] = self.sfile_read        # SFileReadFile(handle, buf, len, *read, overlapped)
         h["storm.dll#253"] = self.sfile_close       # SFileCloseFile(handle)
+        # SNet turn info (0x4c40f0 after a player leaves): succeed, values left as passed.
+        h["storm.dll#109"] = lambda e, a: (1, 3)
         k = "kernel32.dll!"
         h[k + "createeventa"] = lambda e, a: (0x1000, 4)
         h[k + "waitforsingleobject"] = lambda e, a: (0, 2)
@@ -90,6 +92,9 @@ class Files:
 def game_init(e, f, md):
     """0x4eee00 with the scenario taken from memory (replay-style CHK, 0x4bf520)."""
     rd = lambda n: open(os.path.join(md, n), "rb").read()
+    if os.environ.get("SCBW_REPLAY"):
+        e.w8(0x58f440, 1)  # Brood War game (BW maps need it to load)
+        e.w32(0x6d11e4, 1)  # and its data (0x47ae30 loads all 999 image GRPs)
     w, h = struct.unpack("<HH", rd("dims"))
     e.w16(0x57f1d4, w)
     e.w16(0x57f1d6, h)
@@ -350,10 +355,30 @@ def scenario(e, units, move, frames, out):
     """Same steps as `scbw bwsim`: create + finish units, order Move, step frames."""
     for p in range(12):
         e.w8(0x57eee8 + p * 0x24, 2)
-    e.call(0x4c3ed0)  # alliances and shared vision at game start
     for p in range(8):  # starting money for training/building scenarios
         e.w32(0x57f0f0 + p * 4, 10000)
         e.w32(0x57f120 + p * 4, 10000)
+    replay = None
+    if os.environ.get("SCBW_REPLAY"):
+        # `scbw repdump` output: play the replay's game (0x4ef100 seeds the RNG from the
+        # header, 0x487100 feeds each frame's commands to 0x4865d0).
+        replay = {"cmds": []}
+        for line in open(os.environ["SCBW_REPLAY"]):
+            w = line.split()
+            if w[0] == "seed":
+                replay["seed"] = int(w[1], 0)
+            elif w[0] == "player":
+                p, ty, race = int(w[1]), int(w[2]), int(w[3])
+                e.w8(0x57eee8 + p * 0x24, ty)
+                e.w8(0x57eee8 + p * 0x24 + 1, race)
+                e.w32(0x57f0f0 + p * 4, 50 if ty in (1, 2) else 0)
+                e.w32(0x57f120 + p * 4, 0)
+            elif w[0] == "cmd":
+                replay["cmds"].append((int(w[1]), int(w[2]), bytes.fromhex(w[3])))
+    if replay:
+        for p in range(8, 12):
+            e.w8(0x57eee8 + p * 0x24, 0)
+    e.call(0x4c3ed0)  # alliances and shared vision at game start
     # 0x49e530 shows a placement error to the owning player (UI only): skip it.
     e.write(0x49e530, b"\xc2\x04\x00")
     # __getptd (0x4059e4) reads TLS: return one static per-thread block instead, with
@@ -363,6 +388,18 @@ def scenario(e, units, move, frames, out):
     ptd = e.alloc(0x8c)
     e.w32(ptd + 0x14, 1)
     e.write(0x4059e4, b"\xb8" + struct.pack("<I", ptd) + b"\xc3")
+    if replay:
+        e.w32(0x6d0f14, 1)
+        e.w32(0x596bbc, e.alloc(0x20))  # replay writer, not recording while playing back
+        for tbl in (0x6d1238, 0x6d1220):  # string tables (stat_txt, network): empty, so
+            if not e.r32(tbl):              # messages fall back to the default string
+                e.w32(tbl, e.alloc(0x10))
+        e.w32(0x51ca14, replay["seed"])
+        e.w32(0x51ca18, 0)
+        e.w8(0x596871, 2)
+        e.w32(0x6d11c8, 1)
+        e.call(0x49da40)
+        e.w32(0x6d11c8, 0)
     melee = os.environ.get("SCBW_MELEE")
     if melee:  # "race,race,...": those players start a melee game (0x49da40, mode 2)
         races = [int(r) for r in melee.split(",")]
@@ -498,8 +535,24 @@ def scenario(e, units, move, frames, out):
     if minimap:
         minimap_init(e, e.data_root)
     with open(out, "w") as fo:
+        ci = 0
+        pkt = e.alloc(0x400)
         for f in range(frames):
             e.w32(0x57eebc, e.r32(0x57f23c))  # net turns: one per frame
+            while replay and ci < len(replay["cmds"]) and replay["cmds"][ci][0] <= f:
+                _, p, data = replay["cmds"][ci]
+                ci += 1
+                e.write(pkt, data)
+                e.w32(0x512678, p)
+                e.w32(0x51267c, p)
+                e.w32(0x6d11c8, 1)
+                e.w32(0x6d5bec, 1)
+                e.w32(0x6556e8, 0)
+                e.call(0x4865d0, regs={"eax": pkt}, stack=[len(data), 1])
+                e.w32(0x6d5bec, 0)
+                e.w32(0x6d11c8, 0)
+                e.w32(0x512678, e.r32(0x512684))
+                e.w32(0x51267c, e.r32(0x512688))
             if move2 and f == at:
                 apply_moves(move2)
             e.w32(0x57f23c, e.r32(0x57f23c) + 1)  # 0x4d9670 advances the frame first
@@ -521,7 +574,7 @@ def scenario(e, units, move, frames, out):
                 with open(os.environ["SCBW_TILEDUMP"] + ".emu", "wb") as td:
                     td.write(bytes(e.uc.mem_read(e.r32(0x5993c4), n * 2)) + bytes(e.uc.mem_read(e.r32(0x6d1260), n * 4)))
             fo.write(bullet_trace(e, f) + "\n")
-            fo.write(f"f{f} res " + " ".join(f"{e.r32(0x57f0f0 + p * 4)},{e.r32(0x57f120 + p * 4)}" for p in range(2)) + "\n")
+            fo.write(f"f{f} res " + " ".join(f"{e.r32(0x57f0f0 + p * 4)},{e.r32(0x57f120 + p * 4)}" for p in range(8 if replay else 2)) + "\n")
             fo.write(f"f{f} rng {e.r32(0x51ca14):#x} {e.r32(0x51ca18)}\n")
             if os.environ.get("SCBW_SELTRACE"):
                 row = [(a - UNITS) // 0x150 for a in struct.unpack("<12I", e.read(0x6284e8, 48)) if a]

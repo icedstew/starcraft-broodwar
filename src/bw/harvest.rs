@@ -78,7 +78,7 @@ impl State {
     }
 
     /// 0x474540 / 0x4745f0: queue in front of the queue, or append when it is empty.
-    fn queue_front(&mut self, d: &Data, u: u32, order: u8, pos: (i16, i16), target: u32) {
+    pub(super) fn queue_front(&mut self, d: &Data, u: u32, order: u8, pos: (i16, i16), target: u32) {
         let head = self.units[u as usize].order_queue_head;
         if head != NIL {
             self.order_insert_before(d, u, order, 0xe4, pos, target, head);

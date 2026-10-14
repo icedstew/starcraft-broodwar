@@ -38,7 +38,7 @@ impl State {
     }
 
     /// 0x401d60: `target` is cloaked and not detected by `u`'s owner.
-    fn cloaked_from(&self, target: u32, u: u32) -> bool {
+    pub(super) fn cloaked_from(&self, target: u32, u: u32) -> bool {
         let t = &self.units[target as usize];
         t.status & 0x300 != 0 && t.visibility & (1 << (self.units[u as usize].player & 0x1f)) == 0
     }
@@ -434,6 +434,50 @@ impl State {
         }
         let range = range * 32;
         let min = self.min_attack_range(d, u);
+        let buckets = self.target_buckets(d, u, range, min);
+        let Some(list) = buckets.iter().find(|b| !b.is_empty()) else { return NIL };
+        if list.len() == 1 {
+            return list[0];
+        }
+        if self.units[u as usize].ai != NIL && self.units[u as usize].unit_type == 0x2f {
+            todo_port!("0x4405e0", "AI scourge: prefer the toughest target (0x4026d0)");
+        }
+        // 0x4405e0: nearest (first on ties).
+        let up = self.unit_sprite_pos(u);
+        let dist = |st: &State, c: u32| {
+            let p = st.unit_sprite_pos(c);
+            super::path::approx_distance(up.0 as i32, p.0 as i32, up.1 as i32, p.1 as i32)
+        };
+        let mut best = 0;
+        let mut bd = dist(self, list[0]);
+        for (i, &c) in list.iter().enumerate().skip(1) {
+            let dd = dist(self, c);
+            if dd < bd {
+                bd = dd;
+                best = i;
+            }
+        }
+        list[best]
+    }
+
+    /// 0x442fc0: an enemy `u` can hit without moving: acquisition range only (+0x40 in
+    /// a bunker), a random one of the best priority bucket (0x4401b0).
+    pub fn find_target_in_range(&mut self, d: &Data, u: u32) -> u32 {
+        let mut range = self.acquisition_range(u) as u8 as u32 * 32;
+        if self.units[u as usize].status & 0x20 != 0 {
+            range += 0x40;
+        }
+        let buckets = self.target_buckets(d, u, range, 0);
+        let Some(list) = buckets.iter().find(|b| !b.is_empty()) else { return NIL };
+        if list.len() == 1 || !self.rng.enabled {
+            return list[0];
+        }
+        list[self.rng.rand(0x13) as usize % list.len()]
+    }
+
+    /// 0x4e8280 over the finder box `range` + 0x40 around `u` with filter 0x442da0
+    /// (`min` = 0x6955dc, `range` = 0x6957a4): candidates by target priority (0x440160).
+    fn target_buckets(&mut self, d: &Data, u: u32, range: u32, min: u32) -> [Vec<u32>; 6] {
         let (x, y) = self.unit_sprite_pos(u);
         let e = range as i16 + 0x40;
         let b = [x.wrapping_sub(e), y.wrapping_sub(e), x.wrapping_add(e), y.wrapping_add(e)];
@@ -473,29 +517,105 @@ impl State {
                 buckets[pr].push(c);
             }
         }
-        let Some(list) = buckets.iter().find(|b| !b.is_empty()) else { return NIL };
-        if list.len() == 1 {
-            return list[0];
+        buckets
+    }
+
+    /// 0x4e5db0: `u`'s owner sees its order target (or, without one, the order
+    /// position's tile).
+    pub(super) fn order_target_visible(&self, u: u32) -> bool {
+        let un = &self.units[u as usize];
+        let bit = 1u32 << (un.player & 0x1f);
+        let t = un.order_target_unit;
+        if t == NIL {
+            let (x, y) = un.order_target_pos;
+            let i = (y as i32 / 32) * self.terrain.width as i32 + x as i32 / 32;
+            let f = self.terrain.tile_flags.get(i as usize).copied().unwrap_or(0);
+            return !f & 0xff & bit != 0;
         }
-        if self.units[u as usize].ai != NIL && self.units[u as usize].unit_type == 0x2f {
-            todo_port!("0x4405e0", "AI scourge: prefer the toughest target (0x4026d0)");
+        let tu = &self.units[t as usize];
+        if tu.status & 0x300 != 0 && tu.visibility & bit == 0 {
+            return false;
         }
-        // 0x4405e0: nearest (first on ties).
-        let up = self.unit_sprite_pos(u);
-        let dist = |st: &State, c: u32| {
-            let p = st.unit_sprite_pos(c);
-            super::path::approx_distance(up.0 as i32, p.0 as i32, up.1 as i32, p.1 as i32)
+        self.sprites[tu.sprite as usize].visibility as u32 & bit != 0
+    }
+
+    /// 0x478b40: attack the order target from where `u` stands (hold position). True
+    /// while there is something to do here (cooling down, turning, fired); false when
+    /// there is no hittable target in range.
+    pub(super) fn attack_in_place(&mut self, d: &Data, u: u32) -> bool {
+        if self.units[u as usize].order_target_unit == NIL {
+            return false;
+        }
+        self.pick_better_target(d, u);
+        if !self.order_target_visible(u) {
+            return false;
+        }
+        let t = self.units[u as usize].order_target_unit;
+        if !self.can_attack(d, u, t, true) {
+            return false;
+        }
+        let tp = self.unit_sprite_pos(t);
+        self.units[u as usize].order_target_pos = tp;
+        let sub = self.units[u as usize].subunit;
+        if sub != NIL && d.dat.units.flags[self.units[sub as usize].unit_type as usize] & 0x10 != 0 {
+            return true;
+        }
+        let (w, slot) = if self.units[t as usize].status & 4 != 0 {
+            (d.dat.units.air_weapon[self.units[u as usize].unit_type as usize], 2)
+        } else {
+            (self.ground_weapon(d, u), 1)
         };
-        let mut best = 0;
-        let mut bd = dist(self, list[0]);
-        for (i, &c) in list.iter().enumerate().skip(1) {
-            let dd = dist(self, c);
-            if dd < bd {
-                bd = dd;
-                best = i;
+        let un = &mut self.units[u as usize];
+        let cd = if slot == 1 { un.ground_cooldown } else { un.air_cooldown };
+        if cd != 0 {
+            if un.order_process_timer as i32 > cd as i32 - 1 {
+                un.order_process_timer = cd - 1;
             }
+            return true;
         }
-        list[best]
+        if un.fl.flags & 8 != 0 {
+            return true;
+        }
+        let dist = self.unit_box_gap(d, t, u);
+        let min = d.dat.weapons.min_range[w as usize];
+        if (min != 0 && dist < min) || dist > self.weapon_range(d, u, w) {
+            return false;
+        }
+        let sp = self.unit_sprite_pos(u);
+        let tp = self.units[u as usize].order_target_pos;
+        let dir = crate::game::flingy::direction_to(sp.0 as i32, sp.1 as i32, tp.0 as i32, tp.1 as i32);
+        let mut diff = self.units[u as usize].fl.heading as i32 - dir as i32;
+        if diff < 0 {
+            diff += 0x100;
+        }
+        if diff > 0x80 {
+            diff = 0x100 - diff;
+        }
+        if diff > d.dat.weapons.attack_angle[w as usize] as i32 {
+            if self.units[u as usize].status & 0x1_0000 != 0 {
+                self.units[u as usize].order_process_timer = 0;
+                return true;
+            }
+            return false;
+        }
+        let st = self.units[u as usize].status;
+        if st & 0x8000 != 0 {
+            return false;
+        }
+        if st & 0x20 != 0 {
+            todo_port!("0x477fd0", "muzzle flash of a unit in a bunker");
+        }
+        self.units[u as usize].fl.flags |= 8;
+        self.bullets.spin_source = NIL;
+        let base = self.weapon_cooldown(d, u, w);
+        let r = (self.rng.rand(0xd) & 3) as u8;
+        let cd = base.wrapping_add(r.wrapping_sub(1));
+        let un = &mut self.units[u as usize];
+        un.ground_cooldown = cd;
+        un.air_cooldown = cd;
+        let s = un.sprite;
+        self.sprite_images_run_anim(d, s, slot + 4);
+        true
     }
 
     /// 0x477510: an auto-targeting unit (status 0x8000000) switches to a better target.

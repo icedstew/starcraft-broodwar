@@ -404,7 +404,7 @@ impl State {
             todo_port!("0x4cc470", "map-placed lifted building / unit in transit");
         }
         if valid & 8 != 0 && state & 8 != 0 {
-            todo_port!("0x4f6420", "map-placed hallucination");
+            self.make_hallucination(d, u);
         }
         if valid & 0x10 != 0 && state & 0x10 != 0 {
             self.units[u as usize].status |= 0x400_0000;
@@ -435,6 +435,57 @@ impl State {
                 self.image_run_anim(d, img, anim);
                 img = next;
             }
+        }
+    }
+
+    /// 0x4f6420: turn `u` (and its subunit) into a hallucination: out of the unit counts,
+    /// hallucination buttons, a 0x546-frame life, drawn with the hallucination draw function.
+    pub fn make_hallucination(&mut self, d: &Data, u: u32) {
+        self.modify_unit_counters(d, u, -1);
+        self.modify_completed_counters(d, u, -1, true);
+        let t = self.units[u as usize].unit_type as usize;
+        let building = d.dat.units.flags[t] & 1 != 0;
+        let un = &mut self.units[u as usize];
+        let disabled = un.status & 0x400 != 0 || un.lockdown_timer != 0 || un.stasis_timer != 0 || un.maelstrom_timer != 0;
+        if !disabled || building {
+            un.button_set = 0xf4;
+        }
+        un.status |= crate::bw::unit::status::HALLUCINATION;
+        self.modify_unit_counters(d, u, 1);
+        self.modify_completed_counters(d, u, 1, false);
+        if self.replay || self.units[u as usize].player == self.local_player {
+            // 0x497dc0: the sprite's images switch to the hallucination draw function.
+            let mut i = self.sprites[self.units[u as usize].sprite as usize].images.head;
+            while i != NIL {
+                let img = &mut self.images[i as usize];
+                if img.modifier == 0 || img.modifier == 0x10 {
+                    img.modifier = 0x10;
+                    img.flags |= 1;
+                    img.coloring = 0;
+                }
+                i = img.link.next;
+            }
+        }
+        if d.dat.units.flags[t] & 0x10 != 0 {
+            return;
+        }
+        let un = &mut self.units[u as usize];
+        if un.remove_timer == 0 || 0x546 < un.remove_timer {
+            un.remove_timer = 0x546;
+        }
+        todo_port!("0x431800", "unit air/ground strength (AI)");
+        if un.secondary_order != 0x95 {
+            un.secondary_order = 0x95;
+            un.secondary_order_pos = (0, 0);
+            un.current_build_unit = NIL;
+            un.secondary_order_state = 0;
+        }
+        let sub = un.subunit;
+        if sub != NIL {
+            self.make_hallucination(d, sub);
+        }
+        if matches!(t, 0x48 | 0x52 | 0x53 | 0x51) {
+            todo_port!("0x466170", "hallucinated carrier/reaver children");
         }
     }
 }

@@ -315,7 +315,7 @@ impl State {
         if un.remove_timer != 0 {
             un.remove_timer -= 1;
             if un.remove_timer == 0 {
-                todo_port!("0x475710", "remove_timer expired: kill unit");
+                self.kill_unit(d, u);
                 return;
             }
         }

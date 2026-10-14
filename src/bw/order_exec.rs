@@ -3,6 +3,7 @@
 //! Generated from the decompiled switches (re: dispatch table), then hand-ported per handler.
 //! Unported handlers are `todo_port!` stubs that leave the unit's state unchanged.
 
+use super::list::NIL;
 use super::{Data, State};
 use crate::todo_port;
 
@@ -566,8 +567,89 @@ impl State {
     }
 
     /// 0x479040: AttackMove.
-    fn order_attack_move(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x479040", "AttackMove");
+    fn order_attack_move(&mut self, d: &Data, u: u32) {
+        let order = self.units[u as usize].order;
+        if !self.attack_move_step(d, u, order) || self.units[u as usize].main_order_timer != 0 {
+            return;
+        }
+        self.units[u as usize].main_order_timer = 0xf;
+        // (The status test that follows is always true in 1.16.1: setne + inc.)
+        if self.units[u as usize].fl.move_target == self.unit_sprite_pos(u) {
+            self.order_done_or_next(d, u);
+            return;
+        }
+        self.attack_move_acquire(d, u, order);
+    }
+
+    /// 0x478370: move to the order position (state 0 -> 1), and stop to attack the
+    /// auto target when it is a visible enemy. `order` is pushed back to resume after.
+    /// False when the unit stopped to attack or has not started moving.
+    fn attack_move_step(&mut self, d: &Data, u: u32, order: u8) -> bool {
+        if self.units[u as usize].order_state == 0 {
+            let p = self.units[u as usize].order_target_pos;
+            let r = self.set_move_target_xy(d, u, p);
+            let f = &mut self.units[u as usize].fl;
+            if f.next_target_waypoint != p {
+                f.next_target_waypoint = p;
+            }
+            if !r {
+                return false;
+            }
+            self.units[u as usize].order_state = 1;
+        }
+        let t = self.units[u as usize].auto_target;
+        if t == NIL
+            || !self.is_enemy(u, t)
+            || self.sprites[self.units[t as usize].sprite as usize].flags & super::sprite::sflag::HIDDEN != 0
+            || self.units[t as usize].status & 0x400_0000 != 0
+            || self.cloaked_from(t, u)
+        {
+            return true;
+        }
+        if self.units[u as usize].ai != NIL {
+            todo_port!("0x477160", "AI attack-move target choice");
+            return true;
+        }
+        self.attack_move_switch(d, u, order, t, true);
+        false
+    }
+
+    /// 0x477820: while attack-moving, stop for the best enemy in acquisition range.
+    fn attack_move_acquire(&mut self, d: &Data, u: u32, order: u8) {
+        if self.acquisition_range(u) as u8 == 0 {
+            return;
+        }
+        if self.units[u as usize].ai != NIL {
+            todo_port!("0x477160", "AI attack-move target choice");
+            return;
+        }
+        let t = self.find_auto_target(d, u);
+        if t != NIL {
+            self.attack_move_switch(d, u, order, t, false);
+        }
+    }
+
+    /// The common tail of 0x478370 / 0x477820: halt, queue `order` (to resume) and the
+    /// unit's attack order on `t` in front (0x474af0, 0x474540), start it (0x475420) and
+    /// mark the unit (and subunit) as auto-targeting (0x4026a0). 0x478370 also forgets
+    /// the auto target first.
+    fn attack_move_switch(&mut self, d: &Data, u: u32, order: u8, t: u32, clear_auto: bool) {
+        self.unit_halt(d, u);
+        let (pos, target) = (self.units[u as usize].order_target_pos, self.units[u as usize].order_target_unit);
+        self.queue_front(d, u, order, pos, target);
+        let attack = d.dat.units.ai_attack_unit[self.units[u as usize].unit_type as usize];
+        let head = self.units[u as usize].order_queue_head;
+        let tp = self.unit_sprite_pos(t);
+        self.order_insert_before(d, u, attack, 0xe4, tp, t, head);
+        if clear_auto {
+            self.units[u as usize].auto_target = NIL;
+        }
+        self.order_next_or_idle(d, u);
+        self.units[u as usize].status |= 0x800_0000;
+        let sub = self.units[u as usize].subunit;
+        if sub != NIL {
+            self.units[sub as usize].status |= 0x800_0000;
+        }
     }
 
     /// inline: InfestedCommandCenter.
@@ -766,8 +848,42 @@ impl State {
     }
 
     /// 0x478d10: HoldPosition.
-    fn order_hold_position(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x478d10", "HoldPosition");
+    fn order_hold_position(&mut self, d: &Data, u: u32) {
+        if self.units[u as usize].order_state == 0 {
+            self.unit_halt(d, u);
+            let un = &mut self.units[u as usize];
+            if un.fl.next_target_waypoint != un.fl.move_target {
+                un.fl.next_target_waypoint = un.fl.move_target;
+            }
+            un.status |= 0x800_0000;
+            let sub = un.subunit;
+            if sub != NIL {
+                self.units[sub as usize].status |= 0x800_0000;
+            }
+            self.units[u as usize].order_state = 1;
+        }
+        if !self.attack_in_place(d, u) {
+            let un = &mut self.units[u as usize];
+            if un.main_order_timer == 0 {
+                un.main_order_timer = 0xf;
+                let t = self.find_target_in_range(d, u);
+                let un = &mut self.units[u as usize];
+                un.order_target_unit = t;
+                if t != NIL {
+                    un.order_process_timer = 0;
+                }
+            }
+            return;
+        }
+        let un = &self.units[u as usize];
+        let sub = un.subunit;
+        let turret = sub != NIL && d.dat.units.flags[self.units[sub as usize].unit_type as usize] & 0x10 != 0;
+        if !turret || un.unit_type == 3 || un.unit_type == 0x11 {
+            let un = &mut self.units[u as usize];
+            if un.fl.next_target_waypoint != un.order_target_pos {
+                un.fl.next_target_waypoint = un.order_target_pos;
+            }
+        }
     }
 
     /// 0x4eb5b0: QueenHoldPosition, SuicideHoldPosition.

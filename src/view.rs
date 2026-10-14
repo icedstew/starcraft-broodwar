@@ -618,6 +618,8 @@ fn new_game(a: &Assets, chk: &Chk, rep: Option<&crate::replay::Header>) -> io::R
                 }
             }
             st.replay = true;
+            // Header byte 0: 1 = Brood War (0x58f440).
+            st.is_expansion = h.engine == 1;
             st.local_player = h.slots.iter().position(|s| s.kind == 2).unwrap_or(0) as u8;
         } else if melee {
             // ponytail: local player is slot 0 playing SCBW_RACE (default terran); other
