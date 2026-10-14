@@ -986,6 +986,10 @@ pub fn compose_with_cursor(
     if scene.st.replay {
         draw_replay_panel(scene, ui, pal, out, w, h);
     }
+    // rez\stat_f10.bin: the MENU button (408+8, 388) .. (408+71, 388+19), flags 0x518,
+    // text "MENU" after its hotkey byte.
+    // ponytail: the dialog button's own background (dlg button frames) is not drawn.
+    draw_ctl_text(ui, 0x518, "\x03MENU", (416, 388, 479, 407), pal, out, w, h);
     // Building panels of statdata.cpp (training queue, research, upgrade).
     if let Some((_, ctls)) = scene.status_panel(ui) {
         let sd = &ui.statdata;
@@ -994,8 +998,8 @@ pub fn compose_with_cursor(
             let (cw, ch) = (r - l + 1, b - t + 1);
             match show {
                 crate::statdata::Show::Text(s) => {
-                    let tw = coded_width(ui, s);
-                    draw_coded(ui, s, l + (cw - tw) / 2, t + (ch - ui.font.height) / 2, pal, out, w, h);
+                    let flags = sd.get(*id).map_or(0, |c| c.flags);
+                    draw_ctl_text(ui, flags, s, (l, t, r, b), pal, out, w, h);
                 }
                 crate::statdata::Show::Wireframe => {
                     let [u] = scene.selected[..] else { continue };
@@ -1522,19 +1526,37 @@ fn run_with(a: &Assets, mut scene: Scene, mut replay: Option<ReplayPlay>) -> io:
 
 /// Width of text with tfontgam color codes (bytes below 0x20 draw nothing).
 fn coded_width(ui: &crate::ui::Ui, s: &str) -> i32 {
-    ui.font.width(&s.chars().filter(|c| *c >= ' ').collect::<String>())
+    coded_width_f(&ui.font, s)
+}
+
+fn coded_width_f(font: &crate::ui::Font, s: &str) -> i32 {
+    font.width(&s.chars().filter(|c| *c >= ' ').collect::<String>())
 }
 
 /// Text with color codes: code `c` switches to tfontgam row `c - 2` (default 2).
 #[allow(clippy::too_many_arguments)]
-fn draw_coded(ui: &crate::ui::Ui, s: &str, mut x: i32, y: i32, pal: &[[u8; 3]; 256], out: &mut [u32], w: i32, h: i32) {
+fn draw_coded(ui: &crate::ui::Ui, s: &str, x: i32, y: i32, pal: &[[u8; 3]; 256], out: &mut [u32], w: i32, h: i32) {
+    draw_coded_f(ui, &ui.font, s, x, y, pal, out, w, h)
+}
+
+/// A dialog text control: font8 when the control has flag 0x400, centered in its rect.
+#[allow(clippy::too_many_arguments)]
+fn draw_ctl_text(ui: &crate::ui::Ui, flags: u32, s: &str, rect: (i32, i32, i32, i32), pal: &[[u8; 3]; 256], out: &mut [u32], w: i32, h: i32) {
+    let font = if flags & 0x400 != 0 { &ui.font8 } else { &ui.font };
+    let (l, t, r, b) = rect;
+    let tw = coded_width_f(font, s);
+    draw_coded_f(ui, font, s, l + (r - l + 1 - tw) / 2, t + (b - t + 1 - font.height) / 2, pal, out, w, h);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_coded_f(ui: &crate::ui::Ui, font: &crate::ui::Font, s: &str, mut x: i32, y: i32, pal: &[[u8; 3]; 256], out: &mut [u32], w: i32, h: i32) {
     let mut color = 2usize;
     let mut run = String::new();
     for ch in s.chars() {
         if (ch as u32) < 0x20 {
             if !run.is_empty() {
-                ui.font.draw(&run, x, y, ui.text_color(color - 2), pal, out, w, h);
-                x += ui.font.width(&run);
+                font.draw(&run, x, y, ui.text_color(color - 2), pal, out, w, h);
+                x += font.width(&run);
                 run.clear();
             }
             color = (ch as usize).max(2);
@@ -1543,7 +1565,7 @@ fn draw_coded(ui: &crate::ui::Ui, s: &str, mut x: i32, y: i32, pal: &[[u8; 3]; 2
         }
     }
     if !run.is_empty() {
-        ui.font.draw(&run, x, y, ui.text_color(color - 2), pal, out, w, h);
+        font.draw(&run, x, y, ui.text_color(color - 2), pal, out, w, h);
     }
 }
 
@@ -1574,9 +1596,8 @@ fn draw_replay_panel(scene: &Scene, ui: &crate::ui::Ui, pal: &[[u8; 3]; 256], ou
     let glu = |i: usize| ui.glu_all.get(i.wrapping_sub(1)).map_or(String::new(), |s| s.split('\0').next().unwrap_or("").to_string());
     let stat = |i: usize| ui.stat_txt.get(i.wrapping_sub(1)).map_or(String::new(), |s| s.split('\0').next().unwrap_or("").to_string());
     let centered = |id: i16, text: &str, out: &mut [u32]| {
-        if let Some((l, t, r, b)) = dlg.screen_rect(id) {
-            let tw = coded_width(ui, text);
-            draw_coded(ui, text, l + (r - l + 1 - tw) / 2, t + (b - t + 1 - ui.font.height) / 2, pal, out, w, h);
+        if let (Some(rect), Some(c)) = (dlg.screen_rect(id), dlg.get(id)) {
+            draw_ctl_text(ui, c.flags, text, rect, pal, out, w, h);
         }
     };
     centered(-45, &format!("\x03{}", stat(0x609)), out);
@@ -1599,6 +1620,6 @@ fn draw_replay_panel(scene: &Scene, ui: &crate::ui::Ui, pal: &[[u8; 3]; 256], ou
     let time = if secs / 3600 == 0 { format!("{:02}:{:02}", secs / 60 % 60, secs % 60) } else { format!("{}:{:02}:{:02}", secs / 3600, secs / 60 % 60, secs % 60) };
     centered(-46, &glu(0x10).replace("%s", &time), out);
     let mult = if st.replay_mult > 1 { format!(" {} {}", if st.replay_speed > 2 { "x" } else { "/" }, st.replay_mult) } else { String::new() };
-    let speed = if st.replay_paused { stat(0x60a) } else { format!("{} {}{}", glu(0x5d), glu(st.replay_speed as usize + 0x56), mult) };
+    let speed = if st.replay_paused { stat(0x60a) } else { format!("{} {}{}", glu(0x5d), glu(st.replay_speed as usize + 0x55), mult) };
     centered(-47, &speed, out);
 }

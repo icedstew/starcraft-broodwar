@@ -112,6 +112,8 @@ pub const CURSORS: [&str; 19] = [
 pub struct Ui {
     pub console: Rgba,
     pub font: Font,
+    /// font\font8.fnt: text controls with flag 0x400.
+    pub font8: Font,
     pub icons: Grp,
     /// The cursors in 1.16.1's order (0x512708, loaded by 0x4d1560).
     pub cursors: Vec<Grp>,
@@ -163,6 +165,7 @@ impl Ui {
         let c = if replay { "n" } else { &race[..1] };
         let console = pcx_rgba(&files.read(&format!("game/{c}console.pcx"))?)?;
         let font = Font::parse(read_font(files, "font/font10.fnt")?);
+        let font8 = Font::parse(read_font(files, "font/font8.fnt")?);
         let icons = Grp::parse(files.read("game/icons.grp")?);
         let cursors = CURSORS.iter().map(|n| files.read(&format!("cursor/{n}")).map(Grp::parse)).collect::<io::Result<Vec<_>>>()?;
         let wireframe = Grp::parse(files.read("unit/wirefram/wirefram.grp")?);
@@ -180,7 +183,7 @@ impl Ui {
         let cmdbtns = Grp::parse(files.read(&format!("unit/cmdbtns/{r}cmdbtns.grp"))?);
         let pbar_empty = pcx_rgba(&files.read(&format!("game/{r}pbrempt.pcx"))?)?;
         let pbar_full = pcx_rgba(&files.read(&format!("game/{r}pbrfull.pcx"))?)?;
-        Ok(Ui { console, font, icons, cursors, wireframe, grpwire, tranwire, twire, cmdicons, ticon, stat_txt, glu_all, statbtn_replay, text_colors, statdata, cmdbtns, pbar_empty, pbar_full })
+        Ok(Ui { console, font, font8, icons, cursors, wireframe, grpwire, tranwire, twire, cmdicons, ticon, stat_txt, glu_all, statbtn_replay, text_colors, statdata, cmdbtns, pbar_empty, pbar_full })
     }
 
     pub fn text_color(&self, c: usize) -> &[u8] {
