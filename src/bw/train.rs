@@ -307,6 +307,91 @@ impl State {
 
     /// 0x468280: cancel a unit under construction or in production: refund it (75% for
     /// buildings), then cocoons turn back into their unit and anything else dies.
+    /// 0x45d410: cancel a building morph (hatchery to lair, creep colony to sunken, ...):
+    /// 3/4 of the queued type's cost back, the building completes again as it was.
+    fn cancel_building_morph(&mut self, d: &Data, c: u32) {
+        let un = &mut self.units[c as usize];
+        let slot = un.build_queue_slot as usize % 5;
+        let (t, p) = (un.build_queue[slot] as usize, un.player as usize);
+        un.build_queue[slot] = NONE;
+        let hp = un.hp;
+        self.players.minerals[p] += (d.dat.units.mineral_cost[t] as i32 * 3) / 4;
+        self.players.gas[p] += (d.dat.units.gas_cost[t] as i32 * 3) / 4;
+        self.units[c as usize].status |= 1;
+        self.modify_completed_counters(d, c, -1, true);
+        self.units[c as usize].status &= !1;
+        self.finish_unit_pre(d, c);
+        self.finish_unit_post(d, c);
+        self.set_unit_hp(d, c, hp);
+        // 0x48ed50: the cancel sound (UI).
+        let s = self.units[c as usize].sprite;
+        let mut i = self.sprites[s as usize].images.head;
+        while i != NIL {
+            let next = self.images[i as usize].link.next;
+            self.image_run_anim(d, i, 0xf);
+            i = next;
+        }
+    }
+
+    /// 0x45da40: cancel a zerg building under construction: the drone comes back with
+    /// the hp it had (+0xae) and 3/4 of the cost is refunded.
+    fn cancel_zerg_building(&mut self, d: &Data, c: u32) {
+        let un = &self.units[c as usize];
+        let queued = un.build_queue[un.build_queue_slot as usize % 5];
+        if un.status & 1 == 0 && matches!(queued, 0x85 | 0x84 | 0x89 | 0x90 | 0x92) {
+            return self.cancel_building_morph(d, c);
+        }
+        let (t, p) = (un.unit_type, un.player as usize);
+        let hp = (un.previous_hp as i32) << 8;
+        // 0x42ce70
+        self.players.minerals[p] += (d.dat.units.mineral_cost[t as usize] as i32 * 3) >> 2;
+        self.players.gas[p] += (d.dat.units.gas_cost[t as usize] as i32 * 3) >> 2;
+        self.players.unit_score[p] -= d.dat.units.build_score[0x29] as i32;
+        self.players.units_produced[p] -= 1;
+        let s = self.units[c as usize].sprite;
+        let (x, y) = (self.sprites[s as usize].x, self.sprites[s as usize].y);
+        if t == 0x95 {
+            // An extractor: a new drone at its position; the extractor dies.
+            let Some(drone) = self.create_unit(d, 0x29, x, y, p as u8) else {
+                self.show_last_error(p as u8);
+                return self.kill_unit(d, c);
+            };
+            self.finish_unit_pre(d, drone);
+            self.finish_unit_post(d, drone);
+            self.set_unit_hp(d, drone, hp);
+            return self.kill_unit(d, c);
+        }
+        // 0x488210: sprite 0xb6 one layer above the building.
+        if let Some(th) = self.create_thingy(d, 0xb6, x, y, 0) {
+            let ts = self.thingies[th as usize].sprite;
+            self.sprites[ts as usize].elevation = self.sprites[s as usize].elevation.wrapping_add(1);
+            self.sprite_fog_visibility(ts);
+        }
+        // 0x48ed50: the cancel sound (UI).
+        self.transform_unit(d, c, 0x29);
+        if self.units[c as usize].ai != NIL {
+            todo_port!("0x433fe0", "AI: a computer's cancelled building");
+        }
+        self.finish_unit_pre(d, c);
+        self.finish_unit_post(d, c);
+        // The shadow (last image, draw function 10) sits 7 pixels down.
+        let s = self.units[c as usize].sprite;
+        let tail = self.sprites[s as usize].images.tail;
+        if tail != NIL {
+            let im = &mut self.images[tail as usize];
+            if im.modifier == 10 && im.y != 7 {
+                im.flags |= super::sprite::iflag::REDRAW;
+                im.y = 7;
+            }
+        }
+        // 0x4983a0: image screen positions (UI).
+        self.order_now(d, c, 0x96);
+        let idle = d.dat.units.ai_return_to_idle[0x29];
+        self.issue_order(d, c, idle, false, (0, 0), NIL, 0xe4);
+        self.set_unit_hp(d, c, hp);
+        todo_port!("0x47de40", "creep under the cancelled building starts to recede");
+    }
+
     pub(super) fn cancel_unit(&mut self, d: &Data, c: u32) {
         let un = &self.units[c as usize];
         if un.sprite == NIL || un.order == 0 || un.status & 1 != 0 {
@@ -319,8 +404,7 @@ impl State {
         let p = un.player as usize;
         if un.status & 2 != 0 {
             if Self::supply_race_of(d, t) == 0 {
-                todo_port!("0x45da40", "cancel a zerg building (the drone comes back)");
-                return;
+                return self.cancel_zerg_building(d, c);
             }
             // 0x42ce70
             self.players.minerals[p] += (d.dat.units.mineral_cost[t as usize] as i32 * 3) >> 2;

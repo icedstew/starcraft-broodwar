@@ -351,6 +351,20 @@ impl State {
         // 0x68c1b0 etc.: button refresh (UI).
     }
 
+    /// 0x4c1910: building morph command: the one selected zerg building morphs into `t`.
+    pub fn command_building_morph(&mut self, d: &Data, player: u8, sel: &[u32], t: u16) {
+        let [u] = self.live_selection(sel)[..] else { return };
+        let ut = self.units[u as usize].unit_type;
+        if !(0x82..=0x98).contains(&ut) || !(0x82..=0x98).contains(&t) {
+            return;
+        }
+        if self.can_make_unit(d, u, t, player) != Ok(1) || !self.queue_build(d, u, t) || self.units[u as usize].order == 0x2b {
+            return;
+        }
+        self.order_now(d, u, 0x2b);
+        // 0x4c36c0: button refresh (UI).
+    }
+
     /// 0x4e5d60: show button set `set` unless the unit is disabled.
     fn set_button_set(&mut self, d: &Data, u: u32, set: u16) {
         if !self.disabled(u) || d.dat.units.flags[self.units[u as usize].unit_type as usize] & 1 != 0 || set == 0xe4 {

@@ -1175,6 +1175,7 @@ impl State {
             0x21 => self.command_cloak(d, player, sel),
             0x22 => self.command_decloak(d, player, sel),
             0x23 => self.command_unit_morph(d, player, sel, u16_at(1)),
+            0x35 => self.command_building_morph(d, player, sel, u16_at(1)),
             0x25 => self.command_unsiege(d, player, sel, byte(1) != 0),
             0x26 => self.command_siege(d, player, sel, byte(1) != 0),
             0x28 => self.command_unload_all(d, player, sel, byte(1) != 0),

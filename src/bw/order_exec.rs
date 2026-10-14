@@ -928,9 +928,62 @@ impl State {
     }
 
 
-    /// 0x45d0d0: ZergBuildingMorph.
-    fn order_zerg_building_morph(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x45d0d0", "ZergBuildingMorph");
+    /// 0x45d0d0: ZergBuildingMorph: pay for the queued building, show its construction
+    /// image and continue with IncompleteMorphing.
+    fn order_zerg_building_morph(&mut self, d: &Data, u: u32) {
+        let un = &self.units[u as usize];
+        let t = un.build_queue[un.build_queue_slot as usize % 5] as usize;
+        let p = un.player as usize;
+        // 0x6ca51c / 0x6ca4ec: the cost being checked.
+        let (m, g) = (d.dat.units.mineral_cost[t] as i32, d.dat.units.gas_cost[t] as i32);
+        if self.supply_ok_show(d, p, t as u16) {
+            let race = self.player_races[self.local_player as usize] as u16;
+            if self.players.minerals[p] < m {
+                // 0x48ee30: not enough minerals.
+                self.local_error(p as u8, 0x93 + race, 0x352);
+            } else if self.players.gas[p] < g {
+                self.local_error(p as u8, 0x96 + race, 0x353);
+            } else {
+                self.players.minerals[p] -= m;
+                self.players.gas[p] -= g;
+                let un = &mut self.units[u as usize];
+                un.status &= !1;
+                let free = un.status & 0x400 == 0 && un.lockdown_timer == 0 && un.stasis_timer == 0 && un.maelstrom_timer == 0;
+                if free || d.dat.units.flags[un.unit_type as usize] & 1 != 0 {
+                    un.button_set = 0xec;
+                }
+                self.reset_unit_image(d, u, true);
+                let un = &mut self.units[u as usize];
+                un.remaining_build_time = d.dat.units.build_time[t];
+                un.order_flags |= 1;
+                if un.order != 0 {
+                    loop {
+                        let h = self.units[u as usize].order_queue_head;
+                        if h == NIL {
+                            break;
+                        }
+                        let o = self.orders[h as usize].order;
+                        if d.dat.orders.interruptible[o as usize] == 0 && o != 0x2d {
+                            break;
+                        }
+                        self.order_remove(d, u, h);
+                    }
+                    self.order_queue_append(d, u, 0x2d, 0xe4, (0, 0), NIL);
+                }
+                self.prepare_next_order(d, u);
+                let s = self.units[u as usize].sprite;
+                let mut i = self.sprites[s as usize].images.head;
+                while i != NIL {
+                    let next = self.images[i as usize].link.next;
+                    self.image_run_anim(d, i, 0xd);
+                    i = next;
+                }
+                // 0x68c1e8 etc.: button refresh (UI).
+                return;
+            }
+        }
+        let idle = d.dat.units.ai_return_to_idle[self.units[u as usize].unit_type as usize];
+        self.issue_order(d, u, idle, false, (0, 0), NIL, 0xe4);
     }
 
     /// 0x45dc20: BuildNydusExit.
