@@ -351,7 +351,11 @@ impl State {
             *v == 0
         };
         if dec(&mut self.units[u as usize].stasis_timer) {
-            todo_port!("0x4f62d0", "stasis ends");
+            // 0x4f62d0 (0x4e5d60: the button refresh is UI)
+            if d.dat.units.flags[self.units[u as usize].unit_type as usize] & 0x2000_0000 == 0 {
+                self.units[u as usize].status &= !0x400_0000;
+            }
+            self.spell_overlay_ends(d, u, 0x16d, 0x16f);
         }
         if dec(&mut self.units[u as usize].stim_timer) {
             self.update_speed(d, u);
@@ -368,19 +372,87 @@ impl State {
             todo_port!("0x4555c0", "irradiate damage and end");
         }
         if dec(&mut self.units[u as usize].lockdown_timer) {
-            todo_port!("0x454d90", "lockdown ends");
+            // 0x454d90
+            self.spell_overlay_ends(d, u, 0x169, 0x16b);
         }
         if dec(&mut self.units[u as usize].maelstrom_timer) {
-            todo_port!("0x454d20", "maelstrom ends");
+            // 0x454d20
+            self.spell_overlay_ends(d, u, 0x3d6, 0x3d8);
         }
         if self.units[u as usize].plague_timer != 0 {
             todo_port!("0x492f70", "plague damage and end");
         }
         let st = &mut self.units[u as usize].storm_timer;
         *st = st.saturating_sub(1);
-        if self.units[u as usize].acid_spore_count != 0 {
-            todo_port!("0x4f42c0", "acid spore timers");
+        // 0x4f42c0: each acid spore wears off on its own timer.
+        let before = self.units[u as usize].acid_spore_count;
+        for i in 0..9 {
+            let un = &mut self.units[u as usize];
+            if un.acid_spore_time[i] != 0 {
+                un.acid_spore_time[i] -= 1;
+                if un.acid_spore_time[i] == 0 {
+                    un.acid_spore_count = un.acid_spore_count.wrapping_sub(1);
+                }
+            }
         }
+        if self.units[u as usize].acid_spore_count == 0 {
+            if before != 0 {
+                todo_port!("0x4e5cf0", "acid spore overlay removed");
+            }
+        } else {
+            todo_port!("0x4e5c90", "acid spore overlay (re)added");
+        }
+    }
+
+    /// 0x492370: a disabling spell wears off: its overlay (image ids lo..=hi, on the unit
+    /// or its turret) plays its death animation, the turret works again, and a worker
+    /// that was waiting at a mineral field resumes (0x468db0).
+    fn spell_overlay_ends(&mut self, d: &Data, u: u32, lo: u16, hi: u16) {
+        let find = |st: &State, x: u32| {
+            let s = st.units[x as usize].sprite;
+            let mut i = st.sprites[s as usize].images.head;
+            while i != NIL {
+                let id = st.images[i as usize].image_id;
+                if (lo..=hi).contains(&id) {
+                    return i;
+                }
+                i = st.images[i as usize].link.next;
+            }
+            NIL
+        };
+        let mut img = find(self, u);
+        let sub = self.units[u as usize].subunit;
+        if sub != NIL {
+            if img == NIL {
+                img = find(self, sub);
+            }
+            if !self.disabled(u) {
+                self.units[sub as usize].status &= !0x400;
+                let o = d.dat.units.ai_return_to_idle[self.units[sub as usize].unit_type as usize];
+                self.order_now(d, sub, o);
+            }
+        }
+        if img != NIL {
+            self.image_run_anim(d, img, 1);
+        }
+        if d.dat.units.flags[self.units[u as usize].unit_type as usize] & 8 != 0 {
+            // 0x468db0
+            let un = &self.units[u as usize];
+            let m = un.ptr_at(0xd0);
+            if !self.disabled(u)
+                && m != NIL
+                && d.dat.units.flags[self.units[m as usize].unit_type as usize] & 0x2000 != 0
+                && un.u8_at(0xce) == 0
+                && self.units[m as usize].u8_at(0xd3) == 0
+                && matches!(un.order, 0x56 | 0x52)
+                && un.order_state == 2
+            {
+                self.leave_wait_list(u, m);
+                self.remove_queued(d, u, 0x59);
+                self.try_take_mineral(d, u, m);
+            }
+        }
+        self.units[u as usize].order_process_timer = 0xf;
     }
 
     /// 0x4ec170 execute_secondary_order.

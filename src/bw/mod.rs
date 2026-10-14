@@ -40,6 +40,7 @@ pub mod research;
 pub mod larva;
 pub mod zerg;
 pub mod list;
+pub mod medic;
 pub mod map;
 pub mod minimap;
 pub mod load;

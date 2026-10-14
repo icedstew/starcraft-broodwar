@@ -105,7 +105,7 @@ impl State {
     }
 
     /// 0x474400: remove the first queued `order`.
-    fn remove_queued(&mut self, d: &Data, u: u32, order: u8) {
+    pub(super) fn remove_queued(&mut self, d: &Data, u: u32, order: u8) {
         let mut n = self.units[u as usize].order_queue_head;
         while n != NIL {
             if self.orders[n as usize].order == order {
@@ -349,7 +349,7 @@ impl State {
     }
 
     /// 0x468c70: start mining `m` if nobody is.
-    fn try_take_mineral(&mut self, d: &Data, u: u32, m: u32) -> bool {
+    pub(super) fn try_take_mineral(&mut self, d: &Data, u: u32, m: u32) -> bool {
         if self.units[m as usize].u8_at(0xd3) != 0 {
             return false;
         }
@@ -725,7 +725,17 @@ impl State {
         if c[0x83][p] == 0 && c[0x9a][p] == 0 && c[0x6a][p] == 0 && c[0x84][p] == 0 && c[0x85][p] == 0 {
             return NIL;
         }
-        // 0x4e8740 over the map box (0x6284a0), excluding `u`.
+        // 0x6284a0: map box (0x49bb90).
+        let b = [0, 0, self.map_px.0 as i16, self.map_px.1 as i16];
+        self.nearest_unit_to(u, b, &mut |st: &mut State, c: u32| {
+            st.is_drop_off(d, c)
+                && st.units[c as usize].player == st.units[u as usize].player
+                && (st.units[u as usize].pathing_flags & 1 == 0 || st.same_group(u, st.unit_sprite_pos(c)))
+        })
+    }
+
+    /// 0x4e8740: nearest unit to `u` in box `b` passing `ok`, excluding `u`.
+    pub(super) fn nearest_unit_to(&mut self, u: u32, b: [i16; 4], ok: &mut dyn FnMut(&mut State, u32) -> bool) -> u32 {
         let s = self.units[u as usize].sprite;
         let (x, y) = (self.sprites[s as usize].x, self.sprites[s as usize].y);
         let fi = self.units[u as usize].finder_index;
@@ -736,13 +746,7 @@ impl State {
             let iy = super::finder::search(&self.finder.y, self.finder.count, true, y as i32) as i32;
             (ix, iy, ix - 1, iy - 1)
         };
-        // 0x6284a0: map box (0x49bb90).
-        let b = [0, 0, self.map_px.0 as i16, self.map_px.1 as i16];
-        self.nearest_unit(b, u, (x, y), [ix_desc, iy_desc, ix_asc, iy_asc], &mut |st: &mut State, c: u32| {
-            st.is_drop_off(d, c)
-                && st.units[c as usize].player == st.units[u as usize].player
-                && (st.units[u as usize].pathing_flags & 1 == 0 || st.same_group(u, st.unit_sprite_pos(c)))
-        })
+        self.nearest_unit(b, u, (x, y), [ix_desc, iy_desc, ix_asc, iy_asc], ok)
     }
 
     /// 0x442f70: nearest reachable mineral to `from` within 0x180.

@@ -623,26 +623,6 @@ impl State {
         }
     }
 
-    /// 0x464180: MedicHeal.
-    fn order_medic_heal(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x464180", "MedicHeal");
-    }
-
-    /// 0x4637b0: HealMove.
-    fn order_heal_move(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x4637b0", "HealMove");
-    }
-
-    /// 0x464050: MedicHoldPosition.
-    fn order_medic_hold_position(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x464050", "MedicHoldPosition");
-    }
-
-    /// 0x463740: MedicHealToIdle.
-    fn order_medic_heal_to_idle(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x463740", "MedicHealToIdle");
-    }
-
 
     /// 0x47bba0: Stop.
     fn order_stop(&mut self, d: &Data, u: u32) {
@@ -1563,11 +1543,6 @@ impl State {
     /// 0x47bd60: DisableDoodad.
     fn order_disable_doodad(&mut self, _d: &Data, _u: u32) {
         todo_port!("0x47bd60", "DisableDoodad");
-    }
-
-    /// 0x463900: Medic.
-    fn order_medic(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x463900", "Medic");
     }
 
     /// 0x4f6950: CastMindControl.

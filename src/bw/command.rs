@@ -954,7 +954,7 @@ impl State {
                 if target == NIL {
                     return Ok(());
                 }
-                if self.can_use_tech(d, u, 0x2c, un.player).is_err() {
+                if self.can_use_tech(d, u, 0x22, un.player).is_err() {
                     return Err(0);
                 }
                 let t = &self.units[target as usize];

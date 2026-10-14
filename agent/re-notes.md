@@ -133,3 +133,18 @@ storm.dll base 0x15000000). Long-standing notes are also in `re/NOTES.md`.
   invert 0x44e780, mulinv 0x44e4a0, cipher 0x44e550) + a SHA-0 transform 0x42ae90 whose
   rotates use `sar` (sign smearing). Verified byte-exact against the game.
 - Replays from 1.16.1 are "legacy": PKWare-imploded section chunks (`src/replay.rs`).
+
+## Synced-state checklist (from ShieldBattery rollback/ranges.rs, MIT)
+
+ShieldBattery (github.com/ShieldBattery/ShieldBattery, game/) hooks SC:R; it has no sim
+code. Its rollback snapshot list is a handy list of what BW's sim writes, i.e. state scbw
+must own. Not yet owned/ported by scbw (as of 2026-10-14): AI pools (worker_ai,
+building_ai, ai_town, ai_script, military_ai, guard_ai, player_ai 0x4e8 x8, ai_regions,
+ai_region_reachability, ai_* timers/cursors), triggers (lists, wait timers/flags,
+completed/all-units caches 12x228), lurker_hits (0x20 x 0x10 x 2 words, lurker_hits_frame/pos),
+repulse_state (0xab x 0xab), dcreep (lookup 0x400, lists, dcreep_state pool),
+sync_data (0x10 x 0x10c) / sync check hash, selection_hotkey_last_used_frames.
+SC:R excludes screen_pos_tiles from the snapshot (viewer-local), but in 1.16.1 the screen
+tile feeds creep updates, so for scbw the camera stays sim state.
+Other cross-check sources: neivv's bw_dat / samase (struct layouts), aise (AI scripts).
+ShieldBattery pathing.rs: walkability 0x1ffd = unwalkable split-region minitile check.
