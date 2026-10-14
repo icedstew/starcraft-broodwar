@@ -29,6 +29,26 @@ repshot / the emulator, `NATIVE_CAMERA` to re/native_shots.sh (gdb calls the gam
 differ a lot: check against the native trace with camera (NATIVE_MODE=trace, running
 into shots/tl1412_p0/native/trace.txt) before blaming rendering.
 
+**Other 1.16.1 replays** (2026-10-14, 6000 frames each, `OUT=<dir>` lets repcmp.sh run
+several at once): tl1363, tl1359, tl1346 MATCH the emulator. tl1339 / tl1347 / tl1352: the
+emulator crashes at eip 0x41f82f (fix the harness first); tl1366: emulator CHK load fails.
+Game type 10 in headers is **Use Map Settings** (not top-vs-bottom; that is 0x0f). UMS
+starts need the template (0x596865, 0x20 bytes; +0xc starting units) and 0x59bda8 (replay
+header +0x271) in 0x49da40 / the UNIT loader (`ScenarioModes`, `melee_map_units` exist
+but callers pass defaults); where replays restore the template is not found yet, and the
+emulator hardcodes the melee setup too.
+
+**Late-game divergence vs the real game** (user report "desync around f17044, goliaths?"):
+scbw == emulator with and without the p0 camera through f18000, but native screenshots
+(both camera sets) differ from ~f17040 (unit positions; the factory at 2464,176 gets a
+solid-black shadow natively). Native trace only covers f0-1500. Capture
+`CAP_START=16700 CAP_END=17400 NATIVE_MODE=trace re/native_shots.sh` (CAP_START added)
+and diff against the emulator's trace to find what the emulator harness does differently.
+
+**Rendering fixed today**: fog shades sprites (0x4bd580 order), sprite draw-order heap
+(0x42d4c0), carried resource LO offset (0x4d5a00). Gas plumes: creategasoverlays works
+(seen at f2632); tl1412 p0's refinery is at y=64 so its plume leaves the map top.
+
 **UI** (statdata.cpp panels ported): unit 0x426f50, group 0x425960, building queue /
 research / upgrade, supply 0x427540, resources 0x426190, construction 0x4260c0,
 transports 0x427c90, eggs 0x427260, carriers 0x4274a0; command and info tooltips;

@@ -14,6 +14,9 @@ import emu_game  # noqa: E402
 
 OUT = os.environ["CAP_OUT"]
 END = int(os.environ.get("CAP_END", "2000"))
+# CAP_START: before this frame only the rng line is written (cheap, and the trace keeps
+# growing so native_shots.sh does not think the replay has finished).
+START = int(os.environ.get("CAP_START", "0"))
 inf = gdb.selected_inferior()
 
 
@@ -91,6 +94,11 @@ class Step(gdb.Breakpoint):
 
     def trace(self, e, f):
         if f < 0 or f > END:
+            return False
+        if f < START:
+            fo.write(f"f{f} rng {e.r32(0x51ca14):#x} {e.r32(0x51ca18)}\n")
+            if f % 64 == 0:
+                fo.flush()
             return False
         a = e.r32(0x628430)  # visible units, in list order like the emulator's trace
         while a:
