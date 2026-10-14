@@ -90,3 +90,7 @@ r cancel_train "106,288,2288,0" "t7x5" 900
 export SCBW_MOVE2="S#1642;K0x18" SCBW_AT=400
 r cancel_build "106,288,2288,0;7,200,2250,0" "0,0;b0x1e:109:12,72" 900
 unset SCBW_MOVE2 SCBW_AT
+# Research and upgrades through raw command packets (0x30-0x33).
+r upgrade_research "122,1500,1500,0;112,1700,1500,0;0,1600,1600,0" "S0;P3200;S1;P3000" 4200
+r cancel_upgrade_research "122,1500,1500,0;112,1700,1500,0" "S0;P3200;P3300;S1;P3000;P3100" 300
+r metabolic_boost "142,1500,1500,0;37,1700,1500,0;37,1720,1500,0" "S0;P321b" 1700

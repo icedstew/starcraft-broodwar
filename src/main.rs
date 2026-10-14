@@ -5,6 +5,7 @@ mod bw;
 mod storage;
 mod storm;
 mod dat;
+mod fog;
 mod game;
 mod grid;
 mod grp;
@@ -773,9 +774,18 @@ fn apply_moves(st: &mut bw::State, d: &bw::Data, made: &[u32], m: &str) {
             .take(12)
             .collect();
     }
-    for p in v.iter().filter(|p| p.starts_with(['S', 'A', 'D', 'H'])) {
+    for p in v.iter().filter(|p| p.starts_with(['S', 'A', 'D', 'H', 'P'])) {
         // "S<i>,<j>,..." select / add / remove created units (0x09-0x0b); "H<action>:<group>" hotkey 0x13.
         let units = if made.is_empty() { &sel[..] } else { made };
+        if let Some(h) = p.strip_prefix('P') {
+            // "P<hex>": a raw command packet from player 0 (0x4865d0), in order with the selections.
+            let pkt: Vec<u8> = (0..h.len()).step_by(2).filter_map(|i| u8::from_str_radix(h.get(i..i + 2)?, 16).ok()).collect();
+            let cur = bw::select::selection_units(&st.selections[0]).to_vec();
+            st.rng.enabled = true;
+            st.execute_command(d, 0, &cur, &pkt);
+            st.rng.enabled = false;
+            continue;
+        }
         let pkt: Vec<u8> = if let Some(b) = p.strip_prefix('H') {
             let (a, g) = b.split_once(':').unwrap_or(("0", "0"));
             vec![0x13, a.parse().unwrap_or(0), g.parse().unwrap_or(0)]
@@ -843,7 +853,7 @@ fn apply_moves(st: &mut bw::State, d: &bw::Data, made: &[u32], m: &str) {
     let units = if made.is_empty() { sel.clone() } else { made.to_vec() };
     for (i, &u) in units.iter().enumerate() {
         let p = v[i % v.len()];
-        if p.starts_with(['R', 'T', 'M', 'S', 'A', 'D', 'H', 'K']) {
+        if p.starts_with(['R', 'T', 'M', 'S', 'A', 'D', 'H', 'K', 'P']) {
             continue;
         }
         if let Some(t) = p.strip_prefix('t') {

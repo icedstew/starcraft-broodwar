@@ -256,16 +256,6 @@ impl State {
         todo_port!("0x4649b0", "BuildingLiftOff");
     }
 
-    /// 0x4548b0: ResearchTech.
-    fn order_research_tech(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x4548b0", "ResearchTech");
-    }
-
-    /// 0x4546a0: Upgrade.
-    fn order_upgrade(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x4546a0", "Upgrade");
-    }
-
     /// 0x468e80: Harvest3.
     fn order_harvest3(&mut self, d: &Data, u: u32) {
         if self.units[u as usize].u8_at(0xce) != 0 {
@@ -896,7 +886,7 @@ impl State {
     }
 
     /// 0x475000: Nothing.
-    fn order_nothing(&mut self, d: &Data, u: u32) {
+    pub(super) fn order_nothing(&mut self, d: &Data, u: u32) {
         if self.units[u as usize].order_queue_head != super::list::NIL {
             self.prepare_next_order(d, u);
         }

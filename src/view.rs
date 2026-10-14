@@ -113,6 +113,9 @@ pub struct Scene<'a> {
     pub minimap: bw::minimap::Minimap,
     local: u8,
     shadow: [u8; 256],
+    /// The tileset's dark.pcx: 32 darkness levels x 256 colors (0x5973a0).
+    dark: Vec<u8>,
+    fog: crate::fog::Fog,
     /// game/tselect.pcx: selection circle colors, 8 per color (0x5240b8).
     tselect: Vec<u8>,
     /// game/thpbar.pcx: health bar colors (0x66fbe4).
@@ -177,7 +180,7 @@ impl<'a> Scene<'a> {
         }
         st.interface_colors = minimap.colors;
         with_data(a, |d| minimap.refresh(d, &mut st));
-        Ok(Scene { st, minimap, selected: Vec::new(), sent_selection: Vec::new(), card_menu: None, placing: None, targeting: None, error: 0, error_frames: 0, place_ok: false, drag_box: None, a, chk, ts, terrain, player_colors, local, shadow, tselect, thpbar, remaps })
+        Ok(Scene { st, minimap, selected: Vec::new(), sent_selection: Vec::new(), card_menu: None, placing: None, targeting: None, error: 0, error_frames: 0, place_ok: false, drag_box: None, a, chk, ts, terrain, player_colors, local, shadow, dark, fog: crate::fog::Fog::new(), tselect, thpbar, remaps })
     }
 
     /// Send the local selection to the simulation (0x4c0860) and return the local
@@ -344,20 +347,16 @@ impl<'a> Scene<'a> {
     /// Draw the view at (vx, vy) into an indexed buffer of vw*vh.
     pub fn draw(&self, vx: i32, vy: i32, vw: i32, vh: i32, out: &mut [u8]) {
         let (tw, th, tpx) = &self.terrain;
-        // A tile is dark or fogged only when it is for every player whose vision is shown.
-        let mask = self.st.local_vision_mask as u32;
-        let (unexplored, fogged) = (mask << 8, mask);
-        let mw = self.st.terrain.width as i32;
         for y in 0..vh {
             let sy = (vy + y).clamp(0, *th as i32 - 1) as usize;
             let row = &tpx[sy * tw..sy * tw + tw];
             for x in 0..vw {
                 let sx = (vx + x).clamp(0, *tw as i32 - 1);
-                let f = self.st.terrain.tile_flags.get(((sy as i32 / 32) * mw + sx / 32) as usize).copied().unwrap_or(0);
-                let c = row[sx as usize];
-                out[(y * vw + x) as usize] = if f & unexplored == unexplored { 0 } else if f & fogged == fogged { self.shadow[c as usize] } else { c };
+                out[(y * vw + x) as usize] = row[sx as usize];
             }
         }
+        // 0x4bd580 -> 0x4808e0: fog of war shades the terrain before sprites are drawn.
+        self.fog.shade(&self.st, &self.dark, vx, vy, out, vw as usize, vh as usize);
         // Sprites by elevation, then tile row (row lists as the game keeps them).
         let mut order: Vec<u32> = Vec::new();
         for l in &self.st.sprite_rows {

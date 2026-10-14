@@ -317,6 +317,8 @@ def parse_move(m):
     if m[0] == "t":  # "t<type>[x<count>]"
         t, _, n = m[1:].partition("x")
         return ("t", int(t, 0), int(n) if n else 1)
+    if m[0] == "P":  # "P<hex>": raw command packet through 0x4865d0 as player 0
+        return ("P", bytes.fromhex(m[1:]))
     if m[0] == "M":  # "M<type>": every player-0 larva morphs into <type>
         return ("M", int(m[1:], 0))
     if m[0] in "SAD":  # "S<i>,<j>,...": select / add / remove created units i, j, ... (0x09-0x0b)
@@ -443,6 +445,16 @@ def scenario(e, units, move, frames, out):
                     e.write(pkt, bytes([0x23]) + struct.pack("<H", m[1]))
                     e.call(0x4c1990, stack=[pkt])
                     continue
+                if m[0] == "P":
+                    if not e.r32(0x596bbc):  # 0x4865d0 hands every command to the replay writer
+                        e.w32(0x596bbc, e.alloc(0x20))
+                    e.w32(0x512678, 0)
+                    e.w32(0x51267c, 0)
+                    e.write(pkt, m[1])
+                    e.w32(0x6d11c8, 1)
+                    e.call(0x4865d0, regs={"eax": pkt}, stack=[len(m[1]), 1])
+                    e.w32(0x6d11c8, 0)
+                    continue
                 if m[0] == "K":
                     e.w32(0x512678, 0)
                     e.w32(0x51267c, 0)
@@ -487,7 +499,7 @@ def scenario(e, units, move, frames, out):
                     e.call(0x4c2320, regs={"eax": pkt})
             for i, u in enumerate(made or sel):
                 m = move[i % len(move)]
-                if m[0] in ("R", "T", "M", "S", "A", "D", "H", "K"):
+                if m[0] in ("R", "T", "M", "S", "A", "D", "H", "K", "P"):
                     continue
                 if m[0] == "t":  # train unit type m[1] (0x4c1c20 without the selection checks)
                     a = UNITS + u * 0x150

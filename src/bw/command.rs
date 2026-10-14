@@ -971,6 +971,10 @@ impl State {
             0x1e => self.command_return_cargo(d, player, sel, byte(1) != 0),
             0x1f => self.command_train_sel(d, player, sel, u16_at(1)),
             0x2b => self.command_hold(d, player, sel, byte(1) != 0),
+            0x30 => self.command_research(d, player, sel, byte(1)),
+            0x31 => self.command_cancel_research(d, player, sel),
+            0x32 => self.command_upgrade(d, player, sel, byte(1)),
+            0x33 => self.command_cancel_upgrade(d, player, sel),
             _ => todo_port!("0x4865d0", "command receiver not ported yet"),
         }
     }
