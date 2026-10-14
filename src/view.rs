@@ -127,10 +127,23 @@ pub fn is_melee_map(chk: &Chk) -> bool {
 
 impl<'a> Scene<'a> {
     pub fn new(a: &'a Assets, chk: Chk) -> io::Result<Scene<'a>> {
+        Scene::start(a, chk, None)
+    }
+
+    /// The game a replay recorded, set up as the replay's header says.
+    pub fn from_replay(a: &'a Assets, r: &crate::replay::Replay) -> io::Result<Scene<'a>> {
+        Scene::start(a, Chk::parse(&r.chk), Some(&r.header))
+    }
+
+    fn start(a: &'a Assets, chk: Chk, rep: Option<&crate::replay::Header>) -> io::Result<Scene<'a>> {
         let ts = Tileset::load(&a.files, chk.tileset())?;
         let terrain = map::render_terrain(&chk, &ts);
         let (tw, _, tunit) = pcx(&a.files.read("game/tunit.pcx")?);
-        let colr = chk.section(b"COLR").unwrap_or(&[0, 1, 2, 3, 4, 5, 6, 7]).to_vec();
+        let colr = match rep {
+            // A replay's header keeps each player's color as the game assigned it.
+            Some(h) => h.slots.iter().take(8).map(|s| s.color as u8).collect(),
+            None => chk.section(b"COLR").unwrap_or(&[0, 1, 2, 3, 4, 5, 6, 7]).to_vec(),
+        };
         let mut player_colors = [[0u8; 8]; 12];
         for (p, pc) in player_colors.iter_mut().enumerate() {
             let c = if p < 8 { colr.get(p).copied().unwrap_or(p as u8) as usize } else { p };
@@ -153,7 +166,7 @@ impl<'a> Scene<'a> {
         for (t, &c) in thpbar.iter_mut().zip(pcx(&a.files.read("game/thpbar.pcx")?).2.iter()) {
             *t = c;
         }
-        let mut st = new_game(a, &chk)?;
+        let mut st = new_game(a, &chk, rep)?;
         let local = st.local_player;
         let mut minimap = load_minimap(&a.files, &chk)?;
         // 0x581dd6: each player's minimap color is the tminimap.pcx entry of its color.
@@ -295,7 +308,7 @@ impl<'a> Scene<'a> {
 
     fn sprite_seen(&self, s: u32) -> bool {
         let sp = &self.st.sprites[s as usize];
-        sp.flags & bw::sprite::sflag::HIDDEN == 0 && sp.visibility & (1 << self.local) != 0
+        sp.flags & bw::sprite::sflag::HIDDEN == 0 && sp.visibility & self.st.local_vision_mask != 0
     }
 
     /// (x, y, unit) for every selectable unit the local player can see.
@@ -331,7 +344,9 @@ impl<'a> Scene<'a> {
     /// Draw the view at (vx, vy) into an indexed buffer of vw*vh.
     pub fn draw(&self, vx: i32, vy: i32, vw: i32, vh: i32, out: &mut [u8]) {
         let (tw, th, tpx) = &self.terrain;
-        let (unexplored, fogged) = (1u32 << (self.local + 8), 1u32 << self.local);
+        // A tile is dark or fogged only when it is for every player whose vision is shown.
+        let mask = self.st.local_vision_mask as u32;
+        let (unexplored, fogged) = (mask << 8, mask);
         let mw = self.st.terrain.width as i32;
         for y in 0..vh {
             let sy = (vy + y).clamp(0, *th as i32 - 1) as usize;
@@ -340,7 +355,7 @@ impl<'a> Scene<'a> {
                 let sx = (vx + x).clamp(0, *tw as i32 - 1);
                 let f = self.st.terrain.tile_flags.get(((sy as i32 / 32) * mw + sx / 32) as usize).copied().unwrap_or(0);
                 let c = row[sx as usize];
-                out[(y * vw + x) as usize] = if f & unexplored != 0 { 0 } else if f & fogged != 0 { self.shadow[c as usize] } else { c };
+                out[(y * vw + x) as usize] = if f & unexplored == unexplored { 0 } else if f & fogged == fogged { self.shadow[c as usize] } else { c };
             }
         }
         // Sprites by elevation, then tile row (row lists as the game keeps them).
@@ -550,6 +565,14 @@ impl<'a> Scene<'a> {
         self.card_menu = Option::None;
     }
 
+    /// 0x487100: run a replay command from map player `player` with that player's
+    /// current selection.
+    pub fn replay_command(&mut self, player: u8, p: &[u8]) {
+        let sel = bw::select::selection_units(&self.st.selections[player as usize]).to_vec();
+        let st = &mut self.st;
+        with_data(self.a, |d| st.execute_command(d, player, &sel, p));
+    }
+
     pub fn command(&mut self, f: impl FnOnce(&mut bw::State, &bw::Data, u8, &[u32])) {
         let (sel, me) = (self.sim_selection(), self.local);
         let st = &mut self.st;
@@ -557,8 +580,9 @@ impl<'a> Scene<'a> {
     }
 }
 
-/// Engine state for a new game on `chk` (map load, players, melee starting units).
-fn new_game(a: &Assets, chk: &Chk) -> io::Result<bw::State> {
+/// Engine state for a new game on `chk` (map load, players, melee starting units), or
+/// for the game replay header `rep` recorded.
+fn new_game(a: &Assets, chk: &Chk, rep: Option<&crate::replay::Header>) -> io::Result<bw::State> {
     let (w, h) = chk.dims();
     let mut st = bw::State::new((w, h), chk.tileset() as u16, 1700);
     let name = map::TILESETS[chk.tileset()];
@@ -575,9 +599,27 @@ fn new_game(a: &Assets, chk: &Chk) -> io::Result<bw::State> {
         if let Some(doodads) = chk.section(b"THG2") {
             st.chk_doodads(d, doodads, Default::default());
         }
-        let melee = is_melee_map(chk) && std::env::var("SCBW_NOMELEE").is_err();
+        let melee = match rep {
+            // ponytail: only melee (game type 2) starts are set up; other types (top vs
+            // bottom, UMS, ...) get melee starting units too.
+            Some(_) => true,
+            None => is_melee_map(chk) && std::env::var("SCBW_NOMELEE").is_err(),
+        };
         let units = chk.section(b"UNIT").unwrap_or(&[]);
-        if melee {
+        if let Some(h) = rep {
+            // 0x4ef100: a replay's game uses the seed in its header (0x6d0f38).
+            st.rng.seed = h.start_time;
+            // The header's player table is 0x57eee0 as it was when the game started.
+            for (p, s) in h.slots.iter().enumerate().take(8) {
+                st.player_types[p] = s.kind;
+                st.player_races[p] = s.race;
+                if s.kind == 2 || s.kind == 1 {
+                    st.players.minerals[p] = 50;
+                }
+            }
+            st.replay = true;
+            st.local_player = h.slots.iter().position(|s| s.kind == 2).unwrap_or(0) as u8;
+        } else if melee {
             // ponytail: local player is slot 0 playing SCBW_RACE (default terran); other
             // start locations get idle computer slots cycling the races (no AI yet).
             let starts: Vec<u8> = units.chunks_exact(36).filter(|r| u16::from_le_bytes([r[8], r[9]]) == 0xd6 && r[16] < 8).map(|r| r[16]).collect();
@@ -604,7 +646,11 @@ fn new_game(a: &Assets, chk: &Chk) -> io::Result<bw::State> {
             }
             st.local_player = owners.iter().position(|&o| o == 6).unwrap_or(0) as u8;
         }
-        st.local_vision_mask = 1 << st.local_player;
+        st.local_vision_mask = match rep {
+            // Watching a replay shows every player's vision.
+            Some(h) => h.slots.iter().take(8).enumerate().filter(|(_, s)| s.kind == 2 || s.kind == 1).fold(0, |m, (p, _)| m | 1 << p),
+            None => 1 << st.local_player,
+        };
         st.init_alliances(Default::default());
         st.chk_units(d, units, Default::default());
         if melee {

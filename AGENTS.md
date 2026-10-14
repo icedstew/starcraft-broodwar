@@ -25,6 +25,19 @@ Running the real 1.16.1 headless (Arch: `xorg-server-xvfb`, wine): use a throwaw
 Player (217,120), Expansion (367,275), new ID, Ok (515,392), Load Replay (333,452);
 the replay speed-up button is at (613,457) (8 clicks = Fastest x16).
 
+### Screenshot tests against the real game
+
+`~/games/Starcraft/broodwar-reps-116/shots/<replay>/native/` holds 1.16.1's own game
+screen (the 640x480 8-bit buffer, map area only; the HUD is drawn separately) every ~120
+frames plus `meta.txt` (`frame screen_x screen_y`). Made by `re/native_shots.sh <rep>
+<shots dir> [every]` (gdb through `winedbg --gdb`, breakpoint after each draw; exact
+frames and pixels). So far: `tl1412` (Python, TvT, 206 shots, camera fixed at the
+replay's start view).
+
+`re/repshots.sh <rep> <shots dir>` (= `scbw repshot`) plays the replay in scbw, draws the
+same frames and writes `ours/`, `diff/` (native | ours | red where different) and
+`report.txt`. Compare rows 0..400.
+
 ```sh
 cargo run --release -- rep ~/games/Starcraft/broodwar-reps/<file>.rep     # header and command summary
 cargo run --release -- view ~/games/Starcraft/broodwar-reps/<file>.rep    # watch it

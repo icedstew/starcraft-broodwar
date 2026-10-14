@@ -42,13 +42,17 @@ fn main() -> std::io::Result<()> {
         let r = replay::Replay::parse(&std::fs::read(&args[1])?)?;
         let h = &r.header;
         println!("map {:?} {}x{}, {} frames, title {:?}, host {:?}", h.map_name, h.map_width, h.map_height, h.frames, h.title, h.host);
-        for s in h.slots.iter().filter(|s| !s.name.is_empty()) {
-            println!("  slot {} player {} race {} team {} {:?}", s.slot_id, s.player_id, s.race, s.team, s.name);
+        println!("seed {:#x}, game type {} / {}", h.start_time, h.game_type, h.sub_type);
+        for (i, s) in h.slots.iter().enumerate().filter(|(_, s)| !s.name.is_empty()) {
+            println!("  player {i}: id {} storm {} type {} race {} team {} {:?}", s.slot_id, s.player_id, s.kind, s.race, s.team, s.name);
         }
         let mut hist = std::collections::BTreeMap::new();
+        let mut by_player = std::collections::BTreeMap::new();
         for c in &r.commands {
             *hist.entry(c.data[0]).or_insert(0) += 1;
+            *by_player.entry(c.player).or_insert(0) += 1;
         }
+        println!("commands by player: {by_player:?}");
         println!("{} commands, by id: {:x?}", r.commands.len(), hist);
         println!("chk {} bytes, tileset {}", r.chk.len(), map::Chk::parse(&r.chk).tileset());
         return Ok(());
@@ -255,6 +259,81 @@ fn main() -> std::io::Result<()> {
         Some("view") => {
             let a = view::Assets::load(files)?;
             view::run(&a, load_chk(&args[1])?)?;
+        }
+        Some("repshot") => {
+            // repshot <rep> <shots dir>: play the replay and draw the game screen at each
+            // frame listed in <dir>/native/meta.txt ("frame screen_x screen_y", captured from
+            // 1.16.1 by re/native_shots.sh), writing ours and a side-by-side diff.
+            let a = view::Assets::load(files)?;
+            let r = replay::Replay::parse(&std::fs::read(&args[1])?)?;
+            let dir = std::path::Path::new(&args[2]);
+            let shots: Vec<(u32, i32, i32)> = std::fs::read_to_string(dir.join("native/meta.txt"))?
+                .lines()
+                .filter_map(|l| {
+                    let v: Vec<i64> = l.split_whitespace().filter_map(|n| n.parse().ok()).collect();
+                    (v.len() == 3).then(|| (v[0] as u32, v[1] as i32, v[2] as i32))
+                })
+                .collect();
+            std::fs::create_dir_all(dir.join("ours"))?;
+            std::fs::create_dir_all(dir.join("diff"))?;
+            let mut scene = view::Scene::from_replay(&a, &r)?;
+            // 0x487100: commands name the sender by storm id (0x57eee4); find its player.
+            let mut player_of = [0u8; 256];
+            for (i, s) in r.header.slots.iter().enumerate() {
+                if s.kind == 1 || s.kind == 2 {
+                    player_of[s.player_id as usize] = i as u8;
+                }
+            }
+            let last = shots.iter().map(|s| s.0).max().unwrap_or(0);
+            let (w, h) = (640usize, 400usize);
+            let mut report = String::new();
+            let mut ci = 0;
+            let mut total = 0.0;
+            for frame in 0..last {
+                // 0x4d9670: commands of frame F run while the counter is F, then it advances
+                // and the game steps.
+                while ci < r.commands.len() && r.commands[ci].frame <= frame {
+                    let c = &r.commands[ci];
+                    scene.replay_command(player_of[c.player as usize], &c.data);
+                    ci += 1;
+                }
+                scene.step();
+                let f = scene.st.frame;
+                let Some(&(_, sx, sy)) = shots.iter().find(|s| s.0 == f) else { continue };
+                let mut idx = vec![0u8; w * h];
+                scene.draw(sx, sy, w as i32, h as i32, &mut idx);
+                let pal = scene.palette();
+                let ours: Vec<[u8; 3]> = idx.iter().map(|&i| pal[i as usize]).collect();
+                let name = format!("f{f:06}.png");
+                write_png(dir.join("ours").join(&name).to_str().unwrap(), w, h, &idx, pal)?;
+                let dec = png::Decoder::new(std::io::BufReader::new(std::fs::File::open(dir.join("native").join(&name))?));
+                let mut rd = dec.read_info()?;
+                let mut buf = vec![0; rd.output_buffer_size().unwrap_or(0)];
+                let info = rd.next_frame(&mut buf)?;
+                let nw = info.width as usize;
+                let native = |x: usize, y: usize| [buf[(y * nw + x) * 3], buf[(y * nw + x) * 3 + 1], buf[(y * nw + x) * 3 + 2]];
+                let mut side = vec![0u32; w * 3 * h];
+                let mut bad = 0;
+                for y in 0..h {
+                    for x in 0..w {
+                        let (n, o) = (native(x, y), ours[y * w + x]);
+                        let rgb = |c: [u8; 3]| (c[0] as u32) << 16 | (c[1] as u32) << 8 | c[2] as u32;
+                        side[y * w * 3 + x] = rgb(n);
+                        side[y * w * 3 + w + x] = rgb(o);
+                        side[y * w * 3 + 2 * w + x] = if n == o { rgb(n) >> 2 & 0x3f3f3f } else { 0xff0000 };
+                        bad += (n != o) as usize;
+                    }
+                }
+                write_png_rgb(dir.join("diff").join(&name).to_str().unwrap(), w * 3, h, &side)?;
+                let pct = bad as f64 * 100.0 / (w * h) as f64;
+                total += pct;
+                report += &format!("f{f} {pct:.2}%\n");
+                println!("f{f}: {pct:.2}% of pixels differ");
+            }
+            let n = report.lines().count().max(1);
+            report += &format!("mean {:.2}% over {n} shots\n", total / n as f64);
+            std::fs::write(dir.join("report.txt"), &report)?;
+            println!("mean {:.2}% over {n} shots; ours/, diff/ (native | ours | red = differs), report.txt in {}", total / n as f64, dir.display());
         }
         Some("shot") => {
             let a = view::Assets::load(files)?;
