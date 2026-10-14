@@ -43,6 +43,11 @@ impl Font {
         (off != 0 && off + 4 <= self.d.len()).then_some(off)
     }
 
+    /// Width of `s` in pixels.
+    pub fn width(&self, s: &str) -> i32 {
+        s.bytes().map(|c| self.glyph(c).map_or(self.height / 3, |g| self.d[g] as i32)).sum()
+    }
+
     /// Draw `s` at (x, y); shade 0..8 maps through `colors` (8 palette indices). Returns the end x.
     pub fn draw(&self, s: &str, mut x: i32, y: i32, colors: &[u8], pal: &[[u8; 3]; 256], dst: &mut [u32], dw: i32, dh: i32) -> i32 {
         for c in s.bytes() {
@@ -117,6 +122,13 @@ pub struct Ui {
     pub stat_txt: Vec<String>,
     /// tfontgam rows of 8 palette indices per text color.
     pub text_colors: Vec<u8>,
+    /// rez\statdata.bin: the status panel dialog (statdata.cpp).
+    pub statdata: crate::statdata::Dialog,
+    /// unit\cmdbtns\<race>cmdbtns.grp (0x68c1c0, 0x459b90): slot frames and numbers.
+    pub cmdbtns: Grp,
+    /// game\<race>pbrempt.pcx / pbrfull.pcx: progress bar (0x458050).
+    pub pbar_empty: Rgba,
+    pub pbar_full: Rgba,
 }
 
 /// 0x4dab00: fonts are encrypted with the key in `font\font.gid` (grid.cpp).
@@ -142,7 +154,12 @@ impl Ui {
         let ticon = crate::view::pcx(&files.read("unit/cmdbtns/ticon.pcx")?).2;
         let stat_txt = crate::dat::parse_tbl(&files.read("rez/stat_txt.tbl")?);
         let (_, _, text_colors) = crate::view::pcx(&files.read("game/tfontgam.pcx")?);
-        Ok(Ui { console, font, icons, cursors, wireframe, cmdicons, ticon, stat_txt, text_colors })
+        let r = &race[..1];
+        let statdata = crate::statdata::Dialog::parse(&files.read("rez/statdata.bin")?);
+        let cmdbtns = Grp::parse(files.read(&format!("unit/cmdbtns/{r}cmdbtns.grp"))?);
+        let pbar_empty = pcx_rgba(&files.read(&format!("game/{r}pbrempt.pcx"))?)?;
+        let pbar_full = pcx_rgba(&files.read(&format!("game/{r}pbrfull.pcx"))?)?;
+        Ok(Ui { console, font, icons, cursors, wireframe, cmdicons, ticon, stat_txt, text_colors, statdata, cmdbtns, pbar_empty, pbar_full })
     }
 
     pub fn text_color(&self, c: usize) -> &[u8] {

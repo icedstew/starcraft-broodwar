@@ -14,6 +14,7 @@ mod iscript;
 mod map;
 mod mpq;
 mod replay;
+mod statdata;
 mod ui;
 mod view;
 

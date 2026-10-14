@@ -587,6 +587,28 @@ impl<'a> Scene<'a> {
         self.card_menu = Option::None;
     }
 
+    /// The selected building's statdata panel, if it shows one.
+    pub fn status_panel(&self, ui: &crate::ui::Ui) -> Option<(crate::statdata::Panel, Vec<(i16, crate::statdata::Show)>)> {
+        let [u] = self.selected[..] else { return None };
+        let st = &self.st;
+        with_data(self.a, |d| crate::statdata::building_panel(st, d, &ui.stat_txt, u))
+    }
+
+    /// A click at screen (x, y) on a status panel button (0x4573a0); true if handled.
+    pub fn status_click(&mut self, ui: &crate::ui::Ui, x: i32, y: i32) -> bool {
+        let Some((panel, ctls)) = self.status_panel(ui) else { return false };
+        for (id, _) in ctls {
+            let Some((l, t, r, b)) = ui.statdata.screen_rect(id) else { continue };
+            if (l..=r).contains(&x) && (t..=b).contains(&y) {
+                if let Some(pkt) = crate::statdata::click(panel, id) {
+                    self.command(|st, d, me, sel| st.execute_command(d, me, sel, &pkt));
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     /// 0x487100: run a replay command from map player `player` with that player's
     /// current selection.
     pub fn replay_command(&mut self, player: u8, p: &[u8]) {
@@ -786,6 +808,42 @@ pub fn compose_with_cursor(
     } else if !scene.selected.is_empty() {
         ui.font.draw(&format!("{} units", scene.selected.len()), 260, 392, ui.text_color(2), pal, out, w, h);
     }
+    // Building panels of statdata.cpp (training queue, research, upgrade).
+    if let Some((_, ctls)) = scene.status_panel(ui) {
+        let sd = &ui.statdata;
+        for (id, show) in &ctls {
+            let Some((l, t, r, b)) = sd.screen_rect(*id) else { continue };
+            let (cw, ch) = (r - l + 1, b - t + 1);
+            match show {
+                crate::statdata::Show::Text(s) => {
+                    let tw = ui.font.width(s);
+                    ui.font.draw(s, l + (cw - tw) / 2, t + (ch - ui.font.height) / 2, ui.text_color(2), pal, out, w, h);
+                }
+                crate::statdata::Show::Progress(v) => {
+                    // 0x456b40: the empty bar, then the full one clipped to the percentage.
+                    crate::ui::blit_rgba(&ui.pbar_empty, l, t, out, w, h);
+                    let fw = cw * *v as i32 / 100;
+                    let full = &ui.pbar_full;
+                    for y in 0..full.h.min(ch as usize) as i32 {
+                        for x in 0..fw.min(full.w as i32) {
+                            let [r, g, b, a] = full.px[y as usize * full.w + x as usize];
+                            if a != 0 {
+                                out[((t + y) * w + l + x) as usize] = (r as u32) << 16 | (g as u32) << 8 | b as u32;
+                            }
+                        }
+                    }
+                }
+                crate::statdata::Show::Button { bg, icon, cmdicon } => {
+                    crate::ui::draw_grp_rgb(&ui.cmdbtns, *bg as usize, l, t, pal, out, w, h);
+                    if *cmdicon {
+                        ui.draw_cmd_icon(*icon as usize, 0, l + 2, t + 1, pal, out, w, h);
+                    } else if let Some(f) = ui.cmdbtns.frame(*icon as usize) {
+                        crate::ui::draw_grp_rgb(&ui.cmdbtns, *icon as usize, l + (cw - f.w as i32) / 2 - f.x as i32, t + (ch - f.h as i32) / 2 - f.y as i32, pal, out, w, h);
+                    }
+                }
+            }
+        }
+    }
     if scene.error != 0 && scene.error_frames > 0 {
         let msg = ui.stat_txt.get(scene.error as usize - 1).map_or("", |s| s.split('\0').next().unwrap_or(""));
         let msg: String = msg.chars().filter(|c| *c >= ' ').collect();
@@ -921,6 +979,11 @@ pub fn run(a: &Assets, chk: Chk) -> io::Result<()> {
             let Some(c) = key_char(k) else { continue };
             if let Some((b, _)) = card.iter().flatten().find(|(b, en)| *en && hotkey(ui.as_ref(), b) == Some(c)) {
                 pressed = Some(*b);
+            }
+        }
+        if clicked && pressed.is_none() {
+            if let Some(ui) = ui.as_ref() {
+                scene.status_click(ui, cx, cy);
             }
         }
         let on_card = clicked && cy >= vh - 120 && !on_minimap_pt(cx, cy);
