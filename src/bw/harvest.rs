@@ -583,8 +583,9 @@ impl State {
         let saved = self.iscript_unit;
         if let Some(img) = self.create_overlay(d, main, image, 0, 0, true) {
             if self.images[img as usize].flags & 0x80 == 0 {
+                // 0x4d5a00: follow the worker's special overlay (LO kind 2) offset.
                 self.images[img as usize].flags |= 0x80;
-                todo_port!("0x4d5a00", "carried chunk offset from the worker's LO overlay");
+                self.image_update_special_offset(d, img);
             }
         }
         self.iscript_unit = saved;

@@ -377,7 +377,10 @@ impl<'a> Scene<'a> {
             let sp = &self.st.sprites[s as usize];
             self.sprite_seen(s) && (sp.x as i32 - vx).abs() < vw + 256 && (sp.y as i32 - vy).abs() < vh + 256
         });
-        order.sort_by_key(|&s| self.st.sprites[s as usize].elevation);
+        // 0x42d4c0 keys each sprite, 0x42d400 / 0x42d370 / 0x42d460 heap-sort them and
+        // 0x498d40 draws in ascending key order.
+        let keys = order.iter().map(|&s| (sprite_draw_key(&self.st.sprites[s as usize], s), s)).collect();
+        let mut order = heap_draw_order(keys);
         // 0x4bd580: sprites (0x498d40), then fog of war over terrain and sprites alike
         // (0x4808e0), then the right-click marker (0x488180) unshaded.
         let fogged = order.len();
@@ -783,6 +786,63 @@ fn new_game(a: &Assets, chk: &Chk, rep: Option<&crate::replay::Header>) -> io::R
         }
     });
     Ok(st)
+}
+
+/// 0x42d4c0: draw-order key: elevation, then y (elevation < 5 only), sprite flag 0x10,
+/// then the sprite's pool index (+0x10).
+fn sprite_draw_key(sp: &bw::sprite::Sprite, index: u32) -> u32 {
+    let e = sp.elevation as u32;
+    let y = if e < 5 { sp.y as i32 as u32 } else { 0 };
+    ((((e << 13) | y) << 5 | (sp.flags & 0x10) as u32) << 9) | (index & 0xffff)
+}
+
+/// The draw order 0x498d40 gets from the sprite heap: entries pushed in row-list order
+/// (0x42d4c0 / 0x42d400, max-heap), popped largest first (0x42d460 / 0x42d370) into
+/// 0x6c2318 and drawn from the last popped back to the first.
+fn heap_draw_order(entries: Vec<(u32, u32)>) -> Vec<u32> {
+    // 1-based heap as at 0x6c4a30.
+    let mut h: Vec<(u32, u32)> = vec![(0, 0)];
+    for e in entries {
+        h.push(e);
+        let mut i = h.len() - 1;
+        while i > 1 {
+            let p = i >> 1;
+            if e.0 <= h[p].0 {
+                break;
+            }
+            h[i] = h[p];
+            i = p;
+        }
+        h[i] = e;
+    }
+    let mut popped = Vec::with_capacity(h.len());
+    let mut n = h.len() - 1;
+    while n != 0 {
+        popped.push(h[1].1);
+        let moved = h[n];
+        n -= 1;
+        let half = n >> 1;
+        let mut i = 1;
+        if half != 0 {
+            loop {
+                let mut c = i * 2;
+                if c < n && h[c].0 < h[c + 1].0 {
+                    c += 1;
+                }
+                if h[c].0 <= moved.0 {
+                    break;
+                }
+                h[i] = h[c];
+                i = c;
+                if c > half {
+                    break;
+                }
+            }
+        }
+        h[i] = moved;
+    }
+    popped.reverse();
+    popped
 }
 
 pub const SCREEN_W: i32 = 640;
