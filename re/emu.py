@@ -1,3 +1,4 @@
+import os
 """Run 1.16.1 StarCraft.exe functions under unicorn for differential tests.
 
 Usage (as a module):
@@ -9,6 +10,7 @@ Imports are bound to stubs; Storm SMemAlloc (401) / SMemFree (403) are emulated
 with a bump heap, any other import stops the run.
 """
 import struct
+import unicorn
 from unicorn import Uc, UC_ARCH_X86, UC_MODE_32, UC_HOOK_CODE, UC_HOOK_MEM_INVALID
 from unicorn.x86_const import UC_X86_REG_EAX, UC_X86_REG_EBX, UC_X86_REG_ECX, UC_X86_REG_EDX, \
     UC_X86_REG_ESI, UC_X86_REG_EDI, UC_X86_REG_EBP, UC_X86_REG_ESP, UC_X86_REG_EIP
@@ -49,6 +51,12 @@ class Emu:
         uc.hook_add(UC_HOOK_CODE, self._stub, begin=STUBS, end=STUBS + 0xffff)
         uc.hook_add(UC_HOOK_MEM_INVALID, self._bad)
         self.snaps = {}
+        # EMU_BLOCKS=1: remember the last basic blocks run, shown with any fault (slow).
+        self.blocks = None
+        if os.environ.get("EMU_BLOCKS"):
+            import collections
+            self.blocks = collections.deque(maxlen=40)
+            uc.hook_add(unicorn.UC_HOOK_BLOCK, lambda uc, a, sz, _: self.blocks.append(a))
         # Extra import handlers: lower-case symbol -> fn(emu, args) -> (eax, stdcall arg count).
         self.handlers = {}
 
@@ -163,5 +171,6 @@ class Emu:
         try:
             self.uc.emu_start(addr, RET)
         except Exception as ex:
-            raise RuntimeError(f"{ex}: {self.fault}") from None
+            trail = " blocks " + " ".join(f"{a:#x}" for a in self.blocks) if self.blocks else ""
+            raise RuntimeError(f"{ex}: {self.fault}{trail}") from None
         return self.uc.reg_read(UC_X86_REG_EAX)

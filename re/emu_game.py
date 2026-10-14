@@ -421,6 +421,9 @@ def scenario(e, units, move, frames, out):
         e.w32(0x6d0f1c, 0)
         e.w32(0x57eeb8, 0xff00)
         e.w32(0x596bbc, e.alloc(0x20))  # replay writer, not recording while playing back
+        # 0x48cd30: add a line to the on-screen message list (UI only; it lays the text
+        # out with fonts that are not loaded here).
+        e.write(0x48cd30, b"\xc2\x0c\x00")
         for tbl in (0x6d1238, 0x6d1220):  # string tables (stat_txt, network): empty, so
             if not e.r32(tbl):              # messages fall back to the default string
                 e.w32(tbl, e.alloc(0x10))
