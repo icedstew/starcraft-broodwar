@@ -1,5 +1,28 @@
 # Agent notes
 
+Start here. Detailed hand-off notes live in `agent/` (committed docs and scripts;
+`agent/local/` holds Blizzard-derived and large files and is gitignored):
+
+| File | Contents |
+|---|---|
+| [agent/status.md](agent/status.md) | **Read first.** Current task, uncommitted changes, the pending one-line fix, next steps. |
+| [agent/conventions.md](agent/conventions.md) | User rules: faithful ports, what never to commit, commit trailers, untrusted files. |
+| [agent/tools.md](agent/tools.md) | `agent/tools/*` (decompile/disassembly lookup, scenario and replay compares), `agent/local/` layout, scbw RE commands, emulator, headless native game. |
+| [agent/testing.md](agent/testing.md) | How ports are verified: oracles, 62-scenario suite, replay trace compare, screenshot tests. |
+| [agent/re-notes.md](agent/re-notes.md) | 1.16.1 facts learned (addresses, register conventions, replay/init flow, orders ported). |
+| [agent/history.md](agent/history.md) | What was done and why, newest first. |
+
+Quick start:
+
+```sh
+cd ~/src/decomp/scbw
+~/.cargo/bin/cargo build --release
+agent/tools/fns.sh 479040                 # 1.16.1 decompile of a function
+agent/tools/dis.sh 479040 60              # its assembly
+agent/tools/repcmp.sh ~/games/Starcraft/broodwar-reps-116/tl1412*.rep 3000   # native vs scbw replay
+agent/tools/suite.sh | grep -v MATCH      # regression suite (expect no output)
+```
+
 ## Test data (local, not in the repo)
 
 - Game install (1.16.1): `~/Downloads/StarCraft-BroodWar_1.16.1/` (default `SCBW_INSTALL`;
@@ -47,3 +70,4 @@ cargo run --release -- view ~/games/Starcraft/broodwar-reps/<file>.rep    # watc
 
 - Never commit game assets, the 1.16.1 executable, decompiler output or dumps.
 - Port 1.16.1 logic exactly, annotated with `/// 0x...` addresses; no simplified stand-ins.
+- More in [agent/conventions.md](agent/conventions.md).

@@ -1,0 +1,91 @@
+# Tools and local files
+
+## Layout
+
+```
+agent/
+  tools/            committed: our scripts (no Blizzard code)
+    env.sh          source me: $AGENT $REPO $W $PY $EXE $DUMP $DATA $INSTALL $SCBW
+    fns.sh          fns.sh 4865d0 479040 ...   -> Ghidra decompile of 1.16.1 functions
+    fn_of.sh        fn_of.sh 'DAT_0051ca14 = ' -> which functions match a pattern
+    dis.sh          dis.sh 478b40 200 x        -> disassembly (x = continue past ret)
+    dis32.py        the disassembler behind dis.sh (capstone)
+    refs.py         $PY -I refs.py $EXE 4dc4e0 -> call/jmp sites and dword refs
+    sdis.py         storm.dll disassembler: `sdis.py <addr> <n>` or `sdis.py refs <addr>`
+                    (STORM env = path of storm.dll; default the install's)
+    storm_oracle.py run storm.dll's SCompDecompress under unicorn (sound sector oracle)
+    fontdec.py      run 1.16.1's own font decryption under the emulator (font oracle):
+                    $PY -I fontdec.py $EXE <enc.fnt> <font.gid> > dec.fnt
+    cmp.sh          one bwsim scenario: emulator vs scbw (see testing.md)
+    suite.sh        the 62 regression scenarios (all must print MATCH)
+    repcmp.sh       replay playback: emulator vs scbw trace diff
+  local/            GITIGNORED (Blizzard-derived or large)
+    scratch/        the whole former session scratchpad (5.8 GB), see below
+re/                 committed reverse-engineering harness (emu.py, emu_game.py, ...)
+```
+
+All scripts locate files through `agent/tools/env.sh`; run them from anywhere.
+
+## agent/local/scratch (not in git)
+
+Copied from the session scratchpad
+`/tmp/claude-1000/-home-stubob/76c93498-4528-4c2d-b789-d58b9cc39c19/scratchpad`
+(which is lost on reboot). The important parts:
+
+| Path | What |
+|---|---|
+| `dump/bw116n.c` | Ghidra decompile of 1.16.1 StarCraft.exe, all 4,644 functions, named where known (`// ==== 00<addr> <name>` headers). `bw116.c` is the unnamed original. `sc_x64*` are the SC:R 1.23 x64 dump/decompile (mostly superseded). |
+| `sc116/StarCraft.exe`, `sc116/storm.dll` | Clean 1.16.1 exe (from the 1.16.1 patch MPQ) and storm.dll. Its code bytes equal the install's `StarCraft.exe` (they differ only in header/resources). |
+| `data116/` | Files extracted from the 1.16.1 MPQs (`scbw extract`) for the emulator: arr, scripts, unit, tileset (incl. real `.vx4`), game, parallax. |
+| `venv/` | Python venv with capstone + unicorn (`$PY`). Moved venvs print a sys.prefix warning; harmless. To recreate: `python3 -m venv venv && venv/bin/pip install capstone unicorn`. |
+| `md/` | `scbw mapdump` outputs (dims, tileset, chk, sai, ...) for emulator runs; `md/rep` = the current replay's map. |
+| `rep.txt` | `scbw repdump` of the replay last compared. |
+| `ra`, `rb`, `repdiff.txt` | last replay compare: native trace, scbw trace, diff. |
+| `a`, `b`, `diff.txt`, `emu_log.txt` | last cmp.sh scenario. |
+| `*.s`, `c_0x*.s`, `*.c` snippets | asm/decomp extracts used while porting (Blizzard-derived). |
+| `dbg_*.py` | one-off emulator debugging scripts (examples of poking emulator state). |
+| `f10.enc`, `font.gid`, `f10.dec` | font decryption oracle inputs/output. |
+| `wp/` (not copied, 1.9 GB) | the throwaway Wine prefix; recreate with `re/native_shots.sh`. |
+
+The SC:R CASC export that was at `scratch/data/` (672 MB) was not copied: the project no
+longer uses SC:R data.
+
+## scbw commands useful for RE
+
+```sh
+S=target/release/scbw
+$S rep <file.rep>                    # header: seed, game type, players (index/storm id/type/race), command histogram
+$S repdump <rep> <out.txt>           # replay as text for re/emu_game.py SCBW_REPLAY
+$S reptrace <rep> <frames> <trace>   # scbw's per-frame trace of the replay
+$S repshot <rep> <shots dir>         # draw frames listed in <dir>/native/meta.txt, diff vs native
+$S mapdump <map|rep> <dir>           # map files for the emulator
+$S bwsim <frames>                    # scenario harness (env SCBW_MAP, SCBW_UNITS, SCBW_MOVE, SCBW_MELEE, SCBW_TRACE, ...; see README)
+$S extract <mpq path> <out>          # a file from the install's MPQs (font\font.gid etc.)
+$S shot <map|rep> out.png x y [frames] [n_select]
+$S view <map|rep>
+```
+
+## Emulator (re/emu.py, re/emu_game.py)
+
+`re/emu.py` is a unicorn x86 emulator for 1.16.1 functions with Storm/kernel32 shims
+(bump heap at 0x10000000). `e.call(addr, regs={...}, stack=[...])` returns EAX;
+`e.r8/r16/r32/w8/w16/w32/read/write/alloc`. `re/emu_game.py <exe> <data dir> <mapdump
+dir> <units> <moves> <frames> <trace out>` runs 1.16.1 game init and `game_step` 0x4d94b0
+and writes the trace format that `scbw bwsim` / `scbw reptrace` write (unit lines, `th`
+thingies, fog, tiles every 25 frames, bullets, `res`, `rng`). Env: `SCBW_REPLAY`,
+`SCBW_MELEE`, `SCBW_MOVE2`/`SCBW_AT`, `SCBW_SELTRACE`, `SCBW_CLICKTEST`, `SCBW_SELTEST`,
+`SCBW_MINIMAP`. See testing.md.
+
+Quirks it patches: `__getptd` 0x4059e4 (TLS), 0x49e530 (placement error UI), local
+player 0x512684 = 8 during the sim (0 only during UI tests), explored mask 0x57eeb8 =
+0x100, turn counter 0x57eebc = frame counter each frame.
+
+## Native game (headless)
+
+`re/native_shots.sh <rep> <shots dir> [every]` builds a throwaway prefix, runs the real
+1.16.1 under `Xvfb :78` (640x480) and `winedbg --gdb`, and gdb (`re/native_shots_gdb.py`)
+dumps the 8-bit game screen buffer after each draw. `NATIVE_SHOTS_KEEP=1` keeps the temp
+dir with a screenshot per menu step. ptrace_scope is 1 on this machine, so gdb cannot
+attach to a running wine process; winedbg's gdb proxy (Windows debug API) works.
+The same breakpoint mechanism can read any game state at an exact frame (frame counter
+0x57f23c) — useful for checks the emulator cannot do.
