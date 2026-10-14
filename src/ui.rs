@@ -126,6 +126,10 @@ pub struct Ui {
     /// ticon.pcx: 6 states x 16 colors for command icons.
     pub ticon: Vec<u8>,
     pub stat_txt: Vec<String>,
+    /// rez\gluAll.tbl (0x4ddd30).
+    pub glu_all: Vec<String>,
+    /// rez\statbtnn.bin: the command card dialog while watching a replay.
+    pub statbtn_replay: Option<crate::statdata::Dialog>,
     /// tfontgam rows of 8 palette indices per text color.
     pub text_colors: Vec<u8>,
     /// rez\statdata.bin: the status panel dialog (statdata.cpp).
@@ -150,8 +154,14 @@ fn read_font(files: &Storage, name: &str) -> io::Result<Vec<u8>> {
 impl Ui {
     /// race: "terran" | "protoss" | "zerg"
     pub fn load(files: &Storage, race: &str) -> io::Result<Ui> {
+        Ui::load_with(files, race, false)
+    }
+
+    /// `replay`: watching a replay, the console is game\nconsole.pcx (0x4c3950).
+    pub fn load_with(files: &Storage, race: &str, replay: bool) -> io::Result<Ui> {
         // game\[tpz]console.pcx by the local race.
-        let console = pcx_rgba(&files.read(&format!("game/{}console.pcx", &race[..1]))?)?;
+        let c = if replay { "n" } else { &race[..1] };
+        let console = pcx_rgba(&files.read(&format!("game/{c}console.pcx"))?)?;
         let font = Font::parse(read_font(files, "font/font10.fnt")?);
         let icons = Grp::parse(files.read("game/icons.grp")?);
         let cursors = CURSORS.iter().map(|n| files.read(&format!("cursor/{n}")).map(Grp::parse)).collect::<io::Result<Vec<_>>>()?;
@@ -162,13 +172,15 @@ impl Ui {
         let cmdicons = Grp::parse(files.read("unit/cmdbtns/cmdicons.grp")?);
         let ticon = crate::view::pcx(&files.read("unit/cmdbtns/ticon.pcx")?).2;
         let stat_txt = crate::dat::parse_tbl(&files.read("rez/stat_txt.tbl")?);
+        let glu_all = files.read("rez/gluAll.tbl").map(|d| crate::dat::parse_tbl(&d)).unwrap_or_default();
+        let statbtn_replay = files.read("rez/statbtnn.bin").ok().map(|d| crate::statdata::Dialog::parse(&d));
         let (_, _, text_colors) = crate::view::pcx(&files.read("game/tfontgam.pcx")?);
         let r = &race[..1];
         let statdata = crate::statdata::Dialog::parse(&files.read("rez/statdata.bin")?);
         let cmdbtns = Grp::parse(files.read(&format!("unit/cmdbtns/{r}cmdbtns.grp"))?);
         let pbar_empty = pcx_rgba(&files.read(&format!("game/{r}pbrempt.pcx"))?)?;
         let pbar_full = pcx_rgba(&files.read(&format!("game/{r}pbrfull.pcx"))?)?;
-        Ok(Ui { console, font, icons, cursors, wireframe, grpwire, tranwire, twire, cmdicons, ticon, stat_txt, text_colors, statdata, cmdbtns, pbar_empty, pbar_full })
+        Ok(Ui { console, font, icons, cursors, wireframe, grpwire, tranwire, twire, cmdicons, ticon, stat_txt, glu_all, statbtn_replay, text_colors, statdata, cmdbtns, pbar_empty, pbar_full })
     }
 
     pub fn text_color(&self, c: usize) -> &[u8] {

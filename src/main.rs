@@ -419,6 +419,9 @@ fn main() -> std::io::Result<()> {
             std::fs::create_dir_all(dir.join("ours"))?;
             std::fs::create_dir_all(dir.join("diff"))?;
             let mut scene = view::Scene::from_replay(&a, &r)?;
+            let ui = ui::Ui::load_with(&a.files, ["zerg", "terran", "protoss"][scene.local_race()], true).ok();
+            // re/native_shots.sh plays at Fastest x 16.
+            scene.st.replay_mult = 16;
             // 0x487100: commands name the sender by storm id (0x57eee4); find its player.
             let mut player_of = [0u8; 256];
             for (i, s) in r.header.slots.iter().enumerate() {
@@ -474,9 +477,41 @@ fn main() -> std::io::Result<()> {
                 let pct = bad as f64 * 100.0 / (w * h) as f64;
                 total += pct;
                 report += &format!("f{f} {pct:.2}%\n");
+                // The whole screen with the interface, when native_shots.sh saved it
+                // (NATIVE_FULL=1).
+                let full = dir.join("native").join(format!("f{f:06}_full.png"));
+                if let (Ok(file), Some(ui)) = (std::fs::File::open(&full), ui.as_ref()) {
+                    let mut dec = png::Decoder::new(std::io::BufReader::new(file));
+                    // ImageMagick writes paletted / gray PNGs: expand to RGB(A).
+                    dec.set_transformations(png::Transformations::EXPAND);
+                    let mut rd = dec.read_info()?;
+                    let mut nb = vec![0; rd.output_buffer_size().unwrap_or(0)];
+                    let info = rd.next_frame(&mut nb)?;
+                    let (fw, fh) = (640usize, 480usize);
+                    let ch = info.line_size / info.width as usize;
+                    let mut idx2 = vec![0u8; fw * fh];
+                    let mut ours = vec![0u32; fw * fh];
+                    view::compose(&scene, Some(ui), sx, sy, &mut idx2, &mut ours);
+                    let mut side = vec![0u32; fw * 3 * fh];
+                    let mut fbad = 0;
+                    for y in 0..fh.min(info.height as usize) {
+                        for x in 0..fw.min(info.width as usize) {
+                            let o = (y * info.width as usize + x) * ch;
+                            let n = (nb[o] as u32) << 16 | (nb[o + 1] as u32) << 8 | nb[o + 2] as u32;
+                            let us = ours[y * fw + x] & 0xffffff;
+                            side[y * fw * 3 + x] = n;
+                            side[y * fw * 3 + fw + x] = us;
+                            side[y * fw * 3 + 2 * fw + x] = if n == us { n >> 2 & 0x3f3f3f } else { 0xff0000 };
+                            fbad += (n != us) as usize;
+                        }
+                    }
+                    std::fs::create_dir_all(dir.join("diff_full"))?;
+                    write_png_rgb(dir.join("diff_full").join(&name).to_str().unwrap(), fw * 3, fh, &side)?;
+                    report += &format!("f{f} full {:.2}%\n", fbad as f64 * 100.0 / (fw * fh) as f64);
+                }
                 println!("f{f}: {pct:.2}% of pixels differ");
             }
-            let n = report.lines().count().max(1);
+            let n = report.lines().filter(|l| !l.contains(" full ")).count().max(1);
             report += &format!("mean {:.2}% over {n} shots\n", total / n as f64);
             std::fs::write(dir.join("report.txt"), &report)?;
             println!("mean {:.2}% over {n} shots; ours/, diff/ (native | ours | red = differs), report.txt in {}", total / n as f64, dir.display());

@@ -309,6 +309,10 @@ pub enum ButtonAction {
     SelectLarvae(Vec<u32>),
     /// Refused with a stat_txt message (0x48ee30 / 0x48ef30).
     Error,
+    /// Replay controls.
+    ReplayPause,
+    ReplayFaster,
+    ReplaySlower,
 }
 
 /// The card's nine slots: the button and whether it is enabled (false = greyed out).
@@ -624,7 +628,11 @@ impl State {
             0x429680 | 0x4296f0 => if tech(self, a, v) == -1 { -1 } else { 0 },
             0x429740 => if matches!(self.units[a as usize].unit_type, 0x83..=0x85) { self.can_rally(d, a, player) } else { 0 },
             // Replay controls (0x6d0f14 set only while watching a replay).
-            0x4deac0 | 0x4deaf0 | 0x4deb40 => 0,
+            0x4deac0 => self.replay as i32,
+            // 0x4deaf0: faster, up to Fastest x 16; 0x4deb40: slower, down to Slowest.
+            0x4deaf0 if self.replay => if (self.replay_speed == 6 && self.replay_mult >= 16) || self.replay_paused { -1 } else { 1 },
+            0x4deb40 if self.replay => if (self.replay_speed == 0 && self.replay_mult <= 1) || self.replay_paused { -1 } else { 1 },
+            0x4deaf0 | 0x4deb40 => 0,
             _ => {
                 todo_port!("0x4282d0", "unknown button condition");
                 0
@@ -808,7 +816,11 @@ impl State {
             0x429780 => CancelPlacement,
             0x459af0 => Menu(v),
             // Replay controls.
-            0x4df260 | 0x4df2c0 | 0x4df300 => None,
+            // 0x4df2c0 pause / resume, 0x4df260 faster, 0x4df300 slower (sent as
+            // replay control command 0x56; the viewer applies them directly).
+            0x4df2c0 => ReplayPause,
+            0x4df260 => ReplayFaster,
+            0x4df300 => ReplaySlower,
             _ => {
                 todo_port!("0x423180", "unknown button action");
                 let _ = player;

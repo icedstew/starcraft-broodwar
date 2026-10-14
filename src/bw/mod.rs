@@ -163,6 +163,12 @@ pub struct State {
     pub tileset: u16,
     pub local_player: u8,
     pub replay: bool,
+    /// Watching a replay: 0x6cdfd4 game speed (0..=6), 0x50e058 speed multiplier,
+    /// 0x6d11b0 paused, 0x6d0f31 the replay's length in frames.
+    pub replay_speed: u8,
+    pub replay_mult: u8,
+    pub replay_paused: bool,
+    pub replay_frames: u32,
     /// 0x58d700: player has left (2).
     pub player_left: [u8; 12],
     pub reveal_all: bool,
@@ -352,6 +358,10 @@ impl State {
             forward_offsets: Vec::new(),
             template: [0; 0x20],
             player_left: [0; 12],
+            replay_speed: 6,
+            replay_mult: 1,
+            replay_paused: false,
+            replay_frames: 0,
             dead_removal_counter: 0,
             finder_rows: [[0; 0x20]; 0x20],
             finder_64dea8: 0,

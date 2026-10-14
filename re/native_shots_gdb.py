@@ -12,7 +12,12 @@ EVERY = int(os.environ.get("CAP_EVERY", "120"))
 END = int(os.environ.get("CAP_END", "1000000"))
 inf = gdb.selected_inferior()
 u32 = lambda a: struct.unpack("<I", bytes(inf.read_memory(a, 4)))[0]
-state = {"next": EVERY, "saved": None}
+state = {"next": EVERY, "saved": None, "full": None}
+# CAP_FULL=1: also the whole screen as the player sees it (HUD, minimap, console).
+# The game buffer above has only the map layer; the screen gets the frame together with
+# the interface at the next draw's blit (0x41c200), so the X screen is grabbed just
+# before that draw's layer pass (0x41cb23), named after the captured frame.
+FULL = bool(os.environ.get("CAP_FULL"))
 CAM = {}
 if os.environ.get("CAP_CAMERA"):
     for line in open(os.environ["CAP_CAMERA"]):
@@ -59,8 +64,22 @@ class Draw(gdb.Breakpoint):
         sx, sy = u32(0x62848c), u32(0x6284a8)
         open(os.path.join(OUT, "f%06d.raw" % f), "wb").write(buf + pal)
         meta.write("%d %d %d\n" % (f, sx, sy)); meta.flush()
+        if FULL:
+            state["full"] = f
         state["next"] = (f // EVERY + 1) * EVERY
         return False
 
+class Blitted(gdb.Breakpoint):
+    def stop(self):
+        f = state["full"]
+        if f is not None:
+            state["full"] = None
+            import subprocess
+            subprocess.run(["import", "-window", "root", os.path.join(OUT, "f%06d_full.png" % f)], check=False)
+        return False
+
+
 gdb.execute("set pagination off")
 Draw("*0x41cb28")
+if FULL:
+    Blitted("*0x41cb23")

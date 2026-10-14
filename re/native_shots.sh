@@ -11,6 +11,7 @@
 # gdb, xdotool and ImageMagick, and the 1.16.1 install (SCBW_INSTALL).
 set -e
 REP=$(realpath "$1"); OUT=$(realpath -m "$2"); EVERY=${3:-120}
+# NATIVE_FULL=1 also saves fNNNNNN_full.png: the whole screen with the interface.
 # NATIVE_CAMERA=<scbw repcam file> moves the screen like a player's camera.
 # NATIVE_MODE=trace writes <shots dir>/native/trace.txt (re/native_trace_gdb.py, frames
 # up to CAP_END) instead of screenshots.
@@ -47,7 +48,7 @@ wait_for() { for _ in $(seq 60); do awk "BEGIN{exit !($(green "$@") > 0.06)}" &&
 (cd "$G" && winedbg --gdb --no-start 'C:\StarCraft\StarCraft.exe' > "$W/wdbg.txt" 2>&1 &)
 for _ in $(seq 30); do grep -q 'localhost:' "$W/wdbg.txt" && break; sleep 1; done
 PORT=$(grep -o 'localhost:[0-9]*' "$W/wdbg.txt" | cut -d: -f2)
-CAP_OUT=$W/cap CAP_EVERY=$EVERY CAP_CAMERA=${NATIVE_CAMERA:+$(realpath "$NATIVE_CAMERA")} gdb -q -batch -ex 'set debuginfod enabled off' -ex 'set architecture i386' \
+CAP_OUT=$W/cap CAP_EVERY=$EVERY CAP_FULL=$NATIVE_FULL CAP_CAMERA=${NATIVE_CAMERA:+$(realpath "$NATIVE_CAMERA")} gdb -q -batch -ex 'set debuginfod enabled off' -ex 'set architecture i386' \
   -ex "target remote localhost:$PORT" -ex "source $GDBPY" -ex continue > "$W/gdb.log" 2>&1 &
 
 wait_for 140 16 148 112         # main menu ("Single Player")
@@ -78,5 +79,6 @@ if [ "$MODE" = trace ]; then
 fi
 [ -s "$W/cap/meta.txt" ] || { echo "no shots captured" >&2; exit 1; }
 for f in "$W"/cap/*.raw; do python3 -I "$RE/raw2png.py" "$f" "$OUT/native/$(basename "$f" .raw).png"; done
+cp "$W"/cap/*_full.png "$OUT/native/" 2>/dev/null || true
 cp "$W/cap/meta.txt" "$OUT/native/"
 echo "$(wc -l < "$OUT/native/meta.txt") shots in $OUT/native"

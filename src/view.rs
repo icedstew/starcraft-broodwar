@@ -137,7 +137,9 @@ impl<'a> Scene<'a> {
 
     /// The game a replay recorded, set up as the replay's header says.
     pub fn from_replay(a: &'a Assets, r: &crate::replay::Replay) -> io::Result<Scene<'a>> {
-        Scene::start(a, Chk::parse(&r.chk), Some(&r.header))
+        let mut s = Scene::start(a, Chk::parse(&r.chk), Some(&r.header))?;
+        s.st.replay_frames = r.header.frames;
+        Ok(s)
     }
 
     fn start(a: &'a Assets, chk: Chk, rep: Option<&crate::replay::Header>) -> io::Result<Scene<'a>> {
@@ -533,6 +535,10 @@ impl<'a> Scene<'a> {
     /// The button set on the card: an open menu, the cancel sets while targeting
     /// (0xe5) or placing (0xe6), else the active unit's set (+0x94).
     pub fn card_set(&self, s: &bw::buttons::Selection) -> Option<usize> {
+        // 0x458de0: a replay always shows its controls (0xf8 while paused).
+        if self.st.replay {
+            return Some(if self.st.replay_paused { 0xf8 } else { 0xf9 });
+        }
         if self.targeting.is_some() {
             return Some(0xe5);
         }
@@ -574,6 +580,23 @@ impl<'a> Scene<'a> {
             CancelPlacement => self.placing = Option::None,
             SelectLarvae(l) => self.selected = l,
             Error => self.show_error(btn.disabled_str),
+            ReplayPause => self.st.replay_paused = !self.st.replay_paused,
+            ReplayFaster => {
+                let st = &mut self.st;
+                if st.replay_speed < 6 {
+                    st.replay_speed += 1;
+                } else if st.replay_mult < 16 {
+                    st.replay_mult *= 2;
+                }
+            }
+            ReplaySlower => {
+                let st = &mut self.st;
+                if st.replay_mult > 1 {
+                    st.replay_mult /= 2;
+                } else if st.replay_speed > 0 {
+                    st.replay_speed -= 1;
+                }
+            }
         }
     }
 
@@ -952,10 +975,16 @@ pub fn compose_with_cursor(
     let (used, max) = scene.supply(me as u8, race);
     let (supply, minerals, gas) = (format!("{}/{}", used, max), scene.st.players.minerals[me].to_string(), scene.st.players.gas[me].to_string());
     let mut x = 440;
-    for (icon, text) in [(0, minerals.as_str()), (1 + race, gas.as_str()), (4 + race, supply.as_str())] {
-        ui.draw_icon(icon, x, 2, pal, out, w, h);
-        ui.font.draw(text, x + 16, 4, col, pal, out, w, h);
-        x += 66;
+    // Watching a replay shows no resources (statres is not shown).
+    if !scene.st.replay {
+        for (icon, text) in [(0, minerals.as_str()), (1 + race, gas.as_str()), (4 + race, supply.as_str())] {
+            ui.draw_icon(icon, x, 2, pal, out, w, h);
+            ui.font.draw(text, x + 16, 4, col, pal, out, w, h);
+            x += 66;
+        }
+    }
+    if scene.st.replay {
+        draw_replay_panel(scene, ui, pal, out, w, h);
     }
     // Building panels of statdata.cpp (training queue, research, upgrade).
     if let Some((_, ctls)) = scene.status_panel(ui) {
@@ -1279,11 +1308,12 @@ pub fn run_replay(a: &Assets, rep: crate::replay::Replay) -> io::Result<()> {
 fn run_with(a: &Assets, mut scene: Scene, mut replay: Option<ReplayPlay>) -> io::Result<()> {
     use minifb::{Key, Scale, Window, WindowOptions};
     let mut following = replay.is_some();
+    let mut replay_acc = 0u32;
     if let Some(rp) = replay.as_ref() {
         scene.local = rp.follow.player;
     }
     let race = ["zerg", "terran", "protoss"][scene.local_race()];
-    let ui = crate::ui::Ui::load(&a.files, race).ok();
+    let ui = crate::ui::Ui::load_with(&a.files, race, scene.st.replay).ok();
     let mut audio = crate::audio::Audio::open(&a.files);
     if let Some(au) = audio.as_mut() {
         au.play_music(&a.files, &format!("music/{race}1.wav"));
@@ -1358,7 +1388,7 @@ fn run_with(a: &Assets, mut scene: Scene, mut replay: Option<ReplayPlay>) -> io:
             }
         }
         let on_card = clicked && cy >= vh - 120 && !on_minimap_pt(cx, cy);
-        if let Some(btn) = pressed.filter(|_| replay.is_none()) {
+        if let Some(btn) = pressed.filter(|b| replay.is_none() || matches!(b.act, 0x4df260 | 0x4df2c0 | 0x4df300)) {
             scene.press(&btn, shift);
         }
         if scene.placing.is_some() {
@@ -1434,7 +1464,22 @@ fn run_with(a: &Assets, mut scene: Scene, mut replay: Option<ReplayPlay>) -> io:
         vy = vy.clamp(0, (mh - vh + 120).max(0)); // console covers the bottom
         // 0x57f1d0: the screen position in tiles.
         scene.st.screen_tile = ((vx.max(0) / 32) as u16, (vy.max(0) / 32) as u16);
-        if let Some(rp) = replay.as_mut() {
+        // Replay speed: game frames per window tick (42 ms) at the chosen speed and
+        // multiplier (0x4ff90c: ms per frame by speed); paused: none.
+        let steps = if replay.is_some() {
+            if scene.st.replay_paused {
+                0
+            } else {
+                replay_acc += 42 * scene.st.replay_mult as u32;
+                let ms = [167u32, 111, 83, 67, 56, 48, 42][scene.st.replay_speed.min(6) as usize];
+                let n = replay_acc / ms;
+                replay_acc %= ms;
+                n
+            }
+        } else {
+            1
+        };
+        if let Some(rp) = replay.as_mut().filter(|_| steps > 0) {
             rp.commands(&mut scene);
             // The followed player's view: their selection is shown.
             scene.selected = bw::select::selection_units(&scene.st.selections[rp.follow.player as usize]).to_vec();
@@ -1445,7 +1490,16 @@ fn run_with(a: &Assets, mut scene: Scene, mut replay: Option<ReplayPlay>) -> io:
                 vy = vy.clamp(0, (mh - vh + 120).max(0));
             }
         }
-        for (id, x, y) in scene.step() {
+        let mut sounds = Vec::new();
+        for k in 0..steps {
+            if k > 0 {
+                if let Some(rp) = replay.as_mut() {
+                    rp.commands(&mut scene);
+                }
+            }
+            sounds.extend(scene.step());
+        }
+        for (id, x, y) in sounds {
             // ponytail: on-screen only, no distance falloff or per-frame voice limits yet.
             if let Some(au) = &audio {
                 if (vx..vx + vw).contains(&x) && (vy..vy + vh).contains(&y) {
@@ -1510,4 +1564,41 @@ fn draw_text_box(ui: &crate::ui::Ui, text: &str, right: i32, bottom: i32, pal: &
     for (k, l) in lines.iter().enumerate() {
         draw_coded(ui, l, x0 + 4, y0 + 2 + k as i32 * lh, pal, out, w, h);
     }
+}
+
+/// 0x427a80: the replay panel in the command card dialog (statbtnn.bin): "Replay
+/// Progress" (-45), progress (10), elapsed time (-46) and speed (-47).
+fn draw_replay_panel(scene: &Scene, ui: &crate::ui::Ui, pal: &[[u8; 3]; 256], out: &mut [u32], w: i32, h: i32) {
+    let st = &scene.st;
+    let Some(dlg) = ui.statbtn_replay.as_ref() else { return };
+    let glu = |i: usize| ui.glu_all.get(i.wrapping_sub(1)).map_or(String::new(), |s| s.split('\0').next().unwrap_or("").to_string());
+    let stat = |i: usize| ui.stat_txt.get(i.wrapping_sub(1)).map_or(String::new(), |s| s.split('\0').next().unwrap_or("").to_string());
+    let centered = |id: i16, text: &str, out: &mut [u32]| {
+        if let Some((l, t, r, b)) = dlg.screen_rect(id) {
+            let tw = coded_width(ui, text);
+            draw_coded(ui, text, l + (r - l + 1 - tw) / 2, t + (b - t + 1 - ui.font.height) / 2, pal, out, w, h);
+        }
+    };
+    centered(-45, &format!("\x03{}", stat(0x609)), out);
+    if let Some((l, t, r, b)) = dlg.screen_rect(10) {
+        let pct = (st.frame * 100).checked_div(st.replay_frames).unwrap_or(0).min(100) as i32;
+        crate::ui::blit_rgba(&ui.pbar_empty, l, t, out, w, h);
+        let fw = (r - l + 1) * pct / 100;
+        let full = &ui.pbar_full;
+        for y in 0..full.h.min((b - t + 1) as usize) as i32 {
+            for x in 0..fw.min(full.w as i32) {
+                let [cr, cg, cb, a] = full.px[y as usize * full.w + x as usize];
+                if a != 0 {
+                    out[((t + y) * w + l + x) as usize] = (cr as u32) << 16 | (cg as u32) << 8 | cb as u32;
+                }
+            }
+        }
+    }
+    let ms = [167u64, 111, 83, 67, 56, 48, 42][st.replay_speed.min(6) as usize];
+    let secs = ms * st.frame as u64 / 1000;
+    let time = if secs / 3600 == 0 { format!("{:02}:{:02}", secs / 60 % 60, secs % 60) } else { format!("{}:{:02}:{:02}", secs / 3600, secs / 60 % 60, secs % 60) };
+    centered(-46, &glu(0x10).replace("%s", &time), out);
+    let mult = if st.replay_mult > 1 { format!(" {} {}", if st.replay_speed > 2 { "x" } else { "/" }, st.replay_mult) } else { String::new() };
+    let speed = if st.replay_paused { stat(0x60a) } else { format!("{} {}{}", glu(0x5d), glu(st.replay_speed as usize + 0x56), mult) };
+    centered(-47, &speed, out);
 }

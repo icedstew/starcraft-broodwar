@@ -25,6 +25,10 @@ class Mem:
 
     def __init__(self):
         self.pages = {}
+        self.uc = self  # emu_game's fog / tile traces read through e.uc.mem_read
+
+    def mem_read(self, a, n):
+        return self.read(a, n)
 
     def read(self, a, n):
         out = b""
