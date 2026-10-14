@@ -12,6 +12,19 @@
   the file names). Legacy format (PKWare-imploded sections); each embeds its map's
   `scenario.chk`, so `view`/`shot`/`render` take the `.rep` directly as the map.
 
+All 15 load and play to their recorded end in the real 1.16.1 (checked headless:
+elapsed time at "The replay has finished" equals the header's frame count).
+
+Running the real 1.16.1 headless (Arch: `xorg-server-xvfb`, wine): use a throwaway
+`WINEPREFIX`, copy the install to `drive_c/StarCraft`, set
+`HKLM\Software\Blizzard Entertainment\Starcraft` `InstallPath`/`Program` with
+`wine regedit`, put replays in `maps/replays/`, then `Xvfb :78 -screen 0 640x480x24`
+(the screen must be 640x480 or the game exits after the intro) and
+`DISPLAY=:78 wine StarCraft.exe` from the game dir. Drive menus with `xdotool`
+(mousemove + mousedown/mouseup) and capture with `import -window root`. Path: Single
+Player (217,120), Expansion (367,275), new ID, Ok (515,392), Load Replay (333,452);
+the replay speed-up button is at (613,457) (8 clicks = Fastest x16).
+
 ```sh
 cargo run --release -- rep ~/games/Starcraft/broodwar-reps/<file>.rep     # header and command summary
 cargo run --release -- view ~/games/Starcraft/broodwar-reps/<file>.rep    # watch it
