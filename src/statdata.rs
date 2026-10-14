@@ -109,6 +109,10 @@ fn disabled(st: &State, u: u32) -> bool {
 pub fn building_panel(st: &State, d: &Data, strings: &[String], u: u32) -> Option<(Panel, Vec<(i16, Show)>)> {
     let un = &st.units[u as usize];
     let t = un.unit_type;
+    // The status dispatcher 0x458120 uses 0x427890 for these types (table 0x5193a0).
+    if !matches!(t, 0x6a..=0x76 | 0x78..=0x7c | 0x7e..=0x7f | 0x82..=0x98 | 0x9a..=0x9d | 0x9f..=0xbe | 0xc2..=0xca | 0xd6) {
+        return None;
+    }
     if (0xb0..=0xb2).contains(&t) || t == 0xbc || un.status & 1 == 0 || t == 0x6c {
         return None;
     }
@@ -197,10 +201,10 @@ fn is_training(st: &State, u: u32) -> bool {
 fn research_panel(st: &State, d: &Data, strings: &[String], u: u32) -> Vec<(i16, Show)> {
     let un = &st.units[u as usize];
     let tech = un.u8_at(0xc8) as usize;
-    let total = d.dat.techdata.research_time[tech].max(1) as u32;
+    let total = d.dat.techdata.research_time.get(tech).copied().unwrap_or(1).max(1) as u32;
     let left = un.u16_at(0xc6) as u32;
     let progress = (total.wrapping_sub(left) * 100 / total) as u16;
-    let icon = d.dat.techdata.icon[tech];
+    let icon = d.dat.techdata.icon.get(tech).copied().unwrap_or(0);
     let s = if disabled(st, u) { 0x33c } else { 0x300 };
     vec![
         (7, Show::Progress(progress)),

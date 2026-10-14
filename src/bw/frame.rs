@@ -59,7 +59,7 @@ impl State {
             }
             self.stagger_300 = 300;
         }
-        todo_port!("0x4eb2f0", "detection pass");
+        self.web_pass(d);
         // Dead units (0x62842c): finish their sprites.
         let mut u = self.dead_units.head;
         while u != NIL {
@@ -106,7 +106,7 @@ impl State {
             if un.status & 0x300 != 0 {
                 un.is_cloaked = 0;
                 if un.ai_action_flag == 0 {
-                    todo_port!("0x443390", "cloak visibility refresh");
+                    self.refresh_detection(d, u);
                     self.units[u as usize].ai_action_flag = 0x1e;
                 } else {
                     un.ai_action_flag -= 1;
@@ -133,7 +133,7 @@ impl State {
             self.update_hidden_unit(d, u);
             u = next;
         }
-        todo_port!("0x492eb0", "cloaked units list update");
+        self.update_cloak_list(d);
         self.update_power(d);
         // 0x64dec8: 32 rows of 32 dwords; advance the ring and clear the new row.
         self.finder_ring = (self.finder_ring + 1) % 0x20;
@@ -217,7 +217,7 @@ impl State {
         self.execute_hidden_order(d, u);
         match self.units[u as usize].secondary_order {
             0x3f => todo_port!("0x466790", "TrainFighter"),
-            0x6d => todo_port!("0x491790", "Cloak"),
+            0x6d => self.secondary_cloak(u),
             0x6e => self.set_secondary_order(u, 0x17),
             _ => {}
         }
@@ -309,7 +309,7 @@ impl State {
             let hp = self.units[u as usize].hp + 4;
             self.set_unit_hp(d, u, hp);
         }
-        todo_port!("0x4eb4b0", "energy regeneration");
+        self.regenerate_energy(d, u);
         let un = &mut self.units[u as usize];
         un.recent_order_timer = un.recent_order_timer.saturating_sub(1);
         if un.remove_timer != 0 {
@@ -343,8 +343,8 @@ impl State {
             0x44 => todo_port!("0x4932d0", "ShieldBattery"),
             0x4e => self.hatchery_spawn_larva(d, u),
             0x66 => self.secondary_spread_creep(d, u),
-            0x6d => todo_port!("0x491790", "Cloak"),
-            0x6e => todo_port!("0x4633e0", "Decloak"),
+            0x6d => self.secondary_cloak(u),
+            0x6e => self.secondary_decloak(u),
             0x83 => todo_port!("0x491c20", "CloakNearbyUnits"),
             _ => {}
         }

@@ -247,7 +247,7 @@ pub fn run(st: &mut State, d: &Data, img: u32, nse: bool, mut distance: Option<&
                 p = a + 4;
                 if !nse {
                     let mut id = u16_(a);
-                    if st.iscript_bullet_is_upgraded_goliath() {
+                    if st.iscript_bullet_is_upgraded_goliath(d) {
                         id = 0x1f9;
                     }
                     let s = st.images[img as usize].sprite;
@@ -533,8 +533,9 @@ pub fn run(st: &mut State, d: &Data, img: u32, nse: bool, mut distance: Option<&
                 }
             }
             0x2d => {
+                // 0x4d74c0 op 0x2d: the right-click marker is done (0x652920 = 0).
                 if !nse {
-                    todo_port!("0x1401a00a0", "iscript op 0x2d");
+                    st.marker_shown = false;
                 }
             }
             0x2e => {
@@ -712,10 +713,20 @@ impl State {
         self.image_post_init(d, img);
     }
 
-    fn iscript_bullet_is_upgraded_goliath(&self) -> bool {
-        // sprol: Goliath missiles become Hellfire (sprite 0x1f9) with Charon Boosters.
-        todo_port!("0x1401c7490", "sprol goliath upgrade check (bullet source)");
-        false
+    /// 0x4d74c0 op 0x0f: a bullet from a goliath (0x4011f0: types 3 / 0x11) with
+    /// Charon Boosters (upgrade 0x36), or a hero one in Brood War, uses sprite 0x1f9.
+    fn iscript_bullet_is_upgraded_goliath(&self, d: &Data) -> bool {
+        let Some(b) = self.iscript_bullet else { return false };
+        let src = self.bullets.pool[b as usize].source;
+        if src == NIL {
+            return false;
+        }
+        let un = &self.units[src as usize];
+        if un.unit_type != 3 && un.unit_type != 0x11 {
+            return false;
+        }
+        self.players.upgrade_bw[un.player as usize][0x36 - 0x2e] != 0
+            || (d.dat.units.flags[un.unit_type as usize] & 0x40 != 0 && self.is_expansion)
     }
 
 

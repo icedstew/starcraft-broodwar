@@ -587,6 +587,25 @@ def scenario(e, units, move, frames, out):
                 print(f"f{cur[0]} rng site {e.uc.reg_read(UC_X86_REG_EAX):#x} from {e.r32(e.uc.reg_read(UC_X86_REG_ESP)):#x} unit {(su - UNITS) // 0x150 if su else '-'} img {e.r16(e.uc.reg_read(UC_X86_REG_ESI) + 8):#x} anim {e.r8(e.uc.reg_read(UC_X86_REG_ESI) + 0x16):#x} pc {e.r16(e.uc.reg_read(UC_X86_REG_ESI) + 0x12):#x}", file=sys.stderr)
         e.at(0x4dc4a0, rnglog)
         e.uc.ctl_flush_tb()  # hooks added after code was translated need a flush
+    thlog_at = os.environ.get("SCBW_THLOG_AT")
+    if thlog_at:
+        # Debug: thingy creations (0x488210) on that frame: stack args, caller, regs.
+        def thlog(e):
+            if str(cur[0]) == thlog_at:
+                from unicorn.x86_const import UC_X86_REG_ESP, UC_X86_REG_EAX, UC_X86_REG_ECX, UC_X86_REG_EDX, UC_X86_REG_ESI, UC_X86_REG_EDI
+                sp = e.uc.reg_read(UC_X86_REG_ESP)
+                regs = " ".join(f"{n}={e.uc.reg_read(r):#x}" for n, r in (("eax", UC_X86_REG_EAX), ("ecx", UC_X86_REG_ECX), ("edx", UC_X86_REG_EDX), ("esi", UC_X86_REG_ESI), ("edi", UC_X86_REG_EDI)))
+                su = e.r32(0x6d11fc)
+                print(f"f{cur[0]} thingy from {e.r32(sp):#x} args {[hex(e.r32(sp + 4 * k)) for k in (1, 2, 3)]} {regs} unit {(su - UNITS) // 0x150 if su else '-'}", file=sys.stderr)
+        e.at(0x488210, thlog)
+        def thimg(e):
+            if str(cur[0]) == thlog_at:
+                from unicorn.x86_const import UC_X86_REG_ESP, UC_X86_REG_EAX
+                im = e.uc.reg_read(UC_X86_REG_EAX)
+                sp = e.uc.reg_read(UC_X86_REG_ESP)
+                print(f"f{cur[0]} sprite-at-image from {e.r32(sp):#x} id {e.r32(sp + 4):#x} img {e.r16(im + 8):#x} anim {e.r8(im + 0x16):#x} pc {e.r16(im + 0x12):#x}", file=sys.stderr)
+        e.at(0x4d7120, thimg)
+        e.uc.ctl_flush_tb()
     with open(out, "w") as fo:
         ci = 0
         pkt = e.alloc(0x400)

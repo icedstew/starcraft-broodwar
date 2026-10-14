@@ -387,8 +387,9 @@ impl State {
             }
             return 6;
         }
-        if self.can_carry(d, u) {
-            todo_port!("0x474d90", "transport right-clicking a unit to load (order 0x5e)");
+        // 0x474d90 (order 0x5e): an own unit that fits.
+        if self.can_carry(d, u) && self.units[t as usize].player == un.player && self.can_load(d, u, t) {
+            return 0x5e;
         }
         if self.can_carry(d, t) && self.transport_has_room(d, t, u) {
             return 0x5c;
@@ -451,6 +452,107 @@ impl State {
         self.rc_normal(d, u, t, ty)
     }
 
+    /// 0x455760: `u`'s right-click action (units.dat, with the burrowed-lurker,
+    /// rally-building and hallucination cases).
+    fn right_click_action(&self, d: &Data, u: u32) -> u8 {
+        let un = &self.units[u as usize];
+        let mut action = if un.unit_type == 0x67 && un.status & 0x10 != 0 {
+            3
+        } else {
+            let a = d.dat.units.right_click_action[un.unit_type as usize];
+            if a == 0 && un.status & 2 != 0 && has_rally(un.unit_type) { 2 } else { a }
+        };
+        if un.status & 0x4000_0000 != 0 && (action == 4 || action == 5) {
+            action = 1;
+        }
+        action
+    }
+
+    /// 0x4f6ef0: RightClickAction: go to a right-clicked fog spot; once it is seen,
+    /// act on what is really there.
+    pub fn order_right_click_action(&mut self, d: &Data, u: u32) {
+        let p = self.units[u as usize].order_target_pos;
+        match self.units[u as usize].order_state {
+            0 => {
+                let ok = self.set_move_target_xy(d, u, p);
+                let f = &mut self.units[u as usize].fl;
+                if f.next_target_waypoint != p {
+                    f.next_target_waypoint = p;
+                }
+                if ok {
+                    self.units[u as usize].order_state = 1;
+                }
+            }
+            1 => {
+                let i = (p.1 as i32 / 32) * self.terrain.width as i32 + p.0 as i32 / 32;
+                let player = self.units[u as usize].player;
+                if self.terrain.tile_flags[i as usize] & (1 << (player & 0x1f)) == 0 {
+                    let ty = self.units[u as usize].order_unit_type;
+                    self.right_click_revealed(d, u, p, ty);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// 0x455f20: right-click again on the unit of type `ty` now seen at `p`.
+    fn right_click_revealed(&mut self, d: &Data, u: u32, p: (i16, i16), ty: u16) {
+        let action = self.right_click_action(d, u);
+        let t = self.fog_unit_at(d, p, ty);
+        let mut ord = self.right_click_order(d, u, action, t, 0xe4);
+        if ord == 0x17 {
+            self.unit_halt(d, u);
+            let f = &mut self.units[u as usize].fl;
+            if f.next_target_waypoint != f.move_target {
+                f.next_target_waypoint = f.move_target;
+            }
+            if self.units[u as usize].order_queue_head != NIL {
+                self.units[u as usize].order_flags |= 1;
+                self.order_nothing(d, u);
+            } else {
+                let o = if self.units[u as usize].ai != NIL { 0x9c } else { d.dat.units.ai_return_to_idle[self.units[u as usize].unit_type as usize] };
+                self.order_now(d, u, o);
+            }
+            return;
+        }
+        if ord == 8 {
+            ord = d.dat.units.ai_attack_unit[self.units[u as usize].unit_type as usize];
+        }
+        let player = self.units[u as usize].player;
+        if self.can_issue_order(d, u, ord, player).is_err() {
+            return;
+        }
+        let rally = has_rally(self.units[u as usize].unit_type);
+        match ord {
+            0x27 => {
+                if rally {
+                    // 0x466b40
+                    let r = if t != NIL { t } else { u };
+                    let rp = self.unit_sprite_pos(r);
+                    let un = &mut self.units[u as usize];
+                    un.rally_unit = r;
+                    un.rally_pos = rp;
+                }
+            }
+            0x28 => {
+                if rally {
+                    // 0x466910
+                    let un = &mut self.units[u as usize];
+                    un.rally_unit = NIL;
+                    un.rally_pos = p;
+                }
+            }
+            _ => {
+                if t != NIL {
+                    self.queue_front_target(d, u, ord, t);
+                } else {
+                    self.order_queue_front(d, u, ord, p);
+                }
+                self.order_done_or_next(d, u);
+            }
+        }
+    }
+
     /// The right-click handler table 0x5153fc, by units.dat right-click action.
     fn right_click_order(&self, d: &Data, u: u32, action: u8, t: u32, ty: u16) -> u8 {
         match action {
@@ -472,9 +574,6 @@ impl State {
         }
     }
 
-    /// Right-click command (0x4c2370 -> 0x4560d0) at `pos` on unit `target` (or NIL;
-    /// `unit_type` != 0xe4 for a remembered fog unit).
-    #[allow(clippy::too_many_arguments)]
     /// 0x487fd0: the unit of type `t` whose placement box holds `p` (a right-click on
     /// what the player remembers under the fog), searched within 0x60 pixels.
     fn fog_unit_at(&mut self, d: &Data, p: (i16, i16), t: u16) -> u32 {
@@ -497,6 +596,9 @@ impl State {
         hit.unwrap_or(NIL)
     }
 
+    /// Right-click command (0x4c2370 -> 0x4560d0) at `pos` on unit `target` (or NIL;
+    /// `unit_type` != 0xe4 for a remembered fog unit).
+    #[allow(clippy::too_many_arguments)]
     pub fn command_right_click(&mut self, d: &Data, player: u8, sel: &[u32], pos: (i16, i16), mut target: u32, mut unit_type: u16, queued: bool) {
         if pos.0 as u16 >= self.map_px.0 || pos.1 as u16 >= self.map_px.1 {
             return;
@@ -513,16 +615,7 @@ impl State {
             }
         }
         for u in self.live_selection(sel) {
-            let un = &self.units[u as usize];
-            let mut action = if un.unit_type == 0x67 && un.status & 0x10 != 0 {
-                3
-            } else {
-                let a = d.dat.units.right_click_action[un.unit_type as usize];
-                if a == 0 && un.status & 2 != 0 && has_rally(un.unit_type) { 2 } else { a }
-            };
-            if un.status & 0x4000_0000 != 0 && (action == 4 || action == 5) {
-                action = 1;
-            }
+            let action = self.right_click_action(d, u);
             let mut ord = self.right_click_order(d, u, action, target, unit_type);
             if ord == 0x17 {
                 continue;
@@ -605,11 +698,11 @@ impl State {
             return;
         }
         for u in self.live_selection(sel) {
-            let ok = if d.dat.orders.tech[order as usize] == 0x2c {
+            let tech = d.dat.orders.tech[order as usize];
+            let ok = if tech == 0x2c {
                 self.can_issue_order(d, u, order, player).is_ok()
             } else {
-                todo_port!("0x46dd80", "tech use requirements (0x514a48)");
-                false
+                self.can_use_tech(d, u, tech as u16, player) == Ok(1)
             };
             if !ok || (u == target && !self.may_target_self(d, u, order)) || !self.takes_targeted(d, u, order) {
                 continue;
@@ -1008,6 +1101,8 @@ impl State {
             0x1e => self.command_return_cargo(d, player, sel, byte(1) != 0),
             0x1f => self.command_train_sel(d, player, sel, u16_at(1)),
             0x2b => self.command_hold(d, player, sel, byte(1) != 0),
+            0x21 => self.command_cloak(d, player, sel),
+            0x22 => self.command_decloak(d, player, sel),
             0x25 => self.command_unsiege(d, player, sel, byte(1) != 0),
             0x26 => self.command_siege(d, player, sel, byte(1) != 0),
             0x28 => self.command_unload_all(d, player, sel, byte(1) != 0),

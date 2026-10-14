@@ -327,7 +327,7 @@ fn main() -> std::io::Result<()> {
                     let s = st.units[w as usize].sprite;
                     let mi = if s == bw::list::NIL { bw::list::NIL } else { st.sprites[s as usize].main_image };
                     let (an, pc) = if mi == bw::list::NIL { (0, 0) } else { (st.images[mi as usize].iscript.anim, st.images[mi as usize].iscript.pc) };
-                    eprintln!("{} anim {an:#x} pc {pc:#x}", unit_trace(st, f, w));
+                    eprintln!("{} anim {an:#x} pc {pc:#x} energy {}", unit_trace(st, f, w), st.units[w as usize].energy);
                 }
                 if let Some(v) = std::env::var("SCBW_FINDPOS").ok() {
                     // "f,x,y": indices of units (and their subunits) at (x, y) on frame f.

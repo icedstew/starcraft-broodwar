@@ -361,4 +361,65 @@ impl State {
         self.order_queue_front(d, u, 0x6f, (0, 0));
         self.order_nothing(d, u);
     }
+
+    /// 0x4e75d0: PickupTransport: go to the order target and pick it up (it gets
+    /// EnterTransport); then wait in PickupIdle.
+    pub fn order_pickup_transport(&mut self, d: &Data, u: u32) {
+        let t = self.units[u as usize].order_target_unit;
+        if t == NIL {
+            if self.units[u as usize].order_queue_head != NIL {
+                self.units[u as usize].order_flags |= 1;
+                self.order_nothing(d, u);
+            } else {
+                let o = if self.units[u as usize].ai != NIL { 0x9c } else { d.dat.units.ai_return_to_idle[self.units[u as usize].unit_type as usize] };
+                self.order_now(d, u, o);
+            }
+            return;
+        }
+        if self.units[t as usize].ai != NIL && self.units[t as usize].order != 0x60 {
+            self.order_done_or_next(d, u);
+            return;
+        }
+        if self.units[u as usize].order_state != 0 {
+            return;
+        }
+        if !self.can_load(d, u, t) {
+            self.order_done_or_next(d, u);
+            return;
+        }
+        if self.units[u as usize].main_order_timer != 0 {
+            return;
+        }
+        self.units[u as usize].main_order_timer = 7;
+        if !self.box_distance_within(d, u, 1, t) {
+            self.move_to_unit_aim(d, u, t);
+            return;
+        }
+        self.unit_halt_facing(d, u);
+        if !matches!(self.units[t as usize].order, 0x5c | 0x60) {
+            self.order_with_target(d, t, 0x5c, u);
+        }
+        if self.units[u as usize].ai != NIL {
+            self.units[u as usize].order_state = 1;
+            return;
+        }
+        self.queue_front_target(d, u, 0x5d, t);
+        self.order_nothing(d, u);
+    }
+
+    /// 0x4e7300: PickupIdle: pick up the target again if it still fits.
+    pub fn order_pickup_idle(&mut self, d: &Data, u: u32) {
+        let t = self.units[u as usize].order_target_unit;
+        if t != NIL && self.can_load(d, u, t) {
+            self.queue_front_target(d, u, 0x5e, t);
+            self.order_nothing(d, u);
+            return;
+        }
+        if self.units[u as usize].ai != NIL {
+            self.units[u as usize].order_flags |= 1;
+            // 0x474810 inlined.
+            self.issue_order(d, u, 0x9c, true, (0, 0), NIL, 0xe4);
+            self.order_nothing(d, u);
+        }
+    }
 }

@@ -1100,15 +1100,7 @@ impl State {
 
 
 
-    /// 0x4e7300: PickupIdle.
-    fn order_pickup_idle(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x4e7300", "PickupIdle");
-    }
 
-    /// 0x4e75d0: PickupTransport.
-    fn order_pickup_transport(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x4e75d0", "PickupTransport");
-    }
 
 
     /// 0x4e7b70: Pickup4.
@@ -1279,11 +1271,6 @@ impl State {
         todo_port!("0x464fd0", "PlaceMine");
     }
 
-    /// 0x4f6ef0: RightClickAction.
-    fn order_right_click_action(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x4f6ef0", "RightClickAction");
-    }
-
     /// 0x4788e0: SuicideUnit.
     fn order_suicide_unit(&mut self, _d: &Data, _u: u32) {
         todo_port!("0x4788e0", "SuicideUnit");
@@ -1299,14 +1286,46 @@ impl State {
         todo_port!("0x494470", "CastRecall");
     }
 
-    /// 0x464e40: CastScannerSweep.
-    fn order_cast_scanner_sweep(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x464e40", "CastScannerSweep");
+    /// 0x464e40: CastScannerSweep: pay the energy and put a scanner sweep (0x21) at the
+    /// order position.
+    fn order_cast_scanner_sweep(&mut self, d: &Data, u: u32) {
+        let cost = d.dat.techdata.energy_cost[4] as u8 as u16;
+        let cheat = self.game_options & 0x800 != 0;
+        if !cheat && self.units[u as usize].energy < cost << 8 {
+            // 0x48ccb0: "not enough energy" for the local player (UI).
+            if self.units[u as usize].order_queue_head != NIL {
+                self.units[u as usize].order_flags |= 1;
+                self.order_nothing(d, u);
+            } else {
+                let o = if self.units[u as usize].ai != NIL { 0x9c } else { d.dat.units.ai_return_to_idle[self.units[u as usize].unit_type as usize] };
+                self.order_now(d, u, o);
+            }
+            return;
+        }
+        let mut p = self.units[u as usize].order_target_pos;
+        self.clamp_unit_pos(d, 0x21, &mut p);
+        let player = self.units[u as usize].player;
+        let Some(s) = self.create_unit(d, 0x21, p.0, p.1, player) else {
+            self.show_last_error(player);
+            self.order_done_or_next(d, u);
+            return;
+        };
+        self.finish_unit_pre(d, s);
+        self.finish_unit_post(d, s);
+        // 0x48ed50: the sweep sound (UI).
+        if !cheat {
+            let e = &mut self.units[u as usize].energy;
+            *e = e.wrapping_sub(cost << 8);
+        }
+        self.order_done_or_next(d, u);
     }
 
-    /// 0x463d30: Scanner.
-    fn order_scanner(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x463d30", "Scanner");
+    /// 0x463d30: Scanner: the sweep goes away when its iscript signals (bit 4).
+    fn order_scanner(&mut self, d: &Data, u: u32) {
+        if self.units[u as usize].order_signal & 4 != 0 {
+            self.units[u as usize].order_signal &= !4;
+            self.kill_unit(d, u);
+        }
     }
 
     /// 0x4550a0: CastDefensiveMatrix.
