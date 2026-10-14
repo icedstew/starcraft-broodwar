@@ -68,11 +68,13 @@ pub enum Show {
     Button { bg: u16, icon: u16, cmdicon: bool },
     /// An info button (ids 9..12, 0x425600 and kin): a cmdicons.grp icon and the
     /// upgrade level / count shown with it ("%d ").
-    Info { icon: u16, level: u8 },
+    Info { icon: u16, level: u8, tip: String },
     /// The unit's wireframe (control 1, statwire.cpp).
     Wireframe,
     /// A small wireframe of selected unit `u` (multiple selection, ids 33..44).
     GroupWire(u32),
+    /// A passenger: cmdbtns.grp frame `bg` with its tranwire.grp wireframe.
+    Cargo { bg: u16, unit: u32 },
 }
 
 /// Panel ids remembered in 0x68c1e5 (5 training, 7 research, 8 upgrade).
@@ -125,6 +127,14 @@ pub fn building_panel(st: &State, d: &Data, strings: &[String], u: u32) -> Optio
     if !matches!(t, 0x6a..=0x76 | 0x78..=0x7c | 0x7e..=0x7f | 0x82..=0x98 | 0x9a..=0x9d | 0x9f..=0xbe | 0xc2..=0xca | 0xd6) {
         return None;
     }
+    if un.status & 1 == 0 && !(0xb0..=0xb2).contains(&t) && t != 0xbc && (st.replay || un.player == st.local_player) {
+        // 0x4260c0: under construction: progress (13) and "Under construction" (-30),
+        // with the hit points, status line and name (0x427a50).
+        let race = race_index(d, t);
+        let mut out = vec![(13, Show::Progress(build_progress(st, d, u))), (-30, Show::Text(stat(strings, race + 0x31f)))];
+        out.extend(unit_panel(st, d, strings, u).into_iter().filter(|(id, _)| matches!(id, 1 | -7 | -20 | -5)));
+        return Some((Panel::Unit, out));
+    }
     if (0xb0..=0xb2).contains(&t) || t == 0xbc || un.status & 1 == 0 || t == 0x6c {
         return None;
     }
@@ -145,7 +155,33 @@ pub fn building_panel(st: &State, d: &Data, strings: &[String], u: u32) -> Optio
     if un.u8_at(0xc9) != 0x3d {
         return Some((Panel::Upgrade, upgrade_panel(st, d, strings, u)));
     }
+    if d.dat.units.supply_provided[crate::ui::wire_type(st, u) as usize] != 0 && (st.replay || un.player == st.local_player) {
+        return Some((Panel::Unit, supply_panel(st, d, strings, u)));
+    }
     None
+}
+
+/// 0x427540: a supply provider: supplies used, provided by it, total and max
+/// (ids -10..-13), next to the wireframe, name and hit points.
+fn supply_panel(st: &State, d: &Data, strings: &[String], u: u32) -> Vec<(i16, Show)> {
+    let un = &st.units[u as usize];
+    let race = race_index(d, un.unit_type);
+    let p = un.player as usize;
+    let r = race as usize;
+    let used = if r < 3 { st.players.supply_used[r][p] } else { 0 };
+    let total = if r < 3 { st.players.supply_provided[r][p].min(st.players.supply_max[r][p]) } else { 0 };
+    let shown = crate::ui::wire_type(st, u) as usize;
+    let mr = race_index(d, shown as u16) as usize;
+    let max = if mr < 3 { st.players.supply_max[mr][p] } else { 0 };
+    let mut out: Vec<(i16, Show)> = unit_panel(st, d, strings, u)
+        .into_iter()
+        .filter(|(id, _)| matches!(id, 1 | -5 | -7) || (*id == 9 && d.dat.units.shield_enable[un.unit_type as usize] != 0) || (*id == 9 && matches!(un.unit_type, 0x2a | 0x39)))
+        .collect();
+    out.push((-10, Show::Text(format!("{} {}", stat(strings, race + 0x335), (used + 1) / 2))));
+    out.push((-11, Show::Text(format!("{} {}", stat(strings, race + 0x32f), (d.dat.units.supply_provided[shown] as i32 + 1) / 2))));
+    out.push((-12, Show::Text(format!("{} {}", stat(strings, race + 0x332), (total + 1) / 2))));
+    out.push((-13, Show::Text(format!("{} {}", stat(strings, race + 0x338), (max as u32 + 1) >> 1))));
+    out
 }
 
 /// 0x4669e0: percent done of unit `b` being built (eggs and morphing buildings count
@@ -268,18 +304,39 @@ pub fn unit_panel(st: &State, d: &Data, strings: &[String], u: u32) -> Vec<(i16,
     // 0x426c60: info buttons.
     let mut slot = 0i16;
     if !halluc_own {
-        let mut push = |slot: &mut i16, icon: u16, level: u8| {
-            out.push((9 + *slot, Show::Info { icon, level }));
+        let mut push = |slot: &mut i16, icon: u16, level: u8, tip: String| {
+            out.push((9 + *slot, Show::Info { icon, level, tip }));
             *slot += 1;
+        };
+        // 0x4576a0: "<name>\n<Damage:|Armor:> base[+bonus]".
+        let line = |name: String, what: u16, base: u32, bonus: u32| {
+            if bonus == 0 { format!("{name}\n{} {base}", stat(strings, what)) } else { format!("{name}\n{} {base}+{bonus}", stat(strings, what)) }
+        };
+        // 0x475f10 / 0x475e40: a weapon's damage and upgrade bonus, times its hits.
+        let factor = |w: u8| match t {
+            0x20 | 10 | 0x41 | 0x4d => 2,
+            0x3a => 1,
+            _ => d.dat.weapons.damage_factor[w as usize] as u32,
+        };
+        let weapon_tip = |w: u8, lvl: u8| {
+            let wi = w as usize;
+            let name = stat(strings, d.dat.weapons.label[wi]);
+            let base = d.dat.weapons.damage[wi] as u32 * factor(w);
+            let bonus = d.dat.weapons.damage_bonus[wi] as u32 * lvl as u32 * factor(w);
+            line(name, 0x309, base, bonus)
         };
         let armor_up = d.dat.units.armor_upgrade[shown as usize];
         if armor_up != 0x3c {
             // 0x425600
-            push(&mut slot, d.dat.upgrades.icon[armor_up as usize], st.armor_level(d, u) as u8);
+            let lvl = st.armor_level(d, u);
+            let tip = line(stat(strings, d.dat.upgrades.label[armor_up as usize]), 0x30a, d.dat.units.armor[shown as usize] as u32, lvl);
+            push(&mut slot, d.dat.upgrades.icon[armor_up as usize], lvl as u8, tip);
         }
         if d.dat.units.shield_enable[ts] != 0 {
             // 0x425510: Plasma Shields
-            push(&mut slot, 0x136, st.players.upgrade_sc[un.player as usize][0xf]);
+            let lvl = st.players.upgrade_sc[un.player as usize][0xf];
+            let tip = line(stat(strings, d.dat.upgrades.label[0xf]), 0x30b, 0, lvl as u32);
+            push(&mut slot, 0x136, lvl, tip);
         }
         let sub = un.subunit;
         let sub_w = |table: &[u8]| if sub != NIL { table[st.units[sub as usize].unit_type as usize] } else { 0x82 };
@@ -291,52 +348,65 @@ pub fn unit_panel(st: &State, d: &Data, strings: &[String], u: u32) -> Vec<(i16,
             st.players.upgrade_level(un.player, up)
         };
         if !burrowed_lurker_off && gw != 0x82 {
-            push(&mut slot, d.dat.weapons.icon[gw as usize], weapon_level(gw));
+            push(&mut slot, d.dat.weapons.icon[gw as usize], weapon_level(gw), weapon_tip(gw, weapon_level(gw)));
         }
         let aw = d.dat.units.air_weapon[ts];
         let aw = if aw == 0x82 { sub_w(&d.dat.units.air_weapon) } else { aw };
         let gw_cmp = if burrowed_lurker_off { 0x82 } else { gw };
         if aw != 0x82 && aw != gw_cmp {
-            push(&mut slot, d.dat.weapons.icon[aw as usize], weapon_level(aw));
+            push(&mut slot, d.dat.weapons.icon[aw as usize], weapon_level(aw), weapon_tip(aw, weapon_level(aw)));
         }
         match t {
-            0x48 | 0x52 => push(&mut slot, 0x49, un.u8_at(0xc9).wrapping_add(un.u8_at(0xc8))),
-            0x53 | 0x51 => push(&mut slot, 0x55, un.u8_at(0xc8)),
+            0x48 | 0x52 => push(&mut slot, 0x49, un.u8_at(0xc9).wrapping_add(un.u8_at(0xc8)), stat(strings, 0x317)),
+            0x53 | 0x51 => push(&mut slot, 0x55, un.u8_at(0xc8), stat(strings, 0x318)),
             _ => {}
         }
         if (t == 2 || t == 0x13) && st.can_use_tech(d, u, 3, un.player) == Ok(1) {
             // 0x426300: spider mines
-            push(&mut slot, 0xd, un.u8_at(0xc0));
+            push(&mut slot, 0xd, un.u8_at(0xc0), stat(strings, 0x31a));
         }
         if shown == 0x6c {
             // 0x425310: a nuke in the silo
-            push(&mut slot, 0xe, (un.ptr_at(0xd0) != NIL) as u8);
+            push(&mut slot, 0xe, (un.ptr_at(0xd0) != NIL) as u8, stat(strings, 0x319));
         }
     }
     // 0x425b50: the status line.
     let status = if halluc_own {
-        Some(stat(strings, 0x341))
+        Some(stat(strings, 0x340))
     } else if flags & 1 != 0 && un.status & 1 != 0 && disabled(st, u) && un.u8_at(0xc8) == 0x2c && un.u8_at(0xc9) == 0x3d {
         Some(stat(strings, 0x33c + race_index(d, t)))
     } else if un.status & 1 != 0 && un.acid_spore_count != 0 {
-        Some(format!("{} ({})", stat(strings, 0x515), un.acid_spore_count))
+        Some(format!("{} ({})", stat(strings, 0x514), un.acid_spore_count))
     } else if un.status & 1 != 0 && un.is_blind != 0 {
-        Some(stat(strings, 0x514))
+        Some(stat(strings, 0x513))
     } else if un.status & 1 != 0 && un.parasite_flags != 0 {
-        Some(stat(strings, 0x33c))
+        Some(stat(strings, 0x33b))
     } else if flags & 0x8000 != 0 && un.status & 1 != 0 && !disabled(st, u) && un.is_blind == 0 {
-        Some(stat(strings, 0x340))
+        Some(stat(strings, 0x33f))
     } else if flags & 1 == 0 {
         rank(st, d, strings, u)
     } else {
         None
+    };
+    let status = if (0xb0..=0xb2).contains(&t) || (t == 0xbc) || (un.status & 1 != 0 && matches!(t, 0x6e | 0x95 | 0x9d)) {
+        // 0x426190: resources left.
+        let n = un.u16_at(0xd0);
+        if (0xb0..=0xb2).contains(&t) {
+            Some(format!("{} {n}", stat(strings, 0x31c)))
+        } else if n == 0 {
+            Some(stat(strings, 0x31e))
+        } else {
+            Some(format!("{} {n}", stat(strings, 0x31d)))
+        }
+    } else {
+        status
     };
     if let Some(s) = status {
         out.push((-20, Show::Text(s)));
     }
     // 0x425dd0: kills, for units that can fight.
     if !(t == 0x2f || t == 0x32 || halluc_own) && (can_fight(st, d, u) || un.u8_at(0x8f) != 0) {
-        out.push((-21, Show::Text(format!("{} {}", stat(strings, 0x2fd), un.u8_at(0x8f)))));
+        out.push((-21, Show::Text(format!("{} {}", stat(strings, 0x2fc), un.u8_at(0x8f)))));
     }
     // 0x4263e0: hit points (red under 34%, yellow under 67%), shields first.
     let max_hp = d.dat.units.hit_points[ts] as i32 >> 8;
@@ -413,4 +483,42 @@ fn can_fight(st: &State, d: &Data, u: u32) -> bool {
 /// the selection).
 pub fn group_panel(sel: &[u32]) -> Vec<(i16, Show)> {
     sel.iter().take(12).enumerate().map(|(i, &u)| (33 + i as i16, Show::GroupWire(u))).collect()
+}
+
+/// 0x427c90: a transport (dropship, shuttle, bunker, ...) with passengers shows them
+/// (0x424ba0) instead of its stats, with its hit points and name.
+pub fn transport_panel(st: &State, d: &Data, strings: &[String], u: u32) -> Option<Vec<(i16, Show)>> {
+    let un = &st.units[u as usize];
+    if !(st.replay || un.player == st.local_player) || un.status & 0x4000_0000 != 0 || !st.has_loaded_units(u) {
+        return None;
+    }
+    let cap = d.dat.units.space_provided[un.unit_type as usize];
+    let small = cap < 7;
+    let (mut big, mut mid, mut one) = (0x12 + if small { 2 } else { 0 }, 0x15 + small as i16, 0x19 + if small { 2 } else { 0 });
+    let mut out = vec![];
+    for size in [4u8, 2, 1] {
+        for i in 0..8 {
+            let Some(c) = st.loaded_unit(u, i) else { continue };
+            let cu = &st.units[c as usize];
+            let ct = cu.unit_type as usize;
+            if d.dat.units.space_required[ct] != size {
+                continue;
+            }
+            let hero = d.dat.units.flags[ct] & 0x40 != 0;
+            let para = if cu.parasite_flags != 0 { 0xc } else { 0 };
+            let halluc = cu.status & 0x4000_0000 != 0;
+            let (id, bg) = match size {
+                4 => (big, if halluc { 0x23 } else if hero { 0x17 } else { 0x11 + para }),
+                2 => (mid, if halluc { 0x21 } else if hero { 0x15 } else { 0xf + para }),
+                _ => (one, if halluc { 0x1f } else if hero { 0x13 } else { 0xd + para }),
+            };
+            out.push((id, Show::Cargo { bg, unit: c }));
+            big += (size >> 2) as i16;
+            mid += (size >> 1) as i16;
+            one += size as i16;
+        }
+    }
+    let base = unit_panel(st, d, strings, u);
+    out.extend(base.into_iter().filter(|(id, _)| matches!(id, 1 | -7 | -5)));
+    Some(out)
 }

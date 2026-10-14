@@ -632,6 +632,9 @@ impl<'a> Scene<'a> {
         let [u] = self.selected[..] else { return None };
         let st = &self.st;
         with_data(self.a, |d| {
+            if let Some(p) = crate::statdata::transport_panel(st, d, &ui.stat_txt, u) {
+                return Some((crate::statdata::Panel::Unit, p));
+            }
             crate::statdata::building_panel(st, d, &ui.stat_txt, u).or_else(|| Some((crate::statdata::Panel::Unit, crate::statdata::unit_panel(st, d, &ui.stat_txt, u))))
         })
     }
@@ -639,10 +642,23 @@ impl<'a> Scene<'a> {
     /// A click at screen (x, y) on a status panel button (0x4573a0); true if handled.
     pub fn status_click(&mut self, ui: &crate::ui::Ui, x: i32, y: i32) -> bool {
         let Some((panel, ctls)) = self.status_panel(ui) else { return false };
-        for (id, _) in ctls {
+        for (id, show) in ctls {
             let Some((l, t, r, b)) = ui.statdata.screen_rect(id) else { continue };
             if (l..=r).contains(&x) && (t..=b).contains(&y) {
-                if let Some(pkt) = crate::statdata::click(panel, id) {
+                let pkt = match show {
+                    // A passenger: unload it (command 0x29 with its handle).
+                    crate::statdata::Show::Cargo { unit, .. } => {
+                        let h = self.st.unit_handle(unit) as u16;
+                        Some(vec![0x29, h as u8, (h >> 8) as u8])
+                    }
+                    // A unit of a multiple selection: select just it.
+                    crate::statdata::Show::GroupWire(unit) => {
+                        self.selected = vec![unit];
+                        return true;
+                    }
+                    _ => crate::statdata::click(panel, id),
+                };
+                if let Some(pkt) = pkt {
                     self.command(|st, d, me, sel| st.execute_command(d, me, sel, &pkt));
                     return true;
                 }
@@ -857,13 +873,20 @@ pub fn compose_with_cursor(
                     let colors = with_data(scene.a, |d| crate::ui::wireframe_colors(&scene.st, d, u, &ui.twire));
                     crate::ui::draw_grp_rgb_blend(&ui.wireframe, frame, l, t, pal, out, w, h, crate::grp::Blend::Colors(&colors));
                 }
+                crate::statdata::Show::Cargo { bg, unit } => {
+                    crate::ui::draw_grp_rgb(&ui.cmdbtns, *bg as usize, l, t, pal, out, w, h);
+                    let wt = crate::ui::wire_type(&scene.st, *unit) as usize;
+                    let frame = if wt < ui.tranwire.frame_count() { wt } else { 0 };
+                    let colors = with_data(scene.a, |d| crate::ui::wireframe_colors(&scene.st, d, *unit, &ui.twire));
+                    crate::ui::draw_grp_rgb_blend(&ui.tranwire, frame, l, t, pal, out, w, h, crate::grp::Blend::Colors(&colors));
+                }
                 crate::statdata::Show::GroupWire(u) => {
                     let wt = crate::ui::wire_type(&scene.st, *u) as usize;
                     let frame = if wt < ui.grpwire.frame_count() { wt } else { 0 };
                     let colors = with_data(scene.a, |d| crate::ui::wireframe_colors(&scene.st, d, *u, &ui.twire));
                     crate::ui::draw_grp_rgb_blend(&ui.grpwire, frame, l, t, pal, out, w, h, crate::grp::Blend::Colors(&colors));
                 }
-                crate::statdata::Show::Info { icon, level } => {
+                crate::statdata::Show::Info { icon, level, .. } => {
                     crate::ui::draw_grp_rgb(&ui.cmdbtns, 2, l, t, pal, out, w, h);
                     ui.draw_cmd_icon(*icon as usize, 0, l + 2, t + 1, pal, out, w, h);
                     let n = format!("{level} ");
@@ -892,6 +915,16 @@ pub fn compose_with_cursor(
                         crate::ui::draw_grp_rgb(&ui.cmdbtns, *icon as usize, l + (cw - f.w as i32) / 2 - f.x as i32, t + (ch - f.h as i32) / 2 - f.y as i32, pal, out, w, h);
                     }
                 }
+            }
+        }
+    }
+    // 0x4576a0: an info button's tooltip under the cursor.
+    if let (Some((_, ctls)), Some((_, _, cx, cy))) = (scene.status_panel(ui), cursor) {
+        for (id, show) in &ctls {
+            let crate::statdata::Show::Info { tip, .. } = show else { continue };
+            let Some((l, t, r, b)) = ui.statdata.screen_rect(*id) else { continue };
+            if (l..=r).contains(&cx) && (t..=b).contains(&cy) {
+                draw_text_box(ui, tip, r, t, pal, out, w, h);
             }
         }
     }
@@ -1354,5 +1387,24 @@ fn draw_coded(ui: &crate::ui::Ui, s: &str, mut x: i32, y: i32, pal: &[[u8; 3]; 2
     }
     if !run.is_empty() {
         ui.font.draw(&run, x, y, ui.text_color(color - 2), pal, out, w, h);
+    }
+}
+
+/// A tooltip box (0x481510): `text` lines on black, bottom-right at (`right`, `bottom`).
+#[allow(clippy::too_many_arguments)]
+fn draw_text_box(ui: &crate::ui::Ui, text: &str, right: i32, bottom: i32, pal: &[[u8; 3]; 256], out: &mut [u32], w: i32, h: i32) {
+    let lines: Vec<&str> = text.split('\n').collect();
+    let lh = ui.font.height + 1;
+    let bw_ = lines.iter().map(|l| coded_width(ui, l)).max().unwrap_or(0) + 8;
+    let bh = lines.len() as i32 * lh + 4;
+    let x0 = (right - bw_).clamp(0, (w - bw_).max(0));
+    let y0 = (bottom - bh - 2).max(0);
+    for y in y0..(y0 + bh).min(h) {
+        for x in x0..(x0 + bw_).min(w) {
+            out[(y * w + x) as usize] = 0;
+        }
+    }
+    for (k, l) in lines.iter().enumerate() {
+        draw_coded(ui, l, x0 + 4, y0 + 2 + k as i32 * lh, pal, out, w, h);
     }
 }
