@@ -472,7 +472,7 @@ impl State {
         false
     }
 
-    /// 0x46a740: clamp the move target into the map; sets UNMOVABLE.
+    /// 0x46a740: clamp the move target into the map; UNMOVABLE when it was clamped.
     fn clamp_move_target(&mut self, d: &Data, u: u32) {
         let t = self.units[u as usize].fl.move_target;
         if t == self.unit_sprite_pos(u) {
@@ -493,8 +493,10 @@ impl State {
             un.move_target_unit = NIL;
             un.fl.flags = (un.fl.flags & !mflags::BRAKING) | mflags::TURNING;
             un.fl.next_waypoint = un.fl.move_target;
+            // Only a target that had to be moved marks the unit (the other path to
+            // the flag in 0x46a740 is unreachable).
+            un.status |= status::UNMOVABLE;
         }
-        un.status |= status::UNMOVABLE;
     }
 
     /// 0x453420: air unit repulsion. Adjusts the predicted position; returns whether applied.

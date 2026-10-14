@@ -262,7 +262,7 @@ impl State {
     }
 
     /// 0x4e42a0: release the unit's path (same as 0x42f740).
-    fn path_free(&mut self, u: u32) {
+    pub(super) fn path_free(&mut self, u: u32) {
         self.path_delete(u);
     }
 

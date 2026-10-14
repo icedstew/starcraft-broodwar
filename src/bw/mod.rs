@@ -17,6 +17,7 @@ pub mod crt;
 pub mod death;
 pub mod finder;
 pub mod finish;
+pub mod flight;
 pub mod flingy;
 pub mod frame;
 pub mod harvest;

@@ -15,7 +15,7 @@ pub const PLACEMENT_SLOTS: usize = 12;
 const TILE_BUILDING: u32 = 0x800_0000;
 
 /// units.dat placement box in pixels.
-fn placement(d: &Data, t: u16) -> (i32, i32) {
+pub(super) fn placement(d: &Data, t: u16) -> (i32, i32) {
     let v = d.dat.units.placement_box[t as usize];
     (v as i16 as i32, (v >> 16) as i16 as i32)
 }

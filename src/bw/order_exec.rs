@@ -246,15 +246,7 @@ impl State {
         todo_port!("0x493dd0", "RechargeShieldsUnit");
     }
 
-    /// 0x464360: BuildingLand.
-    fn order_building_land(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x464360", "BuildingLand");
-    }
 
-    /// 0x4649b0: BuildingLiftOff.
-    fn order_building_lift_off(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x4649b0", "BuildingLiftOff");
-    }
 
     /// 0x468e80: Harvest3.
     fn order_harvest3(&mut self, d: &Data, u: u32) {
@@ -850,10 +842,6 @@ impl State {
     }
 
 
-    /// 0x463ac0: LiftingOff.
-    fn order_lifting_off(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x463ac0", "LiftingOff");
-    }
 
 
 

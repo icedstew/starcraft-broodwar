@@ -708,8 +708,10 @@ impl State {
         // 0x48dbd0
         let ok = match order {
             0x19 | 0x1e | 0x1f | 0x20 | 0x24 => self.can_make_unit(d, u, t, player) == Ok(1),
-            0x9b | 0x2e | 0x47 => {
-                todo_port!("0x48dbd0", "nydus exit / addon / beacon builds");
+            // Landing: the building's own type.
+            0x47 => self.units[u as usize].unit_type == t,
+            0x9b | 0x2e => {
+                todo_port!("0x48dbd0", "nydus exit / addon builds (type in AX)");
                 false
             }
             _ => false,
@@ -971,6 +973,7 @@ impl State {
             0x1e => self.command_return_cargo(d, player, sel, byte(1) != 0),
             0x1f => self.command_train_sel(d, player, sel, u16_at(1)),
             0x2b => self.command_hold(d, player, sel, byte(1) != 0),
+            0x2f => self.command_lift(d, player, sel, u16_at(1) as i16, u16_at(3) as i16),
             0x30 => self.command_research(d, player, sel, byte(1)),
             0x31 => self.command_cancel_research(d, player, sel),
             0x32 => self.command_upgrade(d, player, sel, byte(1)),
