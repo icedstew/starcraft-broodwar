@@ -147,7 +147,7 @@ impl State {
     }
 
     /// 0x49b440: stop cloaking: images fade back in.
-    fn end_cloak(&mut self, d: &Data, u: u32) {
+    pub(super) fn end_cloak(&mut self, d: &Data, u: u32) {
         // 0x48ed50: the decloak sound (UI).
         if self.units[u as usize].status & 0x10 != 0 {
             todo_port!("0x49b440", "burrowed unit decloaks (0x497e80)");

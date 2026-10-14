@@ -643,10 +643,6 @@ impl State {
         todo_port!("0x463740", "MedicHealToIdle");
     }
 
-    /// 0x494690: DarkArchonMeld.
-    fn order_dark_archon_meld(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x494690", "DarkArchonMeld");
-    }
 
     /// 0x47bba0: Stop.
     fn order_stop(&mut self, d: &Data, u: u32) {
