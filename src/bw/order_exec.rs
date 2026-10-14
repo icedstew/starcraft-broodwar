@@ -852,13 +852,46 @@ impl State {
     }
 
     /// 0x476f50: TowerGuard.
-    fn order_tower_guard(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x476f50", "TowerGuard");
+    fn order_tower_guard(&mut self, d: &Data, u: u32) {
+        let un = &self.units[u as usize];
+        if un.status & 0x400 != 0 || un.lockdown_timer != 0 || un.stasis_timer != 0 || un.maelstrom_timer != 0 || un.main_order_timer != 0 {
+            return;
+        }
+        self.units[u as usize].main_order_timer = 0xf;
+        let t = self.find_target_in_range(d, u);
+        self.units[u as usize].order_target_unit = t;
+        if t != NIL {
+            self.order_with_target(d, u, 0x13, t);
+            self.units[u as usize].status |= 0x800_0000;
+            let sub = self.units[u as usize].subunit;
+            if sub != NIL {
+                self.units[sub as usize].status |= 0x800_0000;
+            }
+        }
     }
 
     /// 0x479150: TowerAttack.
-    fn order_tower_attack(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x479150", "TowerAttack");
+    fn order_tower_attack(&mut self, d: &Data, u: u32) {
+        let un = &self.units[u as usize];
+        let free = un.status & 0x400 == 0 && un.lockdown_timer == 0 && un.stasis_timer == 0 && un.maelstrom_timer == 0;
+        if free && self.attack_in_place(d, u) {
+            let p = self.unit_sprite_pos(u);
+            self.set_move_target_xy(d, u, p);
+            let un = &mut self.units[u as usize];
+            if un.fl.next_target_waypoint != un.order_target_pos {
+                un.fl.next_target_waypoint = un.order_target_pos;
+            }
+            return;
+        }
+        if self.units[u as usize].order_queue_head != NIL {
+            self.units[u as usize].order_flags |= 1;
+            self.prepare_next_order(d, u);
+        } else if self.units[u as usize].ai != NIL {
+            self.order_now(d, u, 0x9c);
+        } else {
+            let idle = d.dat.units.ai_return_to_idle[self.units[u as usize].unit_type as usize];
+            self.order_now(d, u, idle);
+        }
     }
 
     /// 0x463df0: VultureMine.
