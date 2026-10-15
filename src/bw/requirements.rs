@@ -419,7 +419,10 @@ impl State {
                         }
                         count += 1;
                     }
-                    0xff22 => return Ok(-1),
+                    0xff22 => {
+                        self.req_error.set(0x15);
+                        return Ok(-1);
+                    }
                     0xff23 => return Err(0x17),
                     0xff24 => {
                         if !self.is_expansion {
@@ -446,6 +449,7 @@ impl State {
                 return Err(0x19);
             }
             if count == 0 && none_built {
+                self.req_error.set(8);
                 return Ok(-1);
             }
             i += 1;
@@ -480,6 +484,7 @@ impl State {
 
     /// 0x46dc20: `player` may give `u` `order`.
     pub fn can_issue_order(&self, d: &Data, u: u32, order: u8, player: u8) -> Result<(), u8> {
+        self.req_error.set(0);
         if order > 0xbc {
             return Err(0xf);
         }
@@ -525,6 +530,7 @@ impl State {
     /// 0x46dd80: `player` may use tech `tech` with `u`. Ok(-1) is a soft failure
     /// (shown greyed out).
     pub fn can_use_tech(&self, d: &Data, u: u32, tech: u16, player: u8) -> Result<i32, u8> {
+        self.req_error.set(0);
         if tech > 0x2b {
             return Err(0x11);
         }
@@ -553,6 +559,7 @@ impl State {
 
     /// 0x46dfc0: `player` may start upgrade `up` with `u`.
     pub fn can_upgrade(&self, d: &Data, u: u32, up: u16, player: u8) -> Result<i32, u8> {
+        self.req_error.set(0);
         if up > 0x3c {
             return Err(0x12);
         }
@@ -581,6 +588,7 @@ impl State {
 
     /// 0x46de90: `player` may research tech `tech` with `u`.
     pub fn can_research(&self, d: &Data, u: u32, tech: u16, player: u8) -> Result<i32, u8> {
+        self.req_error.set(0);
         if tech > 0x2b {
             return Err(0x11);
         }
@@ -613,6 +621,7 @@ impl State {
 
     /// 0x46e1c0: `player` may make unit type `t` with `u`. Ok(-1) is a soft failure.
     pub fn can_make_unit(&self, d: &Data, u: u32, t: u16, player: u8) -> Result<i32, u8> {
+        self.req_error.set(0);
         let un = &self.units[u as usize];
         if t > 0xe3 {
             return Err(0x10);
@@ -677,6 +686,9 @@ impl State {
                         if !cheat {
                             let addon = un.ptr_at(0xc0);
                             if addon == NIL || self.units[addon as usize].unit_type != table[i] {
+                                if !wrong_unit {
+                                    self.req_error.set(4);
+                                }
                                 return Ok(-1);
                             }
                         }
@@ -756,7 +768,10 @@ impl State {
                         }
                         count += 1;
                     }
-                    0xff22 => return Ok(-1),
+                    0xff22 => {
+                        self.req_error.set(0x15);
+                        return Ok(-1);
+                    }
                     0xff23 => return Err(0x17),
                     0xff24 => {
                         if !self.is_expansion {
@@ -767,12 +782,14 @@ impl State {
                     0xff25 => {
                         i += 1;
                         if !self.tech_researched(player, table[i]) && self.game_options & 0x1000 == 0 {
+                            self.req_error.set(9);
                             return Ok(-1);
                         }
                         count += 1;
                     }
                     0xff26 => {
                         if un.status & 0x10 == 0 {
+                            self.req_error.set(5);
                             return Ok(-1);
                         }
                         count += 1;
@@ -789,12 +806,17 @@ impl State {
                 i += 2;
             }
             if count == 0 && none_built {
+                self.req_error.set(8);
                 return Ok(-1);
             }
             i += 1;
             op = table[i];
             if op == 0xffff {
-                return if wrong_unit { Ok(-1) } else { Ok(1) };
+                if wrong_unit {
+                    self.req_error.set(0x19);
+                    return Ok(-1);
+                }
+                return Ok(1);
             }
         }
     }

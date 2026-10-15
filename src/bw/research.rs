@@ -69,7 +69,7 @@ impl State {
     }
 
     /// 0x454b70: pay for and start researching `tech` in `u`.
-    fn start_research(&mut self, d: &Data, u: u32, tech: u8) -> bool {
+    pub(super) fn start_research(&mut self, d: &Data, u: u32, tech: u8) -> bool {
         if tech > 0x2b {
             return false;
         }
@@ -102,7 +102,7 @@ impl State {
     }
 
     /// 0x454a80: pay for and start upgrade `up` in `u`.
-    fn start_upgrade(&mut self, d: &Data, u: u32, up: u8) -> bool {
+    pub(super) fn start_upgrade(&mut self, d: &Data, u: u32, up: u8) -> bool {
         if up >= NO_UPGRADE {
             return false;
         }

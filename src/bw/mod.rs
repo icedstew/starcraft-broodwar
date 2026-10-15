@@ -6,6 +6,8 @@
 
 pub mod addon;
 pub mod ai;
+pub mod ai_areas;
+pub mod ai_place;
 pub mod ai_script;
 pub mod ai_town;
 pub mod attack;
@@ -290,6 +292,17 @@ pub struct State {
     pub last_error: u16,
     /// Error the front end should show the local player (stat_txt id + 1), set by 0x49e530.
     pub shown_error: u16,
+    /// 0x66ff60: why the last requirement check failed (soft failures, Ok(-1), set it
+    /// here; hard ones return it as the error).
+    pub req_error: std::cell::Cell<u8>,
+    /// 0x6d5dcc: builder 0x473fb0 checks units against instead of its own (set by the
+    /// AI's spot search 0x4465c0).
+    pub builder_override: u32,
+    /// 0x692688 resource areas (slot 0 unused), 0x695568 their count, 0x69556c the
+    /// recount timer.
+    pub areas: Vec<ai_areas::ResourceArea>,
+    pub area_count: u32,
+    pub area_timer: u32,
     /// 0x6ceb20: the interface colors in the current palette (set by the front end).
     pub interface_colors: [u8; 26],
     /// 0x640870: frames until the next under-attack alert may play; 0x6d63cc: tick phase.
@@ -410,6 +423,11 @@ impl State {
             repulse: vec![0; 0xab * 0xab],
             last_error: 0,
             shown_error: 0,
+            req_error: std::cell::Cell::new(0),
+            builder_override: NIL,
+            areas: vec![ai_areas::ResourceArea::default(); ai_areas::AREA_SLOTS],
+            area_count: 0,
+            area_timer: 0,
             interface_colors: [0; 26],
             alert_cooldown: 0,
             alert_tick_counter: 0,

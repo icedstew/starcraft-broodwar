@@ -88,9 +88,7 @@ impl State {
             self.order_queue_append(d, u, 0, 0xe4, pos, NIL);
         }
         self.prepare_next_order(d, u);
-        if self.units[u as usize].ai != NIL {
-            todo_port!("0x475710", "AI bookkeeping (0x439d60, 0x434c90, 0x4477c0)");
-        }
+        self.ai_release_unit(d, u, true);
     }
 
     /// 0x479480: Die.
@@ -160,9 +158,7 @@ impl State {
         self.remove_loaded_units(d, u);
         self.clear_references(d, u);
         self.untarget_bullets(u);
-        if self.units[u as usize].ai != NIL {
-            todo_port!("0x4a0740", "AI bookkeeping (0x439d60, 0x434c90, 0x4477c0)");
-        }
+        self.ai_release_unit(d, u, true);
         if flags & 0x10 != 0 {
             // 0x4a0080: a subunit goes to the dead list and out of its owner's units.
             let mut l = self.dead_units;

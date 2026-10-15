@@ -87,8 +87,9 @@ impl State {
             } else {
                 self.terrain_check(d, t, tx, ty, player, w, h, slot, a7)
             };
-            // 0x6d5dcc (a builder override) is never set during a game.
-            let units = self.units_check(d, u, tx, ty, player, t, w, h, slot, flags & 2 == 0, a8, a9);
+            // 0x6d5dcc: the AI's builder while it searches for a spot (0x4465c0).
+            let ub = if self.builder_override != NIL { self.builder_override } else { u };
+            let units = self.units_check(d, ub, tx, ty, player, t, w, h, slot, flags & 2 == 0, a8, a9);
             return terrain.max(units);
         };
         self.placement[slot * 0x30..slot * 0x30 + 0x30].fill(r);
@@ -378,15 +379,19 @@ impl State {
             let p = self.units[u as usize].player as usize;
             self.refund(d, p, t);
         }
-        if self.units[u as usize].ai != NIL {
-            todo_port!("0x466a70", "AI town build queue shift");
-        }
         for _ in 0..4 - i {
             if self.units[u as usize].build_queue[j] == NONE {
                 break;
             }
             let n = (j + 1) % 5;
             self.units[u as usize].build_queue[j] = self.units[u as usize].build_queue[n];
+            // A building AI's train queue moves with it.
+            let ai = self.units[u as usize].ai;
+            if ai != NIL && super::ai_town::ai_kind(ai) == super::ai_town::AI_BUILDING {
+                let b = &mut self.ai.buildings.items[super::ai_town::ai_index(ai) as usize];
+                b.train_queue_types[j] = b.train_queue_types[n];
+                b.train_queue_values[j] = b.train_queue_values[n];
+            }
             j = n;
         }
         self.units[u as usize].build_queue[j] = NONE;

@@ -189,6 +189,9 @@ def game_init(e, f, md):
                 e.w32(0x6d0f20, len(chk))
                 r = e.call(0x4bf520)
                 if rep:
+                    # 0x4eee00 tail: AI regions (0x437a70(1)) and resource areas (0x446350).
+                    e.call(0x437a70, stack=[1])
+                    e.call(0x446350)
                     # 0x4ef100 -> 0x4abaf0: the game type's triggers (Melee.trg ...).
                     e.call(0x4abaf0)
                 if not rep:
@@ -481,6 +484,7 @@ def scenario(e, units, move, frames, out):
         for p in (int(v) for v in ai.split(",")):
             e.w8(0x57eee8 + p * 0x24, 1)
         e.call(0x437a70, stack=[1])
+        e.call(0x446350)  # 0x4eee00: resource areas right after
         e.w8(0x596873, 1)
         e.w8(0x596871, 2)
         e.call(0x4ab230)

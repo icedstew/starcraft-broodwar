@@ -516,6 +516,8 @@ pub struct Ai {
     pub town_lists: [u32; 8],
     /// 0x6aa04c: the player 0x435bd0 looks at next.
     pub town_update_player: u32,
+    /// 0x6d63e8: 0x434330 is moving a town's units (no town is removed meanwhile).
+    pub town_merging: bool,
     /// 0x68aca8 script pool, 0x68c100 active scripts.
     pub scripts: AiPool<AiScript>,
     pub active_scripts: u32,
@@ -545,6 +547,7 @@ impl Default for Ai {
             towns: AiPool::new(100),
             town_lists: [NIL; 8],
             town_update_player: 0,
+            town_merging: false,
             scripts: AiPool::new(100),
             active_scripts: NIL,
             script_return: 0,
@@ -586,15 +589,8 @@ impl State {
     pub fn ai_update(&mut self, d: &Data) {
         self.run_ai_scripts(d);
         self.ai_region_steps(d);
-        // 0x445610: resource areas, every 0x1c2 frames.
-        if self.ai_resource_areas_used() {
-            crate::todo_port!("0x445610", "AI resource area refresh");
-        }
+        self.refresh_resource_areas(d);
         self.ai_timers(d);
-    }
-
-    fn ai_resource_areas_used(&self) -> bool {
-        false
     }
 
     /// 0x45cbd0: run the AI scripts whose wait is over (killed ones go back to the pool).
@@ -737,7 +733,11 @@ impl State {
         pa.spell_cooldown = pa.spell_cooldown.saturating_sub(1);
         pa.attack_failed = pa.attack_failed.saturating_sub(1);
         self.ai_reset_budget(d, p as u8);
-        crate::todo_port!("0x4630c0", "AI player tick (0x4630c0, 0x43f990, 0x436320)");
+        crate::todo_port!("0x4630c0", "AI guard requests");
+        if self.trig.elapsed > 9 {
+            crate::todo_port!("0x43f990", "AI region requests");
+        }
+        self.ai_town_requests(d, p as u8);
     }
 
     /// 0x448890: start a new round of spending: no requests or needs, flag 1, and what
@@ -791,14 +791,118 @@ impl State {
         pa.defense_priority_base = 9;
     }
 
-    /// 0x435bd0: the next player's towns.
-    fn ai_town_tick(&mut self, _d: &Data) {
+    /// 0x435bd0: the next player's towns take their step (0x435900); a player whose
+    /// towns are all set up and running low on minerals (or rich) may expand (0x45b590).
+    fn ai_town_tick(&mut self, d: &Data) {
         self.ai.town_update_player = (self.ai.town_update_player + 1) % 8;
         let p = self.ai.town_update_player as usize;
         if self.ai.town_lists[p] == NIL {
             return;
         }
-        crate::todo_port!("0x435bd0", "AI town tick");
+        let (mut towns, mut with_gas, mut mines) = (0u32, 0u32, 0u32);
+        let mut unready = false;
+        let mut t = self.ai.town_lists[p];
+        while t != NIL {
+            towns += 1;
+            if self.town_has_gas(t) {
+                with_gas += 1;
+            }
+            let tw = &self.ai.towns.items[t as usize];
+            if tw.inited == 0 || tw.main_building == NIL || self.units[tw.main_building as usize].status & 1 == 0 {
+                unready = true;
+            }
+            self.town_step(d, t);
+            let tw = &self.ai.towns.items[t as usize];
+            if tw.resource_area != 0 {
+                mines += self.area_mining_spots(tw.resource_area as u32, tw.player);
+            }
+            let tw = &mut self.ai.towns.items[t as usize];
+            tw.in_battle = tw.in_battle.saturating_sub(1);
+            t = tw.link.next;
+        }
+        if unready {
+            return;
+        }
+        let low = if mines == 0 {
+            towns > 1 && with_gas < 2
+        } else if mines < 0x10 {
+            true
+        } else if towns > 1 {
+            mines < 0x14 || with_gas < 2
+        } else {
+            false
+        };
+        let expand = low || (self.ai_rich(p as u8) && self.player_mining_spots(p as u8) < 0x18);
+        if expand {
+            let first = self.ai.town_lists[p];
+            if first != NIL && self.ai.players[p].panic_script_pos != 0 {
+                crate::todo_port!("0x45b590", "AI expansion script (0x45b530, 0x4453e0, 0x45b440)");
+            }
+        }
+    }
+
+    /// The town's first finished gas building with a worker in it, else its first geyser
+    /// (0x435bd0 counts towns with one).
+    fn town_has_gas(&self, t: u32) -> bool {
+        let tw = &self.ai.towns.items[t as usize];
+        let slots = tw.gas_buildings;
+        let pl = tw.player;
+        slots.iter().any(|&g| g != NIL && self.gas_state(g, pl) == 3) || slots.iter().any(|&g| g != NIL && self.gas_state(g, pl) == 1)
+    }
+
+    /// 0x4439b0: how many workers area `a` keeps busy on minerals: its fields, or with
+    /// little left (minerals / 500 at least the player's town fields 0x432320) that
+    /// amount capped at twice the fields.
+    pub(super) fn area_mining_spots(&self, a: u32, player: u8) -> u32 {
+        if a == 0 || a >= 0xfa {
+            return 0;
+        }
+        let ar = &self.areas[a as usize];
+        let left = ar.minerals / 500;
+        if left < self.player_mining_spots(player) {
+            return ar.mineral_fields as u32;
+        }
+        left.min(ar.mineral_fields as u32 * 2)
+    }
+
+    /// 0x432320: mineral fields in the areas of `player`'s towns.
+    pub(super) fn player_mining_spots(&self, player: u8) -> u32 {
+        let mut n = 0u32;
+        let mut t = self.ai.town_lists[player as usize];
+        while t != NIL {
+            let a = self.ai.towns.items[t as usize].resource_area as usize;
+            if a != 0 && a < 0xfa {
+                n += self.areas[a].mineral_fields as u32;
+            }
+            t = self.ai.towns.items[t as usize].link.next;
+        }
+        n
+    }
+
+    /// 0x432360: 2000..5000 minerals, 1000..3000 gas and flag 0x200.
+    fn ai_rich(&self, p: u8) -> bool {
+        let (m, g) = (self.players.minerals[p as usize], self.players.gas[p as usize]);
+        (2000..5000).contains(&m) && (1000..3000).contains(&g) && self.ai.players[p as usize].flags & 0x200 != 0
+    }
+
+    /// 0x4475b0: (gas, minerals) share in percent of what the AI still needs.
+    pub(super) fn ai_need_split(&self, player: u8) -> (u8, u8) {
+        let p = player as usize;
+        let pa = &self.ai.players[p];
+        if pa.gas_need == 0 {
+            return (0, 100);
+        }
+        if pa.mineral_need == 0 {
+            return (100, 0);
+        }
+        let g = pa.gas_need.wrapping_sub(self.players.gas[p] as u32) as i32;
+        let m = pa.mineral_need.wrapping_sub(self.players.minerals[p] as u32) as i32;
+        let ratio = (m > 0 && g > 0) || (m <= 0 && g <= 0);
+        if !ratio {
+            return if m > 0 { (0, 100) } else { (100, 0) };
+        }
+        let gas = (pa.gas_need.wrapping_mul(100) / pa.gas_need.wrapping_add(pa.mineral_need)) as u8;
+        (gas, 100u8.wrapping_sub(gas))
     }
 
     /// 0x43e7d0: after 0x167 seconds (unless a computer has flag 0x20): compare each

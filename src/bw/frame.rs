@@ -186,8 +186,9 @@ impl State {
     pub fn update_unit(&mut self, d: &Data, u: u32) {
         let ut = self.units[u as usize].unit_type as usize;
         let s = self.units[u as usize].sprite;
-        if d.dat.units.flags[ut] & 0x10 == 0 && self.sprites[s as usize].flags & super::sprite::sflag::HIDDEN == 0 {
-            todo_port!("0x4ebbd0", "sprite visibility for owner");
+        if d.dat.units.flags[ut] & 0x10 == 0 && self.sprites[s as usize].flags & super::sprite::sflag::HIDDEN == 0 && self.sprites[s as usize].selection_timer != 0 {
+            // 0x4ebbd0: only a local click (0x456490) starts the timer.
+            todo_port!("0x4ebbd0", "selection circle flash after a click");
         }
         self.update_unit_timers(d, u);
         self.execute_main_order(d, u);

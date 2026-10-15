@@ -1555,8 +1555,8 @@ impl State {
         match super::ai_town::ai_kind(ai) {
             super::ai_town::AI_WORKER => self.worker_ai(d, u),
             super::ai_town::AI_BUILDING => {
-                todo_port!("0x4361a0", "AI building");
-                self.units[u as usize].main_order_timer = 3;
+                let busy = self.building_ai(d, u);
+                self.units[u as usize].main_order_timer = if busy { 0x2d } else { 3 };
             }
             super::ai_town::AI_MILITARY => {
                 todo_port!("0x43d910", "AI military");

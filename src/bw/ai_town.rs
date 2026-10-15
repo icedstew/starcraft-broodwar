@@ -261,6 +261,647 @@ impl State {
         }
     }
 
+    /// 0x4325a0: `player`'s level of upgrade `up` plus the units upgrading it now.
+    fn upgrade_level_or_going(&self, player: u8, up: u16) -> u32 {
+        let mut n = self.players.upgrade_level(player, up as usize) as u32;
+        let mut u = self.player_units[player as usize];
+        while u != NIL {
+            let un = &self.units[u as usize];
+            if un.sprite != NIL && un.order == 0x4c && un.u8_at(0xc9) as u16 == up {
+                n += 1;
+            }
+            u = un.player_next;
+        }
+        n
+    }
+
+    /// 0x432530: `player` has tech `t` or a unit is researching it.
+    fn tech_have_or_going(&self, player: u8, t: u16) -> bool {
+        if self.tech_researched(player, t) {
+            return true;
+        }
+        let mut u = self.player_units[player as usize];
+        while u != NIL {
+            let un = &self.units[u as usize];
+            if un.sprite != NIL && un.order == 0x4b && un.u8_at(0xc8) as u16 == t {
+                return true;
+            }
+            u = un.player_next;
+        }
+        false
+    }
+
+    /// 0x4326a0: the town's own buildings keep only their current build queue entry.
+    fn town_trim_queues(&mut self, d: &Data, town: u32) {
+        let player = self.ai.towns.items[town as usize].player;
+        let mut b = self.ai.towns.items[town as usize].buildings;
+        while b != NIL {
+            let u = self.ai.buildings.items[b as usize].parent;
+            if self.units[u as usize].player == player {
+                for i in 1..5 {
+                    self.cancel_queued(d, u, i);
+                }
+            }
+            b = self.ai.buildings.items[b as usize].link.next;
+        }
+    }
+
+    /// 0x436320: turn each of `player`'s towns' wanted units, upgrades and techs into
+    /// spending requests for what is missing; then the last town's supply, gas and
+    /// defense checks (0x433730, 0x43ebb0, 0x43aae0).
+    pub(super) fn ai_town_requests(&mut self, d: &Data, player: u8) {
+        let p = player as usize;
+        self.ai.players[p].flags |= 0x400;
+        let mut counter = 0u32;
+        let mut too_many_workers = false;
+        let mut town = self.ai.town_lists[p];
+        let mut last = NIL;
+        while town != NIL {
+            self.town_trim_queues(d, town);
+            let tw = &self.ai.towns.items[town as usize];
+            if tw.workers == NIL {
+                let m = tw.main_building;
+                if m == NIL || self.units[m as usize].status & 1 != 0 || self.units[m as usize].unit_type != 0x83 {
+                    self.town_take_workers(d, town, 1);
+                }
+            } else if tw.worker_count > tw.worker_limit {
+                too_many_workers = true;
+            }
+            last = town;
+            for slot in 0..100 {
+                let (flags, _, id) = self.ai.towns.items[town as usize].town_units[slot];
+                if flags & 0xf8 == 0 {
+                    break;
+                }
+                let kind = flags >> 1 & 3;
+                let have = match kind {
+                    0 => {
+                        let n = if flags & 1 != 0 {
+                            self.players.unit_counts[id as usize][p] as u32
+                        } else {
+                            self.town_count_making(d, town, id)
+                        };
+                        if self.ai.towns.items[town as usize].in_battle != 0 {
+                            continue;
+                        }
+                        n
+                    }
+                    1 => self.upgrade_level_or_going(player, id),
+                    _ => self.tech_have_or_going(player, id) as u32,
+                };
+                let mut want = (flags >> 3) as u32;
+                let worker = match self.player_races[p] {
+                    1 => 7,
+                    0 => 0x29,
+                    _ => 0x40,
+                };
+                let limit = self.ai.towns.items[town as usize].worker_limit as u32;
+                if id == worker && want > limit {
+                    want = limit;
+                }
+                if have >= want {
+                    continue;
+                }
+                for _ in 0..want - have {
+                    let (flags, prio, id) = self.ai.towns.items[town as usize].town_units[slot];
+                    let mut priority = prio;
+                    let kind = flags >> 1 & 3;
+                    let fl = self.ai.players[p].flags;
+                    if (kind == 1 || kind == 2) && fl & 0x20 != 0 {
+                        if (priority as u32) < counter {
+                            priority = 0;
+                        } else {
+                            priority -= counter as u8;
+                            counter += 1;
+                        }
+                        self.ai.players[p].flags = fl & 0xfbff;
+                    }
+                    let tp = self.ai.towns.items[town as usize].player;
+                    if self.ai.players[tp as usize].flags & 0x20 == 0 && flags & 6 == 0 && id == self.town_hall_type(tp) && self.players.minerals[tp as usize] < 600 {
+                        priority = 0x96;
+                    }
+                    let ty = match kind {
+                        0 => {
+                            let uf = d.dat.units.flags[id as usize];
+                            if uf & 8 != 0 {
+                                4
+                            } else {
+                                ((uf & 2) << 1 | 3) as u8
+                            }
+                        }
+                        1 => 5,
+                        _ => 6,
+                    };
+                    self.ai_add_need(d, tp, ty, id);
+                    self.ai_push_request(tp, ty, id, priority, town);
+                }
+            }
+            let tw = &self.ai.towns.items[town as usize];
+            if tw.worker_count > 1 || (tw.worker_count == 1 && tw.main_building != NIL && self.player_races[tw.player as usize] == 0) {
+                todo_port!("0x433660", "AI town gas request");
+            }
+            town = self.ai.towns.items[town as usize].link.next;
+        }
+        if too_many_workers {
+            let mut t = self.ai.town_lists[p];
+            while t != NIL {
+                let tw = &self.ai.towns.items[t as usize];
+                let m = tw.main_building;
+                if m != NIL && self.units[m as usize].status & 1 != 0 && tw.worker_count < tw.worker_limit {
+                    self.town_take_workers(d, t, 1);
+                }
+                t = self.ai.towns.items[t as usize].link.next;
+            }
+        }
+        if last != NIL {
+            todo_port!("0x433730", "AI supply request");
+            todo_port!("0x43ebb0", "AI town defense requests");
+            todo_port!("0x43aae0", "AI town requests 0x43aae0");
+        }
+    }
+
+    /// The count 0x436320 makes of unit type `t` in a town: its workers and buildings
+    /// that are `t` or about to make one (0x466b70), with a hatchery also counting
+    /// lairs and hives, a lair hives, a spire greater spires and a creep colony sunken
+    /// and spore colonies.
+    fn town_count_making(&self, d: &Data, town: u32, t: u16) -> u32 {
+        let one = |u: u32, t: u16| if self.units[u as usize].unit_type == t { 1 } else { self.producing(d, u, t) };
+        let mut n = 0u32;
+        let mut w = self.ai.towns.items[town as usize].workers;
+        while w != NIL {
+            n += one(self.ai.workers.items[w as usize].parent, t);
+            w = self.ai.workers.items[w as usize].link.next;
+        }
+        let mut b = self.ai.towns.items[town as usize].buildings;
+        while b != NIL {
+            let u = self.ai.buildings.items[b as usize].parent;
+            n += one(u, t);
+            let extra: &[u16] = match t {
+                0x83 => &[0x84, 0x85],
+                0x84 => &[0x85],
+                0x8d => &[0x89],
+                0x8f => &[0x92, 0x90],
+                _ => &[],
+            };
+            for &e in extra {
+                n += one(u, e);
+            }
+            b = self.ai.buildings.items[b as usize].link.next;
+        }
+        n
+    }
+
+    /// 0x435900: a set-up town finds its resource area (0x443a20), gas buildings
+    /// (0x444460) and mineral field (0x4445e0), works out how many workers it wants
+    /// (+0x1b) and how many go for gas, resets workers idle for a minute (0x9c) and
+    /// hands out the targets: 1 minerals, 2.. gas.
+    pub(super) fn town_step(&mut self, d: &Data, town: u32) {
+        let tw = &self.ai.towns.items[town as usize];
+        if tw.inited == 0 {
+            return;
+        }
+        let player = tw.player;
+        if tw.resource_area == 0 {
+            let (x, y) = tw.position;
+            let a = self.nearest_resource_area(player, x, y);
+            let tw = &mut self.ai.towns.items[town as usize];
+            tw.resource_area = a as u8;
+            tw.resource_units_not_set = 1;
+        }
+        if self.ai.towns.items[town as usize].resource_units_not_set != 0 {
+            self.ai.towns.items[town as usize].resource_units_not_set = 0;
+            let a = self.ai.towns.items[town as usize].resource_area as u32;
+            let gas = self.area_gas_buildings(d, a);
+            self.ai.towns.items[town as usize].gas_buildings = gas;
+            for g in gas {
+                if g != NIL {
+                    self.ai_region_add_building(d, player, g);
+                }
+            }
+        }
+        if self.ai.towns.items[town as usize].mineral == NIL {
+            let a = self.ai.towns.items[town as usize].resource_area as u32;
+            let m = self.area_first_mineral(a);
+            self.ai.towns.items[town as usize].mineral = m;
+            if m != NIL {
+                self.ai_region_add_building(d, player, m);
+            }
+        }
+        let area = self.ai.towns.items[town as usize].resource_area as u32;
+        if area != 0 {
+            let limit = if area < 0xfa { self.area_mining_spots(area, player) + self.areas[area as usize].geysers as u32 * 3 } else { 0 };
+            self.ai.towns.items[town as usize].worker_limit = limit as u8;
+        }
+        let mut mineral_kind = 1u8;
+        let mut gas_kind = 2u8;
+        if self.town_gas(town, 3, 1) == NIL && self.town_gas(town, 2, 1) == NIL {
+            gas_kind = 1;
+        } else if self.ai.towns.items[town as usize].mineral == NIL {
+            mineral_kind = 2;
+        }
+        let (gas_pct, _) = self.ai_need_split(player);
+        let workers = self.ai.towns.items[town as usize].worker_count as u32;
+        let mut on_gas = workers * gas_pct as u32 / 100;
+        let geyser_room = if area < 0xfa { self.areas[area as usize].geysers as u32 * 4 } else { 0 };
+        let worker_type = match self.player_races[player as usize] {
+            1 => 7,
+            0 => 0x29,
+            _ => 0x40,
+        };
+        let have = self.players.completed_counts[worker_type][player as usize] as u32;
+        if on_gas > geyser_room {
+            on_gas = geyser_room;
+        } else if self.players.gas[player as usize] < 800 {
+            let min = if have >= 0x14 {
+                4
+            } else if have >= 0xf {
+                3
+            } else if have >= 10 {
+                2
+            } else if have >= 5 {
+                1
+            } else {
+                0
+            };
+            if on_gas < min {
+                on_gas = min;
+            }
+        }
+        let mut n = 0u32;
+        let mut w = self.ai.towns.items[town as usize].workers;
+        while w != NIL {
+            let u = self.ai.workers.items[w as usize].parent;
+            let un = &self.units[u as usize];
+            let now = self.trig.elapsed;
+            if matches!(un.order, 0x21 | 0x60 | 0x1a) || un.status & 0x40 != 0 {
+                self.ai.workers.items[w as usize].last_update_second = now;
+            } else if now.wrapping_sub(self.ai.workers.items[w as usize].last_update_second) >= 0x3c {
+                self.order_now(d, u, 0x9c);
+                let wk = &mut self.ai.workers.items[w as usize];
+                wk.wait_timer = 10;
+                wk.last_update_second = now;
+                wk.reassign_count = wk.reassign_count.wrapping_add(1);
+                let t = wk.town;
+                self.town_take_workers(d, t, 1);
+            }
+            let kind = if on_gas != 0 {
+                on_gas -= 1;
+                gas_kind
+            } else {
+                mineral_kind
+            };
+            self.ai.workers.items[w as usize].target_resource = kind;
+            if kind != 1 {
+                n += 1;
+                if n >= 4 {
+                    n = 0;
+                    if gas_kind == kind {
+                        gas_kind += 1;
+                    }
+                    if mineral_kind == kind {
+                        mineral_kind += 1;
+                    }
+                    if gas_kind > 4 {
+                        gas_kind = 2;
+                    }
+                    if mineral_kind > 4 {
+                        mineral_kind = 2;
+                    }
+                }
+            }
+            w = self.ai.workers.items[w as usize].link.next;
+        }
+    }
+
+    /// 0x444460: the (up to 3) geysers / gas buildings of area `a`, nearest first.
+    fn area_gas_buildings(&self, d: &Data, a: u32) -> [u32; 3] {
+        let mut g = [NIL; 3];
+        let mut u = self.visible_units.head;
+        while u != NIL {
+            let un = &self.units[u as usize];
+            let t = un.unit_type;
+            if un.sprite != NIL && un.order != 0 && d.dat.units.flags[t as usize] & 0x2000 != 0 && !(0xb0..=0xb2).contains(&t) && un.u8_at(0xd8) as u32 == a {
+                if g[0] == NIL {
+                    g[0] = u;
+                } else if g[1] == NIL {
+                    g[1] = u;
+                } else {
+                    g[2] = u;
+                }
+            }
+            u = un.link.next;
+        }
+        let ap = self.areas[a as usize].pos;
+        let dist = |st: &State, u: u32| {
+            if u == NIL {
+                return 99_999_999u32;
+            }
+            let p = st.unit_sprite_pos(u);
+            super::path::approx_distance(ap.0 as i32, p.0 as i32, ap.1 as i32, p.1 as i32)
+        };
+        let (mut d0, mut d1, d2) = (dist(self, g[0]), dist(self, g[1]), dist(self, g[2]));
+        if d0 > d1 {
+            g.swap(0, 1);
+            std::mem::swap(&mut d0, &mut d1);
+        }
+        if d1 > d2 {
+            g.swap(1, 2);
+            d1 = d2;
+        }
+        if d0 > d1 {
+            g.swap(0, 1);
+        }
+        g
+    }
+
+    /// 0x4445e0: the first mineral field of area `a`.
+    fn area_first_mineral(&self, a: u32) -> u32 {
+        let mut u = self.visible_units.head;
+        while u != NIL {
+            let un = &self.units[u as usize];
+            if un.sprite != NIL && un.order != 0 && (0xb0..=0xb2).contains(&un.unit_type) && un.u8_at(0xd8) as u32 == a {
+                return u;
+            }
+            u = un.link.next;
+        }
+        NIL
+    }
+
+    /// 0x4a1e50 (and the same steps in 0x475710 / 0x4a0740): unit `u` leaves the AI:
+    /// region references and enemy strength (0x439d60), its town (0x434c90), a guard
+    /// post loses it, the free medic is replaced (0x4477c0).
+    pub(super) fn ai_release_unit(&mut self, d: &Data, u: u32, keep_region: bool) {
+        self.ai_forget_unit(d, u, keep_region);
+        self.town_remove_unit(d, u);
+        let r = self.units[u as usize].ai;
+        if r != NIL && ai_kind(r) == AI_GUARD {
+            let g = &mut self.ai.guards.items[ai_index(r) as usize];
+            g.parent = NIL;
+            if g.times_died < 100 {
+                g.times_died += 1;
+            }
+        }
+        // 0x4477c0
+        if self.units[u as usize].unit_type == 0x22 {
+            let p = self.units[u as usize].player as usize;
+            if self.ai.players[p].free_medic == u {
+                self.ai.players[p].free_medic = NIL;
+                let mut m = self.player_units[p];
+                while m != NIL {
+                    if self.units[m as usize].unit_type == 0x22 {
+                        self.ai.players[p].free_medic = m;
+                        break;
+                    }
+                    m = self.units[m as usize].player_next;
+                }
+            }
+        }
+        self.units[u as usize].ai = NIL;
+    }
+
+    /// 0x439d60: computers forget `u` as a region's target, slowest unit or detector;
+    /// enemies of it lose its type's strength from the region it is in; a military
+    /// unit leaves its region (which, when `fight_on` and the region is lost, goes to
+    /// state 3). True for a military unit.
+    fn ai_forget_unit(&mut self, d: &Data, u: u32, fight_on: bool) -> bool {
+        let t = self.units[u as usize].unit_type as usize;
+        let owner = {
+            let un = &self.units[u as usize];
+            if un.player == 0xb { self.sprites[un.sprite as usize].owner } else { un.player }
+        };
+        let n = self.sai.region_count as usize;
+        for p in 0..8usize {
+            if self.player_types[p] != 1 {
+                continue;
+            }
+            for r in 1..n {
+                let reg = &mut self.ai.regions[p][r];
+                for f in [&mut reg.air_target, &mut reg.ground_target, &mut reg.slowest_military, &mut reg.detector] {
+                    if *f == u {
+                        *f = NIL;
+                    }
+                }
+            }
+            if self.alliances[p][owner as usize] == 0 {
+                let (x, y) = self.unit_sprite_pos(u);
+                let r = super::path::region_at(&self.sai, x as i32, y as i32) as usize;
+                let (air, ground) = (d.strength[0][t], d.strength[1][t]);
+                let reg = &mut self.ai.regions[p][r];
+                reg.needed_air_strength = if air < reg.needed_air_strength as u32 { reg.needed_air_strength - air as u16 } else { 0 };
+                reg.needed_ground_strength = if ground < reg.needed_ground_strength as u32 { reg.needed_ground_strength - ground as u16 } else { 0 };
+            }
+        }
+        let r = self.units[u as usize].ai;
+        if r == NIL || ai_kind(r) != AI_MILITARY {
+            return false;
+        }
+        let m = ai_index(r);
+        let (rp, rid) = self.ai.military.items[m as usize].region;
+        let state = self.ai.regions[rp as usize][rid as usize].state;
+        if state == 8 {
+            // 0x447040: the attack force forgets one unit of this type.
+            let ty = if t == 0x1e { 5 } else { t as u16 };
+            let pl = self.units[u as usize].player as usize;
+            if let Some(e) = self.ai.players[pl].attack_force.iter_mut().take(0x3f).find(|e| **e == ty + 1) {
+                *e = 0xe5;
+            }
+        } else if fight_on && state != 0 && !matches!(state, 1 | 8 | 9 | 2) {
+            let (x, y) = self.unit_sprite_pos(u);
+            let here = super::path::region_at(&self.sai, x as i32, y as i32);
+            if here != rid && !self.player_has_base_unit_in(d, rid, rp) {
+                self.set_ai_region_state(d, rp, rid, 3);
+            }
+        }
+        // 0x4371d0
+        let reg = &mut self.ai.regions[rp as usize][rid as usize];
+        if self.units[u as usize].status & 4 == 0 {
+            reg.ground_unit_count = reg.ground_unit_count.wrapping_sub(1);
+        }
+        let mut head = reg.military;
+        self.ai.military.release(&mut head, m);
+        self.ai.regions[rp as usize][rid as usize].military = head;
+        true
+    }
+
+    /// 0x434c90: unit `u` leaves its town: a worker (count down) or a building, larva,
+    /// egg or overlord; the town forgets it as main building or builder and is removed
+    /// when empty (0x4347e0). Other units keep their AI.
+    fn town_remove_unit(&mut self, d: &Data, u: u32) -> bool {
+        // 0x432760: a resource leaves every town's slots.
+        let t = self.units[u as usize].unit_type;
+        let flags = d.dat.units.flags[t as usize];
+        if flags & 0x2000 != 0 {
+            for p in 0..8 {
+                let mut tw = self.ai.town_lists[p];
+                while tw != NIL {
+                    let town = &mut self.ai.towns.items[tw as usize];
+                    if town.mineral == u {
+                        town.mineral = NIL;
+                    }
+                    for g in town.gas_buildings.iter_mut() {
+                        if *g == u {
+                            *g = NIL;
+                        }
+                    }
+                    if town.resource_area != 0 {
+                        town.resource_units_not_set = 1;
+                    }
+                    tw = town.link.next;
+                }
+            }
+        }
+        let r = self.units[u as usize].ai;
+        if r == NIL {
+            return false;
+        }
+        let building_like = (flags & 1 != 0 && t != 0xbc) || matches!(t, 0x23 | 0x24 | 0x2a);
+        let town = if building_like {
+            if ai_kind(r) != AI_BUILDING {
+                todo_port!("0x434c90", "a building-type unit with a non-town AI");
+                return false;
+            }
+            let b = ai_index(r);
+            let town = self.ai.buildings.items[b as usize].town;
+            let mut head = self.ai.towns.items[town as usize].buildings;
+            self.ai.buildings.release(&mut head, b);
+            self.ai.towns.items[town as usize].buildings = head;
+            town
+        } else {
+            if flags & 8 == 0 {
+                return false;
+            }
+            if ai_kind(r) != AI_WORKER {
+                todo_port!("0x434c90", "a worker with a non-worker AI");
+                return false;
+            }
+            let w = ai_index(r);
+            let town = self.ai.workers.items[w as usize].town;
+            let mut head = self.ai.towns.items[town as usize].workers;
+            self.ai.workers.release(&mut head, w);
+            let tw = &mut self.ai.towns.items[town as usize];
+            tw.workers = head;
+            tw.worker_count = tw.worker_count.wrapping_sub(1);
+            town
+        };
+        if town != NIL {
+            let tw = &mut self.ai.towns.items[town as usize];
+            if tw.building_scv == u {
+                tw.building_scv = NIL;
+            }
+            if tw.main_building == u {
+                tw.main_building = NIL;
+            }
+            self.town_remove_if_empty(d, town);
+        }
+        self.units[u as usize].ai = NIL;
+        true
+    }
+
+    /// 0x4347e0: a town with nothing left (or only overlords, whose units move to the
+    /// nearest other town, 0x434330) is removed with its scripts (0x45ae20); resources
+    /// lose their AI marks and its area its town flag.
+    fn town_remove_if_empty(&mut self, d: &Data, town: u32) {
+        if !self.town_empty_or_merged(d, town) {
+            return;
+        }
+        // 0x45ae20
+        let mut s = self.ai.active_scripts;
+        while s != NIL {
+            let next = self.ai.scripts.items[s as usize].link.next;
+            if self.ai.scripts.items[s as usize].town == town {
+                let mut head = self.ai.active_scripts;
+                self.ai.scripts.release(&mut head, s);
+                self.ai.active_scripts = head;
+            }
+            s = next;
+        }
+        let mut u = self.visible_units.head;
+        while u != NIL {
+            let un = &self.units[u as usize];
+            if un.sprite != NIL && un.order != 0 && d.dat.units.flags[un.unit_type as usize] & 0x2000 != 0 {
+                self.units[u as usize].set_u8_at(0xd9, 0);
+            }
+            u = self.units[u as usize].link.next;
+        }
+        let tw = &self.ai.towns.items[town as usize];
+        let (area, player) = (tw.resource_area as usize, tw.player as usize);
+        if area != 0 {
+            self.areas[area].flags &= !2;
+        }
+        let mut head = self.ai.town_lists[player];
+        self.ai.towns.release(&mut head, town);
+        self.ai.town_lists[player] = head;
+    }
+
+    /// 0x434330: town `town` can go: it has no buildings and no workers, or only
+    /// overlords and there is another town (the nearest takes its units).
+    fn town_empty_or_merged(&mut self, d: &Data, town: u32) -> bool {
+        if self.ai.town_merging {
+            return false;
+        }
+        let tw = &self.ai.towns.items[town as usize];
+        if tw.buildings == NIL {
+            if tw.workers == NIL {
+                return true;
+            }
+        } else {
+            let mut b = tw.buildings;
+            while b != NIL {
+                if self.units[self.ai.buildings.items[b as usize].parent as usize].unit_type != 0x2a {
+                    return false;
+                }
+                b = self.ai.buildings.items[b as usize].link.next;
+            }
+        }
+        let (player, pos) = (tw.player as usize, tw.position);
+        let mut best = 99_999_999u32;
+        let mut into = NIL;
+        let mut o = self.ai.town_lists[player];
+        while o != NIL {
+            if o != town {
+                let op = self.ai.towns.items[o as usize].position;
+                let dist = super::path::approx_distance(pos.0 as i32, op.0 as i32, pos.1 as i32, op.1 as i32);
+                if dist < best {
+                    best = dist;
+                    into = o;
+                }
+            }
+            o = self.ai.towns.items[o as usize].link.next;
+        }
+        if into == NIL {
+            return false;
+        }
+        self.ai.town_merging = true;
+        for list in [true, false] {
+            let head = |st: &State| if list { st.ai.towns.items[town as usize].buildings } else { st.ai.towns.items[town as usize].workers };
+            let mut cur = head(self);
+            while cur != NIL && head(self) != NIL {
+                let (next, unit) = if list {
+                    let b = &self.ai.buildings.items[cur as usize];
+                    (b.link.next, b.parent)
+                } else {
+                    let w = &self.ai.workers.items[cur as usize];
+                    (w.link.next, w.parent)
+                };
+                self.ai_release_unit(d, unit, false);
+                self.town_add_unit(d, unit, into);
+                cur = next;
+            }
+        }
+        self.ai.town_merging = false;
+        true
+    }
+
+    /// 0x4355c0: town `town` takes up to `n` idle finished workers from the player's
+    /// other towns with more than one worker (from the last town backwards).
+    pub(super) fn town_take_workers(&mut self, _d: &Data, town: u32, _n: u32) {
+        let tw = &self.ai.towns.items[town as usize];
+        if tw.in_battle != 0 || (tw.worker_count != 0 && tw.worker_limit <= tw.worker_count) {
+            return;
+        }
+        todo_port!("0x4355c0", "AI town takes workers from other towns");
+    }
+
     /// 0x431f90: the town's next free request slot (count 0) gets (kind 0 unit / 1
     /// upgrade / 2 tech, count, id, priority, flag). Computers only.
     pub(super) fn town_request(&mut self, town: u32, kind: u8, count: u8, id: u16, priority: u8, flag: u8) {
@@ -564,7 +1205,7 @@ impl State {
 
     /// 0x4326e0: state of gas building `g` for `player`: 0 none / dead, 1 a geyser,
     /// 2 the race's refinery, 3 one with a worker inside (+0xd0).
-    fn gas_state(&self, g: u32, player: u8) -> u8 {
+    pub(super) fn gas_state(&self, g: u32, player: u8) -> u8 {
         if g == NIL {
             return 0;
         }
@@ -815,19 +1456,309 @@ impl State {
         self.ai_top_request_type(player) != 0
     }
 
+    /// 0x432480: a unit of `maker`'s race (by StarEdit group) can make `id`; else
+    /// error 0x19.
+    fn ai_same_race(&self, d: &Data, maker: u32, id: u16) -> bool {
+        let g = &d.dat.units.staredit_group_flags;
+        let (want, have) = (g[id as usize], g[self.units[maker as usize].unit_type as usize]);
+        let ok = if want & 2 != 0 {
+            have & 2 != 0
+        } else if want & 1 != 0 {
+            have & 1 != 0
+        } else {
+            have & 4 != 0
+        };
+        if !ok {
+            self.req_error.set(0x19);
+        }
+        ok
+    }
+
+    /// Error code of a requirement check (0x66ff60).
+    fn req_code(&self, r: Result<i32, u8>) -> u8 {
+        match r {
+            Err(c) => c,
+            Ok(_) => self.req_error.get(),
+        }
+    }
+
+    /// 0x4361a0: a building AI's round: the top spending request decides (train, worker,
+    /// upgrade, tech, addon, ...); with nothing to do, an idle production building may
+    /// pick a unit to train itself (0x433890).
+    pub(super) fn building_ai(&mut self, d: &Data, u: u32) -> bool {
+        match self.units[u as usize].unit_type {
+            0x2a => todo_port!("0x434df0", "AI overlord"),
+            0x6b => todo_port!("0x4a13c0", "AI comsat"),
+            0x6c => todo_port!("0x434d50", "AI nuke silo"),
+            _ => {}
+        }
+        let ai = self.units[u as usize].ai;
+        if ai == NIL || ai_kind(ai) != AI_BUILDING {
+            return true;
+        }
+        let b = ai_index(ai);
+        let player = self.units[u as usize].player;
+        let p = player as usize;
+        let mut pick = false;
+        if self.players.minerals[p] > 0x5dc && self.players.gas[p] > 0x5dc && !self.busy_building(u) && self.ai_pick_training(d, player, u, 0xa0) {
+            pick = true;
+        }
+        let pa = &self.ai.players[p];
+        let ty = if pa.request_count != 0 { pa.requests[0].ty } else { 0 };
+        match ty {
+            0 => {
+                if !self.ai_pick_training(d, player, u, 0x32) {
+                    return true;
+                }
+                self.ai_train(d, player, u, true)
+            }
+            1 | 2 => self.ai_train(d, player, u, pick),
+            3 => {
+                todo_port!("0x434ff0", "AI building places a building (zerg)");
+                true
+            }
+            4 => {
+                self.ai_train_worker(d, player, u, b);
+                true
+            }
+            5 => {
+                self.ai_start_upgrade(d, player, u);
+                true
+            }
+            6 => {
+                self.ai_start_research(d, player, u);
+                true
+            }
+            7 => {
+                todo_port!("0x434e70", "AI addon");
+                true
+            }
+            8 => {
+                todo_port!("0x435130", "AI request type 8");
+                true
+            }
+            _ => true,
+        }
+    }
+
+    /// 0x435f10: train the top request's unit in `u` (morphs pick their own units);
+    /// requests that can never be met are dropped and, unless `picked`, the building
+    /// tries again (0x4361a0).
+    fn ai_train(&mut self, d: &Data, player: u8, u: u32, picked: bool) -> bool {
+        let p = player as usize;
+        let id = self.ai.players[p].requests[0].id;
+        let maker = match id {
+            0x2c | 0x3e | 0x44 | 0x3f | 0x67 => {
+                todo_port!("0x435f10", "AI morph requests (0x4375f0, 0x437410, 0x437320, 0x437570)");
+                return false;
+            }
+            _ => u,
+        };
+        let mut ok = self.ai_same_race(d, maker, id);
+        let mut code = self.req_error.get();
+        if ok {
+            let r = self.can_make_unit(d, maker, id, player);
+            ok = r == Ok(1);
+            code = self.req_code(r);
+        }
+        if ok {
+            if !self.ai_can_afford(d, player, id) {
+                if self.ai.players[p].flags & 0x20 != 0 {
+                    return false;
+                }
+                return self.ai_drop_request_retry(d, player, u, picked);
+            }
+            if self.ai_at_build_limit(player, id) {
+                self.ai_request_done(d, player, false);
+                self.ai_pop_request(player);
+                return false;
+            }
+            // 0x4672f0
+            let val = self.ai.players[p].requests[0].val;
+            let ty = self.ai_top_request_type(player);
+            let slot = self.free_build_slot(maker);
+            if slot == 5 || !self.queue_build(d, maker, id) {
+                return false;
+            }
+            let bai = ai_index(self.units[maker as usize].ai) as usize;
+            self.ai.buildings.items[bai].train_queue_types[slot] = ty;
+            self.ai.buildings.items[bai].train_queue_values[slot] = val;
+            self.ai_request_done(d, player, true);
+            self.ai_pop_request(player);
+            if matches!(self.units[maker as usize].unit_type, 0x23 | 0x2b | 0x26) {
+                self.order_now(d, maker, 0x2a);
+            } else {
+                self.set_secondary(maker, 0x26);
+            }
+            return true;
+        }
+        if matches!(code, 2 | 0x17 | 0x15 | 8 | 7 | 0xd) {
+            return self.ai_drop_request_retry(d, player, u, picked);
+        }
+        false
+    }
+
+    /// 0x436173 in 0x435f10: drop the top request; unless `picked`, run the building's
+    /// round again.
+    fn ai_drop_request_retry(&mut self, d: &Data, player: u8, u: u32, picked: bool) -> bool {
+        self.ai_request_done(d, player, false);
+        self.ai_pop_request(player);
+        if !picked {
+            self.building_ai(d, u);
+        }
+        false
+    }
+
+    /// 0x434720: a town hall (or larva) of the request's town trains the requested worker.
+    fn ai_train_worker(&mut self, d: &Data, player: u8, u: u32, b: u32) {
+        let p = player as usize;
+        if self.ai.players[p].requests[0].val != self.ai.buildings.items[b as usize].town {
+            return;
+        }
+        let id = self.ai.players[p].requests[0].id;
+        if !self.ai_same_race(d, u, id) || self.can_make_unit(d, u, id, player) != Ok(1) || !self.ai_can_afford(d, player, id) {
+            return;
+        }
+        if self.ai_at_build_limit(player, id) {
+            self.ai_request_done(d, player, false);
+            self.ai_pop_request(player);
+            return;
+        }
+        if !self.queue_build(d, u, id) {
+            return;
+        }
+        if self.units[u as usize].unit_type == 0x23 {
+            self.order_now(d, u, 0x2a);
+        } else {
+            self.set_secondary(u, 0x26);
+        }
+        self.ai_request_done(d, player, true);
+        self.ai_pop_request(player);
+    }
+
+    /// 0x434670: start the requested upgrade (0x448750 checks the AI's budget).
+    fn ai_start_upgrade(&mut self, d: &Data, player: u8, u: u32) {
+        let p = player as usize;
+        let id = self.ai.players[p].requests[0].id;
+        let r = self.can_upgrade(d, u, id, player);
+        if r == Ok(1) {
+            let (m, g, _) = self.upgrade_cost(d, player, id as u8);
+            let (m, g) = (m as u16 as u32, g as u16 as u32);
+            // 0x42d190 / 0x42d0c0 without messages.
+            if self.players.minerals[p] < m as i32 || self.players.gas[p] < g as i32 {
+                return;
+            }
+            let pa = &self.ai.players[p];
+            if m <= pa.minerals_available && g <= pa.gas_available && self.start_upgrade(d, u, id as u8) {
+                self.order_now(d, u, 0x4c);
+                self.ai_request_done(d, player, true);
+                self.ai_pop_request(player);
+            }
+        } else if matches!(self.req_code(r), 2 | 0x17 | 0x15 | 8 | 7 | 0xd) {
+            self.ai_request_done(d, player, false);
+            self.ai_pop_request(player);
+            self.building_ai(d, u);
+        }
+    }
+
+    /// 0x4345c0: start the requested research (0x4486c0 checks the AI's budget).
+    fn ai_start_research(&mut self, d: &Data, player: u8, u: u32) {
+        let p = player as usize;
+        let id = self.ai.players[p].requests[0].id;
+        let r = self.can_research(d, u, id, player);
+        if r == Ok(1) {
+            let (m, g) = (d.dat.techdata.mineral_cost[id as usize] as u32, d.dat.techdata.gas_cost[id as usize] as u32);
+            let pa = &self.ai.players[p];
+            let ok = m as i32 <= self.players.minerals[p] && g as i32 <= self.players.gas[p] && m <= pa.minerals_available && g <= pa.gas_available;
+            if ok && self.start_research(d, u, id as u8) {
+                self.order_now(d, u, 0x4b);
+                self.ai_request_done(d, player, true);
+                self.ai_pop_request(player);
+            }
+        } else if matches!(self.req_code(r), 2 | 0x17 | 0x15 | 8 | 7 | 0xd) {
+            self.ai_request_done(d, player, false);
+            self.ai_pop_request(player);
+            self.building_ai(d, u);
+        }
+    }
+
     /// 0x4348c0: the town's first spending request is a building (type 3) for this
     /// town (or a 0x6d request) that this worker should place. True if it was sent.
-    fn ai_worker_build(&mut self, _d: &Data, town: u32, u: u32) -> bool {
-        let p = self.units[u as usize].player as usize;
+    fn ai_worker_build(&mut self, d: &Data, town: u32, u: u32) -> bool {
+        let player = self.units[u as usize].player;
+        let p = player as usize;
         let pa = &self.ai.players[p];
         if pa.request_count == 0 || pa.requests[0].ty != 3 {
             return false;
         }
         let w = ai_index(self.units[u as usize].ai) as usize;
-        if (pa.requests[0].val != town && pa.requests[0].id != 0x6d) || self.ai.workers.items[w].target_resource > 2 {
+        if (pa.requests[0].val != town && pa.requests[0].id != 0x6d) || self.ai.workers.items[w].reassign_count >= 3 {
             return false;
         }
-        todo_port!("0x4348c0", "AI worker places a requested building");
+        let id = pa.requests[0].id;
+        if !self.ai_same_race(d, u, id) || self.can_make_unit(d, u, id, player) != Ok(1) || !self.ai_can_afford(d, player, id) {
+            return false;
+        }
+        let tp = self.ai.towns.items[town as usize].player;
+        let spot = if id == self.refinery_type(tp) {
+            let g = self.town_gas(town, 1, 1);
+            if g == NIL {
+                return false;
+            }
+            self.unit_sprite_pos(g)
+        } else {
+            let mut pos = self.ai.towns.items[town as usize].position;
+            let radius = match id {
+                0x7d => {
+                    todo_port!("0x4348c0", "AI bunker placement (0x4376f0, 0x444eb0, 0x4390a0)");
+                    return false;
+                }
+                0x7c => {
+                    todo_port!("0x4348c0", "AI turret placement (0x437670)");
+                    return false;
+                }
+                0x83 if self.ai.towns.items[town as usize].main_building != NIL => {
+                    todo_port!("0x444630", "AI expansion hatchery spot");
+                    return false;
+                }
+                0x8f | 0xa2 => {
+                    todo_port!("0x444eb0", "AI defense building region bookkeeping");
+                    0x40
+                }
+                _ => 0x40,
+            };
+            if self.ai.players[p].build_cooldown != 0 {
+                return self.ai_drop_build_request(d, u);
+            }
+            match self.ai_find_build_spot(d, u, id, pos, radius) {
+                Some(s) => pos = s,
+                None => {
+                    self.ai.players[p].build_cooldown = 1;
+                    return self.ai_drop_build_request(d, u);
+                }
+            }
+            pos
+        };
+        self.ai_request_done(d, tp, true);
+        self.ai_pop_request(tp);
+        let order = match self.units[u as usize].unit_type {
+            7 => 0x1e,
+            0x29 => 0x19,
+            0x40 => 0x1f,
+            _ => return false,
+        };
+        self.order_at(d, u, order, spot);
+        self.clear_build_queue(d, u);
+        self.queue_build(d, u, id);
+        true
+    }
+
+    /// 0x433640: drop the top request and let `u` run a building AI round (0x4361a0).
+    fn ai_drop_build_request(&mut self, d: &Data, u: u32) -> bool {
+        let player = self.units[u as usize].player;
+        self.ai_request_done(d, player, false);
+        self.ai_pop_request(player);
+        self.building_ai(d, u);
         false
     }
 }

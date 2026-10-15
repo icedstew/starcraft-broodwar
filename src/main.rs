@@ -149,6 +149,7 @@ fn main() -> std::io::Result<()> {
                     st.player_types[p] = 1;
                 }
                 st.init_ai_regions();
+                st.init_resource_areas(&d);
                 st.template[0xe] = 1;
                 st.template[0xc] = 2;
                 st.start_game_type_ai(&d);

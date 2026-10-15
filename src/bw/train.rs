@@ -109,7 +109,7 @@ impl State {
     }
 
     /// 0x4669b0: first free build queue slot from the current one (5 = full).
-    fn free_build_slot(&self, u: u32) -> usize {
+    pub(super) fn free_build_slot(&self, u: u32) -> usize {
         let un = &self.units[u as usize];
         let mut i = un.build_queue_slot as usize;
         for _ in 0..5 {

@@ -873,7 +873,7 @@ fn new_game(a: &Assets, chk: &Chk, rep: Option<&crate::replay::Header>) -> io::R
         st.rng.enabled = false;
         // 0x4eee00 tail: 0x437a70(1) AI regions for the map's region count.
         st.init_ai_regions();
-        // todo_port: 0x446350 resource areas.
+        st.init_resource_areas(d);
         // 0x4ef100 -> 0x4abaf0: the game type's computer scripts and own triggers.
         st.start_game_type_ai(d);
         if let Some(name) = bw::triggers::game_type_triggers(&st.template) {
