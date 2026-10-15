@@ -33,7 +33,7 @@ impl State {
     }
 
     /// 0x4eb9c0: move to `p` and face it; the 0x4eb820 result.
-    fn move_and_face(&mut self, d: &Data, u: u32, p: (i16, i16)) -> bool {
+    pub(super) fn move_and_face(&mut self, d: &Data, u: u32, p: (i16, i16)) -> bool {
         let r = self.set_move_target_xy(d, u, p);
         let f = &mut self.units[u as usize].fl;
         if f.next_target_waypoint != p {
@@ -43,7 +43,7 @@ impl State {
     }
 
     /// 0x4752b0: give `u` `order` on `t` (or nothing) and start it.
-    fn order_on(&mut self, d: &Data, u: u32, order: u8, t: u32) {
+    pub(super) fn order_on(&mut self, d: &Data, u: u32, order: u8, t: u32) {
         self.units[u as usize].order_flags |= 1;
         let p = if t != NIL { self.unit_sprite_pos(t) } else { (0, 0) };
         self.issue_order(d, u, order, true, p, t, 0xe4);
@@ -539,7 +539,7 @@ impl State {
     }
 
     /// 0x401240: `u` is within `r` of point `p` (from its exact position).
-    fn near_point(&self, u: u32, r: u32, p: (i16, i16)) -> bool {
+    pub(super) fn near_point(&self, u: u32, r: u32, p: (i16, i16)) -> bool {
         let f = &self.units[u as usize].fl;
         super::path::approx_distance(f.exact.0, (p.0 as i32) << 8, f.exact.1, (p.1 as i32) << 8) >> 8 <= r
     }

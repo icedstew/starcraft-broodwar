@@ -269,6 +269,14 @@ impl Unit {
         let i = off - 0xc0;
         self.union_c0[i..i + 2].copy_from_slice(&v.to_le_bytes());
     }
+    pub fn u32_at(&self, off: usize) -> u32 {
+        let i = off - 0xc0;
+        u32::from_le_bytes([self.union_c0[i], self.union_c0[i + 1], self.union_c0[i + 2], self.union_c0[i + 3]])
+    }
+    pub fn set_u32_at(&mut self, off: usize, v: u32) {
+        let i = off - 0xc0;
+        self.union_c0[i..i + 4].copy_from_slice(&v.to_le_bytes());
+    }
     /// Resource amount of a mineral field / geyser (x86 +0xD0).
     pub fn resource_amount(&self) -> u16 {
         self.u16_at(0xd0)

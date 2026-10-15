@@ -696,6 +696,17 @@ def scenario(e, units, move, frames, out):
                     ids.append(str((fr - UNITS) // 0x150))
                     fr = e.r32(fr + 4)
                 fo.write(f"f{f} free {' '.join(ids)}\n")
+            if os.environ.get("SCBW_IMGWATCH"):  # "unit,from": the unit's images each frame
+                wu, wf = (int(v) for v in os.environ["SCBW_IMGWATCH"].split(","))
+                if f >= wf:
+                    ua = UNITS + wu * 0x150
+                    sp, im, parts = e.r32(ua + 0xc), 0, []
+                    if sp:
+                        im = e.r32(sp + 0x1c)
+                    while im:
+                        parts.append(f"{e.r16(im + 8):#x}:a{e.r8(im + 0x16):#x}:pc{e.r16(im + 0x12):#x}:w{e.r8(im + 0x17)}")
+                        im = e.r32(im + 4)
+                    print(f"f{f} img u{wu} st {e.r32(ua + 0xdc):#x} ord {e.r8(ua + 0x4d):#x} " + " ".join(parts), file=sys.stderr)
             if os.environ.get("SCBW_RNGSITES_AT") in (str(f), str(f - 1)):
                 sites = struct.unpack("<256I", e.read(0x51c610, 0x400))
                 fo.write(f"f{f} rngsites " + " ".join(f"{i:#x}:{c}" for i, c in enumerate(sites) if c) + "\n")

@@ -107,7 +107,7 @@ impl State {
         }
         self.modify_completed_counters(d, u, 1, true);
         if d.dat.units.flags[t] & 0x40_0000 != 0 {
-            todo_port!("0x49b5b0", "units.dat flag 0x400000 on completion");
+            self.begin_cloak(d, u);
         }
         let t16 = self.units[u as usize].unit_type;
         let s = self.units[u as usize].sprite;

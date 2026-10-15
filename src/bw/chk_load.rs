@@ -496,7 +496,7 @@ impl State {
             self.make_hallucination(d, sub);
         }
         if matches!(t, 0x48 | 0x52 | 0x53 | 0x51) {
-            todo_port!("0x466170", "hallucinated carrier/reaver children");
+            self.kill_fighters(d, u);
         }
     }
 }

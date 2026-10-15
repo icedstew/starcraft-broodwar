@@ -1288,3 +1288,325 @@ impl State {
         }
     }
 }
+
+impl State {
+    /// 0x4f6350: effect sprite `id` on `t`, one layer above it.
+    fn sprite_on_unit(&mut self, d: &Data, t: u32, id: u16) {
+        let (x, y) = self.unit_sprite_pos(t);
+        if let Some(th) = self.create_thingy(d, id, x, y, 0) {
+            let ts = self.thingies[th as usize].sprite;
+            let s = self.units[t as usize].sprite;
+            self.sprites[ts as usize].elevation = self.sprites[s as usize].elevation.wrapping_add(1);
+            self.sprite_fog_visibility(ts);
+        }
+    }
+
+    /// 0x4f6d40: CastFeedback: the target's energy becomes damage to it (hallucinated
+    /// casters' targets just die).
+    pub(super) fn order_cast_feedback(&mut self, d: &Data, u: u32) {
+        let t = self.units[u as usize].order_target_unit;
+        let ok = t != NIL
+            && d.dat.units.flags[self.units[t as usize].unit_type as usize] & 0x20_0000 != 0
+            && self.units[t as usize].status & 0x4000_0000 == 0;
+        if !ok {
+            self.spell_give_up(d, u);
+            return;
+        }
+        let range = (self.unit_sight_range(d, u, true) as u32) << 5;
+        let mut cost = 0;
+        if !self.direct_cast_ready(d, u, 0x1d, range, &mut cost) {
+            return;
+        }
+        let cheat = self.game_options & 0x800 != 0;
+        let size = self.overlay_size(d, t);
+        if self.units[t as usize].status & 0x4000_0000 != 0 {
+            self.sprite_on_unit(d, t, 0x1f4 + size);
+            if !cheat {
+                self.units[u as usize].energy -= cost;
+            }
+            self.kill_unit(d, t);
+        } else if self.units[t as usize].energy != 0 {
+            let e = self.units[t as usize].energy as u32;
+            let player = self.units[u as usize].player;
+            self.damage_unit(d, t, e, 0x6a, 1, 1, u, player);
+            self.units[t as usize].energy = 0;
+            if !cheat {
+                self.units[u as usize].energy -= cost;
+            }
+            // 0x48ed50: the feedback sound.
+            let tu = &self.units[t as usize];
+            if tu.sprite != NIL && tu.order != 0 {
+                self.add_spell_overlay(d, t, 0x3d3);
+            } else {
+                self.sprite_on_unit(d, t, 0x1f4 + size);
+            }
+        }
+        self.order_done_or_next(d, u);
+    }
+}
+
+impl State {
+    /// 0x4f6180: a freshly created copy becomes a hallucination (and its turret): full
+    /// hp, out of the counts, the computer idle order, hallucination buttons and draw
+    /// function, the Hallucination2 secondary order.
+    fn hallucinate_new(&mut self, d: &Data, u: u32) {
+        let mut u = u;
+        loop {
+            self.modify_unit_counters(d, u, -1);
+            let t = self.units[u as usize].unit_type as usize;
+            if !self.disabled(u) || d.dat.units.flags[t] & 1 != 0 {
+                self.units[u as usize].button_set = 0xf4;
+            }
+            let un = &mut self.units[u as usize];
+            un.status |= 0x4000_0001;
+            un.hp = d.dat.units.hit_points[t] as i32;
+            self.modify_unit_counters(d, u, 1);
+            self.modify_completed_counters(d, u, 1, false);
+            self.units[u as usize].order_flags |= 1;
+            let o = d.dat.units.ai_computer_idle[t];
+            self.issue_order(d, u, o, true, (0, 0), NIL, 0xe4);
+            self.prepare_next_order(d, u);
+            if self.replay || self.units[u as usize].player == self.local_player {
+                // 0x497dc0: the hallucination draw function.
+                let mut i = self.sprites[self.units[u as usize].sprite as usize].images.head;
+                while i != NIL {
+                    let img = &mut self.images[i as usize];
+                    if img.modifier == 0 || img.modifier == 0x10 {
+                        img.modifier = 0x10;
+                        img.flags |= 1;
+                        img.coloring = 0;
+                    }
+                    i = img.link.next;
+                }
+            }
+            if d.dat.units.flags[t] & 0x10 != 0 {
+                return;
+            }
+            // 0x431800: AI strengths (AI only).
+            self.set_secondary(u, 0x95);
+            u = self.units[u as usize].subunit;
+            if u == NIL {
+                return;
+            }
+        }
+    }
+
+    /// 0x4f6b90: a hallucination of `t` for `player` (reavers bring hallucinated scarabs).
+    fn create_hallucination(&mut self, d: &Data, t: u32, player: u8) -> u32 {
+        let (x, y) = self.unit_sprite_pos(t);
+        let ty = self.units[t as usize].unit_type;
+        let Some(h) = self.create_unit(d, ty, x, y, player) else {
+            self.show_last_error(player);
+            return NIL;
+        };
+        self.hallucinate_new(d, h);
+        let hu = &mut self.units[h as usize];
+        let timer = if hu.status & 0x4000_0000 != 0 { 0x546 } else if hu.unit_type == 0x28 { 0x708 } else { 0 };
+        if hu.remove_timer == 0 || timer < hu.remove_timer {
+            hu.remove_timer = timer;
+        }
+        if matches!(self.units[h as usize].unit_type, 0x53 | 0x51) {
+            // 0x4f65b0: copies of the first docked scarab, one per scarab the reaver has.
+            let template = self.units[t as usize].ptr_at(0xc0);
+            let n = self.units[t as usize].u8_at(0xc8) as u32 + self.units[t as usize].u8_at(0xc9) as u32;
+            for _ in 0..n {
+                let s = self.create_hallucination(d, template, player);
+                if s == NIL {
+                    continue;
+                }
+                self.units[s as usize].set_ptr_at(0xc0, h);
+                self.hide_unit(d, s);
+                let head = self.units[h as usize].ptr_at(0xc0);
+                self.units[s as usize].set_ptr_at(0xc4, head);
+                self.units[s as usize].set_ptr_at(0xc8, NIL);
+                if head != NIL {
+                    self.units[head as usize].set_ptr_at(0xc8, s);
+                }
+                self.units[h as usize].set_ptr_at(0xc0, s);
+                let c = self.units[h as usize].u8_at(0xc8);
+                self.units[h as usize].set_u8_at(0xc8, c.wrapping_add(1));
+                self.units[s as usize].set_u8_at(0xcc, 0);
+            }
+        }
+        if self.player_type(player) == 1 {
+            todo_port!("0x4a2830", "AI: a hallucination joins the computer's forces");
+        }
+        h
+    }
+
+    /// 0x4f66d0: put a new hallucination on the map next to where it was made (some
+    /// types face a random way); false when there is no room.
+    fn place_hallucination(&mut self, d: &Data, h: u32) -> bool {
+        let p = self.unit_sprite_pos(h);
+        let Some(q) = self.find_unit_placement(d, h, p, None, false) else {
+            return false;
+        };
+        self.place_unit_at(d, h, q.0, q.1);
+        if self.units[h as usize].status & 0x1_0000 != 0 {
+            let dir = self.rng.rand_between(0x1e, 0, 0x20) as u8;
+            let s = self.units[h as usize].sprite;
+            let mut i = self.sprites[s as usize].images.head;
+            while i != NIL {
+                let next = self.images[i as usize].link.next;
+                self.image_set_direction32(d, i, dir);
+                i = next;
+            }
+            self.set_heading_now(d, h, dir.wrapping_mul(8));
+        }
+        self.show_unit(d, h);
+        true
+    }
+
+    /// 0x4f6c40: CastHallucination: two hallucinations of the target.
+    pub(super) fn order_cast_hallucination(&mut self, d: &Data, u: u32) {
+        let range = (self.unit_sight_range(d, u, true) as u32) << 5;
+        let mut cost = 0;
+        if !self.direct_cast_ready(d, u, 0x14, range, &mut cost) {
+            return;
+        }
+        let player = self.units[u as usize].player;
+        for _ in 0..2 {
+            let t = self.units[u as usize].order_target_unit;
+            let h = self.create_hallucination(d, t, player);
+            if h == NIL {
+                break;
+            }
+            if !self.place_hallucination(d, h) {
+                self.remove_subunit(d, h);
+                break;
+            }
+        }
+        if self.game_options & 0x800 == 0 {
+            self.units[u as usize].energy -= cost;
+        }
+        // 0x48ed50: the hallucination sound.
+        let t = self.units[u as usize].order_target_unit;
+        let sub = self.units[t as usize].subunit;
+        let host = if sub != NIL { sub } else { t };
+        let s = self.units[host as usize].sprite;
+        self.add_image_top(d, s, 0x221);
+        self.spell_give_up(d, u);
+    }
+}
+
+impl State {
+    /// 0x4c8040: give `u` to `player` with what belongs to it: the worker inside a
+    /// refinery, passengers, fighters, an addon, an addon being built, a nydus exit.
+    pub(super) fn give_unit_with_parts(&mut self, d: &Data, u: u32, player: u8) -> bool {
+        if player >= 12 || u == NIL {
+            return false;
+        }
+        let un = &self.units[u as usize];
+        let t = un.unit_type;
+        if un.status & 0x4000_0000 != 0
+            || matches!(t, 0xb0 | 0xb1 | 0xb2 | 0xbc | 0x49 | 0x55)
+            || d.dat.units.flags[t as usize] & 2 != 0
+            || un.player == player
+        {
+            return true;
+        }
+        // 0x4688b0 / 0x468a60: a completed refinery gives its gas worker too.
+        if un.status & 1 != 0 && matches!(t, 0x6e | 0x9d | 0x95) {
+            let mut h = self.player_units[un.player as usize];
+            while h != NIL {
+                let hu = &self.units[h as usize];
+                if hu.order == 0x53
+                    && d.dat.units.flags[hu.unit_type as usize] & 8 != 0
+                    && self.sprites[hu.sprite as usize].flags & 0x20 != 0
+                    && hu.order_target_unit == u
+                {
+                    break;
+                }
+                h = hu.player_next;
+            }
+            if h != NIL {
+                self.give_unit(d, h, player);
+            }
+        }
+        self.give_unit(d, u, player);
+        if self.can_carry(d, u) {
+            let n = d.dat.units.space_provided[self.units[u as usize].unit_type as usize] as usize;
+            for i in 0..n.min(8) {
+                let hd = self.units[u as usize].loaded_units[i] as u32;
+                if hd == 0 {
+                    continue;
+                }
+                let c = (hd & 0x7ff) - 1;
+                let cu = &self.units[c as usize];
+                if cu.sprite != NIL && (cu.order != 0 || cu.order_state != 1) && cu.unique_id as u32 == hd >> 11 {
+                    self.give_unit(d, c, player);
+                }
+            }
+        }
+        if matches!(self.units[u as usize].unit_type, 0x48 | 0x52 | 0x53 | 0x51) {
+            for (list, count) in [(0xc0, 0xc8), (0xc4, 0xc9)] {
+                let mut f = self.units[u as usize].ptr_at(list);
+                for _ in 0..self.units[u as usize].u8_at(count) {
+                    let next = self.units[f as usize].ptr_at(0xc4);
+                    self.give_unit(d, f, player);
+                    f = next;
+                }
+            }
+        }
+        if self.units[u as usize].status & 2 != 0 {
+            let addon = self.units[u as usize].ptr_at(0xc0);
+            if addon != NIL {
+                self.give_unit(d, addon, player);
+            }
+            // 0x4e66b0: an addon under construction goes too (0x466a30 picks it).
+            let un = &self.units[u as usize];
+            let b = un.current_build_unit;
+            if un.secondary_order == 0x25 && b != NIL && self.units[b as usize].status & 1 == 0 {
+                let tgt = un.order_target_unit;
+                let building_target = un.order == 0x1f && tgt != NIL && self.units[tgt as usize].status & 1 == 0;
+                let x = if matches!(un.order, 0x1e | 0x22 | 0x21) || building_target { tgt } else { b };
+                self.give_unit(d, x, player);
+            }
+            let un = &self.units[u as usize];
+            if un.unit_type == 0x86 {
+                let exit = un.ptr_at(0xd0);
+                if exit != NIL {
+                    self.give_unit(d, exit, player);
+                }
+            }
+        }
+        true
+    }
+
+    /// 0x4f6950: CastMindControl: the target changes sides (a hallucination dies); the
+    /// dark archon loses its shields.
+    pub(super) fn order_cast_mind_control(&mut self, d: &Data, u: u32) {
+        let t = self.units[u as usize].order_target_unit;
+        if t == NIL {
+            self.spell_give_up(d, u);
+            return;
+        }
+        if self.units[u as usize].player == self.units[t as usize].player {
+            self.order_done_or_next(d, u);
+            return;
+        }
+        let range = (self.unit_sight_range(d, u, true) as u32) << 5;
+        let mut cost = 0;
+        if !self.direct_cast_ready(d, u, 0x1b, range, &mut cost) {
+            return;
+        }
+        if self.units[t as usize].status & 0x4000_0000 == 0 {
+            self.add_spell_overlay(d, t, 0x3cd);
+            // 0x4f6910
+            let player = self.units[u as usize].player;
+            self.give_unit_with_parts(d, t, player);
+            if self.units[t as usize].unit_type == 0x3f {
+                self.units[t as usize].energy = 0;
+            }
+            self.order_done_or_next(d, t);
+        } else {
+            self.kill_unit(d, t);
+        }
+        self.units[u as usize].shields = 0;
+        if self.game_options & 0x800 == 0 {
+            self.units[u as usize].energy -= cost;
+        }
+        // 0x48ed50: the mind control sound.
+        self.order_done_or_next(d, u);
+    }
+}

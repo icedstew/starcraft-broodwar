@@ -246,11 +246,6 @@ impl State {
         self.ai_alert_around(d, u, 0x500, true);
     }
 
-    /// 0x464d10: NukeTrack.
-    fn order_nuke_track(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x464d10", "NukeTrack");
-    }
-
     /// 0x4777f0: TurretGuard.
     fn order_turret_guard(&mut self, d: &Data, u: u32) {
         let p = self.units[self.units[u as usize].subunit as usize].fl.next_target_waypoint;
@@ -513,11 +508,6 @@ impl State {
     }
 
 
-
-    /// 0x4e6700: NukeTrain.
-    fn order_nuke_train(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x4e6700", "NukeTrain");
-    }
 
     /// 0x4671b0: ResetCollision.
     fn order_reset_collision(&mut self, d: &Data, u: u32) {
@@ -1285,26 +1275,6 @@ impl State {
 
 
 
-    /// 0x464730: NukeLaunch.
-    fn order_nuke_launch(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x464730", "NukeLaunch");
-    }
-
-    /// 0x463610: NukePaint.
-    fn order_nuke_paint(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x463610", "NukePaint");
-    }
-
-    /// 0x479410: NukeUnit.
-    fn order_nuke_unit(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x479410", "NukeUnit");
-    }
-
-    /// 0x479200: CastNuclearStrike.
-    fn order_cast_nuclear_strike(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x479200", "CastNuclearStrike");
-    }
-
     /// 0x4788e0: SuicideUnit.
     fn order_suicide_unit(&mut self, _d: &Data, _u: u32) {
         todo_port!("0x4788e0", "SuicideUnit");
@@ -1360,11 +1330,6 @@ impl State {
             self.units[u as usize].order_signal &= !4;
             self.kill_unit(d, u);
         }
-    }
-
-    /// 0x4f6c40: CastHallucination.
-    fn order_cast_hallucination(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x4f6c40", "CastHallucination");
     }
 
     /// 0x4780f0: Patrol.
@@ -1530,16 +1495,6 @@ impl State {
     /// 0x47bd60: DisableDoodad.
     fn order_disable_doodad(&mut self, _d: &Data, _u: u32) {
         todo_port!("0x47bd60", "DisableDoodad");
-    }
-
-    /// 0x4f6950: CastMindControl.
-    fn order_cast_mind_control(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x4f6950", "CastMindControl");
-    }
-
-    /// 0x4f6d40: CastFeedback.
-    fn order_cast_feedback(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x4f6d40", "CastFeedback");
     }
 
     /// 0x47c210: JunkYardDog.

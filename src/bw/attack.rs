@@ -150,7 +150,7 @@ impl State {
     }
 
     /// 0x476430: `u` cannot hit `target` from here (not visible or out of range).
-    fn cannot_hit_now(&self, d: &Data, u: u32, target: u32) -> bool {
+    pub(super) fn cannot_hit_now(&self, d: &Data, u: u32, target: u32) -> bool {
         if !self.target_visible(target, u) {
             return true;
         }

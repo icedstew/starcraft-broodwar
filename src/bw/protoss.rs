@@ -240,7 +240,7 @@ impl State {
                     return;
                 }
                 if d.dat.units.flags[self.units[u as usize].unit_type as usize] & 0x40_0000 != 0 {
-                    todo_port!("0x49b5b0", "warped-in unit with flag 0x400000");
+                    self.begin_cloak(d, u);
                 }
                 self.order_next_or_idle(d, u);
             }

@@ -123,7 +123,7 @@ impl State {
     }
 
     /// 0x49b5b0: start cloaking: images fade out, nobody detects the unit yet.
-    fn begin_cloak(&mut self, d: &Data, u: u32) {
+    pub(super) fn begin_cloak(&mut self, d: &Data, u: u32) {
         // 0x48ed50: the cloak sound (UI).
         if self.units[u as usize].status & 0x10 != 0 {
             self.burrowed_cloak(d, u);

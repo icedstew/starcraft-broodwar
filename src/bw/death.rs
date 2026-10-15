@@ -246,9 +246,7 @@ impl State {
         match t {
             0x48 | 0x52 | 0x53 | 0x51 => self.kill_fighters(d, u),
             1 | 0x10 | 100 | 99 | 0x68 => {
-                if self.units[u as usize].u16_at(0xd0) != 0 || self.units[u as usize].u16_at(0xd2) != 0 {
-                    todo_port!("0x49f4a0", "ghost nuke");
-                }
+                self.ghost_drop_nuke_dot(d, u);
             }
             _ => {
                 // 0x4688b0: minerals and completed gas buildings hold resources.
@@ -722,7 +720,7 @@ impl State {
     }
 
     /// 0x4a0990: a turret (and its own turret) leaves the game with its sprite.
-    fn remove_subunit(&mut self, d: &Data, u: u32) {
+    pub(super) fn remove_subunit(&mut self, d: &Data, u: u32) {
         let sub = self.units[u as usize].subunit;
         if sub != NIL && d.dat.units.flags[self.units[sub as usize].unit_type as usize] & 0x10 != 0 {
             self.remove_subunit(d, sub);

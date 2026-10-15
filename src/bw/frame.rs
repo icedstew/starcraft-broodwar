@@ -248,7 +248,7 @@ impl State {
             0x1d => todo_port!("0x4ea290", "hidden order 0x1d"),
             0x53 => self.order_harvest_gas(d, u),
             0x61 => todo_port!("0x4f3e10", "hidden order 0x61"),
-            0x7d => todo_port!("0x464730", "hidden order 0x7d"),
+            0x7d => self.order_nuke_launch(d, u),
             0x96 => todo_port!("0x4671b0", "hidden order 0x96"),
             0x97 => todo_port!("0x42e320", "hidden order 0x97"),
             _ => {

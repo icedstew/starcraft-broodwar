@@ -986,6 +986,82 @@ impl State {
         }
     }
 
+    /// 0x492020: tech `tech` may be cast by `u` on unit `t` or a remembered fog unit
+    /// of type `ty` (0xe4: none), or at `p`; Err holds the message.
+    fn spell_target_check(&self, d: &Data, u: u32, tech: u8, t: u32, ty: u16, p: (i16, i16)) -> Result<(), u16> {
+        match tech {
+            2 | 4 | 0xe | 0xf | 0x11 | 0x13 | 0x15 | 0x16 | 0x19 | 0x1f => return Ok(()),
+            3 => {
+                let i = (p.1 as i32 / 32) * self.terrain.width as i32 + p.0 as i32 / 32;
+                return if self.terrain.tile_flags[i as usize] & 0x41_0000 != 0 { Ok(()) } else { Err(0x386) };
+            }
+            _ => {}
+        }
+        let checked_type = if t == NIL {
+            if ty == 0xe4 {
+                return Err(0x36e);
+            }
+            true
+        } else {
+            self.units[t as usize].status & 0x400_0000 != 0
+        };
+        if checked_type && (ty > 0xe3 || d.dat.units.flags[ty as usize] & 0x2000_0000 != 0) {
+            return Err(0x36c);
+        }
+        let e = if ty == 0xe4 {
+            self.tech_target_error(d, t, tech, self.units[u as usize].player)
+        } else {
+            // 0x4914b0: what a remembered fog unit of type `ty` allows.
+            match tech {
+                6 | 7 => 0x36d,
+                0xc => {
+                    if ty == 0x6a { 0 } else { 0x366 }
+                }
+                0x10 => 0x381,
+                _ => 0x36c,
+            }
+        };
+        if e == 0 { Ok(()) } else { Err(e) }
+    }
+
+    /// 0x475c80: `u` may attack a remembered fog unit of type `ty`.
+    fn fog_attack_ok(&self, d: &Data, u: u32, ty: u16) -> bool {
+        if ty > 0xe3 || d.dat.units.flags[ty as usize] & 0x2000_0000 != 0 {
+            return false;
+        }
+        let un = &self.units[u as usize];
+        if matches!(un.unit_type, 0x53 | 0x51 | 0x48 | 0x52) {
+            return true;
+        }
+        // 0x475a90: its ground weapon, else its turret's.
+        let w = if un.unit_type == 0x67 && un.status & 0x10 == 0 {
+            0x82
+        } else {
+            let w = d.dat.units.ground_weapon[un.unit_type as usize];
+            if w == 0x82 && un.subunit != NIL {
+                d.dat.units.ground_weapon[self.units[un.subunit as usize].unit_type as usize]
+            } else {
+                w
+            }
+        };
+        w != 0x82
+    }
+
+    /// 0x4764d0: `t` is inside `u`'s minimum weapon range.
+    fn target_too_close(&self, d: &Data, u: u32, t: u32) -> bool {
+        let sub = self.units[u as usize].subunit;
+        let wu = if sub != NIL && d.dat.units.flags[self.units[sub as usize].unit_type as usize] & 0x10 != 0 { sub } else { u };
+        let wt = self.units[wu as usize].unit_type as usize;
+        let w = if self.units[t as usize].status & 4 != 0 {
+            d.dat.units.air_weapon[wt]
+        } else if wt == 0x67 && self.units[wu as usize].status & 0x10 == 0 {
+            0x82
+        } else {
+            d.dat.units.ground_weapon[wt]
+        };
+        w != 0x82 && d.dat.weapons.min_range[w as usize] != 0 && self.box_distance_within(d, wu, d.dat.weapons.min_range[w as usize], t)
+    }
+
     /// 0x46f5b0: a map click while targeting. Picks the order for what was clicked
     /// (`target` unit, a fog unit of type `ty`, or ground), checks it client side and
     /// sends the targeted-order command. Err holds the message shown instead.
@@ -1013,27 +1089,35 @@ impl State {
                         err = Some(e);
                     }
                 } else {
-                    todo_port!("0x492020", "spell target range / validity");
-                    castable = true;
-                    if self.units[u as usize].energy as u32 >= energy || self.game_options & 0x800 != 0 {
-                        has_energy = true;
+                    match self.spell_target_check(d, u, tech, target, ty, pos) {
+                        Ok(()) => {
+                            castable = true;
+                            if self.units[u as usize].energy as u32 >= energy || self.game_options & 0x800 != 0 {
+                                has_energy = true;
+                            }
+                        }
+                        Err(e) => err = Some(e),
                     }
                 }
             } else if weapon == 0x82 {
                 if target == NIL {
-                    if self.units[u as usize].unit_type == 0x32 {
+                    if self.units[u as usize].unit_type == 0x32 || self.fog_attack_ok(d, u, ty) {
                         any_ok = true;
-                    } else {
-                        todo_port!("0x475c80", "attack a remembered fog unit");
                     }
                 } else if self.right_click_kind(d, u) == 3 {
-                    todo_port!("0x476430", "immobile attacker: target in range (0x4764d0)");
-                    any_ok |= self.can_attack_pub(d, u, target);
+                    // An attacker that can't move: the target must be in range and not
+                    // too close.
+                    if self.cannot_hit_now(d, u, target) {
+                        err = Some(0x378);
+                    } else if self.target_too_close(d, u, target) {
+                        err = Some(0x379);
+                    } else {
+                        any_ok |= self.can_attack_pub(d, u, target);
+                    }
                 } else {
                     any_ok |= self.can_attack_pub(d, u, target);
                 }
-            } else {
-                todo_port!("0x475ce0", "weapon-targeted spell validity");
+            } else if self.weapon_can_target(d, weapon, target, u) || (ty < 0xe4 && d.dat.units.flags[ty as usize] & 0x2000_0000 == 0) {
                 any_ok = true;
                 if self.units[u as usize].energy as u32 >= energy || self.game_options & 0x800 != 0 {
                     has_energy = true;

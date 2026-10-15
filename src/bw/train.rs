@@ -199,7 +199,8 @@ impl State {
                     todo_port!("0x4a2830", "AI: trained unit joins the computer's forces");
                 }
                 if self.units[c as usize].unit_type == 0xe {
-                    todo_port!("0x4e6340", "nuke goes into the silo");
+                    // 0x4e6340: the nuke goes into the silo.
+                    self.hide_unit(d, c);
                 } else {
                     self.send_to_rally(d, u, c);
                 }

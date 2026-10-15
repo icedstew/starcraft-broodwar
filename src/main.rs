@@ -349,6 +349,25 @@ fn main() -> std::io::Result<()> {
                     let (an, pc) = if mi == bw::list::NIL { (0, 0) } else { (st.images[mi as usize].iscript.anim, st.images[mi as usize].iscript.pc) };
                     eprintln!("{} anim {an:#x} pc {pc:#x} energy {}", unit_trace(st, f, w), st.units[w as usize].energy);
                 }
+                if let Some((wu, wf)) = std::env::var("SCBW_IMGWATCH").ok().and_then(|v| {
+                    let (a, b) = v.split_once(',')?;
+                    Some((a.parse::<u32>().ok()?, b.parse::<u32>().ok()?))
+                }) {
+                    // Debug: the unit's images each frame (same format as re/emu_game.py).
+                    if f >= wf {
+                        let un = &st.units[wu as usize];
+                        let mut parts = Vec::new();
+                        if un.sprite != bw::list::NIL {
+                            let mut im = st.sprites[un.sprite as usize].images.head;
+                            while im != bw::list::NIL {
+                                let i = &st.images[im as usize];
+                                parts.push(format!("{:#x}:a{:#x}:pc{:#x}:w{}", i.image_id, i.iscript.anim, i.iscript.pc, i.iscript.wait));
+                                im = i.link.next;
+                            }
+                        }
+                        eprintln!("f{f} img u{wu} st {:#x} ord {:#x} {}", un.status, un.order, parts.join(" "));
+                    }
+                }
                 if let Some(v) = std::env::var("SCBW_FINDPOS").ok() {
                     // "f,x,y": indices of units (and their subunits) at (x, y) on frame f.
                     let n: Vec<i32> = v.split(',').filter_map(|x| x.parse().ok()).collect();
