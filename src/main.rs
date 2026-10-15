@@ -5,6 +5,8 @@ mod bw;
 mod storage;
 mod storm;
 mod dat;
+mod dlg;
+mod menu;
 mod fog;
 mod game;
 mod grid;
@@ -726,7 +728,43 @@ fn main() -> std::io::Result<()> {
                 Some((sx, sy)) => Some((scene.cursor_kind(sx, sy, x, y, false), 0, sx, sy)),
                 None => hover.map(|(_, sx, sy)| (0, 0, sx, sy)),
             };
-            view::compose_with_cursor(&scene, ui.as_ref(), x, y, cursor, &mut idx, &mut rgb);
+            // Debug: SCBW_MENU=game|options|speed|sound|video|help|end opens that menu
+            // (SCBW_MENU_REPLAY=1: as while watching a replay).
+            let menu = std::env::var("SCBW_MENU").ok().and_then(|k| {
+                use menu::Kind::*;
+                let kind = match k.as_str() { "game" => Game, "options" => Options, "speed" => Speed, "sound" => Sound, "video" => Video, "help" => Help, "end" => EndMission, "objectives" => Objectives, _ => return None };
+                let ctx = menu::Ctx { replay: std::env::var("SCBW_MENU_REPLAY").is_ok(), multiplayer: false, replay_speed: 6 };
+                let skin = &ui.as_ref()?.skin;
+                let mut set = menu::Settings::default();
+                let mut m = menu::Menu::open(kind, 0, &a.files, skin, ctx, &set);
+                if let (Some(m), Some(u)) = (m.as_mut().filter(|m| m.kind == Objectives), ui.as_ref()) {
+                    m.set_text(2, &view::objectives_text(&scene, u));
+                }
+                // SCBW_MENU_INPUT="c x y;k s;..." clicks / presses keys (k esc, k enter).
+                for step in std::env::var("SCBW_MENU_INPUT").unwrap_or_default().split(';').filter(|s| !s.is_empty()) {
+                    let Some(cur) = m.as_mut() else { break };
+                    let v: Vec<&str> = step.split_whitespace().collect();
+                    let id = match v[..] {
+                        ["c", x, y] => {
+                            let (x, y) = (x.parse().unwrap_or(0), y.parse().unwrap_or(0));
+                            cur.mouse(skin, x, y, true, &mut set);
+                            cur.mouse(skin, x, y, false, &mut set)
+                        }
+                        ["k", "esc"] => cur.key(0x1b, &mut set),
+                        ["k", "enter"] => cur.key(b'\r', &mut set),
+                        ["k", c] => cur.key(c.as_bytes()[0], &mut set),
+                        _ => None,
+                    };
+                    if let Some(id) = id {
+                        let (next, action) = cur.on_activate(id, &mut set, ctx);
+                        eprintln!("menu {:?}: {id} -> {next:?} {action:?}", cur.kind);
+                        m = next.and_then(|(k, depth)| menu::Menu::open(k, depth, &a.files, skin, ctx, &set));
+                    }
+                }
+                eprintln!("settings {set:?}");
+                m
+            });
+            view::compose_with_cursor(&scene, ui.as_ref(), x, y, cursor, menu.as_ref(), &mut idx, &mut rgb);
             write_png_rgb(&args[2], w, h, &rgb)?;
         }
         Some("path") => {

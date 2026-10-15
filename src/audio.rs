@@ -13,6 +13,8 @@ pub struct Audio {
     names: Vec<String>,
     cache: RefCell<HashMap<u16, Option<Arc<[u8]>>>>,
     music: Option<rodio::Player>,
+    /// The sound options' volumes, 0..=100 (0x6cdfe0 music, 0x6cdfe4 digital).
+    volumes: (i16, i16),
 }
 
 impl Audio {
@@ -21,7 +23,7 @@ impl Audio {
         let mut sink = rodio::DeviceSinkBuilder::open_default_sink().ok()?;
         sink.log_on_drop(false);
         let names = dat::parse_tbl(&files.read("arr/sfxdata.tbl").ok()?);
-        Some(Audio { sink, names, cache: RefCell::new(HashMap::new()), music: None })
+        Some(Audio { sink, names, cache: RefCell::new(HashMap::new()), music: None, volumes: (25, 50) })
     }
 
     fn wav(&self, files: &Storage, dat: &Dat, id: u16) -> Option<Arc<[u8]>> {
@@ -47,15 +49,24 @@ impl Audio {
         }
         let Some(data) = self.wav(files, dat, id) else { return };
         if let Ok(src) = rodio::Decoder::new(Cursor::new(data)) {
-            self.sink.mixer().add(src.amplify(vol / 100.0));
+            // ponytail: digital volume scales linearly (0x5008ec holds DirectSound
+            // attenuations); 50 is the default level.
+            self.sink.mixer().add(src.amplify(vol / 100.0 * self.volumes.1 as f32 / 50.0));
         }
+    }
+
+    pub fn set_volumes(&mut self, music: i16, digital: i16) {
+        if let Some(p) = self.music.as_ref().filter(|_| self.volumes.0 != music) {
+            p.set_volume(music as f32 / 50.0);
+        }
+        self.volumes = (music, digital);
     }
 
     pub fn play_music(&mut self, files: &Storage, path: &str) {
         let Ok(data) = files.read(path) else { return };
         let Ok(src) = rodio::Decoder::new_looped(Cursor::new(Arc::<[u8]>::from(data))) else { return };
         let player = rodio::Player::connect_new(self.sink.mixer());
-        player.set_volume(0.5);
+        player.set_volume(self.volumes.0 as f32 / 50.0);
         player.append(src);
         self.music = Some(player);
     }

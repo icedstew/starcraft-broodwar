@@ -1004,18 +1004,97 @@ fn heap_draw_order(entries: Vec<(u32, u32)>) -> Vec<u32> {
 pub const SCREEN_W: i32 = 640;
 pub const SCREEN_H: i32 = 480;
 const MINIMAP: (i32, i32, i32) = (6, 348, 128); // x, y, size
-/// Command card: top-left of button 1 and the slot pitch (3x3, positions 1..9).
-const CARD: (i32, i32, i32, i32) = (505, 358, 46, 40);
+/// A grp frame blitted without its offsets (0x40abbe) at (x, y), at most cw x ch,
+/// through `colors`.
+#[allow(clippy::too_many_arguments)]
+fn blit_frame(g: &crate::grp::Grp, frame: usize, x: i32, y: i32, cw: i32, ch: i32, colors: Option<&[u8; 256]>, out: &mut [u8], w: i32, h: i32) {
+    let Some(f) = g.frame(frame) else { return };
+    let mut tmp = vec![0u8; (g.w * g.h) as usize];
+    g.draw(frame, false, -f.x, -f.y, &mut tmp, g.w, g.h, Blend::Normal);
+    for yy in 0..f.h.min(ch) {
+        for xx in 0..f.w.min(cw) {
+            let c = tmp[(yy * g.w + xx) as usize];
+            if c != 0 && (0..w).contains(&(x + xx)) && (0..h).contains(&(y + yy)) {
+                out[((y + yy) * w + x + xx) as usize] = colors.map_or(c, |t| t[c as usize]);
+            }
+        }
+    }
+}
 
-/// Screen rect origin of command card position `pos` (1..=9).
-pub fn card_slot(pos: u16) -> (i32, i32) {
-    let i = pos as i32 - 1;
-    (CARD.0 + (i % 3) * CARD.2, CARD.1 + (i / 3) * CARD.3)
+/// statdata.cpp's icon buttons: 0x456d30 (the race's cmdbtns.grp frame `gr`, centered,
+/// clipped to the control) and 0x456c30 (the icon centered, through ticon.pcx `row`);
+/// 0x4574e0 (info buttons) draws the icon first, 0x457480 the frame first.
+#[allow(clippy::too_many_arguments)]
+fn stat_button(ui: &crate::ui::Ui, gr: u16, icons: &crate::grp::Grp, icon: u16, row: usize, icon_first: bool, r: (i32, i32, i32, i32), out: &mut [u8]) {
+    let (w, h) = (SCREEN_W, SCREEN_H);
+    let (l, t, rr, b) = r;
+    let (cw, ch) = (rr - l + 1, b - t + 1);
+    let mut colors = [0u8; 256];
+    for (i, v) in colors.iter_mut().enumerate() {
+        *v = ui.ticon.get(row * 16 + (i & 15)).copied().unwrap_or(i as u8);
+    }
+    let draw_icon = |out: &mut [u8]| {
+        if let Some(f) = icons.frame(icon as usize) {
+            blit_frame(icons, icon as usize, l + (cw - f.w) / 2, t + (ch - f.h) / 2, f.w, f.h, Some(&colors), out, w, h);
+        }
+    };
+    let draw_bg = |out: &mut [u8]| {
+        if let Some(f) = ui.cmdbtns.frame(gr as usize) {
+            let (fw, fh) = (f.w.min(cw), f.h.min(ch));
+            blit_frame(&ui.cmdbtns, gr as usize, l + (cw - fw) / 2, t + (ch - fh) / 2, fw, fh, None, out, w, h);
+        }
+    };
+    if icon_first {
+        draw_icon(out);
+        draw_bg(out);
+    } else {
+        draw_bg(out);
+        draw_icon(out);
+    }
+}
+
+/// Screen rect of command card position `pos` (1..=9): statbtn.bin's buttons 1..9.
+pub fn card_rect(ui: &crate::ui::Ui, pos: u16) -> (i32, i32, i32, i32) {
+    ui.statbtn.screen_rect(pos as i16).unwrap_or((0, 0, -1, -1))
+}
+
+/// 0x458900: a command button: the race's cmdbtns.grp frame (1 pressed, else 0; not
+/// while watching a replay), then the icon centered, through the ticon.pcx row for
+/// its state (1 disabled, 2 pressed or the highlighted icon 0x68c1bc, else 0).
+/// Frames are blitted without their offsets (0x40abbe).
+#[allow(clippy::too_many_arguments)]
+fn draw_cmd_button(ui: &crate::ui::Ui, replay: bool, icon: u16, disabled: bool, pressed: bool, r: (i32, i32, i32, i32), out: &mut [u8], w: i32, h: i32) {
+    let (l, t, rr, b) = r;
+    let (cw, ch) = (rr - l + 1, b - t + 1);
+    let p = pressed as i32;
+    if let Some(f) = ui.cmdbtns.frame(p as usize).filter(|_| !replay) {
+        let mut tmp = vec![0u8; (ui.cmdbtns.w * ui.cmdbtns.h) as usize];
+        ui.cmdbtns.draw(p as usize, false, -f.x, -f.y, &mut tmp, ui.cmdbtns.w, ui.cmdbtns.h, Blend::Normal);
+        for y in 0..f.h.min(ch) {
+            for x in 0..f.w.min(cw) {
+                let c = tmp[(y * ui.cmdbtns.w + x) as usize];
+                if c != 0 && (0..w).contains(&(l + x)) && (0..h).contains(&(t + y)) {
+                    out[((t + y) * w + l + x) as usize] = c;
+                }
+            }
+        }
+    }
+    let state = if disabled { 1 } else if pressed { 2 } else { 0 };
+    let Some(f) = ui.cmdicons.frame(icon as usize) else { return };
+    let (dx, dy) = match (replay, icon) {
+        (true, 0x182 | 0x183) => (-2, 3),
+        (true, 0x184) => (-4, 3),
+        (true, 0x185) => (-3, 3),
+        _ => (0, 0),
+    };
+    let x = (cw - f.w) / 2 + l + dx + p;
+    let y = (ch - f.h) / 2 + t + dy + p;
+    ui.draw_cmd_icon(icon as usize, state, x - f.x, y - f.y, out, w, h);
 }
 
 /// Full frame: map view + console + minimap + resource bar, as 0xRRGGBB.
 pub fn compose(scene: &Scene, ui: Option<&crate::ui::Ui>, vx: i32, vy: i32, idx: &mut [u8], out: &mut [u32]) {
-    compose_with_cursor(scene, ui, vx, vy, None, idx, out)
+    compose_with_cursor(scene, ui, vx, vy, None, None, idx, out)
 }
 
 /// Minimap geometry: (origin x, origin y, map pixels per minimap pixel). 0x4a4400
@@ -1026,7 +1105,7 @@ pub fn minimap_geom(scene: &Scene) -> (i32, i32, i32) {
     (mx + (ms - m.w as i32) / 2, my + (ms - m.h as i32) / 2, m.tile_px as i32)
 }
 
-fn rect(out: &mut [u32], w: i32, h: i32, (x0, y0, x1, y1): (i32, i32, i32, i32), col: u32) {
+fn rect(out: &mut [u8], w: i32, h: i32, (x0, y0, x1, y1): (i32, i32, i32, i32), col: u8) {
     for x in x0.min(x1)..=x0.max(x1) {
         for y in [y0, y1] {
             if (0..w).contains(&x) && (0..h).contains(&y) {
@@ -1043,37 +1122,43 @@ fn rect(out: &mut [u32], w: i32, h: i32, (x0, y0, x1, y1): (i32, i32, i32, i32),
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn compose_with_cursor(
     scene: &Scene,
     ui: Option<&crate::ui::Ui>,
     vx: i32,
     vy: i32,
     cursor: Option<(usize, usize, i32, i32)>,
+    menu: Option<&crate::menu::Menu>,
     idx: &mut [u8],
     out: &mut [u32],
 ) {
     let (w, h) = (SCREEN_W, SCREEN_H);
     scene.draw(vx, vy, w, h, idx);
     let pal = scene.palette();
+    if let Some(ui) = ui {
+        draw_hud(scene, ui, vx, vy, cursor, menu, idx);
+    }
     for (o, &i) in out.iter_mut().zip(idx.iter()) {
         let [r, g, b] = pal[i as usize];
         *o = (r as u32) << 16 | (g as u32) << 8 | b as u32;
     }
-    let Some(ui) = ui else { return };
-    crate::ui::blit_rgba(&ui.console, 0, h - ui.console.h as i32, out, w, h);
+}
+
+/// The interface over the map view, in the game palette.
+fn draw_hud(scene: &Scene, ui: &crate::ui::Ui, vx: i32, vy: i32, cursor: Option<(usize, usize, i32, i32)>, menu: Option<&crate::menu::Menu>, out: &mut [u8]) {
+    let (w, h) = (SCREEN_W, SCREEN_H);
+    ui.skin.colors.set(scene.minimap.colors);
+    crate::ui::blit(&ui.console, 0, h - ui.console.h as i32, out, w, h);
     let (ox, oy, scale) = minimap_geom(scene);
-    let rgb = |i: u8| {
-        let [r, g, b] = pal[i as usize];
-        (r as u32) << 16 | (g as u32) << 8 | b as u32
-    };
     let mm = &scene.minimap;
     for y in 0..mm.h as i32 {
         for x in 0..mm.w as i32 {
-            out[((oy + y) * w + ox + x) as usize] = rgb(mm.pixels[(y * mm.w as i32 + x) as usize]);
+            out[((oy + y) * w + ox + x) as usize] = mm.pixels[(y * mm.w as i32 + x) as usize];
         }
     }
     let (rx, ry, rw, rh) = (ox + vx / scale, oy + vy / scale, w / scale, (h - 120) / scale);
-    rect(out, w, h, (rx, ry, rx + rw, ry + rh), 0xFFFFFF);
+    rect(out, w, h, (rx, ry, rx + rw, ry + rh), scene.minimap.colors[0]);
     // Resource bar. icons.grp frames: 0 minerals, 1..=3 gas (z/t/p), 4..=6 supply (z/t/p).
     let col = ui.text_color(2);
     let race = scene.local_race();
@@ -1084,18 +1169,17 @@ pub fn compose_with_cursor(
     // Watching a replay shows no resources (statres is not shown).
     if !scene.st.replay {
         for (icon, text) in [(0, minerals.as_str()), (1 + race, gas.as_str()), (4 + race, supply.as_str())] {
-            ui.draw_icon(icon, x, 2, pal, out, w, h);
-            ui.font.draw(text, x + 16, 4, col, pal, out, w, h);
+            ui.draw_icon(icon, x, 2, out, w, h);
+            ui.font.draw(text, x + 16, 4, col, out, w, h);
             x += 66;
         }
     }
     if scene.st.replay {
-        draw_replay_panel(scene, ui, pal, out, w, h);
+        draw_replay_panel(scene, ui, out, w, h);
     }
-    // rez\stat_f10.bin: the MENU button (408+8, 388) .. (408+71, 388+19), flags 0x518,
-    // text "MENU" after its hotkey byte.
-    // ponytail: the dialog button's own background (dlg button frames) is not drawn.
-    draw_ctl_text(ui, 0x518, "\x03MENU", (416, 388, 479, 407), pal, out, w, h);
+    // rez\stat_f10.bin: the MENU button (0x4f5300); rez\minimap.bin's buttons.
+    ui.skin.draw(&ui.stat_f10, &mut crate::dlg::Surf { px: out, w, h });
+    ui.skin.draw(&ui.minimap, &mut crate::dlg::Surf { px: out, w, h });
     // Building panels of statdata.cpp (training queue, research, upgrade).
     if let Some((_, ctls)) = scene.status_panel(ui) {
         let sd = &ui.statdata;
@@ -1104,8 +1188,10 @@ pub fn compose_with_cursor(
             let (cw, ch) = (r - l + 1, b - t + 1);
             match show {
                 crate::statdata::Show::Text(s) => {
-                    let flags = sd.get(*id).map_or(0, |c| c.flags);
-                    draw_ctl_text(ui, flags, s, (l, t, r, b), pal, out, w, h);
+                    let Some(c) = sd.get(*id) else { continue };
+                    let mut c = c.clone();
+                    c.text = s.as_bytes().to_vec();
+                    ui.skin.draw_ctl(&c, (l, t, r, b), &mut crate::dlg::Surf { px: out, w, h });
                 }
                 crate::statdata::Show::Wireframe => {
                     let [u] = scene.selected[..] else { continue };
@@ -1113,49 +1199,37 @@ pub fn compose_with_cursor(
                     let wt = crate::ui::wire_type(&scene.st, u) as usize;
                     let frame = if wt < ui.wireframe.frame_count() { wt } else { 0 };
                     let colors = with_data(scene.a, |d| crate::ui::wireframe_colors(&scene.st, d, u, &ui.twire));
-                    crate::ui::draw_grp_rgb_blend(&ui.wireframe, frame, l, t, pal, out, w, h, crate::grp::Blend::Colors(&colors));
+                    ui.wireframe.draw(frame, false, l, t, out, w, h, Blend::Colors(&colors));
                 }
                 crate::statdata::Show::Cargo { bg, unit } => {
-                    crate::ui::draw_grp_rgb(&ui.cmdbtns, *bg as usize, l, t, pal, out, w, h);
+                    ui.cmdbtns.draw(*bg as usize, false, l, t, out, w, h, Blend::Normal);
                     let wt = crate::ui::wire_type(&scene.st, *unit) as usize;
                     let frame = if wt < ui.tranwire.frame_count() { wt } else { 0 };
                     let colors = with_data(scene.a, |d| crate::ui::wireframe_colors(&scene.st, d, *unit, &ui.twire));
-                    crate::ui::draw_grp_rgb_blend(&ui.tranwire, frame, l, t, pal, out, w, h, crate::grp::Blend::Colors(&colors));
+                    ui.tranwire.draw(frame, false, l, t, out, w, h, Blend::Colors(&colors));
                 }
                 crate::statdata::Show::GroupWire(u) => {
                     let wt = crate::ui::wire_type(&scene.st, *u) as usize;
                     let frame = if wt < ui.grpwire.frame_count() { wt } else { 0 };
                     let colors = with_data(scene.a, |d| crate::ui::wireframe_colors(&scene.st, d, *u, &ui.twire));
-                    crate::ui::draw_grp_rgb_blend(&ui.grpwire, frame, l, t, pal, out, w, h, crate::grp::Blend::Colors(&colors));
+                    ui.grpwire.draw(frame, false, l, t, out, w, h, Blend::Colors(&colors));
                 }
                 crate::statdata::Show::Info { icon, level, .. } => {
-                    crate::ui::draw_grp_rgb(&ui.cmdbtns, 2, l, t, pal, out, w, h);
-                    ui.draw_cmd_icon(*icon as usize, 0, l + 2, t + 1, pal, out, w, h);
-                    let n = format!("{level} ");
-                    let tw = ui.font.width(&n);
-                    ui.font.draw(&n, r - tw, b - ui.font.height, ui.text_color(2), pal, out, w, h);
+                    // 0x425600: graphic 0xc, disabled (ticon row 4); drawn by 0x4574e0.
+                    stat_button(ui, 0xc, &ui.cmdicons, *icon, 4, true, (l, t, r, b), out);
+                    let o = crate::ui::TextOpts { flags: 0x44, clip: (l, t, r, b), ..crate::ui::TextOpts::new() };
+                    ui.skin.fonts[0].draw_text(&format!("{level} "), l, t, 2, &o, crate::ui::TextDst { rows: &ui.text_colors, out, w, h });
                 }
                 crate::statdata::Show::Progress(v) => {
                     // 0x456b40: the empty bar, then the full one clipped to the percentage.
-                    crate::ui::blit_rgba(&ui.pbar_empty, l, t, out, w, h);
-                    let fw = cw * *v as i32 / 100;
-                    let full = &ui.pbar_full;
-                    for y in 0..full.h.min(ch as usize) as i32 {
-                        for x in 0..fw.min(full.w as i32) {
-                            let [r, g, b, a] = full.px[y as usize * full.w + x as usize];
-                            if a != 0 {
-                                out[((t + y) * w + l + x) as usize] = (r as u32) << 16 | (g as u32) << 8 | b as u32;
-                            }
-                        }
-                    }
+                    crate::ui::blit(&ui.pbar_empty, l, t, out, w, h);
+                    let _ = ch;
+                    crate::ui::blit_w(&ui.pbar_full, l, t, cw * *v as i32 / 100, out, w, h);
                 }
                 crate::statdata::Show::Button { bg, icon, cmdicon } => {
-                    crate::ui::draw_grp_rgb(&ui.cmdbtns, *bg as usize, l, t, pal, out, w, h);
-                    if *cmdicon {
-                        ui.draw_cmd_icon(*icon as usize, 0, l + 2, t + 1, pal, out, w, h);
-                    } else if let Some(f) = ui.cmdbtns.frame(*icon as usize) {
-                        crate::ui::draw_grp_rgb(&ui.cmdbtns, *icon as usize, l + (cw - f.w as i32) / 2 - f.x as i32, t + (ch - f.h as i32) / 2 - f.y as i32, pal, out, w, h);
-                    }
+                    // 0x457480: an enabled button (ticon row 3).
+                    let g = if *cmdicon { &ui.cmdicons } else { &ui.cmdbtns };
+                    stat_button(ui, *bg, g, *icon, 3, false, (l, t, r, b), out);
                 }
             }
         }
@@ -1166,7 +1240,7 @@ pub fn compose_with_cursor(
             let crate::statdata::Show::Info { tip, .. } = show else { continue };
             let Some((l, t, r, b)) = ui.statdata.screen_rect(*id) else { continue };
             if (l..=r).contains(&cx) && (t..=b).contains(&cy) {
-                draw_text_box(ui, tip, r, t, pal, out, w, h);
+                tooltip(ui, tip, r, t, out, w, h);
             }
         }
     }
@@ -1175,10 +1249,10 @@ pub fn compose_with_cursor(
         let msg: String = msg.chars().filter(|c| *c >= ' ').collect();
         let tw = msg.chars().count() as i32 * 6;
         // Color code 4 (0x641680); tfontgam rows start at code 2.
-        ui.font.draw(&msg, (w - tw) / 2, h - 160, ui.text_color(4 - 2), pal, out, w, h);
+        ui.font.draw(&msg, (w - tw) / 2, h - 160, ui.text_color(4 - 2), out, w, h);
     }
     if let Some(b) = scene.drag_box {
-        rect(out, w, h, b, 0x10FC18);
+        rect(out, w, h, b, scene.minimap.colors[0x12]);
     }
     if let (Some((_, kind)), Some((_, _, cx, cy))) = (scene.placing, cursor) {
         // placebox.cpp (0x48daf0, 0x48d7f0): the building's first frame in the local
@@ -1214,29 +1288,37 @@ pub fn compose_with_cursor(
         for (i, &c) in surf.iter().enumerate() {
             let (px, py) = (sx + i as i32 % sw, sy + i as i32 / sw);
             if c != 0 && (0..w).contains(&px) && (0..h - 120).contains(&py) {
-                let [r, g, b] = pal[c as usize];
-                out[(py * w + px) as usize] = (r as u32) << 16 | (g as u32) << 8 | b as u32;
+                out[(py * w + px) as usize] = c;
             }
         }
     }
     for (i, slot) in scene.card().iter().enumerate() {
         if let Some((b, enabled)) = slot {
-            let (bx, by) = card_slot(i as u16 + 1);
-            ui.draw_cmd_icon(b.icon as usize, if *enabled { 0 } else { 1 }, bx + 2, by + 1, pal, out, w, h);
+            draw_cmd_button(ui, scene.st.replay, b.icon, !*enabled, false, card_rect(ui, i as u16 + 1), out, w, h);
         }
     }
     // 0x4593a0: the hovered button's tooltip.
     if let Some((_, _, cx, cy)) = cursor {
         for (i, slot) in scene.card().iter().enumerate() {
             let Some((b, enabled)) = slot else { continue };
-            let (bx, by) = card_slot(i as u16 + 1);
-            if (bx..bx + 40).contains(&cx) && (by..by + 36).contains(&cy) {
-                draw_tooltip(scene, ui, b, *enabled, bx, by, pal, out, w, h);
+            let (bx, by, br, bb) = card_rect(ui, i as u16 + 1);
+            if (bx..=br).contains(&cx) && (by..=bb).contains(&cy) {
+                draw_tooltip(scene, ui, b, *enabled, bx, by, out, w, h);
             }
         }
     }
+    // 0x4f4f70: the MENU button's tooltip (stat_txt 0x32d) right of it.
+    if let (Some((_, _, cx, cy)), Some((l, t, r, b))) = (cursor, ui.stat_f10.screen_rect(1)) {
+        if (l..=r).contains(&cx) && (t..=b).contains(&cy) {
+            let s = ui.stat_txt.get(0x32d).map_or("", |s| s.split('\0').next().unwrap_or(""));
+            tooltip(ui, s, r, t, out, w, h);
+        }
+    }
+    if let Some(m) = menu {
+        m.draw(&ui.skin, &mut crate::dlg::Surf { px: out, w, h });
+    }
     if let Some((kind, counter, cx, cy)) = cursor {
-        ui.draw_cursor(kind, counter, cx, cy, pal, out, w, h);
+        ui.draw_cursor(kind, counter, cx, cy, out, w, h);
     }
 }
 
@@ -1245,7 +1327,7 @@ pub fn compose_with_cursor(
 /// and supply for units (kind 1), the current level's cost and the next level for
 /// upgrades (2), minerals, gas and energy for techs (3).
 #[allow(clippy::too_many_arguments)]
-fn draw_tooltip(scene: &Scene, ui: &crate::ui::Ui, b: &bw::buttons::Button, enabled: bool, bx: i32, by: i32, pal: &[[u8; 3]; 256], out: &mut [u32], w: i32, h: i32) {
+fn draw_tooltip(scene: &Scene, ui: &crate::ui::Ui, b: &bw::buttons::Button, enabled: bool, bx: i32, by: i32, out: &mut [u8], w: i32, h: i32) {
     let id = if enabled { b.enabled_str } else { b.disabled_str };
     let Some(raw) = (id as usize).checked_sub(1).and_then(|i| ui.stat_txt.get(i)) else { return };
     let raw = raw.split('\0').next().unwrap_or("");
@@ -1291,7 +1373,7 @@ fn draw_tooltip(scene: &Scene, ui: &crate::ui::Ui, b: &bw::buttons::Button, enab
         }
     }
     for (k, l) in lines.iter().enumerate() {
-        draw_coded(ui, l, x0 + 4, y0 + 2 + k as i32 * lh, pal, out, w, h);
+        draw_coded(ui, l, x0 + 4, y0 + 2 + k as i32 * lh, out, w, h);
     }
     if has_cost {
         let race = scene.local_race();
@@ -1301,8 +1383,8 @@ fn draw_tooltip(scene: &Scene, ui: &crate::ui::Ui, b: &bw::buttons::Button, enab
             if !show {
                 continue;
             }
-            ui.draw_icon(icon, x, y, pal, out, w, h);
-            ui.font.draw(&n.to_string(), x + 16, y + 2, ui.text_color(2), pal, out, w, h);
+            ui.draw_icon(icon, x, y, out, w, h);
+            ui.font.draw(&n.to_string(), x + 16, y + 2, ui.text_color(2), out, w, h);
             x += 36;
         }
     }
@@ -1448,11 +1530,88 @@ fn run_with(a: &Assets, mut scene: Scene, mut replay: Option<ReplayPlay>) -> io:
     let mut rmb_was_down = false;
     let mut lmb_was_down = false;
     let mut last_click = 0usize;
-    while win.is_open() && !win.is_key_down(Key::Escape) {
+    let mut settings = crate::menu::Settings::default();
+    let mut menu: Option<crate::menu::Menu> = None;
+    let mut menu_paused = false;
+    let mut game_acc = 0u32;
+    let mut ctx = crate::menu::Ctx { replay: replay.is_some(), multiplayer: false, replay_speed: 0 };
+    let mut menu_btn_down = false;
+    'frames: while win.is_open() {
         tick += 1;
-        let sp = 16;
         let shift = win.is_key_down(Key::LeftShift) || win.is_key_down(Key::RightShift);
         let (cx, cy) = win.get_mouse_pos(minifb::MouseMode::Clamp).map_or((vw / 2, vh / 2), |(x, y)| (x as i32, y as i32));
+        // The game menu (F10 or the console's MENU button) takes all input while open;
+        // single player and replays pause under it (0x4f57a0 -> 0x488790).
+        ctx.replay_speed = scene.st.replay_speed as i16;
+        let open_menu = |kind, depth, settings: &crate::menu::Settings| {
+            let u = ui.as_ref()?;
+            let mut m = crate::menu::Menu::open(kind, depth, &a.files, &u.skin, ctx, settings)?;
+            if kind == crate::menu::Kind::Objectives {
+                m.set_text(2, &objectives_text(&scene, u));
+            }
+            Some(m)
+        };
+        if menu.is_some() {
+            let ldown = win.get_mouse_down(minifb::MouseButton::Left);
+            let mut act = None;
+            if let (Some(m), Some(u)) = (menu.as_mut(), ui.as_ref()) {
+                act = m.mouse(&u.skin, cx, cy, ldown, &mut settings);
+                for k in win.get_keys_pressed(minifb::KeyRepeat::No) {
+                    let ch = match k {
+                        Key::Escape => Some(0x1b),
+                        Key::Enter => Some(b'\r'),
+                        k => key_char(k).map(|c| c as u8),
+                    };
+                    if let Some(id) = ch.and_then(|c| m.key(c, &mut settings)) {
+                        act = Some(id);
+                    }
+                }
+            }
+            lmb_was_down = ldown;
+            if let Some(id) = act {
+                let m = menu.take().unwrap();
+                let (next, action) = m.on_activate(id, &mut settings, ctx);
+                menu = next.and_then(|(k, depth)| open_menu(k, depth, &settings));
+                match action {
+                    crate::menu::Action::QuitMission | crate::menu::Action::ExitProgram => break 'frames,
+                    // ponytail: restarting rebuilds nothing yet; the menu just closes.
+                    _ => {}
+                }
+            }
+            if let Some(au) = audio.as_mut() {
+                au.set_volumes(settings.music, settings.digital);
+            }
+            if menu.is_none() && menu_paused {
+                menu_paused = false;
+                if replay.is_some() {
+                    scene.st.replay_paused = false;
+                }
+            }
+            let counter = tick * 42 / 100;
+            compose_with_cursor(&scene, ui.as_ref(), vx, vy, Some((0, counter, cx, cy)), menu.as_ref(), &mut idx, &mut rgb);
+            win.update_with_buffer(&rgb, vw as usize, vh as usize).map_err(|e| io::Error::other(e.to_string()))?;
+            continue;
+        }
+        let mdown = win.get_mouse_down(minifb::MouseButton::Left);
+        let on_menu_btn = ui.as_ref().and_then(|u| u.stat_f10.screen_rect(1)).is_some_and(|(l, t, r, b)| (l..=r).contains(&cx) && (t..=b).contains(&cy));
+        let menu_clicked = menu_btn_down && !mdown && on_menu_btn;
+        menu_btn_down = mdown && (menu_btn_down || (on_menu_btn && !lmb_was_down));
+        if menu_clicked || win.is_key_pressed(Key::F10, minifb::KeyRepeat::No) {
+            menu = open_menu(crate::menu::Kind::Game, 0, &settings);
+            menu_paused = true;
+            if replay.is_some() && !scene.st.replay_paused {
+                scene.st.replay_paused = true;
+            } else if replay.is_some() {
+                menu_paused = false;
+            }
+            lmb_was_down = mdown;
+            continue;
+        }
+        if menu_btn_down {
+            lmb_was_down = mdown;
+        }
+        // ponytail: scroll speed 0x6cdfd8 / 0x6cdfdc picks among 7 rates; 8 + 4 per step.
+        let sp = 8 + 4 * settings.mouse_scroll as i32;
         if cx <= 1 { vx -= sp }
         if cx >= vw - 2 { vx += sp }
         if cy <= 1 { vy -= sp }
@@ -1467,8 +1626,8 @@ fn run_with(a: &Assets, mut scene: Scene, mut replay: Option<ReplayPlay>) -> io:
         let mut pressed: Option<bw::buttons::Button> = None;
         if clicked {
             pressed = card.iter().enumerate().find_map(|(i, slot)| {
-                let (bx, by) = card_slot(i as u16 + 1);
-                ((bx..bx + 40).contains(&cx) && (by..by + 36).contains(&cy)).then_some(*slot).flatten()
+                let (bx, by, br, bb) = ui.as_ref().map_or((0, 0, -1, -1), |u| card_rect(u, i as u16 + 1));
+                ((bx..=br).contains(&cx) && (by..=bb).contains(&cy)).then_some(*slot).flatten()
             }).and_then(|(b, enabled)| enabled.then_some(b));
         }
         for k in win.get_keys_pressed(minifb::KeyRepeat::No) {
@@ -1491,7 +1650,12 @@ fn run_with(a: &Assets, mut scene: Scene, mut replay: Option<ReplayPlay>) -> io:
                 }
                 continue;
             }
-            let Some(c) = key_char(k) else { continue };
+            // Esc leaves targeting / placement, else it is the hotkey of the card's
+            // cancel buttons (stat_txt hotkey byte 0x1b).
+            if k == Escape && (scene.targeting.take().is_some() || scene.placing.take().is_some()) {
+                continue;
+            }
+            let Some(c) = (if k == Escape { Some('\x1b') } else { key_char(k) }) else { continue };
             if let Some((b, _)) = card.iter().flatten().find(|(b, en)| *en && hotkey(ui.as_ref(), b) == Some(c)) {
                 pressed = Some(*b);
             }
@@ -1591,7 +1755,12 @@ fn run_with(a: &Assets, mut scene: Scene, mut replay: Option<ReplayPlay>) -> io:
                 n
             }
         } else {
-            1
+            // The game speed (0x6cdfd4) picks the ms per frame (0x5124d8).
+            game_acc += 42;
+            let ms = bw::triggers::FRAME_MS[settings.game_speed.clamp(0, 6) as usize];
+            let n = game_acc / ms;
+            game_acc %= ms;
+            n
         };
         if let Some(rp) = replay.as_mut().filter(|_| steps > 0) {
             rp.commands(&mut scene);
@@ -1628,108 +1797,95 @@ fn run_with(a: &Assets, mut scene: Scene, mut replay: Option<ReplayPlay>) -> io:
         }
         let kind = scene.cursor_kind(cx, cy, vx, vy, drag_start.is_some());
         let counter = tick * 42 / 100;
-        compose_with_cursor(&scene, ui.as_ref(), vx, vy, Some((kind, counter, cx, cy)), &mut idx, &mut rgb);
+        compose_with_cursor(&scene, ui.as_ref(), vx, vy, Some((kind, counter, cx, cy)), None, &mut idx, &mut rgb);
         win.update_with_buffer(&rgb, vw as usize, vh as usize).map_err(|e| io::Error::other(e.to_string()))?;
     }
     Ok(())
 }
 
+/// 0x4c9de0: the mission objectives: network.tbl lines for the built-in game types
+/// (template +8; greed by its resource goal, 0x4c9030), else the map string the local
+/// player's objectives trigger set (0x58d6c4).
+pub fn objectives_text(scene: &Scene, ui: &crate::ui::Ui) -> String {
+    let t = &scene.st.template;
+    let net = |i: usize| ui.network.get(i).map_or(String::new(), |s| s.split('\0').next().unwrap_or("").to_string());
+    match t[8] {
+        4 => net(0x7a),
+        3 => match u32::from_le_bytes([t[4], t[5], t[6], t[7]]) {
+            0x9c4 => net(0x75),
+            5000 => net(0x76),
+            0x1d4c => net(0x77),
+            10000 => net(0x78),
+            _ => String::new(),
+        },
+        1 | 7 => net(0x74),
+        6 => net(0x79),
+        5 => net(0x7b),
+        _ => {
+            let id = scene.st.trig.objectives[scene.local_player() as usize & 7];
+            if id == 0 { String::new() } else { scene.chk.string(id as u16).unwrap_or_default() }
+        }
+    }
+}
+
 /// Width of text with tfontgam color codes (bytes below 0x20 draw nothing).
 fn coded_width(ui: &crate::ui::Ui, s: &str) -> i32 {
-    coded_width_f(&ui.font, s)
+    ui.font.width(&s.chars().filter(|c| *c >= ' ').collect::<String>())
 }
 
-fn coded_width_f(font: &crate::ui::Font, s: &str) -> i32 {
-    font.width(&s.chars().filter(|c| *c >= ' ').collect::<String>())
+/// Left-aligned text with color codes (0x4202b0, default color 2).
+fn draw_coded(ui: &crate::ui::Ui, s: &str, x: i32, y: i32, out: &mut [u8], w: i32, h: i32) {
+    let o = crate::ui::TextOpts::new();
+    ui.font.draw_text(s, x, y, 2, &o, crate::ui::TextDst { rows: &ui.text_colors, out, w, h });
 }
 
-/// Text with color codes: code `c` switches to tfontgam row `c - 2` (default 2).
-#[allow(clippy::too_many_arguments)]
-fn draw_coded(ui: &crate::ui::Ui, s: &str, x: i32, y: i32, pal: &[[u8; 3]; 256], out: &mut [u32], w: i32, h: i32) {
-    draw_coded_f(ui, &ui.font, s, x, y, pal, out, w, h)
-}
-
-/// A dialog text control: font8 when the control has flag 0x400, centered in its rect.
-#[allow(clippy::too_many_arguments)]
-fn draw_ctl_text(ui: &crate::ui::Ui, flags: u32, s: &str, rect: (i32, i32, i32, i32), pal: &[[u8; 3]; 256], out: &mut [u32], w: i32, h: i32) {
-    let font = if flags & 0x400 != 0 { &ui.font8 } else { &ui.font };
-    let (l, t, r, b) = rect;
-    let tw = coded_width_f(font, s);
-    draw_coded_f(ui, font, s, l + (r - l + 1 - tw) / 2, t + (b - t + 1 - font.height) / 2, pal, out, w, h);
-}
-
-#[allow(clippy::too_many_arguments)]
-fn draw_coded_f(ui: &crate::ui::Ui, font: &crate::ui::Font, s: &str, mut x: i32, y: i32, pal: &[[u8; 3]; 256], out: &mut [u32], w: i32, h: i32) {
-    let mut color = 2usize;
-    let mut run = String::new();
-    for ch in s.chars() {
-        if (ch as u32) < 0x20 {
-            if !run.is_empty() {
-                font.draw(&run, x, y, ui.text_color(color - 2), pal, out, w, h);
-                x += font.width(&run);
-                run.clear();
+/// 0x481510: a tooltip: `text` (font8, color 2, no line gap) on the black box of its
+/// extent, outlined in interface color 0x10, its top-left at (x, y) kept on screen.
+fn tooltip(ui: &crate::ui::Ui, text: &str, x: i32, y: i32, out: &mut [u8], w: i32, h: i32) {
+    let colors = ui.skin.colors.get();
+    let mut buf = vec![colors[0xf]; (w * h) as usize];
+    let o = crate::ui::TextOpts { flags: 0x11, line_gap: 0, clip: (2, 0, w - 1, h - 1), ..crate::ui::TextOpts::new() };
+    let e = ui.skin.fonts[0].draw_text(text, 2, 0, 2, &o, crate::ui::TextDst { rows: &ui.text_colors, out: &mut buf, w, h });
+    let (bw, bh) = (e.r - e.l + 1, e.b - e.t + 1);
+    let x = x.max(0).min(0x27f - (bw - 1));
+    let y = y.max(0).min(0x1df - (bh - 1));
+    for yy in 0..bh {
+        for xx in 0..bw {
+            let edge = xx == 0 || yy == 0 || xx == bw - 1 || yy == bh - 1;
+            let c = if edge { colors[0x10] } else { buf[((e.t + yy) * w + e.l + xx) as usize] };
+            if (0..w).contains(&(x + xx)) && (0..h).contains(&(y + yy)) {
+                out[((y + yy) * w + x + xx) as usize] = c;
             }
-            color = (ch as usize).max(2);
-        } else {
-            run.push(ch);
         }
-    }
-    if !run.is_empty() {
-        font.draw(&run, x, y, ui.text_color(color - 2), pal, out, w, h);
-    }
-}
-
-/// A tooltip box (0x481510): `text` lines on black, bottom-right at (`right`, `bottom`).
-#[allow(clippy::too_many_arguments)]
-fn draw_text_box(ui: &crate::ui::Ui, text: &str, right: i32, bottom: i32, pal: &[[u8; 3]; 256], out: &mut [u32], w: i32, h: i32) {
-    let lines: Vec<&str> = text.split('\n').collect();
-    let lh = ui.font.height + 1;
-    let bw_ = lines.iter().map(|l| coded_width(ui, l)).max().unwrap_or(0) + 8;
-    let bh = lines.len() as i32 * lh + 4;
-    let x0 = (right - bw_).clamp(0, (w - bw_).max(0));
-    let y0 = (bottom - bh - 2).max(0);
-    for y in y0..(y0 + bh).min(h) {
-        for x in x0..(x0 + bw_).min(w) {
-            out[(y * w + x) as usize] = 0;
-        }
-    }
-    for (k, l) in lines.iter().enumerate() {
-        draw_coded(ui, l, x0 + 4, y0 + 2 + k as i32 * lh, pal, out, w, h);
     }
 }
 
 /// 0x427a80: the replay panel in the command card dialog (statbtnn.bin): "Replay
 /// Progress" (-45), progress (10), elapsed time (-46) and speed (-47).
-fn draw_replay_panel(scene: &Scene, ui: &crate::ui::Ui, pal: &[[u8; 3]; 256], out: &mut [u32], w: i32, h: i32) {
+fn draw_replay_panel(scene: &Scene, ui: &crate::ui::Ui, out: &mut [u8], w: i32, h: i32) {
     let st = &scene.st;
-    let Some(dlg) = ui.statbtn_replay.as_ref() else { return };
+    let dlg = &ui.statbtn;
     let glu = |i: usize| ui.glu_all.get(i.wrapping_sub(1)).map_or(String::new(), |s| s.split('\0').next().unwrap_or("").to_string());
     let stat = |i: usize| ui.stat_txt.get(i.wrapping_sub(1)).map_or(String::new(), |s| s.split('\0').next().unwrap_or("").to_string());
-    let centered = |id: i16, text: &str, out: &mut [u32]| {
-        if let (Some(rect), Some(c)) = (dlg.screen_rect(id), dlg.get(id)) {
-            draw_ctl_text(ui, c.flags, text, rect, pal, out, w, h);
+    let mut s = crate::dlg::Surf { px: out, w, h };
+    let label = |id: i16, text: &str, s: &mut crate::dlg::Surf| {
+        if let Some(c) = dlg.get(id) {
+            let mut c = c.clone();
+            c.text = text.as_bytes().to_vec();
+            ui.skin.draw_ctl(&c, dlg.abs(&c), s);
         }
     };
-    centered(-45, &format!("\x03{}", stat(0x609)), out);
-    if let Some((l, t, r, b)) = dlg.screen_rect(10) {
+    label(-45, &format!("\x03{}", stat(0x609)), &mut s);
+    if let Some((l, t, r, _)) = dlg.screen_rect(10) {
         let pct = (st.frame * 100).checked_div(st.replay_frames).unwrap_or(0).min(100) as i32;
-        crate::ui::blit_rgba(&ui.pbar_empty, l, t, out, w, h);
-        let fw = (r - l + 1) * pct / 100;
-        let full = &ui.pbar_full;
-        for y in 0..full.h.min((b - t + 1) as usize) as i32 {
-            for x in 0..fw.min(full.w as i32) {
-                let [cr, cg, cb, a] = full.px[y as usize * full.w + x as usize];
-                if a != 0 {
-                    out[((t + y) * w + l + x) as usize] = (cr as u32) << 16 | (cg as u32) << 8 | cb as u32;
-                }
-            }
-        }
+        crate::ui::blit(&ui.pbar_empty, l, t, s.px, w, h);
+        crate::ui::blit_w(&ui.pbar_full, l, t, (r - l + 1) * pct / 100, s.px, w, h);
     }
     let ms = [167u64, 111, 83, 67, 56, 48, 42][st.replay_speed.min(6) as usize];
     let secs = ms * st.frame as u64 / 1000;
     let time = if secs / 3600 == 0 { format!("{:02}:{:02}", secs / 60 % 60, secs % 60) } else { format!("{}:{:02}:{:02}", secs / 3600, secs / 60 % 60, secs % 60) };
-    centered(-46, &glu(0x10).replace("%s", &time), out);
+    label(-46, &glu(0x10).replace("%s", &time), &mut s);
     let mult = if st.replay_mult > 1 { format!(" {} {}", if st.replay_speed > 2 { "x" } else { "/" }, st.replay_mult) } else { String::new() };
     let speed = if st.replay_paused { stat(0x60a) } else { format!("{} {}{}", glu(0x5d), glu(st.replay_speed as usize + 0x55), mult) };
-    centered(-47, &speed, out);
+    label(-47, &speed, &mut s);
 }

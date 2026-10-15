@@ -56,6 +56,24 @@ unit voices; wireframe colors. Missing: replay progress panel 0x427a80, dark arc
 archon panel 0x4273e0, specials 0x425ee0, powerups 0x426ee0, status button tooltips,
 shadows look off in screenshots (user report).
 
+**UI work (2026-10-15, user: "focus on UI and UX")**: the HUD is now drawn 8-bit in the
+game palette (view.rs `draw_hud`), like 1.16.1. Ported: the text engine (ui.rs
+`Font::draw_text` = 0x4202b0 / 0x4200d0 / 0x41f920 / 0x41fd70 / 0x41f7c0: glyph advance
+w + xoff + 1, word wrap, alignment flags 0x6ce110, color codes 0x41f610); dialogs
+(src/dlg.rs: .bin parsing, control draws by type 0x501504, wide buttons 0x4ef710, check /
+option boxes, tick sliders 0x4153b0, tile.grp menu backgrounds 0x4c9cc0); the console's
+MENU button (0x4f4fb0), minimap buttons (0x4a5230), command buttons (0x458900), status
+icon buttons (0x456c30 / 0x456d30); the in-game menus (src/menu.rs: game menu, options,
+speed, sound, video, help, end mission, restart / quit confirmations) with F10 / MENU,
+Esc / Enter / hotkeys, mouse, sliders, Cancel restoring settings, pause while open; game
+speed setting drives single-player frame time. Checks: `scbw repshot` of tl1412_full
+frames (HUD text / buttons pixel-exact vs native), `SCBW_MENU=game|options|speed|sound|
+video [SCBW_MENU_REPLAY=1] [SCBW_MENU_INPUT="k o;c x y;..."] scbw shot ...` vs native
+captures from `re/native_menu.sh <rep> <dir>` (all five dialogs pixel-exact except the
+4 transparent corners). Left: dialog translucency (0x416f30 blend on the key color),
+save / load, keystroke help / tips, objectives text, scroll speed tables, gamma, sound
+flags wired to voices, the native in-game (non-replay) HUD reference.
+
 Background runs: always run replays / compares / screenshot tests in the background
 with a copied binary (`SCBW=<copy>` for suite.sh / repcmp.sh) so rebuilding is safe.
 

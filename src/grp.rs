@@ -41,18 +41,26 @@ impl Grp {
         let frames: Vec<Frame> = (0..n)
             .map(|i| {
                 let f = &data[6 + i * 8..14 + i * 8];
+                let off = u32::from_le_bytes(f[4..8].try_into().unwrap());
+                // 0x41d160: the offset's top bit adds 256 to the width.
                 Frame {
                     x: f[0] as i32,
                     y: f[1] as i32,
-                    w: f[2] as i32,
+                    w: f[2] as i32 + if off & 0x8000_0000 != 0 { 0x100 } else { 0 },
                     h: f[3] as i32,
-                    off: u32::from_le_bytes(f[4..8].try_into().unwrap()) as usize,
+                    off: (off & 0x7fff_ffff) as usize,
                 }
             })
             .collect();
         // Raw frames are packed back to back with no row-offset table.
         let raw = frames.len() > 1 && frames.windows(2).all(|p| p[1].off == p[0].off + (p[0].w * p[0].h) as usize || p[1].off == p[0].off);
         Grp { w, h, data, frames, raw }
+    }
+
+    /// A grp whose frames are uncompressed w*h bitmaps (dialog grps: 0x4ef600 blits
+    /// them as bitmaps), whatever their offsets look like.
+    pub fn parse_raw(data: Vec<u8>) -> Grp {
+        Grp { raw: true, ..Grp::parse(data) }
     }
 
     pub fn frame_count(&self) -> usize {

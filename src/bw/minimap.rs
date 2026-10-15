@@ -154,11 +154,20 @@ impl Minimap {
         }
     }
 
-    /// Fog table for a tile's flags (bits 0-7 hidden, 8-15 unexplored per player).
-    fn fog_table(&self, flags: u32, vision: u32) -> &[u8; 256] {
-        // ponytail: replay vision (0x6d0f14 / 0x6d0f18 / 0x6d0f1c) not handled.
-        let visible = flags & vision == 0;
-        let explored = flags & (vision << 8) == 0;
+    /// Fog table for a tile's flags (bits 0-7 hidden, 8-15 unexplored per player). A
+    /// replay (0x6d0f14) shows a tile visible when any shown player (0x6d0f18) sees it,
+    /// unexplored when none explored it; 0x6d0f1c (all players) is 0.
+    fn fog_table(&self, flags: u32, vision: u32, replay: bool) -> &[u8; 256] {
+        let (mut visible, mut explored) = (flags & vision == 0, flags & (vision << 8) == 0);
+        if replay {
+            if !flags & (vision << 8) == 0 {
+                (visible, explored) = (false, false);
+            } else if vision & !flags & 0xff != 0 {
+                (visible, explored) = (true, false);
+            } else {
+                (visible, explored) = (false, true);
+            }
+        }
         &self.fog[(visible as usize) << 1 | explored as usize]
     }
 
@@ -180,7 +189,7 @@ impl Minimap {
                     _ => y * mw + x,
                 };
                 let i = y * w + x;
-                self.pixels[i] = self.fog_table(t.tile_flags[tile], vision)[self.terrain[i] as usize];
+                self.pixels[i] = self.fog_table(t.tile_flags[tile], vision, st.replay)[self.terrain[i] as usize];
             }
         }
     }

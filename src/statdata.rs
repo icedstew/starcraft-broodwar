@@ -4,58 +4,6 @@
 use crate::bw::list::NIL;
 use crate::bw::{Data, State};
 
-/// One control of a 1.16.1 dialog `.bin` (0x56 bytes each).
-#[derive(Clone, Debug)]
-pub struct Ctl {
-    pub id: i16,
-    /// left, top, right, bottom (inclusive), relative to the dialog.
-    pub rect: (i32, i32, i32, i32),
-    pub ty: u16,
-    pub flags: u32,
-}
-
-pub struct Dialog {
-    /// Screen position of the dialog.
-    pub origin: (i32, i32),
-    pub controls: Vec<Ctl>,
-}
-
-impl Dialog {
-    pub fn parse(d: &[u8]) -> Dialog {
-        let i16_at = |o: usize| d.get(o..o + 2).map_or(0, |b| i16::from_le_bytes([b[0], b[1]]));
-        let u32_at = |o: usize| d.get(o..o + 4).map_or(0, |b| u32::from_le_bytes(b.try_into().unwrap()));
-        let ctl = |o: usize| Ctl {
-            id: i16_at(o + 0x20),
-            rect: (i16_at(o + 4) as i32, i16_at(o + 6) as i32, i16_at(o + 8) as i32, i16_at(o + 10) as i32),
-            ty: i16_at(o + 0x22) as u16,
-            flags: u32_at(o + 0x18),
-        };
-        let dlg = ctl(0);
-        let mut controls = Vec::new();
-        let mut o = 0x56;
-        while o + 0x56 <= d.len() {
-            controls.push(ctl(o));
-            let next = u32_at(o) as usize;
-            if next == 0 || next <= o {
-                break;
-            }
-            o = next;
-        }
-        Dialog { origin: (dlg.rect.0, dlg.rect.1), controls }
-    }
-
-    pub fn get(&self, id: i16) -> Option<&Ctl> {
-        self.controls.iter().find(|c| c.id == id)
-    }
-
-    /// Screen rect of control `id`.
-    pub fn screen_rect(&self, id: i16) -> Option<(i32, i32, i32, i32)> {
-        let c = self.get(id)?;
-        let (x, y) = self.origin;
-        Some((x + c.rect.0, y + c.rect.1, x + c.rect.2, y + c.rect.3))
-    }
-}
-
 /// What a shown control displays.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Show {
