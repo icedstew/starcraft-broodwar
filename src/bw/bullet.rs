@@ -192,7 +192,8 @@ impl State {
             owner = src.subunit;
         }
         if src.unit_type == 0x55 {
-            todo_port!("0x48bfbc", "scarab: source is the reaver (+0xc0)");
+            // A scarab's hit belongs to its reaver.
+            owner = src.ptr_at(0xc0);
         }
         let halluc = src.status & 0x4000_0000 != 0;
         let target = src.order_target_unit;

@@ -22,6 +22,7 @@ pub mod create;
 pub mod creep;
 pub mod crt;
 pub mod death;
+pub mod doodads;
 pub mod finder;
 pub mod finish;
 pub mod flight;
@@ -183,6 +184,8 @@ pub struct State {
     /// 0x58d700: player has left (2).
     pub player_left: [u8; 12],
     pub reveal_all: bool,
+    /// 0x6d5bd0: a building or door changed the map (read by the AI timers 0x4a2a40).
+    pub map_changed: bool,
     pub frame: u32,
     /// game_step 100-frame countdown (1.16.1 0x51ce98) and its "is 100th frame" flag (0x51ce9c).
     pub counter_100: u32,
@@ -353,6 +356,7 @@ impl State {
             local_player: 0,
             replay: false,
             reveal_all: false,
+            map_changed: false,
             frame: 0,
             counter_100: 0,
             is_100th_frame: false,

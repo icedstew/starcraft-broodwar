@@ -377,6 +377,21 @@ fn main() -> std::io::Result<()> {
                         eprintln!("f{f} img u{wu} st {:#x} ord {:#x} {}", un.status, un.order, parts.join(" "));
                     }
                 }
+                if let Some(v) = std::env::var("SCBW_NEARDBG").ok() {
+                    // Debug: "f,x,y,r": units within r of (x, y) on frame f (owner, type).
+                    let n: Vec<i32> = v.split(',').filter_map(|x| x.parse().ok()).collect();
+                    if n.len() == 4 && n[0] as u32 == f {
+                        for (i, un) in st.units.iter().enumerate() {
+                            if un.sprite == bw::list::NIL {
+                                continue;
+                            }
+                            let sp = &st.sprites[un.sprite as usize];
+                            if (sp.x as i32 - n[1]).abs() <= n[3] && (sp.y as i32 - n[2]).abs() <= n[3] {
+                                eprintln!("f{f} near u{i} type {:#x} player {} pos {},{} order {:#x} status {:#x} flags {:#x} vis {:#x}", un.unit_type, un.player, sp.x, sp.y, un.order, un.status, sp.flags, sp.visibility);
+                            }
+                        }
+                    }
+                }
                 if let Some(v) = std::env::var("SCBW_FINDPOS").ok() {
                     // "f,x,y": indices of units (and their subunits) at (x, y) on frame f.
                     let n: Vec<i32> = v.split(',').filter_map(|x| x.parse().ok()).collect();

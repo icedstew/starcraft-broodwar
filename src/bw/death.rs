@@ -107,7 +107,7 @@ impl State {
         let t = self.units[u as usize].unit_type;
         let flags = d.dat.units.flags[t as usize];
         if flags & 1 != 0 {
-            todo_port!("0x4a0740", "building destroyed flag 0x6d5bd0");
+            self.map_changed = true;
         }
         self.remove_unit_type_specific(d, u);
         self.remove_loaded_units(d, u);

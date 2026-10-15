@@ -1285,11 +1285,6 @@ impl State {
         todo_port!("0x478a40", "SuicideLocation");
     }
 
-    /// 0x494470: CastRecall.
-    fn order_cast_recall(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x494470", "CastRecall");
-    }
-
     /// 0x464e40: CastScannerSweep: pay the energy and put a scanner sweep (0x21) at the
     /// order position.
     fn order_cast_scanner_sweep(&mut self, d: &Data, u: u32) {
@@ -1460,41 +1455,6 @@ impl State {
     /// 0x478490: ComputerReturn.
     fn order_computer_return(&mut self, _d: &Data, _u: u32) {
         todo_port!("0x478490", "ComputerReturn");
-    }
-
-    /// 0x47bf80: HiddenGun.
-    fn order_hidden_gun(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x47bf80", "HiddenGun");
-    }
-
-    /// 0x47bcd0: OpenDoor.
-    fn order_open_door(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x47bcd0", "OpenDoor");
-    }
-
-    /// 0x47bc50: CloseDoor.
-    fn order_close_door(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x47bc50", "CloseDoor");
-    }
-
-    /// 0x47c0a0: HideTrap.
-    fn order_hide_trap(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x47c0a0", "HideTrap");
-    }
-
-    /// 0x47c1b0: RevealTrap.
-    fn order_reveal_trap(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x47c1b0", "RevealTrap");
-    }
-
-    /// 0x47be80: EnableDoodad.
-    fn order_enable_doodad(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x47be80", "EnableDoodad");
-    }
-
-    /// 0x47bd60: DisableDoodad.
-    fn order_disable_doodad(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x47bd60", "DisableDoodad");
     }
 
     /// 0x47c210: JunkYardDog.

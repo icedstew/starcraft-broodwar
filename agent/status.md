@@ -29,8 +29,8 @@ repshot / the emulator, `NATIVE_CAMERA` to re/native_shots.sh (gdb calls the gam
 differ a lot: check against the native trace with camera (NATIVE_MODE=trace, running
 into shots/tl1412_p0/native/trace.txt) before blaming rendering.
 
-**tl1359 (ZvT) and tl1363 (PvT)** (2026-10-14): scbw == emulator for the whole replay
-(tl1359 36567 frames, tl1363 32459). Done by porting medics,
+**tl1359 (ZvT), tl1363 (PvT), tl1346 (PvZ)** (2026-10-14): scbw == emulator for the whole
+replay (36567 / 32459 / 58129 frames). Done by porting medics,
 the spell system (shared cast order 0x492850, castspell, every spell explosion type but
 yamato-style is done; defensive matrix; status timers/overlays), glave wurm bounces,
 lurker spines (0x48b680, grdsprol), burrowed cloak, AttackFixedRange, bunker muzzle

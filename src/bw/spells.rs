@@ -1610,3 +1610,156 @@ impl State {
         self.order_done_or_next(d, u);
     }
 }
+
+impl State {
+    /// 0x493ca0(0): `u` leaves the finder, tiles, repulse grid and paths before being
+    /// moved (it stays visible).
+    fn lift_off_map(&mut self, d: &Data, u: u32) {
+        let s = self.units[u as usize].sprite;
+        if self.sprites[s as usize].flags & super::sprite::sflag::HIDDEN != 0 {
+            return;
+        }
+        self.clear_references_visible(d, u);
+        self.untarget_bullets_pub(u);
+        self.finder_remove(u);
+        if self.units[u as usize].status & 2 != 0 {
+            let p = self.unit_sprite_pos(u);
+            self.mark_building_tiles(d, u, p, false);
+        }
+        if self.units[u as usize].status & 4 != 0 {
+            self.repulse_remove(d, u);
+        }
+        // 0x497530: redraw (UI).
+        self.path_delete(u);
+        self.units[u as usize].movement_state = 0;
+        let low = (self.sprites[s as usize].elevation < 0xc) as u8;
+        let pf = &mut self.units[u as usize].pathing_flags;
+        *pf = (*pf & !1) | low;
+    }
+
+    /// 0x494160: a moved unit (and its turret) goes back into the finder, tiles,
+    /// repulse grid and vision.
+    fn put_back_on_map(&mut self, d: &Data, u: u32) {
+        let sub = self.units[u as usize].subunit;
+        let turret = sub != NIL && d.dat.units.flags[self.units[sub as usize].unit_type as usize] & 0x10 != 0;
+        if turret {
+            let f = self.units[u as usize].fl.clone();
+            let sf = &mut self.units[sub as usize].fl;
+            sf.exact = f.exact;
+            sf.pos = f.pos;
+            let ss = self.units[sub as usize].sprite;
+            self.move_sprite(ss, f.pos.0, f.pos.1);
+        }
+        let s = self.units[u as usize].sprite;
+        if self.sprites[s as usize].flags & super::sprite::sflag::HIDDEN != 0 {
+            todo_port!("0x494160", "re-showing a hidden unit (visible list)");
+        }
+        self.unit_reveal(d, u);
+        self.update_unit_visibility(d, u);
+        self.finder_insert(d, u);
+        if self.units[u as usize].status & 2 != 0 {
+            let p = self.unit_sprite_pos(u);
+            self.mark_building_tiles(d, u, p, true);
+        }
+        self.update_unit_overlaps(d, u);
+        if self.units[u as usize].status & 4 != 0 {
+            self.repulse_init(d, u);
+        }
+        let units = if turret { vec![u, sub] } else { vec![u] };
+        for x in units {
+            self.path_free(x);
+            self.units[x as usize].movement_state = 0;
+            let xs = self.units[x as usize].sprite;
+            let low = (self.sprites[xs as usize].elevation < 0xc) as u8;
+            let pf = &mut self.units[x as usize].pathing_flags;
+            *pf = (*pf & !1) | low;
+        }
+    }
+
+    /// 0x4942d0: recall `c` next to the arbiter `a` (it stays where it was when there
+    /// is no room).
+    fn recall_unit(&mut self, d: &Data, c: u32, a: u32) -> bool {
+        let orig = self.unit_sprite_pos(c);
+        let ap = self.unit_sprite_pos(a);
+        // 0x4ebae0 (the same code as 0x4eb9f0).
+        self.place_unit_at(d, c, ap.0, ap.1);
+        let Some(q) = self.find_unit_placement(d, c, ap, None, false) else {
+            self.place_unit_at(d, c, orig.0, orig.1);
+            return false;
+        };
+        self.lift_off_map(d, c);
+        self.units[c as usize].order_target_unit = NIL;
+        self.place_unit_at(d, c, q.0, q.1);
+        self.put_back_on_map(d, c);
+        let t = self.units[c as usize].unit_type;
+        if t != 0x3b {
+            let o = d.dat.units.ai_return_to_idle[t as usize];
+            self.order_now(d, c, o);
+        }
+        let cs = self.units[c as usize].sprite;
+        let e = self.sprites[cs as usize].elevation.wrapping_add(1);
+        self.spell_sprite(d, 0x17b, q.0, q.1, e);
+        let k = self.units[c as usize].connected_unit;
+        if matches!(t, 1 | 0x10 | 100 | 99 | 0x68) && k != NIL && self.units[k as usize].unit_type == 0xe {
+            self.units[c as usize].connected_unit = NIL;
+            self.units[k as usize].connected_unit = NIL;
+        }
+        true
+    }
+
+    /// 0x494470: CastRecall: pay, show the recall field, and after 0x16 frames bring the
+    /// caster's units from around the target spot.
+    pub(super) fn order_cast_recall(&mut self, d: &Data, u: u32) {
+        if self.units[u as usize].order_state == 1 {
+            if self.units[u as usize].main_order_timer != 0 {
+                return;
+            }
+            let (x, y) = self.units[u as usize].order_target_pos;
+            let player = self.units[u as usize].player;
+            let mut any = false;
+            for c in self.units_around(x, y, 0x40) {
+                let cu = &self.units[c as usize];
+                let ct = cu.unit_type;
+                if self.sprites[cu.sprite as usize].flags & super::sprite::sflag::HIDDEN != 0
+                    || cu.player != player
+                    || d.dat.units.flags[ct as usize] & 1 != 0
+                    || cu.status & 0x400_0010 != 0
+                    || matches!(ct, 0x23 | 0x24 | 0x61)
+                    || cu.status & 0x4000_0000 != 0
+                    || c == u
+                {
+                    continue;
+                }
+                any |= self.recall_unit(d, c, u);
+            }
+            if any {
+                // 0x48ed50: one of the two recall sounds (0x228 + rand & 1).
+                self.rng.rand(0x12);
+            }
+            self.order_done_or_next(d, u);
+            return;
+        }
+        let cost = (d.dat.techdata.energy_cost[0x15] as u8 as u16) << 8;
+        let cheat = self.game_options & 0x800 != 0;
+        if !cheat && self.units[u as usize].energy < cost {
+            // 0x48ccb0: "Not enough energy" (UI).
+            self.order_done_or_next(d, u);
+            return;
+        }
+        if !cheat {
+            self.units[u as usize].energy -= cost;
+        }
+        let t = self.units[u as usize].order_target_unit;
+        if t != NIL {
+            self.units[u as usize].order_target_pos = self.unit_sprite_pos(t);
+        }
+        let p = self.units[u as usize].order_target_pos;
+        let s = self.units[u as usize].sprite;
+        let e = self.sprites[s as usize].elevation.wrapping_add(1);
+        self.spell_sprite(d, 0x17b, p.0, p.1, e);
+        self.rng.rand(0x11);
+        // 0x48ec10: the recall sound at the spot (UI).
+        self.units[u as usize].main_order_timer = 0x16;
+        self.units[u as usize].order_state = 1;
+    }
+}

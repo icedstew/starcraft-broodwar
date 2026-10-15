@@ -628,10 +628,87 @@ impl State {
         todo_port!("0x488350", "fog sprites (0x654868)");
     }
 
+    /// 0x487690 / 0x4877b0: a map sprite's visibility from the fog over its area:
+    /// doodad-like sprites (ids < 0x82, 0x182..=0x1e0) show where players have explored
+    /// (all of them with the replay's all-players vision), others where players see now.
+    fn thingy_fog_visibility(&mut self, s: u32) {
+        let sp = &self.sprites[s as usize];
+        if sp.flags & super::sprite::sflag::HIDDEN != 0 {
+            return;
+        }
+        let (mw, mh) = (self.terrain.width as i32, self.terrain.height as i32);
+        let (w, h) = (sp.width as i32, sp.height as i32);
+        let div32 = |v: i32| (v + ((v >> 31) & 0x1f)) >> 5;
+        let mut x0 = div32(sp.x as i32 - w / 2);
+        let mut y0 = div32(sp.y as i32 - h / 2);
+        let mut cols = (w + 0x1f) >> 5;
+        let mut rows = (h + 0x1f) >> 5;
+        let id = sp.sprite_id;
+        let explored = id < 0x82 || (0x182..0x1e1).contains(&id);
+        if explored {
+            if x0 < 0 {
+                cols += x0;
+                x0 = 0;
+            } else if cols + x0 > mw {
+                cols = mw - x0;
+            }
+            if y0 < 0 {
+                rows += y0;
+                y0 = 0;
+            } else if rows + y0 > mh {
+                rows = mh - y0;
+            }
+        } else {
+            if x0 < 0 {
+                cols += x0;
+                if cols < 1 {
+                    return;
+                }
+                x0 = 0;
+            }
+            if y0 < 0 {
+                rows += y0;
+                y0 = 0;
+                if rows < 1 {
+                    return;
+                }
+            }
+            if cols + x0 > mw {
+                cols = mw - x0;
+                if cols < 1 {
+                    return;
+                }
+            }
+            if !(rows + y0 <= mh || (mh != y0 && mh - y0 >= 0)) {
+                return;
+            }
+        }
+        let all = explored && self.replay && self.reveal_all;
+        let mask = if all {
+            0xff
+        } else {
+            let mut m = 0u8;
+            for y in y0..y0 + rows {
+                for x in x0..x0 + cols {
+                    // ponytail: rows past the map bottom (1.16.1 reads beyond the tile
+                    // flags there) count as seen by nobody.
+                    let f = self.terrain.tile_flags.get((y * mw + x) as usize).copied().unwrap_or(u32::MAX);
+                    m |= !(if explored { f >> 8 } else { f }) as u8;
+                }
+            }
+            m
+        };
+        if self.sprites[s as usize].visibility != mask {
+            self.sprite_set_visibility(s, mask);
+        }
+    }
+
     /// 0x488020: one map sprite; freed once its images are gone.
     fn update_thingy(&mut self, d: &Data, t: u32) {
-        todo_port!("0x487690/0x4877b0", "map sprite visibility from fog");
         let s = self.thingies[t as usize].sprite;
+        if s != NIL {
+            self.thingy_fog_visibility(s);
+        }
         if s != NIL {
             self.update_unit_sprite(d, s);
             if self.sprites[s as usize].images.head == NIL {
