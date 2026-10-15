@@ -126,7 +126,9 @@ impl State {
     fn begin_cloak(&mut self, d: &Data, u: u32) {
         // 0x48ed50: the cloak sound (UI).
         if self.units[u as usize].status & 0x10 != 0 {
-            todo_port!("0x49b2b0", "burrowed unit cloaks");
+            self.burrowed_cloak(d, u);
+            self.refresh_detection(d, u);
+            self.units[u as usize].ai_action_flag = 0x1e;
             return;
         }
         let s = self.units[u as usize].sprite;
@@ -150,7 +152,10 @@ impl State {
     pub(super) fn end_cloak(&mut self, d: &Data, u: u32) {
         // 0x48ed50: the decloak sound (UI).
         if self.units[u as usize].status & 0x10 != 0 {
-            todo_port!("0x49b440", "burrowed unit decloaks (0x497e80)");
+            let s = self.units[u as usize].sprite;
+            self.sprite_uncloak_images(s);
+            self.sprite_unhide_cloak_images(d, s);
+            self.units[u as usize].status &= !0x300;
             return;
         }
         let s = self.units[u as usize].sprite;
@@ -166,9 +171,76 @@ impl State {
         }
     }
 
-    /// 0x4980f0: the sprite's images start the cloaking fade (draw functions 0/4/7 ->
-    /// 2); images not drawn while cloaked hide (0x4976c0).
-    fn sprite_start_cloaking(&mut self, d: &Data, s: u32) {
+    /// 0x49b2b0: a burrowed unit cloaks at once (draw function 3, no fade): it joins
+    /// the cloak list and keeps the Cloak secondary order.
+    fn burrowed_cloak(&mut self, d: &Data, u: u32) {
+        if self.units[u as usize].status & 0x100 != 0 {
+            return;
+        }
+        self.secondary_cloak(u);
+        let s = self.units[u as usize].sprite;
+        self.sprite_cloak_underground(d, s);
+        let un = &mut self.units[u as usize];
+        un.status |= 0x300;
+        if un.secondary_order != 0x6d {
+            un.secondary_order = 0x6d;
+            un.secondary_order_pos = (0, 0);
+            un.current_build_unit = NIL;
+            un.secondary_order_state = 0;
+        }
+        un.visibility = 0x8000_0000;
+    }
+
+    /// 0x497fd0(3, 0): images not drawn while cloaked hide, the rest take draw
+    /// function 3 (cloaked, no fade).
+    fn sprite_cloak_underground(&mut self, d: &Data, s: u32) {
+        self.sprite_hide_cloak_images(d, s);
+        let mut i = self.sprites[s as usize].images.head;
+        while i != NIL {
+            let im = &mut self.images[i as usize];
+            if matches!(im.modifier, 0 | 2 | 4) {
+                im.modifier = 3;
+                im.flags |= iflag::REDRAW;
+                im.coloring &= !0xffff;
+            }
+            i = im.link.next;
+        }
+    }
+
+    /// 0x49b1e0: a spider mine that burrowed cloaks at once and keeps the Cloak
+    /// secondary order.
+    pub(super) fn mine_cloak(&mut self, d: &Data, u: u32) {
+        self.secondary_cloak(u);
+        // 0x68c1b0 etc.: UI refresh.
+        self.units[u as usize].ai_action_flag = 0;
+        let s = self.units[u as usize].sprite;
+        self.sprite_cloak_underground(d, s);
+        let un = &mut self.units[u as usize];
+        un.status |= 0x300;
+        un.visibility = 0x8000_0000;
+        if un.secondary_order != 0x6d {
+            un.secondary_order = 0x6d;
+            un.secondary_order_pos = (0, 0);
+            un.current_build_unit = NIL;
+            un.secondary_order_state = 0;
+        }
+    }
+
+    /// 0x497e80: the sprite's cloaked images (draw functions 2..=7) draw normally again.
+    fn sprite_uncloak_images(&mut self, s: u32) {
+        let mut i = self.sprites[s as usize].images.head;
+        while i != NIL {
+            let im = &mut self.images[i as usize];
+            if (2..8).contains(&im.modifier) {
+                im.modifier = 0;
+                im.flags |= iflag::REDRAW;
+            }
+            i = im.link.next;
+        }
+    }
+
+    /// 0x4976c0: images not drawn while cloaked hide.
+    fn sprite_hide_cloak_images(&mut self, d: &Data, s: u32) {
         let mut i = self.sprites[s as usize].images.head;
         while i != NIL {
             let im = &mut self.images[i as usize];
@@ -178,6 +250,12 @@ impl State {
             }
             i = im.link.next;
         }
+    }
+
+    /// 0x4980f0: the sprite's images start the cloaking fade (draw functions 0/4/7 ->
+    /// 2); images not drawn while cloaked hide (0x4976c0).
+    fn sprite_start_cloaking(&mut self, d: &Data, s: u32) {
+        self.sprite_hide_cloak_images(d, s);
         let mut i = self.sprites[s as usize].images.head;
         while i != NIL {
             let im = &mut self.images[i as usize];
@@ -266,7 +344,7 @@ impl State {
     /// 0x497ed0: images take the detected look (2..4 -> 5..7, 0 -> 6).
     fn sprite_detected(&mut self, s: u32) {
         if self.sprites[s as usize].flags & 0x40 != 0 {
-            todo_port!("0x497e80", "burrowed sprite detected");
+            self.sprite_uncloak_images(s);
             return;
         }
         let mut i = self.sprites[s as usize].images.head;
@@ -465,12 +543,55 @@ impl State {
             }
             u = next;
         }
+        // 0x5861c0: completed disruption webs (unit 0x69) of player 11.
+        if self.players.completed_counts[0x69][11] == 0 {
+            return;
+        }
         let mut n = self.player_units[11];
         while n != NIL {
             if self.units[n as usize].unit_type == 0x69 {
-                todo_port!("0x4eb2f0", "units under a disruption web (0x4eb170)");
+                let b = self.unit_box(d, n);
+                let mut search = std::mem::replace(&mut self.search, super::collide::UnitSearch::empty());
+                let start = search.units_in_finder_box(self, b);
+                let found = search.results(start);
+                search.pop();
+                self.search = search;
+                for c in found {
+                    self.web_mark(d, c);
+                }
             }
             n = self.units[n as usize].player_next;
+        }
+    }
+
+    /// 0x4eb170: a ground unit under a web can't attack (0x8000), with its passengers
+    /// or turret.
+    fn web_mark(&mut self, d: &Data, u: u32) {
+        let st = self.units[u as usize].status;
+        if st & 4 != 0 {
+            return;
+        }
+        self.units[u as usize].status = st | 0x8000;
+        let un = &self.units[u as usize];
+        let t = un.unit_type;
+        let transport = st & 0x4000_0000 == 0
+            && (t != 0x2a || self.players.upgrade_sc[un.player as usize][0x18] != 0)
+            && d.dat.units.space_provided[t as usize] != 0;
+        if transport {
+            for i in 0..8 {
+                let h = self.units[u as usize].loaded_units[i] as u32;
+                if h == 0 {
+                    continue;
+                }
+                let c = (h & 0x7ff) - 1;
+                let cu = &self.units[c as usize];
+                if cu.sprite != NIL && (cu.order != 0 || cu.order_state != 1) && cu.unique_id as u32 == h >> 11 {
+                    self.units[c as usize].status |= 0x8000;
+                }
+            }
+        } else if un.subunit != NIL {
+            let sub = un.subunit;
+            self.units[sub as usize].status |= 0x8000;
         }
     }
 }

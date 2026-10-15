@@ -405,8 +405,8 @@ pub fn unit_panel(st: &State, d: &Data, strings: &[String], u: u32) -> Vec<(i16,
         out.push((-20, Show::Text(s)));
     }
     // 0x425dd0: kills, for units that can fight.
-    if !(t == 0x2f || t == 0x32 || halluc_own) && (can_fight(st, d, u) || un.u8_at(0x8f) != 0) {
-        out.push((-21, Show::Text(format!("{} {}", stat(strings, 0x2fc), un.u8_at(0x8f)))));
+    if !(t == 0x2f || t == 0x32 || halluc_own) && (can_fight(st, d, u) || un.kill_count != 0) {
+        out.push((-21, Show::Text(format!("{} {}", stat(strings, 0x2fc), un.kill_count))));
     }
     // 0x4263e0: hit points (red under 34%, yellow under 67%), shields first.
     let max_hp = d.dat.units.hit_points[ts] as i32 >> 8;
@@ -454,7 +454,7 @@ fn rank(st: &State, d: &Data, strings: &[String], u: u32) -> Option<String> {
     if race_index(d, t) != 1 {
         return None;
     }
-    let r = d.dat.units.rank[ts].wrapping_add(un.u8_at(0x8e)) as u16;
+    let r = d.dat.units.rank[ts].wrapping_add(un.unknown_8e) as u16;
     Some(stat(strings, r + 0x516))
 }
 

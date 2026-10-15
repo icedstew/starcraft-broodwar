@@ -29,6 +29,24 @@ repshot / the emulator, `NATIVE_CAMERA` to re/native_shots.sh (gdb calls the gam
 differ a lot: check against the native trace with camera (NATIVE_MODE=trace, running
 into shots/tl1412_p0/native/trace.txt) before blaming rendering.
 
+**tl1359 (ZvT)** (2026-10-14): scbw == emulator through f25299 after porting medics,
+the spell system (shared cast order 0x492850, castspell, every spell explosion type but
+yamato-style is done; defensive matrix; status timers/overlays), glave wurm bounces,
+lurker spines (0x48b680, grdsprol), burrowed cloak, AttackFixedRange, bunker muzzle
+flash / target stand-in, valkyrie spread, Move-to-unit. Full emulator trace in
+`$W/e59/ra` (re-diff: `scbw reptrace <rep> 37000`, blank unit ids, diff).
+
+**Also ported (not yet exercised by a replay)**: carriers / reavers / interceptors /
+scarabs (src/bw/carrier.rs), shield batteries and arbiters (battery.rs), spider mines
+(mines.rs), disruption web marking, AI alert searches (AI reaction itself todo),
+hallucination hits and the Hallucination2 secondary. Still todo: nukes (0x479200 family),
+CastHallucination (0x4f6c40), CastRecall (0x494470), CastMindControl (0x4f6950),
+CastFeedback (0x4f6d40), AI (ai_update 0x4a2b00 and everything AI-gated).
+
+**Creep**: the view drew terrain once from the CHK, so creep never showed. It now draws
+from the live megatile map (0x628494) each frame, with the creep edge map (0x6d0e80)
+and the tileset's edge GRP (0x414100 / 0x49b9f0) ported.
+
 **Other 1.16.1 replays** (2026-10-14, 6000 frames each, `OUT=<dir>` lets repcmp.sh run
 several at once): tl1363, tl1359, tl1346 MATCH the emulator. tl1339 / tl1347 / tl1352: the
 emulator crashes at eip 0x41f82f (fix the harness first); tl1366: emulator CHK load fails.

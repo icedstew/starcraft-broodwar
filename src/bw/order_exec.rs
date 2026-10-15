@@ -134,7 +134,7 @@ impl State {
             0x17 => self.order_nothing(d, u),
             0x6f => self.order_unload(d, u),
             0x70 => self.order_move_unload(d, u),
-            0x71 | 0x73 | 0x77 | 0x78 | 0x79 | 0x7a | 0x8e | 0x8f | 0x90 | 0x91 | 0x92 | 0x93 | 0xb4 | 0xb5 | 0xb9 | 0xba => self.order_fire_yamato_gun(d, u),
+            0x71 | 0x73 | 0x77 | 0x78 | 0x79 | 0x7a | 0x8e | 0x8f | 0x90 | 0x91 | 0x92 | 0x93 | 0xb4 | 0xb5 | 0xb9 | 0xba => self.order_cast_spell(d, u),
             0x74 => self.order_burrowing(d, u),
             0x75 => self.order_burrowed(d, u),
             0x76 => self.order_unburrowing(d, u),
@@ -195,21 +195,55 @@ impl State {
         }
         un.main_order_timer = 0xf;
         if un.lockdown_timer != 0 || un.maelstrom_timer != 0 || un.status & 0x8000 != 0 {
-            todo_port!("0x4e8280", "disabled unit: clear targets of units targeting it");
+            self.ai_alert_around(_d, u, 0x280, false);
+        }
+    }
+
+    /// 0x4e8280 over (x +- r, y +- r) with callback 0x43fcf0: computer units nearby
+    /// that could attack `u` react to it (0x6957ac = `wide`).
+    fn ai_alert_around(&mut self, d: &Data, u: u32, r: i16, wide: bool) {
+        let (x, y) = self.unit_sprite_pos(u);
+        let b = [x.wrapping_sub(r), y.wrapping_sub(r), x.wrapping_add(r), y.wrapping_add(r)];
+        let mut search = std::mem::replace(&mut self.search, super::collide::UnitSearch::empty());
+        let start = search.units_in_finder_box(self, b);
+        let found = search.results(start);
+        search.pop();
+        self.search = search;
+        for c in found {
+            let cu = &self.units[c as usize];
+            if cu.ai == NIL {
+                continue;
+            }
+            if cu.status & 4 == 0 && (wide || self.units[u as usize].status & 0x8000 != 0) {
+                continue;
+            }
+            if self.is_enemy(c, u)
+                && self.units[c as usize].auto_target == NIL
+                && self.can_attack(d, c, u, true)
+                && (self.units[c as usize].status & 0x2_0000 != 0 || self.can_hit_now(d, c, u))
+            {
+                todo_port!("0x43f320", "computer unit reacts to a nearby target");
+            }
         }
     }
 
     /// 0x43ff90: acid spore / interceptor timer work every order-process tick.
-    fn order_timer_tick(&mut self, _d: &Data, u: u32) {
+    fn order_timer_tick(&mut self, d: &Data, u: u32) {
         let un = &self.units[u as usize];
         if un.acid_spore_count > 3 {
-            todo_port!("0x43fe50", "acid spore timers");
+            self.ai_alert_wide(d, u);
             return;
         }
-        if self.var_6957d0 == 0 && un.unit_type == 0x49 && un.u16_at(0xc0) != 0 {
-            todo_port!("0x43fe50", "acid spore timers (interceptor)");
+        if self.var_6957d0 == 0 && un.unit_type == 0x49 && un.ptr_at(0xc0) != NIL {
+            self.ai_alert_wide(d, u);
             self.var_6957d0 = 1;
         }
+    }
+
+    /// 0x43fe50: computer units within 0x280, then (wide) within 0x500, react to `u`.
+    fn ai_alert_wide(&mut self, d: &Data, u: u32) {
+        self.ai_alert_around(d, u, 0x280, false);
+        self.ai_alert_around(d, u, 0x500, true);
     }
 
     /// 0x464d10: NukeTrack.
@@ -453,16 +487,6 @@ impl State {
 
 
 
-    /// 0x465e00: ScarabAttack.
-    fn order_scarab_attack(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x465e00", "ScarabAttack");
-    }
-
-    /// 0x493dd0: RechargeShieldsUnit.
-    fn order_recharge_shields_unit(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x493dd0", "RechargeShieldsUnit");
-    }
-
 
 
     /// 0x468e80: Harvest3.
@@ -493,11 +517,6 @@ impl State {
     /// 0x4e6700: NukeTrain.
     fn order_nuke_train(&mut self, _d: &Data, _u: u32) {
         todo_port!("0x4e6700", "NukeTrain");
-    }
-
-    /// 0x493a80: InitializeArbiter.
-    fn order_initialize_arbiter(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x493a80", "InitializeArbiter");
     }
 
     /// 0x4671b0: ResetCollision.
@@ -689,8 +708,8 @@ impl State {
                     }
                     ok
                 } else {
-                    todo_port!("0x4eb980", "move to target unit (0x4eb720)");
-                    false
+                    let t = un.order_target_unit;
+                    self.move_to_unit_aim(d, u, t)
                 };
                 if ok {
                     self.units[u as usize].order_state = 1;
@@ -708,19 +727,48 @@ impl State {
         }
     }
 
-    /// 0x4654b0: ReaverStop.
-    fn order_reaver_stop(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x4654b0", "ReaverStop");
-    }
-
     /// 0x4f6fa0: Attack2, MoveToInfest, MoveToRepair, CarrierMoveToAttack, ReaverMoveToAttack, Harvest2, MoveToFireYamatoGun.
     fn order_attack2(&mut self, d: &Data, u: u32) {
         self.order_obscured(d, u);
     }
 
     /// 0x477d00: AttackFixedRange.
-    fn order_attack_fixed_range(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x477d00", "AttackFixedRange");
+    fn order_attack_fixed_range(&mut self, d: &Data, u: u32) {
+        if self.units[u as usize].ai == NIL {
+            self.pick_better_target(d, u);
+        } else {
+            let t = self.find_auto_target(d, u);
+            self.units[u as usize].order_target_unit = t;
+        }
+        let t = self.units[u as usize].order_target_unit;
+        if t != NIL {
+            self.units[u as usize].order_target_pos = self.unit_sprite_pos(t);
+        }
+        if t != NIL && self.can_attack(d, u, t, true) {
+            if self.can_hit_now(d, u, t) {
+                let un = &mut self.units[u as usize];
+                if un.fl.next_target_waypoint != un.order_target_pos {
+                    un.fl.next_target_waypoint = un.order_target_pos;
+                }
+                self.fire(d, u, 5);
+            } else if self.units[u as usize].ai != NIL {
+                // 0x475260: AI units attack-move there instead.
+                let p = self.units[u as usize].order_target_pos;
+                self.order_issue_now(d, u, 0xe, p, NIL, 0xe4);
+            } else {
+                self.order_done_or_next(d, u);
+            }
+            return;
+        }
+        if self.units[u as usize].order_queue_head != NIL {
+            self.units[u as usize].order_flags |= 1;
+            self.prepare_next_order(d, u);
+        } else if self.units[u as usize].ai != NIL {
+            self.order_now(d, u, 0x9c);
+        } else {
+            let o = d.dat.units.ai_return_to_idle[self.units[u as usize].unit_type as usize];
+            self.order_now(d, u, o);
+        }
     }
 
     /// 0x479040: AttackMove.
@@ -860,11 +908,6 @@ impl State {
             let idle = d.dat.units.ai_return_to_idle[self.units[u as usize].unit_type as usize];
             self.order_now(d, u, idle);
         }
-    }
-
-    /// 0x463df0: VultureMine.
-    fn order_vulture_mine(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x463df0", "VultureMine");
     }
 
     /// 0x47c4f0: StayInRange.
@@ -1032,7 +1075,11 @@ impl State {
             }
             match self.units[t as usize].unit_type {
                 0x86 => todo_port!("0x4e8c20", "following onto a nydus canal: EnterNyduscanal (0x2f)"),
-                0xac => todo_port!("0x493520", "following onto a shield battery: RechargeShieldsBattery (0x42)"),
+                0xac => {
+                    if self.follow_onto_battery(d, u, t) {
+                        return;
+                    }
+                }
                 _ => {}
             }
             self.units[u as usize].order_state = 1;
@@ -1096,51 +1143,6 @@ impl State {
             return false;
         }
         self.move_to_unit(d, u, t)
-    }
-
-    /// 0x4666a0: Carrier, CarrierFight, CarrierHoldPosition.
-    fn order_carrier(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x4666a0", "Carrier, CarrierFight, CarrierHoldPosition");
-    }
-
-    /// 0x465910: CarrierStop.
-    fn order_carrier_stop(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x465910", "CarrierStop");
-    }
-
-    /// 0x465950: CarrierAttack.
-    fn order_carrier_attack(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x465950", "CarrierAttack");
-    }
-
-    /// 0x466720: CarrierIgnore2.
-    fn order_carrier_ignore2(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x466720", "CarrierIgnore2");
-    }
-
-    /// 0x4665d0: Reaver, ReaverFight, ReaverHoldPosition.
-    fn order_reaver(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x4665d0", "Reaver, ReaverFight, ReaverHoldPosition");
-    }
-
-    /// 0x465690: ReaverAttack.
-    fn order_reaver_attack(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x465690", "ReaverAttack");
-    }
-
-    /// 0x465f60: InterceptorAttack.
-    fn order_interceptor_attack(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x465f60", "InterceptorAttack");
-    }
-
-    /// 0x493990: RechargeShieldsBattery.
-    fn order_recharge_shields_battery(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x493990", "RechargeShieldsBattery");
-    }
-
-    /// 0x466350: InterceptorReturn.
-    fn order_interceptor_return(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x466350", "InterceptorReturn");
     }
 
 
@@ -1280,11 +1282,6 @@ impl State {
         }
     }
 
-    /// 0x492850: FireYamatoGun, CastLockdown, CastDarkSwarm, CastParasite, CastSpawnBroodlings, CastEMPShockwave, CastPsionicStorm, CastIrradiate, CastPlague, CastConsume, CastEnsnare, CastStasisField, CastRestoration, CastDisruptionWeb, CastOpticalFlare, CastMaelstrom.
-    fn order_fire_yamato_gun(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x492850", "FireYamatoGun, CastLockdown, CastDarkSwarm, CastParasite, CastSpawnBroodlings, CastEMPShockwave, CastPsionicStorm, CastIrradiate, CastPlague, CastConsume, CastEnsnare, CastStasisField, CastRestoration, CastDisruptionWeb, CastOpticalFlare, CastMaelstrom");
-    }
-
 
 
 
@@ -1306,11 +1303,6 @@ impl State {
     /// 0x479200: CastNuclearStrike.
     fn order_cast_nuclear_strike(&mut self, _d: &Data, _u: u32) {
         todo_port!("0x479200", "CastNuclearStrike");
-    }
-
-    /// 0x464fd0: PlaceMine.
-    fn order_place_mine(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x464fd0", "PlaceMine");
     }
 
     /// 0x4788e0: SuicideUnit.
@@ -1368,11 +1360,6 @@ impl State {
             self.units[u as usize].order_signal &= !4;
             self.kill_unit(d, u);
         }
-    }
-
-    /// 0x4550a0: CastDefensiveMatrix.
-    fn order_cast_defensive_matrix(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x4550a0", "CastDefensiveMatrix");
     }
 
     /// 0x4f6c40: CastHallucination.

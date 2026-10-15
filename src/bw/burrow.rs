@@ -166,7 +166,7 @@ impl State {
         if st == 1 {
             let un = &mut self.units[u as usize];
             un.visibility = 0x8000_0000;
-            un.set_u8_at(0x91, 0);
+            un.ai_action_flag = 0;
             un.order_state = 2;
             st = 2;
         }
@@ -231,7 +231,7 @@ impl State {
 
     /// 0x4e9a30: the unit is underground: no path, burrowed (0x10) and needing detection
     /// (0x800), sprite flag 0x40, the burrowed sprite id and elevation 1.
-    fn go_underground(&mut self, u: u32) {
+    pub(super) fn go_underground(&mut self, u: u32) {
         self.path_free(u);
         let s = self.units[u as usize].sprite;
         let low = (self.sprites[s as usize].elevation < 0xc) as u8;
@@ -248,7 +248,7 @@ impl State {
     }
 
     /// 0x4e99d0: back on the surface: no path, not burrowed, the flingy's sprite id.
-    fn come_up(&mut self, d: &Data, u: u32) {
+    pub(super) fn come_up(&mut self, d: &Data, u: u32) {
         self.path_free(u);
         let s = self.units[u as usize].sprite;
         let low = (self.sprites[s as usize].elevation < 0xc) as u8;
@@ -262,12 +262,15 @@ impl State {
 
     /// 0x4f46f0: a burrowing unit loses the defense matrix, irradiate, ensnare and plague
     /// overlay images (the timers stay).
-    fn remove_status_overlays(&mut self, _d: &Data, u: u32) {
-        let un = &self.units[u as usize];
-        if un.defense_matrix_damage != 0 {
-            todo_port!("0x454ed0", "defense matrix overlay removed on burrow");
+    fn remove_status_overlays(&mut self, d: &Data, u: u32) {
+        let (hp, timer) = (self.units[u as usize].defense_matrix_damage, self.units[u as usize].defense_matrix_timer);
+        if hp != 0 {
+            self.defense_matrix_hit(d, u, hp as i32);
+            let un = &mut self.units[u as usize];
+            un.defense_matrix_timer = timer;
+            un.defense_matrix_damage = hp;
         }
-        if un.irradiate_timer != 0 {
+        if self.units[u as usize].irradiate_timer != 0 {
             self.remove_overlay_in(u, 0x17c, 0x17e);
         }
         if self.units[u as usize].ensnare_timer != 0 {
@@ -298,32 +301,4 @@ impl State {
         }
     }
 
-    /// 0x492da0: put back the overlays of the spells affecting `u`.
-    pub(super) fn reapply_status_overlays(&mut self, _d: &Data, u: u32) {
-        let un = &self.units[u as usize];
-        if un.defense_matrix_timer != 0 {
-            todo_port!("0x455010", "defense matrix overlay");
-        }
-        if un.lockdown_timer != 0 {
-            todo_port!("0x455380", "lockdown overlay");
-        }
-        if un.maelstrom_timer != 0 {
-            todo_port!("0x4553f0", "maelstrom overlay");
-        }
-        if un.irradiate_timer != 0 {
-            todo_port!("0x454e80", "irradiate overlay");
-        }
-        if un.ensnare_timer != 0 {
-            todo_port!("0x4f45e0", "ensnare overlay");
-        }
-        if un.stasis_timer != 0 {
-            todo_port!("0x4f67b0", "stasis overlay");
-        }
-        if un.plague_timer != 0 {
-            todo_port!("0x4f4550", "plague overlay");
-        }
-        if un.u8_at(0x126) != 0 {
-            todo_port!("0x4f41f0", "acid spore overlay");
-        }
-    }
 }

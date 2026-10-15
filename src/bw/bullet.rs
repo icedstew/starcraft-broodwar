@@ -83,7 +83,7 @@ impl Default for Bullets {
 }
 
 impl State {
-    fn bullet_sprite_pos(&self, b: u32) -> (i16, i16) {
+    pub(super) fn bullet_sprite_pos(&self, b: u32) -> (i16, i16) {
         let s = &self.sprites[self.bullets.pool[b as usize].sprite as usize];
         (s.x, s.y)
     }
@@ -219,7 +219,7 @@ impl State {
             bu.previous_bounce_target = NIL;
         }
         let missed = |st: &mut State| -> bool {
-            let chance = st.miss_chance(target, owner);
+            let chance = st.miss_chance(d, target, owner);
             (st.rng.rand(1) & 0xff) <= chance
         };
         let (tx, ty) = direction_table()[dir as usize];
@@ -245,7 +245,17 @@ impl State {
                 }
             }
             8 => {
-                todo_port!("0x48c043", "spread pattern (0x513650, source +0x130)");
+                // 0x513650: the spread pattern, ended by a 0 x.
+                const SPREAD: [(i16, i16); 15] = [(1, 1), (51, 31), (7, 12), (-36, -52), (-49, 25), (40, -46), (-4, -19), (28, 50), (50, -15), (-54, -13), (11, -53), (15, -9), (-19, 50), (-17, 8), (0, 0)];
+                let n = self.units[source as usize].bullet_spread;
+                let i = n as u8 as usize;
+                let bu = &mut self.bullets.pool[b as usize];
+                bu.spread_index = n as u8;
+                bu.target_pos = (bu.target_pos.0.wrapping_sub(SPREAD[i].0), bu.target_pos.1.wrapping_sub(SPREAD[i].1));
+                let p = bu.target_pos;
+                self.bullet_set_move_target(b, p);
+                let next = n.wrapping_add(1);
+                self.units[source as usize].bullet_spread = if SPREAD.get(next as usize).map_or(true, |e| e.0 == 0) { 0 } else { next };
                 return true;
             }
             9 => {
@@ -275,8 +285,8 @@ impl State {
     }
 
     /// 0x4765b0: chance (out of 256) that `owner`'s shot at `target` misses.
-    fn miss_chance(&self, target: u32, owner: u32) -> u32 {
-        let c = self.cover_chance(target);
+    fn miss_chance(&mut self, d: &Data, target: u32, owner: u32) -> u32 {
+        let c = self.cover_chance(d, target);
         if self.units[owner as usize].status & 4 == 0 && self.units[target as usize].status & 4 == 0 {
             let (a, b) = (self.unit_pos(owner), self.unit_pos(target));
             if self.los_elevation(a.0 as i32, a.1 as i32) < self.los_elevation(b.0 as i32, b.1 as i32) && c < 0x78 {
@@ -286,17 +296,27 @@ impl State {
         c
     }
 
-    pub(super) fn cover_chance_pub(&self, t: u32) -> u32 {
-        self.cover_chance(t)
+    pub(super) fn cover_chance_pub(&mut self, d: &Data, t: u32) -> u32 {
+        self.cover_chance(d, t)
     }
 
-    /// 0x476210: miss chance from where `target` stands.
-    fn cover_chance(&self, target: u32) -> u32 {
+    /// 0x476210: miss chance from where `target` stands: all shots miss a ground unit
+    /// under a dark swarm, 0x77 / 256 on cover tiles.
+    fn cover_chance(&mut self, d: &Data, target: u32) -> u32 {
         let t = &self.units[target as usize];
         if t.status & 4 != 0 {
             return 0;
         }
-        todo_port!("0x476210", "units under doodad cover (0x5873f0, 0x4e8830)");
+        // 0x5873f0: completed dark swarms (unit 0xca) of player 11.
+        if d.dat.units.flags[t.unit_type as usize] & 1 == 0 && self.players.completed_counts[0xca][11] != 0 {
+            let b = self.unit_box(d, target);
+            let start = self.units_in_box(d, b);
+            let swarm = self.search.results(start).into_iter().any(|c| self.units[c as usize].unit_type == 0xca);
+            self.search.pop();
+            if swarm {
+                return 0xff;
+            }
+        }
         let (x, y) = self.unit_pos(target);
         let i = (y as i32 / 32) as usize * self.terrain.width as usize + (x as i32 / 32) as usize;
         if self.terrain.tile_flags[i] & 0x10_0000 != 0 { 0x77 } else { 0 }
@@ -571,9 +591,39 @@ impl State {
         }
         bu.bounces = bu.bounces.wrapping_sub(1);
         if bu.bounces != 0 {
-            todo_port!("0x48b1e0", "next bounce target");
+            let t = self.next_bounce_target(d, b);
+            let bu = &mut self.bullets.pool[b as usize];
+            bu.previous_bounce_target = bu.target;
+            if t != NIL {
+                self.bullet_run_anim(d, b, 0xd);
+                self.bullets.pool[b as usize].target = t;
+                return;
+            }
         }
         self.bullet_die(d, b);
+    }
+
+    /// 0x48b1e0: the first unit within 0x60 of the bullet that its source can attack
+    /// (filter 0x48afd0: attackable, enemy, neither the current nor the previous target).
+    fn next_bounce_target(&mut self, d: &Data, b: u32) -> u32 {
+        let bu = &self.bullets.pool[b as usize];
+        let src = bu.source;
+        if src == NIL {
+            return NIL;
+        }
+        let (cur, prev) = (bu.target, bu.previous_bounce_target);
+        let sp = &self.sprites[bu.sprite as usize];
+        let (x, y) = (sp.x, sp.y);
+        let bx = [x.wrapping_sub(0x60), y.wrapping_sub(0x60), x.wrapping_add(0x60), y.wrapping_add(0x60)];
+        let mut search = std::mem::replace(&mut self.search, super::collide::UnitSearch::empty());
+        let start = search.units_in_finder_box(self, bx);
+        let found = search.results(start);
+        search.pop();
+        self.search = search;
+        found
+            .into_iter()
+            .find(|&c| self.can_attack(d, src, c, true) && self.is_enemy(src, c) && c != cur && c != prev)
+            .unwrap_or(NIL)
     }
 
     /// 0x48bc70: state 4, damage every 7 frames until the time runs out.
@@ -627,23 +677,52 @@ impl State {
                 }
             }
             2 | 3 | 5 => {
-                if w == 0x6d {
-                    todo_port!("0x48b680", "lurker spines: once per unit per attack (0x64dec8)");
-                    return;
-                }
                 let r = d.dat.weapons.outer_splash[w] as i16;
                 let sp = &self.sprites[bu.sprite as usize];
                 let (x, y) = (sp.x, sp.y);
                 let bx = [x.wrapping_sub(r), y.wrapping_sub(r), x.wrapping_add(r), y.wrapping_add(r)];
+                let lurker = w == 0x6d;
                 let start = self.units_in_box(d, bx);
                 for u in self.search.results(start) {
-                    // 0x48b750: 0x64deb8 = 1 (inner radius does full damage).
-                    self.splash_hit(d, b, u, true);
+                    if lurker {
+                        self.lurker_spine_hit(d, b, u);
+                    } else {
+                        // 0x48b750: 0x64deb8 = 1 (inner radius does full damage).
+                        self.splash_hit(d, b, u, true);
+                    }
                 }
                 self.search.pop();
             }
+            4 | 6 | 7 | 8 | 9 | 0xa | 0xb | 0xc | 0xd | 0xe | 0x10 | 0x11 | 0x12 | 0x15 | 0x16 => self.bullet_spell_effect(d, b, d.dat.weapons.explosion_type[w]),
             _ => todo_port!("0x48b770", "other weapon explosion types"),
         }
+    }
+
+    /// 0x48b680: lurker spines hit `u` at full damage, at most once per lurker attack
+    /// (pairs remembered for 32 frames in 0x64dec8).
+    fn lurker_spine_hit(&mut self, d: &Data, b: u32, u: u32) {
+        let bu = &self.bullets.pool[b as usize];
+        let (w, source, target, player) = (bu.weapon, bu.source, bu.target, bu.player);
+        if u == source || (self.units[u as usize].player == player && u != target) {
+            return;
+        }
+        if !self.weapon_can_target(d, w, u, u) || !self.splash_within(d, b, u, d.dat.weapons.inner_splash[w as usize] as u32) {
+            return;
+        }
+        if source != NIL {
+            let pair = [source + 1, u + 1];
+            if self.lurker_hits.iter().flat_map(|r| r.chunks(2)).any(|p| p == pair) {
+                return;
+            }
+            if self.lurker_hits_count != 0x10 {
+                let i = self.lurker_hits_count as usize * 2;
+                let row = &mut self.lurker_hits[self.lurker_hits_frame as usize];
+                row[i] = pair[0];
+                row[i + 1] = pair[1];
+                self.lurker_hits_count += 1;
+            }
+        }
+        self.weapon_hit(d, b, u, 1);
     }
 
     /// 0x48b570: splash damage to `u` by bullet `b`: full within the inner radius
@@ -731,25 +810,58 @@ impl State {
             && (f & 0x100 == 0 || self.units[owner as usize].player == tu.player)
     }
 
+    /// 0x479730: a hallucination's hit does no damage, but the target still notices
+    /// it (and its shields flash).
+    pub(super) fn hallucination_hit(&mut self, d: &Data, t: u32, source: u32, w: u8) {
+        let tu = &self.units[t as usize];
+        if tu.hp == 0 || tu.status & 0x400_0000 != 0 {
+            return;
+        }
+        if source != NIL {
+            self.attacked_by(d, t, source, w != 0x22);
+            if w != 0x22 && self.units[t as usize].player != self.units[source as usize].player {
+                self.under_attack_alert(t);
+            }
+        }
+        let tu = &self.units[t as usize];
+        if d.dat.units.shield_enable[tu.unit_type as usize] != 0 && tu.shields > 0xff && d.dat.weapons.damage_type[w as usize] != 0 {
+            todo_port!("0x4e6140", "shield hit overlay");
+        }
+    }
+
     /// 0x479ae0: damage the bullet's target.
-    fn weapon_hit(&mut self, d: &Data, b: u32, target: u32, divisor: u8) {
+    pub(super) fn weapon_hit(&mut self, d: &Data, b: u32, target: u32, divisor: u8) {
         let bu = &self.bullets.pool[b as usize];
         if bu.flags & 2 != 0 {
-            todo_port!("0x479730", "hallucination hit");
+            let (w, source) = (bu.weapon, bu.source);
+            self.hallucination_hit(d, target, source, w);
             return;
         }
         let (w, player, dir, source) = (bu.weapon, bu.player, bu.fl.heading, bu.source);
-        let dmg = self.weapon_damage(d, b);
+        let dmg = self.weapon_damage(d, b, target);
         self.damage_unit(d, target, dmg, w, divisor as u32, dir, source, player);
     }
 
     /// 0x48acd0: weapon damage (fp8) with upgrades.
-    fn weapon_damage(&self, d: &Data, b: u32) -> u32 {
+    fn weapon_damage(&self, d: &Data, b: u32, t: u32) -> u32 {
         let bu = &self.bullets.pool[b as usize];
         let w = bu.weapon as usize;
         let ws = &d.dat.weapons;
         if ws.explosion_type[w] == 5 {
-            todo_port!("0x48acd0", "explosion type 5 (yamato-like) damage");
+            // Nuclear missile: two thirds of `t`'s max hp (+ shields), at least 500.
+            let tu = &self.units[t as usize];
+            let ty = tu.unit_type as usize;
+            let mut hp = d.dat.units.hit_points[ty] as i32 >> 8;
+            if hp == 0 {
+                hp = (tu.hp + 0xff) >> 8;
+                if hp == 0 {
+                    hp = 1;
+                }
+            }
+            if d.dat.units.shield_enable[ty] != 0 {
+                hp += d.dat.units.shields[ty] as i32;
+            }
+            return ((hp * 2 / 3).max(500) as u32) << 8;
         }
         let up = ws.damage_upgrade[w] as usize;
         let level = if up < 0x2e {
@@ -779,7 +891,7 @@ impl State {
         if tu.defense_matrix_damage != 0 {
             let absorbed = v.min(tu.defense_matrix_damage as i32);
             v -= absorbed;
-            todo_port!("0x454ed0", "defense matrix absorbs damage");
+            self.defense_matrix_hit(d, t, absorbed);
         }
         let tu = &self.units[t as usize];
         let ut = tu.unit_type as usize;

@@ -469,7 +469,9 @@ pub fn run(st: &mut State, d: &Data, img: u32, nse: bool, mut distance: Option<&
             }
             0x27 => {
                 if !nse {
-                    todo_port!("0x1401b5020", "castspell");
+                    if let Some(u) = unit {
+                        st.iscript_cast_spell(d, u);
+                    }
                 }
             }
             0x28 => {
@@ -697,7 +699,16 @@ pub fn run(st: &mut State, d: &Data, img: u32, nse: bool, mut distance: Option<&
             0x42 => {
                 p = a + 4;
                 if !nse {
-                    todo_port!("0x1401d1700", "grdsprol: ground check before spawning");
+                    // Only where a marine (unit 0) could stand (0x42d810).
+                    let (dx, dy) = (i8_(a + 2), i8_(a + 3));
+                    let im = &st.images[img as usize];
+                    let sp = &st.sprites[im.sprite as usize];
+                    let x = sp.x.wrapping_add(im.x as i16).wrapping_add(dx as i16);
+                    let y = sp.y.wrapping_add(im.y as i16).wrapping_add(dy as i16);
+                    let elev = sp.elevation.wrapping_add(1);
+                    if st.terrain_fits(d, 0, x, y) {
+                        st.create_sprite_at_image(d, img, u16_(a), dx as i32, dy as i32, elev);
+                    }
                 }
             }
             _ => {} // 0x0c, 0x3e, 0x43: no-ops

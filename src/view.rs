@@ -89,6 +89,8 @@ fn with_data<R>(a: &Assets, f: impl FnOnce(&bw::Data) -> R) -> R {
 
 pub struct Scene<'a> {
     pub st: bw::State,
+    /// 0x6d0c64: the tileset's creep edge pieces (`Tileset\<name>.grp`, 0x414100).
+    creep_grp: Option<crate::grp::Grp>,
     pub selected: Vec<u32>,
     /// Unit voices (selection and acknowledgement lines).
     pub voices: crate::voices::Voices,
@@ -190,7 +192,8 @@ impl<'a> Scene<'a> {
             st.game_step(d);
             minimap.refresh(d, &mut st)
         });
-        Ok(Scene { st, minimap, selected: Vec::new(), voices: crate::voices::Voices::new(), sent_selection: Vec::new(), card_menu: None, placing: None, targeting: None, error: 0, error_frames: 0, place_ok: false, drag_box: None, a, chk, ts, terrain, player_colors, local, shadow, dark, fog: crate::fog::Fog::new(), tselect, thpbar, remaps })
+        let creep_grp = a.files.read(&format!("tileset/{}.grp", map::TILESETS[chk.tileset()])).ok().map(crate::grp::Grp::parse);
+        Ok(Scene { st, creep_grp, minimap, selected: Vec::new(), voices: crate::voices::Voices::new(), sent_selection: Vec::new(), card_menu: None, placing: None, targeting: None, error: 0, error_frames: 0, place_ok: false, drag_box: None, a, chk, ts, terrain, player_colors, local, shadow, dark, fog: crate::fog::Fog::new(), tselect, thpbar, remaps })
     }
 
     /// Send the local selection to the simulation (0x4c0860) and return the local
@@ -357,13 +360,36 @@ impl<'a> Scene<'a> {
 
     /// Draw the view at (vx, vy) into an indexed buffer of vw*vh.
     pub fn draw(&self, vx: i32, vy: i32, vw: i32, vh: i32, out: &mut [u8]) {
-        let (tw, th, tpx) = &self.terrain;
-        for y in 0..vh {
-            let sy = (vy + y).clamp(0, *th as i32 - 1) as usize;
-            let row = &tpx[sy * tw..sy * tw + tw];
-            for x in 0..vw {
-                let sx = (vx + x).clamp(0, *tw as i32 - 1);
-                out[(y * vw + x) as usize] = row[sx as usize];
+        // Terrain from the live megatile map (0x628494), which creep changes update.
+        let (tw, th) = (self.terrain.0 as i32, self.terrain.1 as i32);
+        let mw = self.st.terrain.width as i32;
+        let mut tile = [0u8; 32 * 32];
+        let (x0, y0) = (vx.clamp(0, tw - 1) >> 5, vy.clamp(0, th - 1) >> 5);
+        let (x1, y1) = ((vx + vw - 1).clamp(0, tw - 1) >> 5, (vy + vh - 1).clamp(0, th - 1) >> 5);
+        for ty in y0..=y1 {
+            for tx in x0..=x1 {
+                let i = (ty * mw + tx) as usize;
+                let raw = self.st.terrain.megatiles[i];
+                self.ts.draw_megatile(raw as usize & 0x7fff, &mut tile, 32);
+                // 0x49b9f0: a flagged tile next to creep gets its edge piece.
+                let edge = self.st.terrain.creep_edges[i];
+                if raw & 0x8000 != 0 && edge != 0 {
+                    if let Some(g) = &self.creep_grp {
+                        g.draw(edge as usize - 1, false, 0, 0, &mut tile, 32, 32, crate::grp::Blend::Normal);
+                    }
+                }
+                for py in 0..32 {
+                    let oy = ty * 32 + py - vy;
+                    if oy < 0 || oy >= vh {
+                        continue;
+                    }
+                    for px in 0..32 {
+                        let ox = tx * 32 + px - vx;
+                        if ox >= 0 && ox < vw {
+                            out[(oy * vw + ox) as usize] = tile[(py * 32 + px) as usize];
+                        }
+                    }
+                }
             }
         }
         // Sprites by elevation, then tile row (row lists as the game keeps them).
@@ -517,7 +543,7 @@ impl<'a> Scene<'a> {
         let best = with_data(self.a, |d| {
             self.selected.iter().copied().max_by_key(|&u| {
                 let un = &st.units[u as usize];
-                d.dat.units.rank[un.unit_type as usize] as u32 + un.u8_at(0x8e) as u32
+                d.dat.units.rank[un.unit_type as usize] as u32 + un.unknown_8e as u32
             })
         });
         let Some(u) = best else { return };

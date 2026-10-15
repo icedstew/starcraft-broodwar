@@ -244,7 +244,7 @@ impl State {
     fn remove_unit_type_specific(&mut self, d: &Data, u: u32) {
         let t = self.units[u as usize].unit_type;
         match t {
-            0x48 | 0x52 | 0x53 | 0x51 => todo_port!("0x466170", "carrier/reaver children"),
+            0x48 | 0x52 | 0x53 | 0x51 => self.kill_fighters(d, u),
             1 | 0x10 | 100 | 99 | 0x68 => {
                 if self.units[u as usize].u16_at(0xd0) != 0 || self.units[u as usize].u16_at(0xd2) != 0 {
                     todo_port!("0x49f4a0", "ghost nuke");
@@ -264,7 +264,7 @@ impl State {
                             self.units[c as usize].set_ptr_at(0xd4, NIL);
                         }
                     }
-                    0x49 | 0x55 if st & 1 != 0 => todo_port!("0x4652a0", "interceptor / scarab leaves its carrier"),
+                    0x49 | 0x55 if st & 1 != 0 => self.fighter_unlink(u),
                     0x6c => {
                         let n = self.units[u as usize].ptr_at(0xd0);
                         if n != NIL {

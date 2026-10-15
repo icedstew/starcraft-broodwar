@@ -316,7 +316,7 @@ impl State {
     }
 
     /// 0x47b150: race of `u` (0 zerg, 1 terran, 2 protoss, 4 other).
-    fn race_of(&self, d: &Data, u: u32) -> u8 {
+    pub(super) fn race_of(&self, d: &Data, u: u32) -> u8 {
         let g = d.dat.units.staredit_group_flags[self.units[u as usize].unit_type as usize];
         if g & 1 != 0 {
             0

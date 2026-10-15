@@ -17,7 +17,9 @@ agent/
     fontdec.py      run 1.16.1's own font decryption under the emulator (font oracle):
                     $PY -I fontdec.py $EXE <enc.fnt> <font.gid> > dec.fnt
     cmp.sh          one bwsim scenario: emulator vs scbw (see testing.md)
-    suite.sh        the 62 regression scenarios (all must print MATCH)
+    suite.sh        the regression scenarios (all must print MATCH). cmp.sh / suite.sh write fixed
+                    files in $W (md/cur, a, b, emu_trace...): never run two at once (they
+                    corrupt each other and report false diffs). repcmp.sh takes OUT=<dir>.
     repcmp.sh       replay playback: emulator vs scbw trace diff
   local/            GITIGNORED (Blizzard-derived or large)
     scratch/        the whole former session scratchpad (5.8 GB), see below

@@ -18,6 +18,17 @@ impl Finder {
     pub fn new(max_units: usize) -> Finder {
         Finder { x: vec![(0, 0); max_units * 2 + 2], y: vec![(0, 0); max_units * 2 + 2], count: 0 }
     }
+
+    /// Coordinate of x entry `i`. A unit outside the finder has index -1, and 1.16.1
+    /// then reads the dword before the array: the count (0x66ff74).
+    pub fn x_value(&self, i: i32) -> i32 {
+        if i < 0 { self.count as i32 } else { self.x[i as usize].1 }
+    }
+
+    /// Coordinate of y entry `i`; index -1 reads the last x entry (0x6769b4, x[3399]).
+    pub fn y_value(&self, i: i32) -> i32 {
+        if i < 0 { self.x[3399].1 } else { self.y[i as usize].1 }
+    }
 }
 
 /// 0x469b00: binary search for the insert position of `value`.

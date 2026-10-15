@@ -54,6 +54,8 @@ pub struct GameMap {
     pub minitiles: Vec<u8>,
     /// 0x5993a8: the tile under each creep tile (0 = none).
     pub creep_saved: Vec<u16>,
+    /// 0x6d0e80: creep edge piece (frame + 1 of the tileset's .grp) for tiles next to creep.
+    pub creep_edges: Vec<u8>,
     pub tileset: TilesetData,
 }
 
@@ -69,6 +71,7 @@ impl GameMap {
             vf4: ts.vf4.clone(),
             minitiles: Vec::new(),
             creep_saved: vec![0; 0x10000],
+            creep_edges: vec![0; 0x10000],
             tileset: ts.clone(),
         }
     }

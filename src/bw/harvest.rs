@@ -822,7 +822,7 @@ impl State {
     }
 
     /// 0x42fa30: distance from `m` to `p` (along the region path for ground units).
-    fn path_distance(&mut self, m: u32, p: (i16, i16)) -> i32 {
+    pub(super) fn path_distance(&mut self, m: u32, p: (i16, i16)) -> i32 {
         let mp = self.unit_sprite_pos(m);
         let straight = |a: (i16, i16), b: (i16, i16)| super::path::approx_distance(a.0 as i32, b.0 as i32, a.1 as i32, b.1 as i32) as i32;
         if self.units[m as usize].pathing_flags & 1 == 0 {
@@ -1138,7 +1138,7 @@ impl State {
     }
 
     /// 0x495f20: face `dir` immediately.
-    fn set_heading_now(&mut self, d: &Data, u: u32, dir: u8) {
+    pub(super) fn set_heading_now(&mut self, d: &Data, u: u32, dir: u8) {
         let sp = self.unit_sprite_pos(u);
         let f = &mut self.units[u as usize].fl;
         f.velocity_dir_prev = dir;

@@ -222,8 +222,8 @@ impl State {
     /// 0x469b60: finder boxes of `a` and `b` overlap.
     pub fn finder_boxes_overlap(&self, a: u32, b: u32) -> bool {
         let (fa, fb) = (self.units[a as usize].finder_index, self.units[b as usize].finder_index);
-        let x = |i: i32| self.finder.x[i as usize].1;
-        let y = |i: i32| self.finder.y[i as usize].1;
+        let x = |i: i32| self.finder.x_value(i);
+        let y = |i: i32| self.finder.y_value(i);
         x(fa[0]) <= x(fb[1]) && x(fb[0]) <= x(fa[1]) && y(fa[2]) <= y(fb[3]) && y(fb[2]) <= y(fa[3])
     }
 

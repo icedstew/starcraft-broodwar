@@ -134,6 +134,8 @@ pub struct Unit {
     pub maelstrom_timer: u8,          // 0x124
     pub acid_spore_count: u8,         // 0x126
     pub acid_spore_time: [u8; 9],     // 0x127
+    /// 0x130: next entry of the 0x513650 spread pattern (valkyrie rockets).
+    pub bullet_spread: u16,           // 0x130
     pub ai: u32,                      // 0x134 / 0x1c8
     pub air_strength: u16,            // 0x138
     pub ground_strength: u16,         // 0x13A
@@ -238,6 +240,7 @@ impl Default for Unit {
             maelstrom_timer: 0,
             acid_spore_count: 0,
             acid_spore_time: [0; 9],
+            bullet_spread: 0,
             ai: NIL,
             air_strength: 0,
             ground_strength: 0,

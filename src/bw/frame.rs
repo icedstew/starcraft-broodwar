@@ -138,10 +138,10 @@ impl State {
         }
         self.update_cloak_list(d);
         self.update_power(d);
-        // 0x64dec8: 32 rows of 32 dwords; advance the ring and clear the new row.
-        self.finder_ring = (self.finder_ring + 1) % 0x20;
-        self.finder_rows[self.finder_ring as usize] = [0; 0x20];
-        self.finder_64dea8 = 0;
+        // 0x64dec8: lurker hits, 32 frames of 16 (lurker, target) pairs; advance the ring and clear the new frame.
+        self.lurker_hits_frame = (self.lurker_hits_frame + 1) % 0x20;
+        self.lurker_hits[self.lurker_hits_frame as usize] = [0; 0x20];
+        self.lurker_hits_count = 0;
         let mut u = self.scanner_units.head;
         while u != NIL {
             let next = self.units[u as usize].link.next;
@@ -361,15 +361,24 @@ impl State {
             self.update_speed(d, u);
         }
         if dec(&mut self.units[u as usize].ensnare_timer) {
-            todo_port!("0x4e5cf0", "ensnare overlay removed");
+            self.remove_overlay_in(u, 0x180, 0x182);
             self.units[u as usize].ensnare_timer = 0;
             self.update_speed(d, u);
         }
         if dec(&mut self.units[u as usize].defense_matrix_timer) {
-            todo_port!("0x454ed0", "defensive matrix ends");
+            let hp = self.units[u as usize].defense_matrix_damage as i32;
+            self.defense_matrix_hit(d, u, hp);
         }
         if self.units[u as usize].irradiate_timer != 0 {
-            todo_port!("0x4555c0", "irradiate damage and end");
+            self.units[u as usize].irradiate_timer -= 1;
+            self.irradiate_tick(d, u);
+            if self.units[u as usize].irradiate_timer == 0 {
+                self.remove_overlay_in(u, 0x17c, 0x17e);
+                let un = &mut self.units[u as usize];
+                un.irradiate_timer = 0;
+                un.irradiated_by = NIL;
+                un.irradiate_player = 8;
+            }
         }
         if dec(&mut self.units[u as usize].lockdown_timer) {
             // 0x454d90
@@ -380,7 +389,15 @@ impl State {
             self.spell_overlay_ends(d, u, 0x3d6, 0x3d8);
         }
         if self.units[u as usize].plague_timer != 0 {
-            todo_port!("0x492f70", "plague damage and end");
+            self.units[u as usize].plague_timer -= 1;
+            let dmg = ((d.dat.weapons.damage[0x3c] as i32) << 8) / 0x4c;
+            if self.units[u as usize].status & 0x400_0000 == 0 && self.units[u as usize].hp > dmg {
+                self.apply_damage_pub(d, u, dmg, NIL, 0xff, true);
+            }
+            if self.units[u as usize].plague_timer == 0 {
+                self.remove_overlay_in(u, 0x184, 0x186);
+                self.units[u as usize].plague_timer = 0;
+            }
         }
         let st = &mut self.units[u as usize].storm_timer;
         *st = st.saturating_sub(1);
@@ -395,19 +412,13 @@ impl State {
                 }
             }
         }
-        if self.units[u as usize].acid_spore_count == 0 {
-            if before != 0 {
-                todo_port!("0x4e5cf0", "acid spore overlay removed");
-            }
-        } else {
-            todo_port!("0x4e5c90", "acid spore overlay (re)added");
-        }
+        self.acid_overlay_update(d, u, before);
     }
 
     /// 0x492370: a disabling spell wears off: its overlay (image ids lo..=hi, on the unit
     /// or its turret) plays its death animation, the turret works again, and a worker
     /// that was waiting at a mineral field resumes (0x468db0).
-    fn spell_overlay_ends(&mut self, d: &Data, u: u32, lo: u16, hi: u16) {
+    pub(super) fn spell_overlay_ends(&mut self, d: &Data, u: u32, lo: u16, hi: u16) {
         let find = |st: &State, x: u32| {
             let s = st.units[x as usize].sprite;
             let mut i = st.sprites[s as usize].images.head;
@@ -459,7 +470,7 @@ impl State {
     pub fn execute_secondary_order(&mut self, d: &Data, u: u32) {
         let un = &self.units[u as usize];
         if un.secondary_order == 0x95 {
-            todo_port!("0x4f63a0", "Hallucination2 timer");
+            self.secondary_hallucination(d, u);
             return;
         }
         // Disabled units (doodad-disabled, lockdown, stasis, maelstrom) skip secondary orders.
@@ -470,12 +481,12 @@ impl State {
             0x25 => self.secondary_build_addon(d, u),
             0x26 => self.secondary_train(d, u),
             0x3f => self.secondary_train_fighter(d, u),
-            0x44 => todo_port!("0x4932d0", "ShieldBattery"),
+            0x44 => self.secondary_shield_battery(d, u),
             0x4e => self.hatchery_spawn_larva(d, u),
             0x66 => self.secondary_spread_creep(d, u),
             0x6d => self.secondary_cloak(u),
             0x6e => self.secondary_decloak(u),
-            0x83 => todo_port!("0x491c20", "CloakNearbyUnits"),
+            0x83 => self.secondary_cloak_nearby(d, u),
             _ => {}
         }
     }

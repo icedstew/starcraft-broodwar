@@ -54,7 +54,7 @@ impl State {
     }
 
     /// 0x402210: `target` is a damaged (< 50% hp) completed unit of type 0x6a.
-    fn damaged_6a(&self, d: &Data, target: u32) -> bool {
+    pub(super) fn damaged_6a(&self, d: &Data, target: u32) -> bool {
         let t = &self.units[target as usize];
         if t.status & 1 == 0 || t.unit_type != 0x6a {
             return false;
@@ -354,7 +354,10 @@ impl State {
         let tt = self.units[t as usize].unit_type;
         let mut c = t;
         if tt == 0x7d {
-            todo_port!("0x4e6c90", "bunker: first loaded unit");
+            // 0x4e6c90: the bunker's first live passenger stands in for it.
+            if let Some(p) = self.first_passenger(d, t) {
+                c = p;
+            }
         } else if matches!(tt, 0x23 | 0x24 | 0x3b | 0x61) {
             return 5;
         }
@@ -376,8 +379,21 @@ impl State {
         if p == 0 && cu.status & 0x8000 != 0 {
             return 1;
         }
-        let _ = &mut c;
         p
+    }
+
+    /// 0x4e6c90: the first live unit in `tr`'s passenger slots.
+    pub(super) fn first_passenger(&self, d: &Data, tr: u32) -> Option<u32> {
+        let n = d.dat.units.space_provided[self.units[tr as usize].unit_type as usize] as usize;
+        (0..n.min(8)).find_map(|i| {
+            let h = self.units[tr as usize].loaded_units[i] as u32;
+            if h == 0 {
+                return None;
+            }
+            let c = (h & 0x7ff) - 1;
+            let cu = &self.units[c as usize];
+            (cu.sprite != NIL && (cu.order != 0 || cu.order_state != 1) && cu.unique_id as u32 == h >> 11).then_some(c)
+        })
     }
 
     /// 0x476000: target acquisition range in tiles, with range upgrades.
@@ -610,7 +626,7 @@ impl State {
             return false;
         }
         if st & 0x20 != 0 {
-            todo_port!("0x477fd0", "muzzle flash of a unit in a bunker");
+            self.bunker_muzzle_flash(d, u);
         }
         self.units[u as usize].fl.flags |= 8;
         self.bullets.spin_source = NIL;
@@ -785,7 +801,7 @@ impl State {
     }
 
     /// 0x476640: the order target (or position) is within weapon `w`'s range and arc.
-    fn weapon_ready(&mut self, d: &Data, u: u32, w: u8) -> bool {
+    pub(super) fn weapon_ready(&mut self, d: &Data, u: u32, w: u8) -> bool {
         if self.units[u as usize].fl.flags & 8 != 0 {
             return false;
         }
@@ -801,6 +817,34 @@ impl State {
             return false;
         }
         true
+    }
+
+    /// 0x477fd0: a unit firing from a bunker shows a muzzle flash (0x179, firebats and
+    /// Gui Montag 0x17a) at the bunker's attack overlay point for its facing.
+    fn bunker_muzzle_flash(&mut self, d: &Data, u: u32) {
+        let b = self.units[u as usize].connected_unit;
+        let main = self.sprites[self.units[b as usize].sprite as usize].main_image;
+        let im = &self.images[main as usize];
+        let h = self.units[u as usize].fl.heading as i32;
+        let idx = ((h + 0x10) >> 5) & 7;
+        let (mut ox, oy) = d.lo_offset(0, im.image_id, im.frame, idx as i8).unwrap_or((0, 0));
+        if im.flags & super::sprite::iflag::FLIPPED != 0 {
+            ox = ox.wrapping_neg();
+        }
+        let (sprite_id, dir) = if matches!(self.units[u as usize].unit_type, 0x20 | 0xa) {
+            (0x17a, ((h + 8) >> 4) & 0xf)
+        } else {
+            (0x179, idx * 2)
+        };
+        let (x, y) = self.unit_sprite_pos(u);
+        let Some(th) = self.create_thingy(d, sprite_id, x.wrapping_add(ox as i16), y.wrapping_add(oy as i16), 0) else {
+            return;
+        };
+        let ts = self.thingies[th as usize].sprite;
+        let us = self.units[u as usize].sprite;
+        self.sprites[ts as usize].elevation = self.sprites[us as usize].elevation.wrapping_add(1);
+        self.sprite_images_set_direction(d, ts, (dir << 4) as u8);
+        self.sprite_fog_visibility(ts);
     }
 
     /// 0x475be0: `u` faces (x, y) within weapon `w`'s attack angle (lurkers just turn).
@@ -961,7 +1005,7 @@ impl State {
     }
 
     /// 0x476870: `u` can hit `target` (default: its order target) from where it is.
-    fn can_hit_now(&self, d: &Data, u: u32, target: u32) -> bool {
+    pub(super) fn can_hit_now(&self, d: &Data, u: u32, target: u32) -> bool {
         let target = if target != NIL { target } else { self.units[u as usize].order_target_unit };
         if target == NIL {
             return true;
@@ -1109,7 +1153,7 @@ impl State {
             if mu.ai != NIL {
                 todo_port!("0x462930", "AI unit flees only toward its AI destination");
             }
-            if self.cover_chance_pub(m) == 0xff {
+            if self.cover_chance_pub(d, m) == 0xff {
                 return;
             }
             let p = self.flee_point(d, attacker, m);
@@ -1264,7 +1308,7 @@ impl State {
         }
         let w = self.ground_weapon(d, u);
         if self.units[u as usize].status & 0x4000_0000 != 0 {
-            todo_port!("0x479730", "hallucination melee hit");
+            self.hallucination_hit(d, t, u, w);
             return;
         }
         let (player, dir) = (self.units[u as usize].player, self.units[u as usize].fl.heading);

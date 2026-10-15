@@ -6,8 +6,10 @@
 
 pub mod addon;
 pub mod attack;
+pub mod battery;
 pub mod build;
 pub mod bullet;
+pub mod carrier;
 pub mod buttons;
 pub mod archon;
 pub mod burrow;
@@ -41,6 +43,7 @@ pub mod larva;
 pub mod zerg;
 pub mod list;
 pub mod medic;
+pub mod mines;
 pub mod map;
 pub mod minimap;
 pub mod load;
@@ -49,6 +52,7 @@ pub mod sai;
 pub mod select;
 pub mod short_path;
 pub mod siege;
+pub mod spells;
 pub mod sprite;
 pub mod train;
 pub mod transport;
@@ -184,8 +188,8 @@ pub struct State {
     /// update_units stagger countdowns (150 / 300 frames).
     pub stagger_150: u32,
     pub stagger_300: u32,
-    /// Unit finder search-id ring index (advances each frame).
-    pub finder_ring: u32,
+    /// 0x64eec8: current frame row of `lurker_hits` (advances each frame).
+    pub lurker_hits_frame: u32,
     /// Scanner sweep / special units list stepped last in update_units.
     pub scanner_units: List,
     /// 0x57eee8 player type per player (2 = human).
@@ -214,9 +218,11 @@ pub struct State {
     pub template: [u8; 0x20],
     /// 0x658ae4: shared countdown for 0x4000-status dead-unit removal.
     pub dead_removal_counter: u32,
-    /// 0x64dec8 ring rows, 0x64dea8, 0x6957d0.
-    pub finder_rows: [[u32; 0x20]; 0x20],
-    pub finder_64dea8: u32,
+    /// 0x64dec8: lurker spine hits, 32 frames of 16 (lurker + 1, target + 1) pairs (0 = empty);
+    /// 0x64dea8: pairs used in the current frame.
+    pub lurker_hits: [[u32; 0x20]; 0x20],
+    pub lurker_hits_count: u32,
+    /// 0x6957d0.
     pub var_6957d0: u32,
     /// 0x66ff70: unit moved to a new tile this frame (vision refresh).
     pub moved_flag: bool,
@@ -345,7 +351,7 @@ impl State {
             creep_rec: creep::Recession::new(),
             stagger_150: 10, // 0x59cca4 = 10 (0x49f380)
             stagger_300: 0x96, // 0x6283e8 = 0x96
-            finder_ring: 0,
+            lurker_hits_frame: 0,
             scanner_units: List::default(),
             player_types: [0; 12],
             player_races: [0; 12],
@@ -364,8 +370,8 @@ impl State {
             replay_paused: false,
             replay_frames: 0,
             dead_removal_counter: 0,
-            finder_rows: [[0; 0x20]; 0x20],
-            finder_64dea8: 0,
+            lurker_hits: [[0; 0x20]; 0x20],
+            lurker_hits_count: 0,
             var_6957d0: 0,
             moved_flag: false,
             finder: finder::Finder::new(max_units as usize),

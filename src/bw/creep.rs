@@ -3,11 +3,66 @@
 //!
 //! Creep lives in the tile map itself (0x5993c4, `terrain.mtxm`): a creep tile is cv5
 //! group 1 (`tile & 0x7ff0 == 0x10`), and the tile it covered is kept in 0x5993a8
-//! (`terrain.creep_saved`). The edge byte map (0x6d0e80) and the 0x413b30 neighbour
-//! walk only drive the creep edge graphics, so they are not kept here.
+//! (`terrain.creep_saved`). The edge byte map (0x6d0e80, `terrain.creep_edges`), filled
+//! by the 0x413b30 neighbour walk, picks the creep edge pieces drawn on bare tiles.
 
 use super::list::NIL;
 use super::{Data, State};
+use std::sync::OnceLock;
+
+/// 0x5061b8: the 0x413b30 walk order (the 8 neighbours, then the tile itself).
+const WALK: [(i32, i32); 9] = [(1, 1), (0, 1), (-1, 1), (1, 0), (-1, 0), (1, -1), (0, -1), (-1, -1), (0, 0)];
+
+/// 0x413c50 (0x6d0c80: neighbour mask -> edge shape) and 0x413c00 (0x6d0e88: edge
+/// shape -> piece number, in order of first use).
+fn edge_tables() -> &'static ([u8; 0x200], [u8; 0x80]) {
+    static T: OnceLock<([u8; 0x200], [u8; 0x80])> = OnceLock::new();
+    T.get_or_init(|| {
+        let mut shape = [0u8; 0x200];
+        for (m, v) in shape.iter_mut().enumerate() {
+            if m & 0x100 != 0 {
+                *v = 0x7f;
+                continue;
+            }
+            if m & 0x10 != 0 {
+                *v |= 9;
+            }
+            if m & 8 != 0 {
+                *v |= 0x24;
+            }
+            if m & 0x40 != 0 {
+                *v |= 2;
+            }
+            if m & 2 != 0 {
+                *v |= 0x10;
+            }
+            if m & 0xc0 == 0xc0 {
+                *v |= 1;
+            }
+            if m & 0x60 == 0x60 {
+                *v |= 4;
+            }
+            if m & 6 == 6 {
+                *v |= 8;
+            }
+            if m & 3 == 3 {
+                *v |= 0x20;
+            }
+            if *v & 0x21 == 0x21 || *v & 0xc == 0xc {
+                *v |= 0x40;
+            }
+        }
+        let mut piece = [0u8; 0x80];
+        let mut n = 0u8;
+        for (k, p) in piece.iter_mut().enumerate() {
+            if shape.iter().any(|&v| v as usize == k) {
+                *p = n;
+                n += 1;
+            }
+        }
+        (shape, piece)
+    })
+}
 
 impl State {
     /// 0x413f20: tile (x, y) has creep.
@@ -72,6 +127,37 @@ impl State {
         let tile = 0x10 + v as u16;
         self.terrain.mtxm[i] = tile;
         self.creep_tile_changed(x, y, 0, tile);
+        self.creep_edges_around(x, y);
+    }
+
+    /// 0x47d290: tile (x, y) shows creep to the local player.
+    fn creep_shown(&self, x: i32, y: i32) -> bool {
+        self.terrain.tile_flags[(y * self.terrain.width as i32 + x) as usize] & 0x4000_0000 != 0
+    }
+
+    /// 0x413b30 with 0x414440: the bare tiles around (x, y) (and (x, y) itself) get the
+    /// creep edge piece for their creep neighbours (0x414230 mask, 0x413a70).
+    fn creep_edges_around(&mut self, x: i32, y: i32) {
+        let (w, h) = (self.terrain.width as i32, self.terrain.height as i32);
+        let (shape, piece) = edge_tables();
+        for (dx, dy) in WALK {
+            let (nx, ny) = (x + dx, y + dy);
+            if nx < 0 || nx >= w || ny < 0 || ny >= h || self.creep_shown(nx, ny) {
+                continue;
+            }
+            // The mask is a byte, so the tile's own bit (1 << 8) drops out.
+            let mut mask = 0u8;
+            for (i, (ex, ey)) in WALK.iter().enumerate() {
+                let (mx, my) = (nx + ex, ny + ey);
+                if mx >= 0 && mx < w && my >= 0 && my < h && self.creep_shown(mx, my) {
+                    mask |= (1u32 << i) as u8;
+                }
+            }
+            let i = (ny * w + nx) as usize;
+            self.terrain.creep_edges[i] = piece[shape[mask as usize] as usize];
+            let tile = self.terrain.mtxm[i];
+            self.creep_tile_changed(nx, ny, 2, tile);
+        }
     }
 
     /// MSVC `rand` (0x40c7bd), used for creep tile variations.
@@ -198,7 +284,6 @@ impl State {
         let w = self.terrain.width as i32;
         self.terrain.tile_flags[(y * w + x) as usize] &= !0x1000_0000;
         self.remove_creep_tile(x, y);
-        // 0x47d290 / 0x413b30: creep edges (UI).
         self.creep_rec.push(n, 9);
     }
 
@@ -206,12 +291,12 @@ impl State {
     fn remove_creep_tile(&mut self, x: i32, y: i32) {
         let i = (y * self.terrain.width as i32 + x) as usize;
         let saved = self.terrain.creep_saved[i];
-        if saved == 0 {
-            return;
+        if saved != 0 {
+            self.terrain.mtxm[i] = saved;
+            self.terrain.creep_saved[i] = 0;
+            self.creep_tile_changed(x, y, 1, saved);
         }
-        self.terrain.mtxm[i] = saved;
-        self.terrain.creep_saved[i] = 0;
-        self.creep_tile_changed(x, y, 1, saved);
+        self.creep_edges_around(x, y);
     }
 
     /// 0x47de40 / 0x47df90: the creep a removed `t` at (x, y) kept alive starts to
@@ -344,7 +429,6 @@ impl State {
                     && f & 0x800_0000 == 0
                 {
                     self.add_creep_tile(x as i32, y as i32);
-                    // 0x47d230 / 0x413b30: creep edges (UI).
                 }
             }
         }
@@ -427,7 +511,8 @@ impl State {
             self.terrain.megatiles[i] = mega;
             let f = &mut self.terrain.tile_flags[i];
             *f = if raw & 0x7ff0 == 0x10 { *f | 0x4000_0000 } else { *f & !0x4000_0000 };
-            // 0x413b30 edges and 0x59cb58 redraw: UI.
+            self.creep_edges_around(x as i32, y as i32);
+            // 0x59cb58: redraw (UI).
         }
     }
 }
