@@ -119,6 +119,9 @@ def install_ptd(e):
 def game_init(e, f, md):
     """0x4eee00 with the scenario taken from memory (replay-style CHK, 0x4bf520)."""
     install_ptd(e)
+    # Trigger UI: the countdown timer text (0x489c30) and its dialog (0x4e5600).
+    e.skip(0x489c30)
+    e.skip(0x4e5600)
     # 0x4fc7f0: CRT static constructor of the per-player lists at 0x51a280 (freed when
     # a player leaves, 0x48a1c0): empty-list sentinels, head + 8 = ~(head + 4). The
     # harness does not run the CRT init table (its atexit needs CRT state).
@@ -179,10 +182,15 @@ def game_init(e, f, md):
                     if "mapunits" in r:
                         e.write(0x59bda8, r["mapunits"])
                     e.w32(0x6d11c8, 1)
+                    # 0x4eec30 -> 0x489b30: trigger state for the new game.
+                    e.call(0x489b30)
                 e.w32(0x6d0f14, 1)
                 e.w32(0x6d0f24, p)
                 e.w32(0x6d0f20, len(chk))
                 r = e.call(0x4bf520)
+                if rep:
+                    # 0x4ef100 -> 0x4abaf0: the game type's triggers (Melee.trg ...).
+                    e.call(0x4abaf0)
                 if not rep:
                     e.w32(0x6d0f14, 0)
                 e.w32(0x6d11c8, 0)
@@ -663,6 +671,12 @@ def scenario(e, units, move, frames, out):
                 apply_moves(move2)
             e.w32(0x57f23c, e.r32(0x57f23c) + 1)  # 0x4d9670 advances the frame first
             e.call(0x4d94b0)
+            if replay:
+                # 0x4d9670: the trigger pass (0x48a460) with the RNG on, at the fastest
+                # speed's frame time (0x5124d8[6]).
+                e.call(0x4dc540, regs={"ecx": 1})
+                e.call(0x48a460, stack=[0x2a])
+                e.call(0x4dc540, regs={"ecx": 0})
             if f in camera:
                 # 0x49c440 (its 0x49bfd0 scroll redraw is UI only): the screen position
                 # set after this frame's draw.
@@ -696,6 +710,7 @@ def scenario(e, units, move, frames, out):
                     ids.append(str((fr - UNITS) // 0x150))
                     fr = e.r32(fr + 4)
                 fo.write(f"f{f} free {' '.join(ids)}\n")
+                fo.write(f"f{f} trg {list(e.read(0x58d700, 8))} {e.r32(0x58d6f8)} {e.r16(0x6509a0)} {e.r32(0x58dc40):x}\n")
             if os.environ.get("SCBW_IMGWATCH"):  # "unit,from": the unit's images each frame
                 wu, wf = (int(v) for v in os.environ["SCBW_IMGWATCH"].split(","))
                 if f >= wf:

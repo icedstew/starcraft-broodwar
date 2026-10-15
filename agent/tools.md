@@ -38,7 +38,7 @@ Copied from the session scratchpad
 |---|---|
 | `dump/bw116n.c` | Ghidra decompile of 1.16.1 StarCraft.exe, all 4,644 functions, named where known (`// ==== 00<addr> <name>` headers). `bw116.c` is the unnamed original. `sc_x64*` are the SC:R 1.23 x64 dump/decompile (mostly superseded). |
 | `sc116/StarCraft.exe`, `sc116/storm.dll` | Clean 1.16.1 exe (from the 1.16.1 patch MPQ) and storm.dll. Its code bytes equal the install's `StarCraft.exe` (they differ only in header/resources). |
-| `data116/` | Files extracted from the 1.16.1 MPQs (`scbw extract`) for the emulator: arr, scripts, unit, tileset (incl. real `.vx4`), game, parallax. |
+| `data116/` | Files extracted from the 1.16.1 MPQs (`scbw extract`) for the emulator: arr, scripts, unit, tileset (incl. real `.vx4`), game, parallax, triggers (`triggers\\*.trg`, read by 0x4abaf0). |
 | `venv/` | Python venv with capstone + unicorn (`$PY`). Moved venvs print a sys.prefix warning; harmless. To recreate: `python3 -m venv venv && venv/bin/pip install capstone unicorn`. |
 | `md/` | `scbw mapdump` outputs (dims, tileset, chk, sai, ...) for emulator runs; `md/rep` = the current replay's map. |
 | `rep.txt` | `scbw repdump` of the replay last compared. |

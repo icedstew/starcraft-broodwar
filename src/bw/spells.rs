@@ -1615,7 +1615,7 @@ impl State {
 impl State {
     /// 0x493ca0(0): `u` leaves the finder, tiles, repulse grid and paths before being
     /// moved (it stays visible).
-    fn lift_off_map(&mut self, d: &Data, u: u32) {
+    pub(super) fn lift_off_map(&mut self, d: &Data, u: u32) {
         let s = self.units[u as usize].sprite;
         if self.sprites[s as usize].flags & super::sprite::sflag::HIDDEN != 0 {
             return;
@@ -1640,7 +1640,7 @@ impl State {
 
     /// 0x494160: a moved unit (and its turret) goes back into the finder, tiles,
     /// repulse grid and vision.
-    fn put_back_on_map(&mut self, d: &Data, u: u32) {
+    pub(super) fn put_back_on_map(&mut self, d: &Data, u: u32) {
         let sub = self.units[u as usize].subunit;
         let turret = sub != NIL && d.dat.units.flags[self.units[sub as usize].unit_type as usize] & 0x10 != 0;
         if turret {

@@ -500,3 +500,140 @@ impl State {
         }
     }
 }
+
+/// Use Map Settings sections that rewrite the dat tables (as the game's memory copies of
+/// units.dat / weapons.dat / upgrades.dat / techdata.dat are): UNIx (0x4cacd0), UPGx
+/// (0x4ca9f0), TECx (0x4ca7d0). Only Use Map Settings games read them (no melee flag).
+pub fn apply_dat_settings(dat: &mut crate::dat::Dat, unix: Option<&[u8]>, upgx: Option<&[u8]>, tecx: Option<&[u8]>) {
+    let u16s = |b: &[u8], o: usize, i: usize| u16::from_le_bytes([b[o + i * 2], b[o + i * 2 + 1]]);
+    if let Some(b) = unix.filter(|b| b.len() == 0x1048) {
+        // use default [228], hp u32 [228], shields, armor u8, time, minerals, gas,
+        // string id (u16 [228] each), weapon damage and bonus (u16 [130] each).
+        let (hp, sh, ar, tm, mi, ga, st, dm, bo) = (0xe4, 0x474, 0x63c, 0x720, 0x8e8, 0xab0, 0xc78, 0xe40, 0xf44);
+        let u = &mut dat.units;
+        for i in (0..0xe4usize).rev() {
+            if b[i] != 0 {
+                continue;
+            }
+            u.hit_points[i] = u32::from_le_bytes(b[hp + i * 4..hp + i * 4 + 4].try_into().unwrap());
+            u.shields[i] = u16s(b, sh, i);
+            u.armor[i] = b[ar + i];
+            u.build_time[i] = u16s(b, tm, i);
+            u.mineral_cost[i] = u16s(b, mi, i);
+            u.gas_cost[i] = u16s(b, ga, i);
+            u.name_string[i] = u16s(b, st, i);
+            // The weapons of the unit's turret when it has one.
+            let s = u.subunit1[i];
+            let w_of = if s != 0xe4 { s as usize } else { i };
+            for w in [u.ground_weapon[w_of], u.air_weapon[w_of]] {
+                if w != 0x82 {
+                    dat.weapons.damage[w as usize] = u16s(b, dm, w as usize);
+                    dat.weapons.damage_bonus[w as usize] = u16s(b, bo, w as usize);
+                }
+            }
+        }
+    }
+    if let Some(b) = upgx.filter(|b| b.len() == 0x31a) {
+        // use default [61] + pad, then minerals, mineral factor, gas, gas factor, time,
+        // time factor (u16 [61] each).
+        let g = &mut dat.upgrades;
+        for i in (0..61usize).rev() {
+            if b[i] == 0 {
+                g.mineral_base[i] = u16s(b, 0x3e, i);
+                g.mineral_factor[i] = u16s(b, 0xb8, i);
+                g.gas_base[i] = u16s(b, 0x132, i);
+                g.gas_factor[i] = u16s(b, 0x1ac, i);
+                g.time_base[i] = u16s(b, 0x226, i);
+                g.time_factor[i] = u16s(b, 0x2a0, i);
+            }
+        }
+    }
+    if let Some(b) = tecx.filter(|b| b.len() == 0x18c) {
+        // use default [44], minerals, gas, time, energy (u16 [44] each).
+        let t = &mut dat.techdata;
+        for i in (0..44usize).rev() {
+            if b[i] == 0 {
+                t.mineral_cost[i] = u16s(b, 0x2c, i);
+                t.gas_cost[i] = u16s(b, 0x84, i);
+                t.research_time[i] = u16s(b, 0xdc, i);
+                t.energy_cost[i] = u16s(b, 0x134, i);
+            }
+        }
+    }
+}
+
+impl State {
+    /// 0x4caf90: MASK, the starting fog: each tile's flags get the mask byte as both the
+    /// visibility and the exploration bits (low 16 bits replaced).
+    pub fn chk_mask(&mut self, data: &[u8]) {
+        for (f, &m) in self.terrain.tile_flags.iter_mut().zip(data) {
+            *f = (*f & 0xffff_0000) | (m as u32) << 8 | m as u32;
+        }
+    }
+
+    /// 0x4ca600: PUNI, which units each player may build.
+    pub fn chk_puni(&mut self, b: &[u8]) {
+        if b.len() != 0x1644 {
+            return;
+        }
+        // per player [12][228], global [228], use global [12][228]
+        for p in (0..12usize).rev() {
+            for t in (0..228usize).rev() {
+                let v = if b[0xb94 + p * 228 + t] == 0 { b[p * 228 + t] } else { b[0xab0 + t] };
+                self.players.unit_available[p][t] = v;
+            }
+        }
+    }
+
+    /// 0x4cbac0: PUPx, upgrade levels and limits per player.
+    pub fn chk_pupx(&mut self, b: &[u8]) {
+        if b.len() != 0x90e {
+            return;
+        }
+        // max [12][61], start [12][61], default max [61], default start [61], use default [12][61]
+        for p in (0..12usize).rev() {
+            for u in (0..61usize).rev() {
+                let (level, max) = if b[0x5b8 + 0x7a + p * 61 + u] == 0 {
+                    (b[0x2dc + p * 61 + u], b[p * 61 + u])
+                } else {
+                    (b[0x5b8 + 61 + u], b[0x5b8 + u])
+                };
+                if u < 46 {
+                    self.players.upgrade_sc[p][u] = level;
+                } else if self.is_expansion {
+                    self.players.upgrade_bw[p][u - 46] = level;
+                }
+                self.players.upgrade_max[p][u] = max;
+            }
+        }
+    }
+
+    /// 0x4cb7d0: PTEx, techs available and researched per player.
+    pub fn chk_ptex(&mut self, b: &[u8]) {
+        if b.len() != 0x688 {
+            return;
+        }
+        // available [12][44], researched [12][44], default available [44], default
+        // researched [44], use default [12][44]
+        for p in (0..12usize).rev() {
+            for t in (0..44usize).rev() {
+                let (avail, done) = if b[0x478 + p * 44 + t] == 0 {
+                    (b[p * 44 + t], b[0x210 + p * 44 + t])
+                } else {
+                    (b[0x420 + t], b[0x44c + t])
+                };
+                self.players.tech_available[p][t] = avail;
+                if t < 0x18 || self.is_expansion {
+                    self.players.tech_researched[p][t] = done;
+                }
+            }
+        }
+    }
+
+    /// 0x4cb250: UPRP, the unit property slots of CreateUnitWithProperties (0x596cd8).
+    pub fn chk_uprp(&mut self, b: &[u8]) {
+        if b.len() == 0x500 {
+            self.trig.unit_properties = b.chunks_exact(0x14).map(|c| c.try_into().unwrap()).collect();
+        }
+    }
+}

@@ -61,6 +61,7 @@ pub mod sprite;
 pub mod train;
 pub mod transport;
 pub mod transform;
+pub mod triggers;
 pub mod unit;
 pub mod vision;
 
@@ -182,8 +183,11 @@ pub struct State {
     pub replay_mult: u8,
     pub replay_paused: bool,
     pub replay_frames: u32,
-    /// 0x58d700: player has left (2).
+    /// 0x58d700: a player's game result once settled (2 defeated / left, 3 victorious,
+    /// 4 ignored, 5 draw).
     pub player_left: [u8; 12],
+    /// Trigger state (0x51a280 lists, timers, switches, locations).
+    pub trig: triggers::Triggers,
     pub reveal_all: bool,
     /// 0x6d5bd0: a building or door changed the map (read by the AI timers 0x4a2a40).
     pub map_changed: bool,
@@ -379,6 +383,7 @@ impl State {
             forward_offsets: Vec::new(),
             template: [0; 0x20],
             player_left: [0; 12],
+            trig: Default::default(),
             replay_speed: 6,
             replay_mult: 1,
             replay_paused: false,

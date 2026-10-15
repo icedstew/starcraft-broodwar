@@ -268,11 +268,11 @@ fn main() -> std::io::Result<()> {
             println!("rng seed {:#x} draws {}", st.rng.seed, st.rng.total);
         }
         Some("view") => {
-            let a = view::Assets::load(files)?;
+            let mut a = view::Assets::load(files)?;
             if args[1].to_ascii_lowercase().ends_with(".rep") {
-                view::run_replay(&a, replay::Replay::parse(&std::fs::read(&args[1])?)?)?;
+                view::run_replay(&mut a, replay::Replay::parse(&std::fs::read(&args[1])?)?)?;
             } else {
-                view::run(&a, load_chk(&args[1])?)?;
+                view::run(&mut a, load_chk(&args[1])?)?;
             }
         }
         Some("repdump") => {
@@ -303,10 +303,11 @@ fn main() -> std::io::Result<()> {
         Some("reptrace") => {
             // reptrace <rep> <frames> <trace>: play the replay headless, writing the same
             // per-frame trace as re/emu_game.py with SCBW_REPLAY.
-            let a = view::Assets::load(files)?;
+            let mut a = view::Assets::load(files)?;
             let r = replay::Replay::parse(&std::fs::read(&args[1])?)?;
             let frames: u32 = args[2].parse().unwrap_or(100);
             let mut t = std::io::BufWriter::new(std::fs::File::create(&args[3])?);
+            view::prepare_replay(&mut a, &r);
             let mut scene = view::Scene::from_replay(&a, &r)?;
             let mut player_of = [0u8; 256];
             for (i, s) in r.header.slots.iter().enumerate() {
@@ -410,6 +411,9 @@ fn main() -> std::io::Result<()> {
                     fr = st.units[fr as usize].link.next;
                 }
                 writeln!(t, "f{f} free {}", ids.join(" "))?;
+                // Trigger state: results (0x58d700), elapsed seconds, next pass, switches.
+                let tr = &st.trig;
+                writeln!(t, "f{f} trg {:?} {} {} {:x}", &st.player_left[..8], tr.elapsed, tr.check_timer, tr.switches[0])?;
                 if std::env::var("SCBW_RNGSITES_AT").is_ok_and(|v| v == f.to_string() || v == (f as i64 - 1).to_string()) {
                     let sites: Vec<String> = st.rng.per_site.iter().enumerate().filter(|(_, c)| **c != 0).map(|(i, c)| format!("{i:#x}:{c}")).collect();
                     writeln!(t, "f{f} rngsites {}", sites.join(" "))?;
@@ -421,9 +425,10 @@ fn main() -> std::io::Result<()> {
             // (SCBW_FOLLOW, default the first) as "frame x y" lines: the screen position
             // 1.16.1's 0x49c440 sets after that frame's draw (clamped to the map, 8-pixel
             // aligned). Fed to native_shots.sh, the emulator and scbw (SCBW_CAMERA).
-            let a = view::Assets::load(files)?;
+            let mut a = view::Assets::load(files)?;
             let r = replay::Replay::parse(&std::fs::read(&args[1])?)?;
             let frames: u32 = args.get(3).and_then(|v| v.parse().ok()).unwrap_or(r.header.frames);
+            view::prepare_replay(&mut a, &r);
             let mut scene = view::Scene::from_replay(&a, &r)?;
             let (mw, mh) = (scene.st.map_px.0 as i32 / 32, scene.st.map_px.1 as i32 / 32);
             let (maxx, maxy) = ((mw - 20) * 32, (mh - 12) * 32 + 8);
@@ -449,7 +454,7 @@ fn main() -> std::io::Result<()> {
             // repshot <rep> <shots dir>: play the replay and draw the game screen at each
             // frame listed in <dir>/native/meta.txt ("frame screen_x screen_y", captured from
             // 1.16.1 by re/native_shots.sh), writing ours and a side-by-side diff.
-            let a = view::Assets::load(files)?;
+            let mut a = view::Assets::load(files)?;
             let r = replay::Replay::parse(&std::fs::read(&args[1])?)?;
             let dir = std::path::Path::new(&args[2]);
             let shots: Vec<(u32, i32, i32)> = std::fs::read_to_string(dir.join("native/meta.txt"))?
@@ -461,6 +466,7 @@ fn main() -> std::io::Result<()> {
                 .collect();
             std::fs::create_dir_all(dir.join("ours"))?;
             std::fs::create_dir_all(dir.join("diff"))?;
+            view::prepare_replay(&mut a, &r);
             let mut scene = view::Scene::from_replay(&a, &r)?;
             let ui = ui::Ui::load_with(&a.files, ["zerg", "terran", "protoss"][scene.local_race()], true).ok();
             // re/native_shots.sh plays at Fastest x 16.
@@ -560,8 +566,10 @@ fn main() -> std::io::Result<()> {
             println!("mean {:.2}% over {n} shots; ours/, diff/ (native | ours | red = differs), report.txt in {}", total / n as f64, dir.display());
         }
         Some("shot") => {
-            let a = view::Assets::load(files)?;
-            let mut scene = view::Scene::new(&a, load_chk(&args[1])?)?;
+            let mut a = view::Assets::load(files)?;
+            let chk = load_chk(&args[1])?;
+            view::prepare_map(&mut a, &chk);
+            let mut scene = view::Scene::new(&a, chk)?;
             eprintln!("local player {} start {:?}", scene.local_player(), scene.st.start_locations[scene.local_player() as usize]);
             let frames: usize = args.get(5).and_then(|f| f.parse().ok()).unwrap_or(24);
             let (x, y) = (args[3].parse().unwrap_or(0), args[4].parse().unwrap_or(0));

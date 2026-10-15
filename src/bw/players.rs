@@ -59,6 +59,8 @@ pub struct Players {
     pub factories_razed: [i32; 12],
     /// 0x58a364: deaths [unit type][player]; 0x5878a4: kills [unit type][player].
     pub deaths: Vec<[i32; 12]>,
+    /// 0x5822f4: custom score (triggers).
+    pub custom_score: [i32; 12],
     pub kills: Vec<[i32; 12]>,
 }
 
@@ -101,6 +103,7 @@ impl Default for Players {
             razing_score: [0; 12],
             factories_razed: [0; 12],
             deaths: vec![[0; 12]; 228],
+            custom_score: [0; 12],
             kills: vec![[0; 12]; 228],
         }
     }

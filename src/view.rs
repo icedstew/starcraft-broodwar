@@ -133,11 +133,13 @@ pub fn is_melee_map(chk: &Chk) -> bool {
 }
 
 impl<'a> Scene<'a> {
+    /// (Call `prepare_map` on the assets first.)
     pub fn new(a: &'a Assets, chk: Chk) -> io::Result<Scene<'a>> {
         Scene::start(a, chk, None)
     }
 
     /// The game a replay recorded, set up as the replay's header says.
+    /// (Call `prepare_replay` on the assets first.)
     pub fn from_replay(a: &'a Assets, r: &crate::replay::Replay) -> io::Result<Scene<'a>> {
         let mut s = Scene::start(a, Chk::parse(&r.chk), Some(&r.header))?;
         s.st.replay_frames = r.header.frames;
@@ -277,6 +279,11 @@ impl<'a> Scene<'a> {
             // 0x4d9670: the frame counter advances before each step.
             st.frame += 1;
             st.game_step(d);
+            // 0x4d9670: then the triggers, with the RNG on, given the frame time of the
+            // game speed (0x5124d8).
+            st.rng.enabled = true;
+            st.run_triggers(d, bw::triggers::FRAME_MS[st.replay_speed.min(6) as usize]);
+            st.rng.enabled = false;
             self.minimap.update(d, st);
         });
         self.st.alert_tick();
@@ -763,14 +770,7 @@ fn new_game(a: &Assets, chk: &Chk, rep: Option<&crate::replay::Header>) -> io::R
         st.init_thingies(d);
         st.load_terrain(&ts, w as u16, h as u16, &chk.mtxm());
         let melee = rep.is_none() && is_melee_map(chk) && std::env::var("SCBW_NOMELEE").is_err();
-        // 0x596865: the game's template (a replay keeps its game type and sub type; a
-        // map played here is Melee, or Use Map Settings when it is not a melee map).
-        let (gt, sub) = match rep {
-            Some(h) => (h.game_type, h.sub_type),
-            None if melee => (2, 1),
-            None => (10, 1),
-        };
-        st.template = load_template(a, gt, sub);
+        st.template = game_template(a, chk, rep);
         let modes = bw::chk_load::ScenarioModes::of_template(&st.template);
         let units = chk.section(b"UNIT").unwrap_or(&[]); // start locations: the last UNIT handler call sets them
         if let Some(h) = rep {
@@ -823,6 +823,8 @@ fn new_game(a: &Assets, chk: &Chk, rep: Option<&crate::replay::Header>) -> io::R
             None => 1 << st.local_player,
         };
         st.init_alliances(modes);
+        // 0x4eec30 -> 0x489b30: trigger state for a new game (0x489790: who is in it).
+        st.init_trigger_players();
         // 0x4eee00 loads the scenario right after 0x4ef100 seeds the RNG, with it on.
         // Handler order (table 0x5001e8): MTXM, THG2 (its unit doodads draw from the
         // RNG too), UNIT.
@@ -830,8 +832,36 @@ fn new_game(a: &Assets, chk: &Chk, rep: Option<&crate::replay::Header>) -> io::R
         for doodads in chk.sections(b"THG2") {
             st.chk_doodads(d, doodads, Default::default());
         }
+        if !(modes.flag_59686d || modes.flag_596871 || modes.flag_596877) {
+            for b in chk.sections(b"MASK") {
+                st.chk_mask(b);
+            }
+            for b in chk.sections(b"PUNI") {
+                st.chk_puni(b);
+            }
+            for b in chk.sections(b"PUPx") {
+                st.chk_pupx(b);
+            }
+            for b in chk.sections(b"PTEx") {
+                st.chk_ptex(b);
+            }
+        }
         for units in chk.sections(b"UNIT") {
             st.chk_units(d, units, modes);
+        }
+        let melee_sections = modes.flag_59686d || modes.flag_596871 || modes.flag_596877;
+        if !melee_sections {
+            // The rest of the Use Map Settings list (0x5004a8; UNIx / UPGx / TECx went
+            // to the dat tables in apply_map_dat).
+            for b in chk.sections(b"UPRP") {
+                st.chk_uprp(b);
+            }
+            for m in chk.sections(b"MRGN") {
+                st.load_locations(m);
+            }
+            for t in chk.sections(b"TRIG") {
+                st.load_triggers(t);
+            }
         }
         st.rng.enabled = false;
         // 0x4bf520: 0x49da40 starting units (team melee with shared bases 0x49d8e0 is
@@ -839,8 +869,52 @@ fn new_game(a: &Assets, chk: &Chk, rep: Option<&crate::replay::Header>) -> io::R
         st.rng.enabled = true;
         st.melee_start_units(d, st.template[0xc]);
         st.rng.enabled = false;
+        // 0x4ef100 -> 0x4abaf0: the game type's own triggers.
+        if let Some(name) = bw::triggers::game_type_triggers(&st.template) {
+            if let Ok(t) = a.files.read(name) {
+                st.load_triggers(&t);
+            }
+        }
     });
     Ok(st)
+}
+
+/// 0x596865: the game's template (a replay keeps its game type and sub type; a map
+/// played here is Melee, or Use Map Settings when it is not a melee map).
+fn game_template(a: &Assets, chk: &Chk, rep: Option<&crate::replay::Header>) -> [u8; 0x20] {
+    let melee = rep.is_none() && is_melee_map(chk) && std::env::var("SCBW_NOMELEE").is_err();
+    let (gt, sub) = match rep {
+        Some(h) => (h.game_type, h.sub_type),
+        None if melee => (2, 1),
+        None => (10, 1),
+    };
+    load_template(a, gt, sub)
+}
+
+/// Use Map Settings games: UNIx / UPGx / TECx rewrite the dat tables when the scenario
+/// loads (0x5004a8 handler list).
+pub fn prepare_map(a: &mut Assets, chk: &Chk) {
+    apply_map_dat(a, chk, None);
+}
+
+pub fn prepare_replay(a: &mut Assets, r: &crate::replay::Replay) {
+    apply_map_dat(a, &Chk::parse(&r.chk), Some(&r.header));
+}
+
+fn apply_map_dat(a: &mut Assets, chk: &Chk, rep: Option<&crate::replay::Header>) {
+    let m = bw::chk_load::ScenarioModes::of_template(&game_template(a, chk, rep));
+    if m.flag_59686d || m.flag_596871 || m.flag_596877 {
+        return;
+    }
+    for b in chk.sections(b"UNIx") {
+        bw::chk_load::apply_dat_settings(&mut a.bw.dat, Some(b), None, None);
+    }
+    for b in chk.sections(b"UPGx") {
+        bw::chk_load::apply_dat_settings(&mut a.bw.dat, None, Some(b), None);
+    }
+    for b in chk.sections(b"TECx") {
+        bw::chk_load::apply_dat_settings(&mut a.bw.dat, None, None, Some(b));
+    }
 }
 
 /// 0x4aaea0: the template (Templates\\*.got, listed in templates.lst) of a game type
@@ -1325,12 +1399,16 @@ impl ReplayPlay {
     }
 }
 
-pub fn run(a: &Assets, chk: Chk) -> io::Result<()> {
+pub fn run(a: &mut Assets, chk: Chk) -> io::Result<()> {
+    prepare_map(a, &chk);
+    let a: &Assets = a;
     run_with(a, Scene::new(a, chk)?, None)
 }
 
 /// Watch a replay; the camera follows a player (Tab: next player, F: follow on/off).
-pub fn run_replay(a: &Assets, rep: crate::replay::Replay) -> io::Result<()> {
+pub fn run_replay(a: &mut Assets, rep: crate::replay::Replay) -> io::Result<()> {
+    prepare_replay(a, &rep);
+    let a: &Assets = a;
     let scene = Scene::from_replay(a, &rep)?;
     run_with(a, scene, Some(ReplayPlay::new(rep)))
 }

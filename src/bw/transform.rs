@@ -415,25 +415,42 @@ impl State {
         }
     }
 
-    /// 0x48a1c0: `player` leaves the game: their units become neutral (0x489fc0).
+    /// 0x48a1c0: `player` leaves the game: their triggers go, and unless already
+    /// settled they are defeated (0x489fc0).
     pub fn leave_game(&mut self, d: &Data, player: u8) {
         let p = player as usize;
+        // 0x402330: free the player's trigger list.
+        if let Some(l) = self.trig.lists.get_mut(p) {
+            l.clear();
+        }
         if self.player_left[p] != 0 {
             return;
         }
         self.player_left[p] = 2;
-        // ponytail: team melee (0x57f0b4 / 0x596875, the whole team's slots) and the
-        // game variants 4 / 5 of 0x59686d (units die instead) are not tracked yet.
+        self.player_defeated(d, player);
+    }
+
+    /// 0x489fc0: a defeated player's slot turns into a left one and their units become
+    /// neutral (capture the flag / sudden death: they die).
+    pub fn player_defeated(&mut self, d: &Data, player: u8) {
+        let p = player as usize;
+        // ponytail: team melee (0x57f0b4 / 0x596875) changes the whole team's slots;
+        // 0x57f0b4 is never set here.
         match self.player_types[p] {
             1 => self.player_types[p] = 0xb,
             2 => self.player_types[p] = 10,
             _ => {}
         }
-        let mut u = self.player_units[p];
-        while u != NIL {
-            let next = self.units[u as usize].player_next;
-            self.make_neutral(d, u);
-            u = next;
+        if matches!(self.template[8], 4 | 5) {
+            todo_port!("0x48a087", "capture the flag / sudden death: the defeated player's units die");
+        } else {
+            let mut u = self.player_units[p];
+            while u != NIL {
+                let next = self.units[u as usize].player_next;
+                self.make_neutral(d, u);
+                u = next;
+            }
+            // 0x68c1b0 / 0x68ac74 / 0x68c1f8 / 0x68c1e8 / 0x68c1ec: UI refresh flags.
         }
         if self.replay {
             // 0x6d0f18 / 0x57f0b0 / 0x57eeb8: the replay stops showing their vision.
