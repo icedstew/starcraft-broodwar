@@ -503,7 +503,7 @@ impl State {
         if self.tech_target_error(d, t, 0x10, player) != 0 {
             return;
         }
-        // 0x488af0: death and kill score counters.
+        self.count_death(d, t, player);
         self.kill_unit(d, t);
         if self.units[t as usize].status & 0x4000_0000 == 0 {
             let e = (self.units[src as usize].energy as u32 + 0x3200).min(self.max_energy(d, src));
@@ -1236,7 +1236,8 @@ impl State {
                 y += 4;
             }
         }
-        // 0x488af0: death and kill score counters.
+        let sp = self.units[src as usize].player;
+        self.count_death(d, t, sp);
         self.kill_unit(d, t);
         let su = &mut self.units[src as usize];
         if su.kill_count != 0xff {

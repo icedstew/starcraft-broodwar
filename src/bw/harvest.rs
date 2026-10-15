@@ -593,7 +593,7 @@ impl State {
     }
 
     /// 0x4f3900: remove the carried chunk / powerup image.
-    fn remove_carried_image(&mut self, u: u32) {
+    pub(super) fn remove_carried_image(&mut self, u: u32) {
         let s = self.units[u as usize].sprite;
         let mut i = self.sprites[s as usize].images.head;
         while i != NIL {

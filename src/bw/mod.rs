@@ -37,6 +37,7 @@ pub mod orders;
 pub mod path;
 pub mod path_req;
 pub mod players;
+pub mod powerups;
 pub mod protoss;
 pub mod psi;
 pub mod requirements;

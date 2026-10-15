@@ -299,15 +299,29 @@ impl State {
     fn reveals_to_all(&self, d: &Data, u: u32) -> bool {
         let un = &self.units[u as usize];
         let t = un.unit_type as usize;
+        let carries_flag = |st: &State, w: u32| {
+            let p = st.units[w as usize].ptr_at(0xc0);
+            d.dat.units.flags[st.units[w as usize].unit_type as usize] & 8 != 0 && p != NIL && st.units[p as usize].unit_type == 0xd7
+        };
         if d.dat.units.flags[t] & 8 != 0 {
-            todo_port!("0x4f3a80", "worker carrying powerup 0xd7 (+0xc0)");
-            return false;
+            return carries_flag(self, u);
         }
         if un.status & 0x4000_0000 == 0
             && (t != 0x2a || self.players.upgrade_sc[un.player as usize][0x18] != 0)
             && d.dat.units.space_provided[t] != 0
         {
-            todo_port!("0x4e7080", "loaded worker carrying powerup 0xd7");
+            // 0x4e7080: a passenger carries a flag.
+            for i in 0..8 {
+                let h = un.loaded_units[i] as u32;
+                if h == 0 {
+                    continue;
+                }
+                let c = (h & 0x7ff) - 1;
+                let cu = &self.units[c as usize];
+                if cu.sprite != NIL && (cu.order != 0 || cu.order_state != 1) && cu.unique_id as u32 == h >> 11 && carries_flag(self, c) {
+                    return true;
+                }
+            }
         }
         false
     }

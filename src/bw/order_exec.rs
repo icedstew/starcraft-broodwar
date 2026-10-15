@@ -502,15 +502,10 @@ impl State {
         self.order_next_or_idle(d, u);
     }
 
-    /// 0x493920: Interrupted.
-    fn order_interrupted(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x493920", "Interrupted");
-    }
-
 
 
     /// 0x4671b0: ResetCollision.
-    fn order_reset_collision(&mut self, d: &Data, u: u32) {
+    pub(super) fn order_reset_collision(&mut self, d: &Data, u: u32) {
         let s = self.units[u as usize].sprite;
         let ut = self.units[u as usize].unit_type as usize;
         self.sprites[s as usize].elevation = d.dat.units.elevation[ut];
@@ -530,7 +525,7 @@ impl State {
     }
 
     /// 0x42e320: ResetHarvestCollision.
-    fn order_reset_harvest_collision(&mut self, d: &Data, u: u32) {
+    pub(super) fn order_reset_harvest_collision(&mut self, d: &Data, u: u32) {
         let head = self.units[u as usize].order_queue_head;
         if head != super::list::NIL && matches!(self.orders[head as usize].order, 0x4f | 0x51 | 0x52 | 0x53 | 0x55 | 0x56 | 0x57 | 0x59 | 0x58) {
             // Still harvesting: keep this order queued behind the harvest orders.
@@ -847,14 +842,66 @@ impl State {
         }
     }
 
-    /// inline: InfestedCommandCenter.
-    fn order_infested_command_center(&mut self, _d: &Data, _u: u32) {
-        todo_port!("inline", "InfestedCommandCenter");
-    }
-
-    /// 0x4f3ea0: UnusedPowerup.
-    fn order_unused_powerup(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x4f3ea0", "UnusedPowerup");
+    /// 0x4ea4c0: InfestedCommandCenter: the command center (order target: the queen
+    /// inside it) turns into its infested type after 3 frames and joins the queen's owner.
+    fn order_infested_command_center(&mut self, d: &Data, u: u32) {
+        let q = self.units[u as usize].order_target_unit;
+        if q != NIL && self.damaged_6a(d, u) {
+            if self.units[u as usize].order_state == 0 {
+                self.units[u as usize].main_order_timer = 3;
+                self.units[u as usize].order_state = 2;
+                return;
+            }
+            let t = self.units[u as usize].main_order_timer;
+            self.units[u as usize].main_order_timer = t.wrapping_sub(1);
+            if t != 0 {
+                return;
+            }
+            if self.units[u as usize].ptr_at(0xc0) != NIL {
+                self.detach_addon(d, u);
+            }
+            if super::command::has_rally(self.units[u as usize].unit_type) {
+                self.units[u as usize].rally_unit = u;
+            }
+            let new_type = d.dat.units.infestation[self.units[u as usize].unit_type as usize];
+            let qp = self.units[q as usize].player;
+            self.count_death(d, u, qp);
+            self.modify_unit_counters(d, u, -1);
+            if self.units[u as usize].status & 1 != 0 {
+                self.modify_completed_counters(d, u, -1, false);
+            }
+            self.units[u as usize].unit_type = new_type;
+            self.modify_unit_counters(d, u, 1);
+            if self.units[u as usize].status & 1 != 0 {
+                self.modify_completed_counters(d, u, 1, false);
+            }
+            let owner = self.units[q as usize].player;
+            self.change_owner(d, u, owner, true);
+            self.set_unit_colors(d, u, owner);
+            let un = &mut self.units[u as usize];
+            un.secondary_order_pos = (0, 0);
+            un.current_build_unit = NIL;
+            un.secondary_order_state = 0;
+            un.secondary_order = 0x17;
+            self.clear_build_queue(d, u);
+            while self.units[u as usize].order_queue_head != NIL {
+                let n = self.units[u as usize].order_queue_head;
+                self.order_remove(d, u, n);
+            }
+            if self.units[u as usize].status & 2 != 0 {
+                self.unit_anim(d, u, 0x14);
+            }
+            let c = d.dat.units.construction_image[new_type as usize] as u16;
+            if c < 999 {
+                let s = self.units[u as usize].sprite;
+                self.create_image(d, s, NIL, c, 0, 0, 0);
+            }
+            let hp = d.dat.units.hit_points[new_type as usize] as i32;
+            self.set_unit_hp(d, u, hp);
+            self.set_button_set(d, u, new_type);
+            // 0x68c1b0 / 0x68ac74 / 0x68c1f8 / 0x68c1e8 / 0x68c1ec: UI refresh flags.
+        }
+        self.order_next_or_idle(d, u);
     }
 
     /// 0x476f50: TowerGuard.
@@ -951,14 +998,86 @@ impl State {
     }
 
 
-    /// inline: CastInfestation.
-    fn order_cast_infestation(&mut self, _d: &Data, _u: u32) {
-        todo_port!("inline", "CastInfestation");
+    /// 0x4e98e0: CastInfestation: the queen walks to a damaged command center and then
+    /// enters it (InfestingCommandCenter).
+    fn order_cast_infestation(&mut self, d: &Data, u: u32) {
+        let t = self.units[u as usize].order_target_unit;
+        match self.units[u as usize].order_state {
+            0 => {
+                if t != NIL && self.damaged_6a(d, t) {
+                    if self.move_to_unit_aim(d, u, t) {
+                        self.units[u as usize].order_state = 1;
+                    }
+                    return;
+                }
+                // 0x48ef30: error 0x365 for the local player (UI).
+                self.order_done_or_next(d, u);
+            }
+            1 => {
+                let un = &self.units[u as usize];
+                let s = &self.sprites[un.sprite as usize];
+                if un.fl.move_target != (s.x, s.y) {
+                    if t != NIL {
+                        self.follow_move(d, u, t);
+                    }
+                    return;
+                }
+                let stopped_by_collision = un.status & 0x80000 != 0;
+                if t != NIL && self.damaged_6a(d, t) && !stopped_by_collision {
+                    self.order_on(d, u, 0x1d, t);
+                } else {
+                    self.order_done_or_next(d, u);
+                }
+            }
+            _ => {}
+        }
     }
 
-    /// inline: InfestingCommandCenter.
-    fn order_infesting_command_center(&mut self, _d: &Data, _u: u32) {
-        todo_port!("inline", "InfestingCommandCenter");
+    /// 0x4ea290: InfestingCommandCenter: the queen hides inside the command center for
+    /// 0x3c frames, then comes back out next to it.
+    pub(super) fn order_infesting_command_center(&mut self, d: &Data, u: u32) {
+        let t = self.units[u as usize].order_target_unit;
+        match self.units[u as usize].order_state {
+            0 => {
+                if t != NIL && self.damaged_6a(d, t) && self.units[t as usize].order != 0xf {
+                    self.hide_unit(d, u);
+                    self.order_on(d, t, 0xf, u);
+                    self.units[u as usize].order_state = 3;
+                    self.units[u as usize].main_order_timer = 0x3c;
+                    return;
+                }
+                self.unit_halt(d, u);
+                let f = &mut self.units[u as usize].fl;
+                if f.move_target != f.next_target_waypoint {
+                    f.next_target_waypoint = f.move_target;
+                }
+                if self.units[u as usize].order_queue_head == NIL {
+                    let idle = d.dat.units.ai_return_to_idle[self.units[u as usize].unit_type as usize];
+                    self.issue_order(d, u, idle, false, (0, 0), NIL, 0xe4);
+                }
+            }
+            3 => {
+                let tm = self.units[u as usize].main_order_timer;
+                if tm != 0 {
+                    self.units[u as usize].main_order_timer = tm - 1;
+                    return;
+                }
+                let s = self.units[u as usize].sprite;
+                let p = (self.sprites[s as usize].x, self.sprites[s as usize].y);
+                let Some(p) = self.find_unit_placement(d, u, p, None, false) else {
+                    return;
+                };
+                self.set_unit_position(d, u, p.0, p.1);
+                self.unit_halt_facing(d, u);
+                self.show_unit(d, u);
+                if self.units[u as usize].order_queue_head == NIL {
+                    let idle = d.dat.units.ai_return_to_idle[self.units[u as usize].unit_type as usize];
+                    self.issue_order(d, u, idle, false, (0, 0), NIL, 0xe4);
+                }
+            }
+            _ => return,
+        }
+        self.order_next_or_idle(d, u);
     }
 
 
@@ -1152,11 +1271,6 @@ impl State {
     /// 0x4e7b70: Pickup4.
     fn order_pickup4(&mut self, _d: &Data, _u: u32) {
         todo_port!("0x4e7b70", "Pickup4");
-    }
-
-    /// 0x4f3e10: PowerupIdle.
-    fn order_powerup_idle(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x4f3e10", "PowerupIdle");
     }
 
     /// 0x47bab0: WatchTarget.
@@ -1442,24 +1556,9 @@ impl State {
         todo_port!("0x4778e0", "GuardPost");
     }
 
-    /// 0x4a1ef0: RescuePassive.
-    fn order_rescue_passive(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x4a1ef0", "RescuePassive");
-    }
-
-    /// 0x4a1c20: Neutral.
-    fn order_neutral(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x4a1c20", "Neutral");
-    }
-
     /// 0x478490: ComputerReturn.
     fn order_computer_return(&mut self, _d: &Data, _u: u32) {
         todo_port!("0x478490", "ComputerReturn");
-    }
-
-    /// 0x47c210: JunkYardDog.
-    fn order_junk_yard_dog(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x47c210", "JunkYardDog");
     }
 
 }

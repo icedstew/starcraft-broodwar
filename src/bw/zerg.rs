@@ -192,7 +192,7 @@ impl State {
         self.players.gas[p] -= g;
         let powerup = if d.dat.units.flags[self.units[u as usize].unit_type as usize] & 8 != 0 { self.units[u as usize].ptr_at(0xc0) } else { NIL };
         if powerup != NIL {
-            todo_port!("0x4f3b70", "drone carrying a powerup drops it");
+            self.drop_powerup(d, u);
         }
         if t == 0x95 {
             self.morph_extractor(d, u);
@@ -200,7 +200,9 @@ impl State {
             self.morph_drone(d, u, t);
         }
         if powerup != NIL {
-            todo_port!("0x4eb9f0", "dropped powerup returns to its spot");
+            // The dropped powerup goes back home.
+            let home = (self.units[powerup as usize].u16_at(0xd0) as i16, self.units[powerup as usize].u16_at(0xd2) as i16);
+            self.place_unit_at(d, powerup, home.0, home.1);
         }
     }
 

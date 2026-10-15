@@ -220,3 +220,198 @@ impl State {
         self.order_next_or_idle(d, u);
     }
 }
+
+impl State {
+    /// 0x493920: Interrupted: the shield recharge overlay goes, then the next order.
+    pub(super) fn order_interrupted(&mut self, d: &Data, u: u32) {
+        let s = self.units[u as usize].sprite;
+        let mut i = self.sprites[s as usize].images.head;
+        while i != NIL {
+            if (0x170..0x173).contains(&self.images[i as usize].image_id) {
+                self.destroy_image(i);
+                break;
+            }
+            i = self.images[i as usize].link.next;
+        }
+        if self.units[u as usize].order_queue_head == NIL {
+            let o = d.dat.units.ai_return_to_idle[self.units[u as usize].unit_type as usize];
+            self.issue_order(d, u, o, true, (0, 0), NIL, 0xe4);
+        }
+        self.order_next_or_idle(d, u);
+    }
+
+    /// 0x47c210: JunkYardDog: wander to random spots, attacking whatever turns up.
+    pub(super) fn order_junk_yard_dog(&mut self, d: &Data, u: u32) {
+        if self.units[u as usize].order_state == 0 {
+            let dir = self.rng.rand_between(0x30, 0, 0xff);
+            let dist = self.rng.rand_between(0x30, 0x400, 0x800);
+            let (vx, vy) = crate::game::flingy::direction_table()[dir as usize];
+            let (x, y) = self.unit_sprite_pos(u);
+            let mut p = ((((vx * dist) >> 8) as i16).wrapping_add(x), (((vy * dist) >> 8) as i16).wrapping_add(y));
+            let t = self.units[u as usize].unit_type;
+            self.clamp_unit_pos(d, t, &mut p);
+            self.units[u as usize].order_target_pos = p;
+            self.set_move_target_xy(d, u, p);
+            self.units[u as usize].order_state = 1;
+            self.units[u as usize].spell_cooldown = 0xff;
+        }
+        let t = self.units[u as usize].auto_target;
+        if t != NIL
+            && self.is_enemy(u, t)
+            && self.sprites[self.units[t as usize].sprite as usize].flags & super::sprite::sflag::HIDDEN == 0
+            && self.units[t as usize].status & 0x400_0000 == 0
+            && !self.cloaked_from(t, u)
+        {
+            let o = d.dat.units.ai_attack_unit[self.units[u as usize].unit_type as usize];
+            self.order_on(d, u, o, t);
+            self.order_queue_append(d, u, 0xbb, 0xe4, (0, 0), NIL);
+            self.units[u as usize].auto_target = NIL;
+            self.set_auto_targeting(u);
+            return;
+        }
+        if self.units[u as usize].main_order_timer != 0 {
+            return;
+        }
+        self.units[u as usize].main_order_timer = 0xf;
+        let un = &self.units[u as usize];
+        let arrived = un.fl.move_target == self.unit_sprite_pos(u);
+        if arrived || (un.spell_cooldown == 0 && un.status & 4 == 0) {
+            self.units[u as usize].order_state = 0;
+            return;
+        }
+        let t = self.find_auto_target(d, u);
+        if t != NIL {
+            let o = d.dat.units.ai_attack_unit[self.units[u as usize].unit_type as usize];
+            self.order_on(d, u, o, t);
+            self.order_queue_append(d, u, 0xbb, 0xe4, (0, 0), NIL);
+            self.set_auto_targeting(u);
+        }
+    }
+
+    /// 0x4026a0: `u` (and its turret) pick their own targets from now on.
+    pub(super) fn set_auto_targeting(&mut self, u: u32) {
+        self.units[u as usize].status |= 0x800_0000;
+        let sub = self.units[u as usize].subunit;
+        if sub != NIL {
+            self.units[sub as usize].status |= 0x800_0000;
+        }
+    }
+}
+
+impl State {
+    /// 0x463040: a computer player's AI takes over `u` (towns, the medic list).
+    pub(super) fn ai_take_unit(&mut self, u: u32) {
+        let p = self.units[u as usize].player;
+        if p < 8 && self.player_type(p) == 1 {
+            crate::todo_port!("0x463040", "AI: computer player takes the unit");
+        }
+    }
+
+    /// 0x4a1c20: Neutral: once something attacks it (+0x7c), its player turns
+    /// computer-controlled and hostile to the attacker, and its units fight back.
+    pub(super) fn order_neutral(&mut self, d: &Data, u: u32) {
+        let a = self.units[u as usize].auto_target;
+        if a == NIL {
+            return;
+        }
+        let p = self.units[u as usize].player;
+        let ap = self.units[a as usize].player;
+        let shown = self.sprites[self.units[a as usize].sprite as usize].flags & super::sprite::sflag::HIDDEN == 0;
+        if shown && !self.cloaked_from(a, u) && p != ap {
+            self.player_types[p as usize] = 1;
+            self.alliances[p as usize][ap as usize] = 0;
+            self.alliances[ap as usize][p as usize] = 0;
+            if self.can_attack(d, u, a, true) {
+                // 0x401da0: no target for now.
+                self.units[u as usize].order_target_unit = NIL;
+                let sub = self.units[u as usize].subunit;
+                if sub != NIL && d.dat.units.flags[self.units[sub as usize].unit_type as usize] & 0x10 != 0 {
+                    self.units[sub as usize].order_target_unit = NIL;
+                }
+                let o = d.dat.units.ai_attack_unit[self.units[u as usize].unit_type as usize];
+                self.order_on(d, u, o, a);
+                if sub != NIL && self.units[sub as usize].sprite != NIL {
+                    let o = d.dat.units.ai_attack_unit[self.units[sub as usize].unit_type as usize];
+                    self.order_on(d, sub, o, a);
+                }
+            } else {
+                let o = d.dat.units.ai_return_to_idle[self.units[u as usize].unit_type as usize];
+                self.order_now(d, u, o);
+            }
+            self.ai_take_unit(u);
+            let mut c = self.player_units[p as usize];
+            while c != NIL {
+                let next = self.units[c as usize].player_next;
+                let cu = &self.units[c as usize];
+                let alive = cu.sprite != NIL && cu.order != 0;
+                if alive && d.dat.units.flags[cu.unit_type as usize] & 0x10 == 0 && c != u {
+                    let st = cu.status;
+                    if st & 0x40 == 0 {
+                        let o = d.dat.units.ai_return_to_idle[cu.unit_type as usize];
+                        self.order_now(d, c, o);
+                    } else if st & 0x20 != 0 {
+                        self.order_now(d, c, 5);
+                    }
+                    let sub = self.units[c as usize].subunit;
+                    if sub != NIL && self.units[sub as usize].sprite != NIL {
+                        let o = d.dat.units.ai_attack_unit[self.units[sub as usize].unit_type as usize];
+                        self.order_on(d, sub, o, a);
+                    }
+                    self.ai_take_unit(c);
+                }
+                c = next;
+            }
+        }
+        self.units[u as usize].auto_target = NIL;
+    }
+
+    /// 0x4a1ef0: RescuePassive: a human player's unit within 0x40 rescues it (a rescuable
+    /// building with units.dat flag 0x1000 brings its whole player along).
+    pub(super) fn order_rescue_passive(&mut self, d: &Data, u: u32) {
+        if self.units[u as usize].main_order_timer != 0 {
+            return;
+        }
+        self.units[u as usize].main_order_timer = 1;
+        let (x, y) = self.unit_sprite_pos(u);
+        let b = [x.wrapping_sub(0x40), y.wrapping_sub(0x40), x.wrapping_add(0x40), y.wrapping_add(0x40)];
+        let mut search = std::mem::replace(&mut self.search, super::collide::UnitSearch::empty());
+        let start = search.units_in_finder_box(self, b);
+        let found = search.results(start);
+        search.pop();
+        self.search = search;
+        let Some(r) = found.into_iter().find(|&c| self.player_type(self.units[c as usize].player) == 2) else {
+            return;
+        };
+        let rp = self.units[r as usize].player;
+        let un = &self.units[u as usize];
+        let t = un.unit_type;
+        let st = un.status;
+        let mut whole_player = st & 1 != 0 || t == 0x85 || t == 0x84;
+        if !whole_player && t == 0x83 {
+            // 0x45cd00: a hatchery morphing into a lair / hive counts as completed.
+            let q = un.build_queue[un.build_queue_slot as usize % 5];
+            whole_player = matches!(q, 0x85 | 0x84 | 0x89 | 0x90 | 0x92);
+        }
+        whole_player = whole_player && st & 2 != 0 && d.dat.units.flags[t as usize] & 0x1000 != 0;
+        let rescue = |st: &mut State, c: u32| {
+            st.change_owner(d, c, rp, true);
+            let o = if st.units[c as usize].status & 0x20 != 0 { 5 } else { d.dat.units.ai_computer_idle[st.units[c as usize].unit_type as usize] };
+            st.units[c as usize].order_flags |= 1;
+            st.issue_order(d, c, o, true, (0, 0), NIL, 0xe4);
+            st.prepare_next_order(d, c);
+        };
+        if whole_player {
+            let mut c = self.player_units[self.units[u as usize].player as usize];
+            while c != NIL {
+                let next = self.units[c as usize].player_next;
+                if self.units[c as usize].sprite != NIL && self.units[c as usize].order != 0 {
+                    rescue(self, c);
+                }
+                c = next;
+            }
+        } else {
+            rescue(self, u);
+        }
+        // 0x48ed50: the rescue sound for the local player (UI).
+    }
+}

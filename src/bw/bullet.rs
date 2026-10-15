@@ -695,6 +695,32 @@ impl State {
                 self.search.pop();
             }
             4 | 6 | 7 | 8 | 9 | 0xa | 0xb | 0xc | 0xd | 0xe | 0x10 | 0x11 | 0x12 | 0x15 | 0x16 => self.bullet_spell_effect(d, b, d.dat.weapons.explosion_type[w]),
+            0x18 => {
+                // Air splash: the target (or a random unit in the inner radius) takes a
+                // full hit, then everything else in range splash damage.
+                let r = d.dat.weapons.outer_splash[w] as i16;
+                let sp = &self.sprites[bu.sprite as usize];
+                let (x, y) = (sp.x, sp.y);
+                let bx = [x.wrapping_sub(r), y.wrapping_sub(r), x.wrapping_add(r), y.wrapping_add(r)];
+                let start = self.units_in_box(d, bx);
+                let mut picks: Vec<u32> = Vec::new();
+                for u in self.search.results(start) {
+                    if self.air_splash_candidate(d, b, u, &mut picks) {
+                        break;
+                    }
+                }
+                self.search.pop();
+                if !picks.is_empty() {
+                    let i = if picks.len() == 1 { 0 } else { self.rng.rand(0x3a) as usize % picks.len() };
+                    self.weapon_hit(d, b, picks[i], 1);
+                }
+                let start = self.units_in_box(d, bx);
+                for u in self.search.results(start) {
+                    // 0x48b730: 0x64deb8 = 0.
+                    self.splash_hit(d, b, u, false);
+                }
+                self.search.pop();
+            }
             _ => todo_port!("0x48b770", "other weapon explosion types"),
         }
     }
@@ -760,6 +786,26 @@ impl State {
                 self.weapon_hit(d, b, u, 4);
             }
         }
+    }
+
+    /// 0x48b150: collect `u` (0x64eee0) if the air splash may pick it; the target inside
+    /// the inner radius ends the search as the only pick.
+    fn air_splash_candidate(&self, d: &Data, b: u32, u: u32, picks: &mut Vec<u32>) -> bool {
+        let bu = &self.bullets.pool[b as usize];
+        let w = bu.weapon as usize;
+        if u == bu.source || (self.units[u as usize].player == bu.player && u != bu.target) {
+            return false;
+        }
+        if !self.weapon_can_target(d, bu.weapon, u, u) || !self.splash_within(d, b, u, d.dat.weapons.outer_splash[w] as u32) {
+            return false;
+        }
+        if self.splash_within(d, b, u, d.dat.weapons.inner_splash[w] as u32) && u == bu.target {
+            picks.clear();
+            picks.push(u);
+            return true;
+        }
+        picks.push(u);
+        false
     }
 
     /// 0x48adb0: the bullet is within `r` of `u`'s box.
@@ -982,14 +1028,14 @@ impl State {
                     if let Some(c) = self.loaded_unit(t, i) {
                         if self.units[c as usize].order != 0 {
                             self.kill_unit(d, c);
-                            todo_port!("0x488af0", "death and kill score counters");
+                            self.count_death(d, c, player);
                         }
                     }
                 }
             }
             self.units[t as usize].hp = 0;
             self.kill_unit(d, t);
-            todo_port!("0x488af0", "death and kill score counters");
+            self.count_death(d, t, player);
             if source != NIL && self.alliances[self.units[source as usize].player as usize][self.alliance_owner_pub(t)] == 0 {
                 // 0x4759c0
                 let mut k = source;

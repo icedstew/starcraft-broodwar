@@ -217,7 +217,7 @@ impl State {
             self.psi.dirty = true;
         }
         if self.player_type(player) == 1 {
-            todo_port!("0x463040", "AI: computer player takes the unit");
+            self.ai_take_unit(u);
         }
         let sub = self.units[u as usize].subunit;
         if sub != NIL && d.dat.units.flags[self.units[sub as usize].unit_type as usize] & 0x10 != 0 {
@@ -225,7 +225,12 @@ impl State {
         }
         self.apply_speed_upgrades(d, u);
         if d.dat.units.flags[t] & 8 != 0 {
-            todo_port!("0x4f3b70", "worker carrying a flag powerup changes owner");
+            // A worker carrying a flag drops it when it joins the flag's owner (or a
+            // non-player).
+            let p = self.units[u as usize].ptr_at(0xc0);
+            if p != NIL && self.units[p as usize].unit_type == 0xd7 && (player == self.units[p as usize].player || player > 7) {
+                self.drop_powerup(d, u);
+            }
         }
     }
 

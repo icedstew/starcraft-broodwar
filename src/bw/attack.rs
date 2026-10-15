@@ -1132,7 +1132,7 @@ impl State {
         }
         if un.status & 0x10 != 0 && un.irradiate_timer == 0 && t != 0x67 {
             if d.dat.units.flags[t as usize] & 0x10_0000 != 0 {
-                todo_port!("0x4e97c0", "burrowed unit unburrows when attacked");
+                self.unburrow(d, u);
             }
             return;
         }

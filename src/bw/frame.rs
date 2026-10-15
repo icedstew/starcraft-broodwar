@@ -243,14 +243,14 @@ impl State {
                 let next = if self.units[u as usize].status & 0x20 != 0 { 5 } else { 0x17 };
                 self.order_now(d, u, next);
             }
-            0x11 => todo_port!("0x4f3ea0", "hidden order 0x11"),
+            0x11 => self.order_unused_powerup(d, u),
             0x17 | 0x18 | 0xa2 | 0xaf | 0xb0 => {}
-            0x1d => todo_port!("0x4ea290", "hidden order 0x1d"),
+            0x1d => self.order_infesting_command_center(d, u),
             0x53 => self.order_harvest_gas(d, u),
-            0x61 => todo_port!("0x4f3e10", "hidden order 0x61"),
+            0x61 => self.order_powerup_idle(d, u),
             0x7d => self.order_nuke_launch(d, u),
-            0x96 => todo_port!("0x4671b0", "hidden order 0x96"),
-            0x97 => todo_port!("0x42e320", "hidden order 0x97"),
+            0x96 => self.order_reset_collision(d, u),
+            0x97 => self.order_reset_harvest_collision(d, u),
             _ => {
                 let un = &mut self.units[u as usize];
                 let t = un.order_process_timer;
@@ -263,7 +263,7 @@ impl State {
                     5 => self.order_bunker_guard(d, u),
                     0x60 => todo_port!("0x4e7b70", "hidden order 0x60"),
                     0x9c if un.status & 0x20 != 0 => self.order_bunker_guard(d, u),
-                    0xa1 => todo_port!("0x4a1ef0", "hidden order 0xa1"),
+                    0xa1 => self.order_rescue_passive(d, u),
                     _ => {}
                 }
             }

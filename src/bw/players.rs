@@ -46,6 +46,20 @@ pub struct Players {
     pub upgrade_max: [[u8; 61]; 12],
     /// 0x58f230: research-in-progress bits, 6 bytes per player.
     pub research_in_progress: [[u8; 6]; 12],
+    /// 0x581e74 / 0x581fc4 / 0x5820e4: men, buildings and factories lost.
+    pub men_lost: [i32; 12],
+    pub buildings_lost: [i32; 12],
+    pub factories_lost: [i32; 12],
+    /// 0x581ea4 men killed, 0x581f04 kill score, 0x581ff4 buildings razed,
+    /// 0x582054 razing score, 0x582114 factories razed.
+    pub men_killed: [i32; 12],
+    pub kill_score: [i32; 12],
+    pub buildings_razed: [i32; 12],
+    pub razing_score: [i32; 12],
+    pub factories_razed: [i32; 12],
+    /// 0x58a364: deaths [unit type][player]; 0x5878a4: kills [unit type][player].
+    pub deaths: Vec<[i32; 12]>,
+    pub kills: Vec<[i32; 12]>,
 }
 
 impl Default for Players {
@@ -78,6 +92,16 @@ impl Default for Players {
             tech_researched: [[0; 44]; 12],
             upgrade_max: [[0; 61]; 12],
             research_in_progress: [[0; 6]; 12],
+            men_lost: [0; 12],
+            buildings_lost: [0; 12],
+            factories_lost: [0; 12],
+            men_killed: [0; 12],
+            kill_score: [0; 12],
+            buildings_razed: [0; 12],
+            razing_score: [0; 12],
+            factories_razed: [0; 12],
+            deaths: vec![[0; 12]; 228],
+            kills: vec![[0; 12]; 228],
         }
     }
 }

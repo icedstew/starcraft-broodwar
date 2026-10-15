@@ -12,10 +12,57 @@ impl State {
         un.sprite != NIL && (un.order != 0 || un.order_state != 1)
     }
 
+    /// 0x489350: player `p` is out of the game (observer slots 10 / 11, or a player
+    /// whose 0x58d700 result is 1 or 2).
+    pub(super) fn player_out(&self, p: u8) -> bool {
+        if p >= 8 {
+            return false;
+        }
+        let ty = self.player_type(p);
+        ty == 10 || ty == 11 || (matches!(ty, 1 | 2) && matches!(self.player_left[p as usize], 1 | 2))
+    }
+
+    /// 0x488af0: count `u`'s death for its owner and the kill for `killer`.
+    pub(super) fn count_death(&mut self, d: &Data, u: u32, killer: u8) {
+        let p = self.units[u as usize].player as usize;
+        let t = self.units[u as usize].unit_type as usize;
+        let g = d.dat.units.staredit_group_flags[t];
+        if self.units[u as usize].status & 0x4000_0000 != 0 || d.dat.units.flags[t] & 0x10 != 0 {
+            return;
+        }
+        let pl = &mut self.players;
+        if g & 8 != 0 {
+            pl.men_lost[p] += 1;
+        } else if g & 0x10 != 0 {
+            pl.buildings_lost[p] += 1;
+        }
+        if g & 0x20 != 0 {
+            pl.factories_lost[p] += 1;
+        }
+        pl.deaths[t][p] += 1;
+        let k = killer as usize;
+        if k == p || k >= 8 || self.player_out(killer) {
+            return;
+        }
+        let score = d.dat.units.destroy_score[t] as i32;
+        let pl = &mut self.players;
+        if g & 8 != 0 || t == 0x23 || t == 0x24 {
+            pl.men_killed[k] += 1;
+            pl.kill_score[k] += score;
+        } else if g & 0x10 != 0 {
+            pl.buildings_razed[k] += 1;
+            pl.razing_score[k] += score;
+        }
+        if g & 0x20 != 0 {
+            pl.factories_razed[k] += 1;
+        }
+        pl.kills[t][k] += 1;
+    }
+
     /// 0x475710: give `u` the Die order (clearing its queue).
     pub fn kill_unit(&mut self, d: &Data, u: u32) {
         if self.units[u as usize].resource_type != 0 {
-            todo_port!("0x4f3b70", "drop a carried powerup");
+            self.drop_powerup(d, u);
         }
         loop {
             let h = self.units[u as usize].order_queue_head;
@@ -230,7 +277,7 @@ impl State {
             self.set_secondary_order(u, 0x17);
         }
         if self.units[u as usize].resource_type != 0 {
-            todo_port!("0x4f3b70", "drop a carried powerup");
+            self.drop_powerup(d, u);
         }
         // 0x49a7f0: out of every selection (selection circles are not ported).
         self.selections_remove_unit(u);
