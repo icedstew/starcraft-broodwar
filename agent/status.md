@@ -1,4 +1,4 @@
-# Status and hand-off (last updated 2026-10-14)
+# Status and hand-off (last updated 2026-10-15)
 
 Read this first when picking the work up. It says what is in flight, what is uncommitted,
 and what to do next. Background: [conventions.md](conventions.md) (user rules),
@@ -15,27 +15,28 @@ runtime from the user's 1.16.1 install (`~/Downloads/StarCraft-BroodWar_1.16.1`,
 
 ## Where the work is (updated 2026-10-15)
 
+**Metric the user watches:** `re/coverage.py ... ` "reachable from both" (game_step +
+command dispatch), now split into "(no AI)" and "(AI only)" (README has the command).
+2026-10-15: no AI 57% (931/1615), AI only 40%, all 54%. The user said: skip AI for now (port the
+non-AI frontier, `--missing both`); do not run screenshot tests until ~90% is ported.
+
 **Replays vs the emulator (whole replay, trigger state and unit AI strengths traced):**
-tl1412, tl1359, tl1363, tl1346, tl1347, tl1352, tl1366 MATCH; tl1361 (Use Map Settings,
-map triggers) MATCH; tl1339 MATCH through f50700 after the transform repulse fix (the
-rest was being re-diffed against `$W/tl1339/ra`). Not yet run: the other UMS replays
-tl1330, 1340, 1341, 1349, 1354, 1356.
+tl1412, tl1359, tl1363, tl1346, tl1347, tl1352, tl1366, tl1339 MATCH to the end;
+tl1361 (Use Map Settings) MATCH. Not yet run: UMS replays tl1330, 1340, 1341, 1349,
+1354, 1356. The emulator now runs 0x437a70(1) and 0x446350 at game start for replays
+and the SCBW_AI scenario, like 0x4eee00.
 
-**Triggers** (src/bw/triggers.rs): engine, every condition, nearly every action (create
-unit 0x4a0ad0, move unit incl. buildings, order, give, modify, kill/remove, alliance,
-locations, doodads, waits, run AI script). Melee.trg etc. from the game type; UMS
-sections MASK/UNIx/UPGx/TECx/PUNI/PUPx/PTEx/UPRP/MRGN/TRIG. The emulator runs 0x48a460
-too (needs `$DATA/triggers/*.trg`).
+**Triggers** (src/bw/triggers.rs): engine, every condition, nearly every action. Melee.trg
+etc. from the game type; UMS sections. The emulator runs 0x48a460 too.
 
-**AI** (src/bw/ai.rs, ai_script.rs; memory map in re-notes.md): unit strengths
-(0x431800 / 0x4313c0, traced as `str a,g`), player AI data, AI regions, pools, the
-ai_update frame (0x4a2b00: scripts, region sweep + enemy strength 0x43a250, 0x4a2a40
-timers, 0x43e7d0), script threads (start 0x45aef0, lookup 0x45b170, melee start
-0x4ab230, RunAIScript actions) and the interpreter with its self-contained opcodes.
-Next: towns (0x434220 start_town, 0x432020, 0x433dd0, 0x4626e0), AI regions state
-machine (0x4390a0, 0x43a010, 0x43fc60), building/training requests (0x447230,
-0x4474f0...), attacks (0x43abb0, 0x43e050), and an AI verification scenario (computer
-player with its melee script in bwsim and the emulator).
+**AI** (paused by the user): ai.rs (requests heap, budget, player tick, town tick),
+ai_town.rs (towns, worker / building rounds, requests, supply / gas, unit removal),
+ai_place.rs (building spot search 0x4465c0), ai_areas.rs (resource areas 0x446350 /
+0x445610), ai_region.rs (region state machine 0x43fc60, targets 0x431990, military
+moves 0x43d5d0, region flood 0x437e70). Check: `SCBW_MELEE="1,1" SCBW_AI="1"
+agent/tools/cmp.sh "$INSTALL/maps/(2)Boxer.scm" "" "" 8000` MATCHes. Left: guard /
+region / defense requests (0x4630c0, 0x43f990, 0x43ebb0, 0x43aae0), attack timers
+0x43b9e0, target choice 0x477160, military AI 0x43d910, script opcodes still todo.
 
 **Late-game divergence vs the real game** (user report "desync around f17044, goliaths?"):
 scbw == emulator with and without the p0 camera through f18000, but native screenshots
@@ -60,17 +61,14 @@ with a copied binary (`SCBW=<copy>` for suite.sh / repcmp.sh) so rebuilding is s
 
 ## Next steps
 
-1. Continue the tl1412 divergence chase to the end (player leave 0x48a1c0 near
-   f24642). Grep `todo_port!` for the address the trace stops on.
-2. Remaining todos seen on the way: lurker spines splash (0x48b680), AI paths, cloak,
-   interceptor/scarab removal (0x4652a0), ghost nuke cleanup.
-3. Then the other 14 replays in `~/games/Starcraft/broodwar-reps-116/` (PvZ, ZvT, 2v2 top
-   vs bottom; `rep` shows game type: 2 melee, 10 top-vs-bottom). Non-melee game types
-   currently get melee starting units (`view.rs::new_game`, marked ponytail): port the
-   real setup if a replay needs it.
-4. UI (earlier direction "focus on the UI"): status panel from `rez\statdata.bin`, the
-   building panel 0x427890, info buttons and wireframes. Hallucination draw function
-   (image modifier 0x10) is not drawn by the viewer yet.
-5. Screenshot tests: once the sim matches, `re/repshots.sh` should drop toward 0%;
-   remaining differences are rendering (fog edge smoothing, geyser smoke overlays, one
-   missing doodad, palette cycling).
+1. The non-AI frontier (`--missing both`) is now mostly UI: selection circle / health
+   bar images (own pools 0x57d768 / 0x5244b8 set up by 0x4d6930; 0x4d7070, 0x4d4fa0,
+   0x4975d0, 0x497590, 0x4ebbd0 flash, 0x4e6180 / 0x4e6290 select / deselect), status
+   panel refresh flags (0x4c36c0), placement box (placebox.cpp 0x48e310 ...), glue
+   menus, replay UI (0x4deb90), chat (0x48d1c0, command 0x5c). Commands still on the
+   `todo_port!` arm of 0x4865d0: 5, 6/7 save/load, 8 restart, 0x10/0x11 pause, 0x12
+   cheats, 0x37 sync, 0x39 squelch, 0x55/0x56, 0x58 minimap ping, 0x5c chat.
+2. Sim gaps left: Pickup4 0x4e7b70 and hidden order 0x60 (need AI target choice
+   0x477160), AI orders (AtkMoveEP, HarassMove, GuardPost, ComputerReturn, AIPatrol).
+3. AI (paused by the user): see the AI paragraph above.
+4. Screenshot tests: not until ~90% of the sim functions are ported (user rule).

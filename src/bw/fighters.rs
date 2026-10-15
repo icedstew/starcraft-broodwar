@@ -22,7 +22,7 @@ impl State {
                 continue;
             }
             let un = &mut self.units[u as usize];
-            let fighter_parent = matches!(un.unit_type, 0x48 | 0x52 | 0x53 | 0x51);
+            let fighter_parent = super::unit::has_hangar(un.unit_type);
             if !fighter_parent || un.secondary_order_state != 2 {
                 un.secondary_order = 0x3f;
                 un.secondary_order_pos = (0, 0);
@@ -37,7 +37,7 @@ impl State {
     /// dock them; with nothing queued, carriers repair docked interceptors.
     pub(super) fn secondary_train_fighter(&mut self, d: &Data, u: u32) {
         let ut = self.units[u as usize].unit_type;
-        if !matches!(ut, 0x48 | 0x52 | 0x53 | 0x51) {
+        if !super::unit::has_hangar(ut) {
             return;
         }
         match self.units[u as usize].secondary_order_state {
@@ -62,11 +62,7 @@ impl State {
             2 => {
                 let f = self.units[u as usize].current_build_unit;
                 if f != NIL {
-                    // 0x402c40: hp gain, x16 on the fast-build cheat.
-                    let mut gain = self.units[f as usize].hp_gain as i32;
-                    if self.game_options & 2 != 0 {
-                        gain <<= 4;
-                    }
+                    let gain = self.build_hp_gain(f);
                     self.build_progress(d, f, gain, false);
                     if self.units[f as usize].status & 1 == 0 {
                         return;

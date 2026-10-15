@@ -6,7 +6,6 @@
 use super::list::NIL;
 use super::sprite::iflag;
 use super::{Data, State};
-use crate::todo_port;
 
 /// Tech that cloaks unit type `t`: Personal Cloaking (ghosts, Sarah, Duran), Cloaking
 /// Field (wraiths, Tom Kazansky), else none (0x2c).
@@ -191,6 +190,31 @@ impl State {
         un.visibility = 0x8000_0000;
     }
 
+    /// 0x497fd0: images not drawn while cloaked hide; the rest take the cloaked draw
+    /// function of `mode` (1 cloaking, 2 decloaking, 3 cloaked) with colouring
+    /// `coloring` (+0x30 / +0x31; mode 3 keeps theirs).
+    pub(super) fn sprite_cloak_mode(&mut self, d: &Data, s: u32, mode: u8, coloring: u16) {
+        if mode == 3 {
+            self.sprite_cloak_underground(d, s);
+            return;
+        }
+        self.sprite_hide_cloak_images(d, s);
+        if mode != 1 && mode != 2 {
+            return;
+        }
+        let m = if mode == 1 { 2 } else { 4 };
+        let mut i = self.sprites[s as usize].images.head;
+        while i != NIL {
+            let im = &mut self.images[i as usize];
+            if im.modifier == 0 {
+                im.modifier = m;
+                im.flags |= iflag::REDRAW;
+                im.coloring = (im.coloring & !0xffff) | coloring as u64;
+            }
+            i = im.link.next;
+        }
+    }
+
     /// 0x497fd0(3, 0): images not drawn while cloaked hide, the rest take draw
     /// function 3 (cloaked, no fade).
     fn sprite_cloak_underground(&mut self, d: &Data, s: u32) {
@@ -325,12 +349,7 @@ impl State {
             let s = self.units[u as usize].sprite;
             let sub = self.units[u as usize].subunit;
             if m & lm == 0 {
-                // 0x443350 (0x4c3b40 / 0x4975d0: selection UI)
-                self.sprite_undetected(s);
-                if sub != NIL {
-                    let ss = self.units[sub as usize].sprite;
-                    self.sprite_undetected(ss);
-                }
+                self.unit_undetected_locally(d, u);
             } else {
                 self.sprite_detected(s);
                 if sub != NIL {
@@ -341,8 +360,21 @@ impl State {
         }
     }
 
+    /// 0x443350: the local player stops detecting `u`: deselect (0x4c3b40) and drop
+    /// its selection circle (0x4975d0) (UI), then the undetected look for it and its
+    /// subunit.
+    fn unit_undetected_locally(&mut self, d: &Data, u: u32) {
+        let s = self.units[u as usize].sprite;
+        self.sprite_undetected(d, s);
+        let sub = self.units[u as usize].subunit;
+        if sub != NIL {
+            let ss = self.units[sub as usize].sprite;
+            self.sprite_undetected(d, ss);
+        }
+    }
+
     /// 0x497ed0: images take the detected look (2..4 -> 5..7, 0 -> 6).
-    fn sprite_detected(&mut self, s: u32) {
+    pub(super) fn sprite_detected(&mut self, s: u32) {
         if self.sprites[s as usize].flags & 0x40 != 0 {
             self.sprite_uncloak_images(s);
             return;
@@ -366,9 +398,9 @@ impl State {
     }
 
     /// 0x498a10: images lose the detected look (5..7 -> 2..4).
-    fn sprite_undetected(&mut self, s: u32) {
+    fn sprite_undetected(&mut self, d: &Data, s: u32) {
         if self.sprites[s as usize].flags & 0x40 != 0 {
-            todo_port!("0x497fd0", "burrowed sprite undetected");
+            self.sprite_cloak_underground(d, s);
             return;
         }
         let mut i = self.sprites[s as usize].images.head;

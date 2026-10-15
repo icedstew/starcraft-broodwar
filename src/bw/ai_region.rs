@@ -926,7 +926,7 @@ impl State {
         while u != NIL {
             let next = self.units[u as usize].link.next;
             let un = &self.units[u as usize];
-            if un.sprite == NIL || un.order == 0 || !self.enemy_of(p, u) {
+            if un.is_dead() || !self.enemy_of(p, u) {
                 u = next;
                 continue;
             }
@@ -1063,7 +1063,7 @@ impl State {
         while u != NIL {
             let un = &self.units[u as usize];
             let next = un.player_next;
-            if un.sprite == NIL || un.order == 0 || d.dat.units.flags[un.unit_type as usize] & 0x10 != 0 {
+            if un.is_dead() || d.dat.units.flags[un.unit_type as usize] & 0x10 != 0 {
                 u = next;
                 continue;
             }

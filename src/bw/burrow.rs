@@ -136,7 +136,7 @@ impl State {
             if h != NIL && self.orders[h as usize].order == 0x2a {
                 // Hydralisk told to morph while burrowed: come up first.
                 self.order_now(d, u, 0x76);
-                todo_port!("0x4749a0", "queue the morph after unburrowing");
+                self.order_queue_after_head(d, u, 0x2a);
                 return self.order_next_or_idle(d, u);
             }
         }

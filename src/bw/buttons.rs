@@ -418,7 +418,7 @@ impl State {
             0x428500 => b2i(matches!(self.units[a as usize].unit_type, 0x83..=0x85)),
             0x428530 => {
                 let un = &self.units[a as usize];
-                b2i(un.build_queue[un.build_queue_slot as usize % 5] < 0x6a)
+                b2i(un.queue_slot_holds_unit(0))
             }
             0x428560 => b2i(self.any_sel(s, |u| carrying(self, u)) && self.any_sel(s, |u| !constructing(self, u))),
             0x4285a0 => b2i(self.any_sel(s, |u| !carrying(self, u)) && self.any_sel(s, |u| !constructing(self, u))),
@@ -661,7 +661,7 @@ impl State {
             return 0;
         }
         let t = un.unit_type;
-        if (t == 7 && un.order == 0x21) || (matches!(t, 1 | 0x10 | 100 | 99 | 0x68) && un.order == 0x81) || ((t == 0x44 || t == 0x3f) && un.order == 0x6a) {
+        if (t == 7 && un.order == 0x21) || (super::unit::is_ghost(t) && un.order == 0x81) || ((t == 0x44 || t == 0x3f) && un.order == 0x6a) {
             return 0;
         }
         self.order_requirements(d, u, player, 0x28)

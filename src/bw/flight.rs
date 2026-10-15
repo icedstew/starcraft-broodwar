@@ -284,7 +284,24 @@ impl State {
     /// animation and become a grounded building again.
     pub fn order_building_land(&mut self, d: &Data, u: u32) {
         if self.units[u as usize].status & 2 != 0 {
-            todo_port!("0x464360", "BuildingLand given to a grounded building");
+            // Grounded: lift off first, then land at the same target.
+            let un = &self.units[u as usize];
+            let (pos, target) = (un.order_target_pos, un.order_target_unit);
+            self.units[u as usize].order_flags |= 1;
+            self.issue_order(d, u, 0x48, true, (0, 0), NIL, 0xe4);
+            self.prepare_next_order(d, u);
+            if self.units[u as usize].order != 0 {
+                loop {
+                    let t = self.units[u as usize].order_queue_tail;
+                    if t == NIL || self.orders[t as usize].order != 0x47 {
+                        break;
+                    }
+                    self.order_remove(d, u, t);
+                }
+                self.order_queue_append(d, u, 0x47, 0xe4, pos, target);
+            }
+            let idle = d.dat.units.ai_return_to_idle[self.units[u as usize].unit_type as usize];
+            self.issue_order(d, u, idle, false, (0, 0), NIL, 0xe4);
             return;
         }
         let s = self.units[u as usize].sprite;
@@ -336,8 +353,8 @@ impl State {
                     let sp = (self.sprites[s as usize].x, self.sprites[s as usize].y);
                     let f = &self.units[u as usize].fl;
                     let dir = crate::game::flingy::direction_to(sp.0 as i32, sp.1 as i32, f.next_target_waypoint.0 as i32, f.next_target_waypoint.1 as i32);
-                    // 0x402160: at the next target waypoint, or facing it.
-                    if f.next_target_waypoint != f.pos && f.velocity_dir_prev != dir {
+                    // At the next target waypoint, or facing it.
+                    if !super::unit::at_target_waypoint(f) && f.velocity_dir_prev != dir {
                         return;
                     }
                     self.sprite_images_run_anim(d, s, 0x11);

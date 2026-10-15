@@ -91,7 +91,7 @@ impl State {
         let link = self.ai.buildings.items[b as usize].link;
         self.ai.buildings.items[b as usize] = BuildingAi { link, ai_type: 3, parent: u, town, ..BuildingAi::default() };
         self.units[u as usize].ai = ai_ref(AI_BUILDING, b);
-        if matches!(t, 0x83 | 0x85 | 0x84) && self.units[u as usize].status & 1 != 0 {
+        if super::unit::is_hatchery(t) && self.units[u as usize].status & 1 != 0 {
             self.order_now(d, u, 0x9c);
             self.set_secondary_order(u, 0x66);
         }
@@ -1328,7 +1328,7 @@ impl State {
             return 0;
         }
         let gu = &self.units[g as usize];
-        if gu.sprite == NIL || gu.order == 0 {
+        if gu.is_dead() {
             return 0;
         }
         if gu.unit_type == 0xbc {
@@ -1451,7 +1451,7 @@ impl State {
     /// targets, flag 0x20).
     fn ai_building_safe(&self, b: u32) -> bool {
         let un = &self.units[b as usize];
-        if un.sprite == NIL || un.order == 0 {
+        if un.is_dead() {
             return false;
         }
         let (x, y) = self.unit_sprite_pos(b);

@@ -35,7 +35,7 @@ impl State {
             && bu.status & 1 != 0
             && bu.energy != 0
             && !self.disabled(b)
-            && !matches!(un.unit_type, 0x49 | 0x55);
+            && !super::unit::is_fighter(un.unit_type);
         if !ok {
             return false;
         }

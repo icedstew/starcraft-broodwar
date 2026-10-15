@@ -132,11 +132,8 @@ impl State {
         }
         match tech {
             2 | 4 | 0xe | 0xf | 0x11 | 0x13 | 0x15 | 0x16 | 0x19 | 0x1f => false,
-            // Spider mines (0x472f80): the target tile must be ground or creep.
-            3 => {
-                let i = (y / 32) * self.terrain.width as i32 + x / 32;
-                self.terrain.tile_flags[i as usize] & 0x41_0000 == 0
-            }
+            // Spider mines: the target tile must be ground or creep.
+            3 => !self.tile_flags_match(x as i16, y as i16, 0x41_0000, 0),
             _ => {
                 t == NIL
                     || self.units[t as usize].status & 0x400_0000 != 0
@@ -315,8 +312,8 @@ impl State {
 }
 
 impl State {
-    /// Overlay size of `t` for spell overlays: 0 small, 1 medium, 2 large (units.dat
-    /// flags 0x2000000 / 0x4000000).
+    /// 0x47b720: overlay size of `t` for spell overlays: 0 small, 1 medium, 2 large
+    /// (units.dat flags 0x2000000 / 0x4000000).
     fn overlay_size(&self, d: &Data, t: u32) -> u16 {
         let f = d.dat.units.flags[self.units[t as usize].unit_type as usize];
         if f & 0x200_0000 != 0 { 1 } else { ((f >> 25) & 2) as u16 }
@@ -600,7 +597,7 @@ impl State {
                     self.maelstrom_area(d, pos.0, pos.1, src);
                 }
             }
-            _ => todo_port!("0x48b770", "spell explosion type"),
+            _ => super::fatal_error("CBullet: Damage"),
         }
     }
 
@@ -1239,24 +1236,7 @@ impl State {
         let sp = self.units[src as usize].player;
         self.count_death(d, t, sp);
         self.kill_unit(d, t);
-        let su = &mut self.units[src as usize];
-        if su.kill_count != 0xff {
-            su.kill_count += 1;
-        }
-        if su.unit_type == 0x49 {
-            // 0x4759c0: the carrier gets the kill too.
-            let mut k = su.ptr_at(0xc0);
-            while k != NIL {
-                let ku = &mut self.units[k as usize];
-                if ku.kill_count != 0xff {
-                    ku.kill_count += 1;
-                }
-                if ku.unit_type != 0x49 {
-                    break;
-                }
-                k = ku.ptr_at(0xc0);
-            }
-        }
+        self.credit_kill(src);
     }
 
     /// 0x48b770 types 6 / 7: parasite `t` for `player`; spawn broodlings from `t`.
@@ -1539,7 +1519,7 @@ impl State {
                 }
             }
         }
-        if matches!(self.units[u as usize].unit_type, 0x48 | 0x52 | 0x53 | 0x51) {
+        if super::unit::has_hangar(self.units[u as usize].unit_type) {
             for (list, count) in [(0xc0, 0xc8), (0xc4, 0xc9)] {
                 let mut f = self.units[u as usize].ptr_at(list);
                 for _ in 0..self.units[u as usize].u8_at(count) {
@@ -1653,7 +1633,18 @@ impl State {
         }
         let s = self.units[u as usize].sprite;
         if self.sprites[s as usize].flags & super::sprite::sflag::HIDDEN != 0 {
-            todo_port!("0x494160", "re-showing a hidden unit (visible list)");
+            // Hidden: it shows again and moves from the hidden list to the visible one.
+            self.sprites[s as usize].flags &= !super::sprite::sflag::HIDDEN;
+            if turret {
+                let ss = self.units[sub as usize].sprite;
+                self.sprites[ss as usize].flags &= !super::sprite::sflag::HIDDEN;
+            }
+            let mut l = self.hidden_units;
+            super::list::remove(&mut self.units, u, &mut l);
+            self.hidden_units = l;
+            let mut l = self.visible_units;
+            super::list::insert_after_head(&mut self.units, u, &mut l);
+            self.visible_units = l;
         }
         self.unit_reveal(d, u);
         self.update_unit_visibility(d, u);
@@ -1701,7 +1692,7 @@ impl State {
         let e = self.sprites[cs as usize].elevation.wrapping_add(1);
         self.spell_sprite(d, 0x17b, q.0, q.1, e);
         let k = self.units[c as usize].connected_unit;
-        if matches!(t, 1 | 0x10 | 100 | 99 | 0x68) && k != NIL && self.units[k as usize].unit_type == 0xe {
+        if super::unit::is_ghost(t) && k != NIL && self.units[k as usize].unit_type == 0xe {
             self.units[c as usize].connected_unit = NIL;
             self.units[k as usize].connected_unit = NIL;
         }

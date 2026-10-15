@@ -505,7 +505,7 @@ impl State {
         if t == 7 && un.order == 0x21 && order != 1 {
             return Err(8);
         }
-        if (matches!(t, 1 | 0x10 | 100 | 99 | 0x68) && un.order == 0x81) || ((t == 0x44 || t == 0x3f) && un.order == 0x6a) {
+        if (super::unit::is_ghost(t) && un.order == 0x81) || ((t == 0x44 || t == 0x3f) && un.order == 0x6a) {
             return Err(8);
         }
         let start = order_offsets()[order as usize];
@@ -638,8 +638,8 @@ impl State {
         if self.players.unit_available[player as usize][t as usize] == 0 {
             return Err(2);
         }
-        // 0x401e70(4): the last queue slot holds a unit.
-        if un.build_queue[(un.build_queue_slot as usize + 4) % 5] < 0x6a {
+        // The last queue slot holds a unit.
+        if un.queue_slot_holds_unit(4) {
             return Err(3);
         }
         if un.status & 0x4000_0000 != 0 {

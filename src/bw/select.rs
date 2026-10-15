@@ -6,7 +6,7 @@ use super::list::NIL;
 use super::{Data, State};
 
 /// 0x46ed80: types a box never picks (critters, map revealers, beacons...).
-fn never_picked(t: u16) -> bool {
+pub(super) fn never_picked(t: u16) -> bool {
     matches!(t, 0xe | 0x55 | 0x69 | 0xca | 0xcd..=0xd0)
 }
 

@@ -278,6 +278,17 @@ impl Unit {
         self.union_c0[i..i + 4].copy_from_slice(&v.to_le_bytes());
     }
     /// Resource amount of a mineral field / geyser (x86 +0xD0).
+    /// 0x401e70: build queue entry `i` (from the current slot) is a unit, not a
+    /// building or nothing.
+    pub fn queue_slot_holds_unit(&self, i: usize) -> bool {
+        self.build_queue[(self.build_queue_slot as usize + i) % 5] < 0x6a
+    }
+
+    /// 0x475a50: the unit has no sprite or its order is Die (0).
+    pub fn is_dead(&self) -> bool {
+        self.sprite == super::list::NIL || self.order == 0
+    }
+
     pub fn resource_amount(&self) -> u16 {
         self.u16_at(0xd0)
     }
@@ -290,4 +301,40 @@ impl Node for Unit {
     fn link_mut(&mut self) -> &mut Link {
         &mut self.link
     }
+}
+
+/// 0x401570: ghost, Sarah Kerrigan, Samir Duran, Infested Kerrigan / Duran (cloakers
+/// with nukes and lockdown).
+pub fn is_ghost(t: u16) -> bool {
+    matches!(t, 1 | 0x10 | 100 | 99 | 0x68)
+}
+
+/// 0x4014b0: carriers and reavers (units with a hangar).
+pub fn has_hangar(t: u16) -> bool {
+    matches!(t, 0x48 | 0x52 | 0x53 | 0x51)
+}
+
+/// 0x401450: interceptor or scarab.
+pub fn is_fighter(t: u16) -> bool {
+    matches!(t, 0x49 | 0x55)
+}
+
+/// 0x4011f0: vulture or Jim Raynor (vulture): lays spider mines.
+pub fn lays_mines(t: u16) -> bool {
+    matches!(t, 3 | 0x11)
+}
+
+/// 0x402c20: hatchery, lair or hive.
+pub fn is_hatchery(t: u16) -> bool {
+    matches!(t, 0x83 | 0x85 | 0x84)
+}
+
+/// 0x402160: a flingy stands on its next target waypoint.
+pub fn at_target_waypoint(f: &Flingy) -> bool {
+    f.next_target_waypoint == f.pos
+}
+
+/// 0x47b070: the floor-gun / wall-gun trap doodads.
+pub fn is_gun_trap(t: u16) -> bool {
+    matches!(t, 0xcb | 0xd1)
 }

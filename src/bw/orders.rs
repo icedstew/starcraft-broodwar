@@ -98,6 +98,14 @@ impl State {
         self.free_orders = f;
     }
 
+    /// 0x4744d0: empty the order queue.
+    pub fn clear_order_queue(&mut self, d: &Data, u: u32) {
+        while self.units[u as usize].order_queue_head != NIL {
+            let n = self.units[u as usize].order_queue_head;
+            self.order_remove(d, u, n);
+        }
+    }
+
     /// 0x4745f0: queue an order after `after` (or at the end when NIL).
     fn order_insert_after(&mut self, d: &Data, u: u32, order: u8, unit_type: u16, pos: (i16, i16), target: u32, after: u32) -> Option<u32> {
         let Some(n) = self.order_alloc(order, unit_type, pos, target) else {
@@ -120,6 +128,23 @@ impl State {
     /// 0x4745f0 with EDI = 0: append to the queue.
     pub fn order_queue_append(&mut self, d: &Data, u: u32, order: u8, unit_type: u16, pos: (i16, i16), target: u32) -> Option<u32> {
         self.order_insert_after(d, u, order, unit_type, pos, target, NIL)
+    }
+
+    /// 0x4749a0: queue `order` (no target) after the queue head (at the end when empty).
+    pub(super) fn order_queue_after_head(&mut self, d: &Data, u: u32, order: u8) {
+        let h = self.units[u as usize].order_queue_head;
+        self.order_insert_after(d, u, order, 0xe4, (0, 0), NIL, h);
+    }
+
+    /// 0x474940: append `order` on unit `t` (at its position).
+    pub(super) fn order_queue_append_target(&mut self, d: &Data, u: u32, order: u8, t: u32) {
+        let p = if t != NIL { self.unit_sprite_pos(t) } else { (0, 0) };
+        self.order_queue_append(d, u, order, 0xe4, p, t);
+    }
+
+    /// 0x4748e0: append `order` at `pos`.
+    pub(super) fn order_queue_append_at(&mut self, d: &Data, u: u32, order: u8, pos: (i16, i16)) {
+        self.order_queue_append(d, u, order, 0xe4, pos, NIL);
     }
 
     /// 0x474540: queue an order before `before` (AI units are limited to 8 queued orders).

@@ -7,6 +7,9 @@ use super::list::NIL;
 use super::{Data, State};
 use crate::todo_port;
 
+/// 0x6577ec: the suicide orders' reach; in .bss and never written by 1.16.1, so 0.
+const SUICIDE_RANGE: u32 = 0;
+
 impl State {
     /// 0x4ec4d0.
     pub fn execute_main_order(&mut self, d: &Data, u: u32) {
@@ -474,8 +477,7 @@ impl State {
             return false;
         }
         self.units[u as usize].set_u16_at(0xcc, time as u16);
-        self.players.minerals[p] -= m;
-        self.players.gas[p] -= g;
+        self.spend(p, m, g);
         true
     }
 
@@ -569,14 +571,47 @@ impl State {
         self.order_now(d, u, o);
     }
 
-    /// 0x4e3fb0: CTFCOP2.
-    fn order_ctfcop2(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x4e3fb0", "CTFCOP2");
+    /// 0x4e3fb0: CTFCOP2: the beacon moves to the order position if it can be placed
+    /// there, then goes back to CTFCOP1 (0x99).
+    fn order_ctfcop2(&mut self, d: &Data, u: u32) {
+        let un = &self.units[u as usize];
+        let (t, player, tp) = (un.unit_type, un.player, un.order_target_pos);
+        let (pw, ph) = super::build::placement(d, t);
+        let div32 = |v: i32| (v + ((v >> 31) & 0x1f)) >> 5;
+        let tx = div32(tp.0 as i32 - pw / 2);
+        let ty = div32(tp.1 as i32 - ph / 2);
+        let r = self.placement_check(d, u, player, tx as i16, ty as i16, t, 0, false, true, false);
+        if r == 0 {
+            self.finder_remove(u);
+            let air = self.units[u as usize].status & 4 != 0;
+            if self.units[u as usize].status & 2 != 0 {
+                let p = self.unit_sprite_pos(u);
+                self.mark_building_tiles(d, u, p, false);
+            }
+            if air {
+                self.repulse_remove(d, u);
+            }
+            self.set_unit_position(d, u, tp.0, tp.1);
+            self.finder_insert(d, u);
+            if self.units[u as usize].status & 2 != 0 {
+                let p = self.unit_sprite_pos(u);
+                self.mark_building_tiles(d, u, p, true);
+            }
+            self.update_unit_overlaps(d, u);
+            if self.units[u as usize].status & 4 != 0 {
+                self.repulse_init(d, u);
+            }
+            self.units[u as usize].button_set = 0xe4;
+        }
+        // else 0x48f7b0: the placement error (0x513634) for the local player (UI).
+        self.units[u as usize].order_flags |= 1;
+        self.issue_order(d, u, 0x99, true, (0, 0), NIL, 0xe4);
+        self.prepare_next_order(d, u);
     }
 
-    /// 0x475710: SelfDestructing.
-    fn order_self_destructing(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x475710", "SelfDestructing");
+    /// SelfDestructing: the unit dies (0x475710).
+    fn order_self_destructing(&mut self, d: &Data, u: u32) {
+        self.kill_unit(d, u);
     }
 
     /// 0x47c3c0: Critter.
@@ -884,10 +919,7 @@ impl State {
             un.secondary_order_state = 0;
             un.secondary_order = 0x17;
             self.clear_build_queue(d, u);
-            while self.units[u as usize].order_queue_head != NIL {
-                let n = self.units[u as usize].order_queue_head;
-                self.order_remove(d, u, n);
-            }
+            self.clear_order_queue(d, u);
             if self.units[u as usize].status & 2 != 0 {
                 self.unit_anim(d, u, 0x14);
             }
@@ -981,7 +1013,7 @@ impl State {
         }
         // Goliaths and tanks turn the body toward a target more than 0x1f off.
         let un = &self.units[u as usize];
-        if matches!(un.unit_type, 3 | 0x11) && un.fl.flags & 2 == 0 {
+        if super::unit::lays_mines(un.unit_type) && un.fl.flags & 2 == 0 {
             let s = &self.sprites[un.sprite as usize];
             let tp = un.order_target_pos;
             let dir = crate::game::flingy::direction_to(s.x as i32, s.y as i32, tp.0 as i32, tp.1 as i32);
@@ -1095,8 +1127,7 @@ impl State {
             } else if self.players.gas[p] < g {
                 self.local_error(p as u8, 0x96 + race, 0x353);
             } else {
-                self.players.minerals[p] -= m;
-                self.players.gas[p] -= g;
+                self.spend(p, m, g);
                 let un = &mut self.units[u as usize];
                 un.status &= !1;
                 let free = un.status & 0x400 == 0 && un.lockdown_timer == 0 && un.stasis_timer == 0 && un.maelstrom_timer == 0;
@@ -1137,14 +1168,102 @@ impl State {
         self.issue_order(d, u, idle, false, (0, 0), NIL, 0xe4);
     }
 
-    /// 0x45dc20: BuildNydusExit.
-    fn order_build_nydus_exit(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x45dc20", "BuildNydusExit");
+    /// 0x45dc20: BuildNydusExit: the exit appears at the target spot (10% hp, under
+    /// construction) and the two canals are linked (+0xd0); a blocked spot gives the
+    /// "can't build here" error.
+    fn order_build_nydus_exit(&mut self, d: &Data, u: u32) {
+        let player = self.units[u as usize].player;
+        let (x, y) = self.units[u as usize].order_target_pos;
+        let (pw, ph) = super::build::placement(d, 0x86);
+        let tx = ((x as i32 - pw / 2) / 32) as i16;
+        let ty = ((y as i32 - ph / 2) / 32) as i16;
+        if self.placement_check(d, u, player, tx, ty, 0x86, 0, false, true, false) != 0 {
+            // 0x48f6c0(0x358)
+            let race = Self::supply_race_of(d, self.units[u as usize].unit_type);
+            self.local_error(player, 0xa2 + race, 0x358);
+            self.order_done_or_next(d, u);
+            return;
+        }
+        let Some(e) = self.create_unit(d, 0x86, x, y, player) else {
+            self.show_last_error(player);
+            self.order_done_or_next(d, u);
+            return;
+        };
+        self.reset_unit_image(d, e, true);
+        self.units[e as usize].hp = d.dat.units.hit_points[0x86] as i32 / 10;
+        self.order_now(d, e, 0x2d);
+        self.units[e as usize].button_set = 0xe4;
+        self.creep_unmark_receding(d, e);
+        self.units[u as usize].set_ptr_at(0xd0, e);
+        self.units[e as usize].set_ptr_at(0xd0, u);
+        self.order_done_or_next(d, u);
     }
 
-    /// inline: EnterNydusCanal.
-    fn order_enter_nydus_canal(&mut self, _d: &Data, _u: u32) {
-        todo_port!("inline", "EnterNydusCanal");
+    /// 0x4ea3e0: EnterNydusCanal: a zerg ground unit of the canal's owner walks to it
+    /// and comes out at the linked exit (0x4ea180).
+    fn order_enter_nydus_canal(&mut self, d: &Data, u: u32) {
+        let t = self.units[u as usize].order_target_unit;
+        if !self.nydus_usable(d, u, t) {
+            self.order_done_or_next(d, u);
+            return;
+        }
+        match self.units[u as usize].order_state {
+            0 => {
+                if self.move_to_unit_aim(d, u, t) {
+                    self.units[u as usize].order_state = 1;
+                }
+                return;
+            }
+            1 => match self.unit_at_move_target(u) {
+                0 => return,
+                1 => self.units[u as usize].order_state = 2,
+                _ => {
+                    self.order_done_or_next(d, u);
+                    return;
+                }
+            },
+            2 => {}
+            _ => return,
+        }
+        self.nydus_travel(d, t, u);
+    }
+
+    /// 0x4e8c20 (and the check in 0x4ea3e0): `t` is a finished nydus canal with a
+    /// finished exit, of `u`'s owner, and `u` is a zerg ground unit.
+    fn nydus_usable(&self, d: &Data, u: u32, t: u32) -> bool {
+        if t == NIL {
+            return false;
+        }
+        let tu = &self.units[t as usize];
+        let e = tu.ptr_at(0xd0);
+        tu.status & 1 != 0
+            && e != NIL
+            && self.units[e as usize].status & 1 != 0
+            && self.units[u as usize].player == tu.player
+            && self.units[u as usize].status & 4 == 0
+            && self.race_of(d, u) == 0
+    }
+
+    /// 0x4ea180: `u` goes into canal `c` and out next to its exit (or back where it was
+    /// when there is no room there), then takes its next order.
+    fn nydus_travel(&mut self, d: &Data, c: u32, u: u32) {
+        let old = self.unit_sprite_pos(u);
+        let e = self.units[c as usize].ptr_at(0xd0);
+        let ep = self.unit_sprite_pos(e);
+        self.enter_building(d, u);
+        self.set_unit_position(d, u, ep.0, ep.1);
+        match self.find_unit_placement(d, u, ep, None, false) {
+            None => {
+                self.set_unit_position(d, u, old.0, old.1);
+                self.put_back_on_map(d, u);
+            }
+            Some(p) => {
+                // 0x48ed50: the nydus sounds.
+                self.set_unit_position(d, u, p.0, p.1);
+                self.put_back_on_map(d, u);
+                self.order_done_or_next(d, u);
+            }
+        }
     }
 
     /// 0x47c7b0: Follow: keep close to the order target; enemies become a Guard order
@@ -1181,7 +1300,12 @@ impl State {
                 return;
             }
             match self.units[t as usize].unit_type {
-                0x86 => todo_port!("0x4e8c20", "following onto a nydus canal: EnterNyduscanal (0x2f)"),
+                0x86 => {
+                    if self.nydus_usable(d, u, t) {
+                        self.order_with_target(d, u, 0x2f, t);
+                        return;
+                    }
+                }
                 0xac => {
                     if self.follow_onto_battery(d, u, t) {
                         return;
@@ -1201,17 +1325,8 @@ impl State {
             return;
         }
         let air = self.units[u as usize].status & 4 != 0;
-        // 0x49cbb0: both in the same region group.
-        let same_group = || {
-            let (a, b) = (self.unit_sprite_pos(u), self.unit_sprite_pos(t));
-            let ra = super::path::region_at(&self.sai, a.0 as i32, a.1 as i32);
-            let rb = super::path::region_at(&self.sai, b.0 as i32, b.1 as i32);
-            self.sai.regions[ra as usize].group == self.sai.regions[rb as usize].group
-        };
-        if air || same_group() {
-            // 0x47b490: the target's owner is a rescuable or neutral (type 3 / 4) player.
-            let tt = self.player_type(self.units[t as usize].player);
-            if (tt == 3 || tt == 4) && !self.box_distance_within(d, u, 1, t) {
+        if air || self.units_same_group(u, t) {
+            if self.owner_rescuable_or_neutral(t) && !self.box_distance_within(d, u, 1, t) {
                 self.move_to_unit_aim(d, u, t);
                 return;
             }
@@ -1384,14 +1499,99 @@ impl State {
 
 
 
-    /// 0x4788e0: SuicideUnit.
-    fn order_suicide_unit(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x4788e0", "SuicideUnit");
+    /// 0x4788e0: SuicideUnit: reach the target unit, then blow up (special state 1
+    /// animation, dies on the iscript's order signal 1).
+    fn order_suicide_unit(&mut self, d: &Data, u: u32) {
+        let t = self.units[u as usize].order_target_unit;
+        if t == NIL {
+            if self.units[u as usize].order_queue_head != NIL {
+                self.units[u as usize].order_flags |= 1;
+                return self.prepare_next_order(d, u);
+            }
+            let o = if self.units[u as usize].ai != NIL { 0x9c } else { d.dat.units.ai_return_to_idle[self.units[u as usize].unit_type as usize] };
+            return self.order_now(d, u, o);
+        }
+        if !self.can_attack(d, u, t, true) {
+            let p = self.unit_sprite_pos(t);
+            return self.order_at(d, u, 6, p);
+        }
+        match self.units[u as usize].order_state {
+            0 => {
+                if !self.move_to_unit(d, u, t) {
+                    return;
+                }
+                self.units[u as usize].order_state = 1;
+            }
+            1 => {}
+            2 => return self.suicide_on_signal(d, u),
+            _ => return,
+        }
+        let at = self.unit_at_move_target(u);
+        if !self.box_distance_within(d, u, 4, t) && at != 2 {
+            if self.box_distance_within(d, u, 0x100, t) && self.units[t as usize].fl.flags & 2 != 0 {
+                self.intercept_move(u, t);
+            } else {
+                self.chase(d, u, t);
+            }
+            return;
+        }
+        self.unit_halt(d, u);
+        if !self.box_distance_within(d, u, SUICIDE_RANGE, t) {
+            return self.order_done_or_next(d, u);
+        }
+        self.suicide_start(d, u);
+        self.suicide_on_signal(d, u);
     }
 
-    /// 0x478a40: SuicideLocation.
-    fn order_suicide_location(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x478a40", "SuicideLocation");
+    /// 0x478a40: SuicideLocation: reach the order position, then blow up.
+    fn order_suicide_location(&mut self, d: &Data, u: u32) {
+        let p = self.units[u as usize].order_target_pos;
+        match self.units[u as usize].order_state {
+            0 => {
+                let moved = self.set_move_target_xy(d, u, p);
+                if self.units[u as usize].fl.next_target_waypoint != p {
+                    self.units[u as usize].fl.next_target_waypoint = p;
+                }
+                if !moved {
+                    return;
+                }
+                self.units[u as usize].order_state = 1;
+            }
+            1 => {}
+            2 => return self.suicide_on_signal(d, u),
+            _ => return,
+        }
+        // 0x401dc0 inlined.
+        let at = self.unit_at_move_target(u);
+        if at == 0 {
+            return;
+        }
+        if at == 2 {
+            let e = self.units[u as usize].fl.exact;
+            let dist = super::path::approx_distance(e.0, (p.0 as i32) << 8, e.1, (p.1 as i32) << 8);
+            if dist >> 8 > SUICIDE_RANGE {
+                return self.order_done_or_next(d, u);
+            }
+        }
+        self.suicide_start(d, u);
+        self.suicide_on_signal(d, u);
+    }
+
+    /// 0x4788e0 / 0x478a40 tail: target itself, run special state 1 (0xd), state 2.
+    fn suicide_start(&mut self, d: &Data, u: u32) {
+        self.units[u as usize].order_target_unit = u;
+        self.unit_anim(d, u, 0xd);
+        self.units[u as usize].status |= 0x1000;
+        self.units[u as usize].order_state = 2;
+    }
+
+    /// 0x4788e0 / 0x478a40 state 2: die once the iscript signals 1.
+    fn suicide_on_signal(&mut self, d: &Data, u: u32) {
+        if self.units[u as usize].order_signal & 1 == 0 {
+            return;
+        }
+        self.units[u as usize].status |= 0x8000_0000;
+        self.kill_unit(d, u);
     }
 
     /// 0x464e40: CastScannerSweep: pay the energy and put a scanner sweep (0x21) at the
@@ -1516,14 +1716,49 @@ impl State {
         }
     }
 
-    /// 0x4e4210: CTFCOPInit.
-    fn order_ctfcopinit(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x4e4210", "CTFCOPInit");
+    /// 0x4e4210: CTFCOPInit: after the first 600 seconds the beacon gets its flag
+    /// (unit 0xd7, order 0x9a) and loses its buttons.
+    fn order_ctfcopinit(&mut self, d: &Data, u: u32) {
+        if self.trig.elapsed < 600 {
+            return;
+        }
+        self.units[u as usize].button_set = 0xe4;
+        // 0x48d9a0 / 0x48e310: the local player's placement box closes (UI).
+        let (x, y) = self.unit_sprite_pos(u);
+        let player = self.units[u as usize].player;
+        if let Some(f) = self.create_unit(d, 0xd7, x, y, player) {
+            self.show_unit(d, f);
+            self.finish_unit_pre(d, f);
+            self.finish_unit_post(d, f);
+            self.order_now(d, f, 0x9a);
+        }
     }
 
-    /// 0x4e41a0: CTFCOP1.
-    fn order_ctfcop1(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x4e41a0", "CTFCOP1");
+    /// 0x4e41a0: CTFCOP1: units in the beacon's box: an own worker carrying a flag
+    /// scores it (the flag dies), an enemy's flag dies. Checked every 15 frames.
+    fn order_ctfcop1(&mut self, d: &Data, u: u32) {
+        let (x, y) = self.unit_sprite_pos(u);
+        let b = self.unit_box_at(d, self.units[u as usize].unit_type, x, y);
+        let mut search = std::mem::replace(&mut self.search, super::collide::UnitSearch::empty());
+        let start = search.units_in_finder_box(self, b);
+        let found = search.results(start);
+        search.pop();
+        self.search = search;
+        let player = self.units[u as usize].player;
+        for c in found {
+            // 0x4e4130; 0x4e3e90: the capture message and sound (UI).
+            let cu = &self.units[c as usize];
+            if cu.player == player {
+                let pw = cu.ptr_at(0xc0);
+                if d.dat.units.flags[cu.unit_type as usize] & 8 != 0 && pw != NIL && self.units[pw as usize].unit_type == 0xd7 {
+                    self.kill_carried_powerup(d, c);
+                }
+            } else if cu.unit_type == 0xd7 {
+                self.units[c as usize].order_flags |= 4;
+                self.kill_unit(d, c);
+            }
+        }
+        self.units[u as usize].order_process_timer = 0xf;
     }
 
     /// 0x4a28b0: ComputerAI: every 15 frames the unit's AI (worker, building or
@@ -1537,7 +1772,7 @@ impl State {
         if t == 0x23 {
             todo_port!("0x4e9f90", "AI larva");
             let un = &self.units[u as usize];
-            if un.sprite == NIL || un.order == 0 {
+            if un.is_dead() {
                 return;
             }
         } else if t == 0x22 {

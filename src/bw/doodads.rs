@@ -52,7 +52,7 @@ impl State {
         if self.units[u as usize].order_state == 0 {
             let un = &mut self.units[u as usize];
             un.status |= 0x20_0000;
-            if matches!(un.unit_type, 0xcb | 0xd1) {
+            if super::unit::is_gun_trap(un.unit_type) {
                 let s = un.sprite;
                 self.sprites[s as usize].elevation = 0;
             }
@@ -73,7 +73,7 @@ impl State {
         }
         self.units[u as usize].status &= !0x20_0000;
         let ty = self.units[u as usize].unit_type;
-        if matches!(ty, 0xcb | 0xd1) {
+        if super::unit::is_gun_trap(ty) {
             let s = self.units[u as usize].sprite;
             self.sprites[s as usize].elevation = d.dat.units.elevation[ty as usize];
         }
@@ -171,7 +171,7 @@ impl State {
         let s = self.units[u as usize].sprite;
         self.sprite_images_run_anim(d, s, 0x1b);
         let t = self.units[u as usize].unit_type;
-        if matches!(t, 0xcb | 0xd1) || State::is_trap_doodad(t) {
+        if super::unit::is_gun_trap(t) || State::is_trap_doodad(t) {
             self.sprites[s as usize].elevation = d.dat.units.elevation[t as usize];
         }
         if !State::is_trap_doodad(t) {
@@ -201,7 +201,7 @@ impl State {
         let s = self.units[u as usize].sprite;
         self.sprite_images_run_anim(d, s, 0x18);
         let t = self.units[u as usize].unit_type;
-        if matches!(t, 0xcb | 0xd1) || State::is_trap_doodad(t) {
+        if super::unit::is_gun_trap(t) || State::is_trap_doodad(t) {
             self.sprites[s as usize].elevation = 1;
         }
         if State::is_trap_doodad(t) {
@@ -322,12 +322,8 @@ impl State {
             self.alliances[p as usize][ap as usize] = 0;
             self.alliances[ap as usize][p as usize] = 0;
             if self.can_attack(d, u, a, true) {
-                // 0x401da0: no target for now.
-                self.units[u as usize].order_target_unit = NIL;
+                self.clear_order_target(d, u);
                 let sub = self.units[u as usize].subunit;
-                if sub != NIL && d.dat.units.flags[self.units[sub as usize].unit_type as usize] & 0x10 != 0 {
-                    self.units[sub as usize].order_target_unit = NIL;
-                }
                 let o = d.dat.units.ai_attack_unit[self.units[u as usize].unit_type as usize];
                 self.order_on(d, u, o, a);
                 if sub != NIL && self.units[sub as usize].sprite != NIL {

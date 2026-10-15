@@ -1063,7 +1063,7 @@ impl State {
     }
 
     /// 0x493ca0(1): a worker goes inside a refinery (hidden, off the map).
-    fn enter_building(&mut self, d: &Data, u: u32) {
+    pub(super) fn enter_building(&mut self, d: &Data, u: u32) {
         let s = self.units[u as usize].sprite;
         if self.sprites[s as usize].flags & super::sprite::sflag::HIDDEN != 0 {
             return;

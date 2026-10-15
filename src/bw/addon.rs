@@ -127,9 +127,7 @@ impl State {
             self.show_last_error(player);
             return;
         };
-        // 0x42ce40
-        self.players.minerals[player as usize] -= m;
-        self.players.gas[player as usize] -= g;
+        self.spend(player as usize, m, g);
         let idle = d.dat.units.ai_return_to_idle[own as usize];
         self.start_order_now(d, u, idle);
         self.set_secondary_order(u, 0x25);

@@ -90,7 +90,7 @@ impl State {
 
     /// 0x401400: max hp in whole points (the current hp, at least 1, when the type has
     /// none).
-    fn max_hp_points(&self, d: &Data, u: u32) -> i32 {
+    pub(super) fn max_hp_points(&self, d: &Data, u: u32) -> i32 {
         let un = &self.units[u as usize];
         let mut m = d.dat.units.hit_points[un.unit_type as usize] as i32 >> 8;
         if m == 0 {
@@ -100,6 +100,33 @@ impl State {
             }
         }
         m
+    }
+
+    /// 0x4022c0: `u` is under 34% of its hit points.
+    pub(super) fn hp_below_third(&self, d: &Data, u: u32) -> bool {
+        let hp = (self.units[u as usize].hp + 0xff) >> 8;
+        (hp.wrapping_mul(100) as u32) / (self.max_hp_points(d, u) as u32) < 0x22
+    }
+
+    /// 0x47b490: `u`'s owner is a rescuable or neutral (type 3 / 4) player.
+    pub(super) fn owner_rescuable_or_neutral(&self, u: u32) -> bool {
+        matches!(self.player_type(self.units[u as usize].player), 3 | 4)
+    }
+
+    /// 0x402c40: the hit points `u` gains per frame of construction (x16 with the
+    /// fast-build cheat).
+    pub(super) fn build_hp_gain(&self, u: u32) -> i32 {
+        let gain = self.units[u as usize].hp_gain as i32;
+        if self.game_options & 2 != 0 { gain << 4 } else { gain }
+    }
+
+    /// 0x401da0: `u` (and its turret) drop their order target.
+    pub(super) fn clear_order_target(&mut self, d: &Data, u: u32) {
+        self.units[u as usize].order_target_unit = NIL;
+        let sub = self.units[u as usize].subunit;
+        if sub != NIL && d.dat.units.flags[self.units[sub as usize].unit_type as usize] & 0x10 != 0 {
+            self.units[sub as usize].order_target_unit = NIL;
+        }
     }
 
     /// 0x402710: max hp + max shields (whole points).

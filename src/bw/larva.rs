@@ -33,9 +33,7 @@ impl State {
         if n.0 as i32 != p.0 + dx as i32 || n.1 as i32 != p.1 + dy as i32 {
             return false;
         }
-        // 0x472f80
-        let f = self.terrain.tile_flags[((n.1 as i32 / 32) * w + n.0 as i32 / 32) as usize];
-        f & 0x41_0000 != 0 && f & 0x800_0000 == 0
+        self.tile_flags_match(n.0, n.1, 0x41_0000, 0x800_0000)
     }
 
     /// 0x4e8e10: where hatchery `h` puts its next larva: the middle of its least busy

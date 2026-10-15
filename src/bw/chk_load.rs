@@ -19,6 +19,10 @@ impl ScenarioModes {
     }
 }
 
+fn u32_at(e: &[u8], o: usize) -> u32 {
+    u32::from_le_bytes([e[o], e[o + 1], e[o + 2], e[o + 3]])
+}
+
 fn u16_at(e: &[u8], o: usize) -> u16 {
     u16::from_le_bytes([e[o], e[o + 1]])
 }
@@ -166,6 +170,7 @@ impl State {
             return false;
         }
         let mut starts = [(0i16, 0i16); 8];
+        let (mut nydus, mut addons) = (Vec::new(), Vec::new());
         for e in data.chunks_exact(0x24) {
             let ty = u16_at(e, 8);
             let player = e[0x10];
@@ -199,11 +204,37 @@ impl State {
                 continue;
             };
             self.chk_unit_props(d, u, &e[0xc..]);
-            if ty == 0x86 || d.dat.units.staredit_group_flags[ty as usize] & 2 != 0 {
-                todo_port!("0x4cbef0", "link nydus exits / addons placed by the map (0x4cbd30, 0x4ccf90)");
+            // 0x4cbef0 / 0x4cbdc0 (0x4cb140): nydus canals and terran buildings on the
+            // ground that name a related unit (+0x20) wait to be linked.
+            let (serial, related) = (u32_at(e, 0), u32_at(e, 0x20));
+            if ty == 0x86 && related != 0 {
+                nydus.push((serial, related, u));
+            }
+            let g = d.dat.units.staredit_group_flags[ty as usize];
+            if g & 5 == 0 && g & 2 != 0 && self.units[u as usize].status & 2 != 0 && related != 0 {
+                addons.push((serial, related, u));
             }
         }
         self.start_locations = starts;
+        // 0x4cbd30: newest first, a nydus canal links with an older one naming it.
+        for i in (0..nydus.len()).rev() {
+            let (serial, _, u) = nydus[i];
+            if let Some(&(_, _, o)) = nydus[..i].iter().rev().find(|x| x.1 == serial) {
+                self.units[u as usize].set_ptr_at(0xd0, o);
+                self.units[o as usize].set_ptr_at(0xd0, u);
+            }
+        }
+        // 0x4ccf90: an addon and the building naming it (or named by it) attach when the
+        // addon is built from that building's type.
+        for i in (0..addons.len()).rev() {
+            let (serial, _, u) = addons[i];
+            if let Some(&(_, _, o)) = addons[..i].iter().rev().find(|x| x.1 == serial) {
+                let (b, a) = if d.dat.units.flags[self.units[u as usize].unit_type as usize] & 2 != 0 { (o, u) } else { (u, o) };
+                if super::requirements::addon_parent_type(self.units[a as usize].unit_type) == self.units[b as usize].unit_type {
+                    self.attach_addon(d, b, a);
+                }
+            }
+        }
         let mut u = self.visible_units.head;
         while u != NIL {
             self.update_unit_visibility(d, u);
@@ -360,8 +391,10 @@ impl State {
             }
             return Some(u);
         }
-        todo_port!("0x4cd40e", "placement failure message and removal (0x475710)");
+        // No room: a "could not be placed" chat line for the map maker (0x48d140, display)
+        // and the unit dies unseen.
         self.units[u as usize].order_flags |= 4;
+        self.kill_unit(d, u);
         None
     }
 
@@ -548,7 +581,7 @@ impl State {
         if sub != NIL {
             self.make_hallucination(d, sub);
         }
-        if matches!(t, 0x48 | 0x52 | 0x53 | 0x51) {
+        if super::unit::has_hangar(t as u16) {
             self.kill_fighters(d, u);
         }
     }

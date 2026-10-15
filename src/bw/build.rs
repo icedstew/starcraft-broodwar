@@ -25,11 +25,18 @@ fn dims(d: &Data, t: u16) -> [i16; 4] {
     [v as i16, (v >> 16) as i16, (v >> 32) as i16, (v >> 48) as i16]
 }
 
+/// 0x47afe0: refinery, assimilator or extractor.
 fn is_gas_building(t: u16) -> bool {
     matches!(t, 0x6e | 0x9d | 0x95)
 }
 
 impl State {
+    /// 0x472f80: the tile under pixel (x, y) has one of the flags `any` and none of `none`.
+    pub(super) fn tile_flags_match(&self, x: i16, y: i16, any: u32, none: u32) -> bool {
+        let f = self.terrain.tile_flags[((y as i32 / 32) * self.terrain.width as i32 + x as i32 / 32) as usize];
+        any & f != 0 && none & f == 0
+    }
+
     fn tile_flag(&self, x: i32, y: i32) -> u32 {
         self.terrain.tile_flags[(y * self.terrain.width as i32 + x) as usize]
     }
@@ -73,15 +80,13 @@ impl State {
                 break 'fail self.gas_spot_check(d, tx as i32, ty as i32, player, a7);
             }
             if flags & 0x8_0000 != 0 {
-                // 0x473920: the building's centre must be powered.
-                let (pw, ph) = placement(d, t);
-                if !self.psi_powered(d, t, pw / 2 + tx as i32 * 32, ph / 2 + ty as i32 * 32, player) {
-                    break 'fail 6;
+                let r = self.power_check(d, t, tx, ty, player);
+                if r != 0 {
+                    break 'fail r;
                 }
             }
             let terrain = if u != NIL && self.units[u as usize].unit_type == 0x86 {
-                todo_port!("0x473150", "nydus exit placement");
-                0
+                self.nydus_exit_placement(tx, ty, player, w, h, slot, a7)
             } else if flags & 0x2_0000 != 0 {
                 self.creep_placement(tx, ty, player, w, h, slot, a7, a9)
             } else {
@@ -101,6 +106,25 @@ impl State {
         self.units[u as usize].pathing_flags & 1 == 0 || self.same_group(u, p)
     }
 
+    /// 0x4027f0: a tile of the `w` x `h` tile rectangle at (tx, ty) is unexplored for
+    /// `player` (tile bit `player` + 8).
+    fn rect_any_unexplored(&self, tx: i32, ty: i32, w: i32, h: i32, player: u8) -> bool {
+        let m = 1u32 << ((player as u32 + 8) & 0x1f);
+        (ty..ty + h).any(|y| (tx..tx + w).any(|x| self.tile_flag(x, y) & m != 0))
+    }
+
+    /// 0x402770: every tile of the rectangle is fogged for `player` (tile bit `player`).
+    fn rect_all_fogged(&self, tx: i32, ty: i32, w: i32, h: i32, player: u8) -> bool {
+        let m = 1u32 << (player as u32 & 0x1f);
+        (ty..ty + h).all(|y| (tx..tx + w).all(|x| self.tile_flag(x, y) & m != 0))
+    }
+
+    /// 0x473920: 6 unless `t`'s centre at tile (tx, ty) is powered for `player`.
+    fn power_check(&self, d: &Data, t: u16, tx: i16, ty: i16, player: u8) -> u8 {
+        let (pw, ph) = placement(d, t);
+        if self.psi_powered(d, t, pw / 2 + tx as i32 * 32, ph / 2 + ty as i32 * 32, player) { 0 } else { 6 }
+    }
+
     /// 0x473db0: a gas building at tile (tx, ty) needs a geyser there (10 = unexplored,
     /// 8 = no geyser).
     fn gas_spot_check(&mut self, d: &Data, tx: i32, ty: i32, player: u8, a7: bool) -> u8 {
@@ -109,20 +133,15 @@ impl State {
         let y = gh / 2 + ty * 32;
         if self.player_type(player) == 2 {
             let (w, h) = (gw / 32, gh / 32);
-            let unexplored = self.human_tile_mask(player, true);
-            let fogged = self.human_tile_mask(player, false);
-            let rect = |st: &State, mask: u32, any: bool| -> bool {
-                (ty..ty + h).any(|yy| (tx..tx + w).any(|xx| (st.tile_flag(xx, yy) & mask != 0) == any))
-            };
-            // 0x4027f0: any tile unexplored.
-            if rect(self, unexplored, true) {
+            if self.rect_any_unexplored(tx, ty, w, h, player) {
                 return 10;
             }
-            // 0x402770: every tile fogged.
-            if !rect(self, fogged, false) {
+            if self.rect_all_fogged(tx, ty, w, h, player) {
                 if a7 {
-                    todo_port!("0x487c70", "remembered geyser fog sprite");
-                    return 8;
+                    let s = self.fog_sprite_at(0x113, x, y, gw as i16, gh as i16).map(|t| self.fog_thingies[t as usize].sprite);
+                    if s.map_or(true, |s| (self.sprites[s as usize].x as i32, self.sprites[s as usize].y as i32) != (x, y)) {
+                        return 8;
+                    }
                 }
                 return 0;
             }
@@ -229,6 +248,35 @@ impl State {
         worst
     }
 
+    /// 0x473150: a nydus exit needs creep on every tile (remembered creep when `fog`):
+    /// 10 unexplored, 9 fogged (`fog` only), 5 no creep.
+    #[allow(clippy::too_many_arguments)]
+    fn nydus_exit_placement(&mut self, tx: i16, ty: i16, player: u8, w: i16, h: i16, slot: usize, fog: bool) -> u8 {
+        let unexplored = self.human_tile_mask(player, true);
+        let fogged = self.human_tile_mask(player, false);
+        let creep = if fog { 0x4000_0000 } else { 0x40_0000 };
+        let mut worst = 0;
+        for row in 0..h.max(0) as i32 {
+            for col in 0..w.max(0) as i32 {
+                let f = self.tile_flag(tx as i32 + col, ty as i32 + row);
+                let v = if unexplored & f != 0 {
+                    worst = 10;
+                    10
+                } else if fog && fogged & f != 0 {
+                    worst = worst.max(9);
+                    9
+                } else if creep & f == 0 {
+                    worst = worst.max(5);
+                    5
+                } else {
+                    0
+                };
+                self.placement[(row as usize + slot * 8) * 6 + col as usize] = v;
+            }
+        }
+        worst
+    }
+
     /// 0x4741a0: can `t` be created at tile (tx, ty) by a trigger / the editor: terrain
     /// (0x473bd0, no fog test) and units in the way (0x473720). 0 = yes.
     pub(super) fn creation_placement_check(&mut self, d: &Data, player: u8, tx: i16, ty: i16, t: u16, slot: usize) -> u8 {
@@ -270,8 +318,8 @@ impl State {
 
     /// 0x473990: a resource within 3 tiles of tile (x, y).
     fn near_resource(&mut self, d: &Data, a7: bool, x: i16, y: i16) -> bool {
-        if a7 {
-            todo_port!("0x487b00", "remembered resource fog sprites");
+        if a7 && self.fog_resource_near(d, x as i32, y as i32, 3).is_some() {
+            return true;
         }
         let b = [x.wrapping_sub(3).wrapping_mul(32), y.wrapping_sub(3).wrapping_mul(32), x.wrapping_add(4).wrapping_mul(32), y.wrapping_add(4).wrapping_mul(32)];
         let mut search = std::mem::replace(&mut self.search, super::collide::UnitSearch::empty());
@@ -503,8 +551,7 @@ impl State {
             // 0x48f6c0: error sound.
             return false;
         }
-        self.players.minerals[p as usize] -= m;
-        self.players.gas[p as usize] -= g;
+        self.spend(p as usize, m, g);
         true
     }
 
@@ -775,9 +822,10 @@ impl State {
     /// 0x4e65e0: give `u`'s sprite a fresh main image: the units.dat construction image
     /// when `construction` (and the type has one), else the sprite's own image.
     pub fn reset_unit_image(&mut self, d: &Data, u: u32, construction: bool) {
-        if self.units[u as usize].status & 0x300 != 0 {
-            todo_port!("0x497fd0", "cloaked unit: re-cloak the new images");
-        }
+        let st = self.units[u as usize].status;
+        let mode = (st >> 8 & 3) as u8;
+        let s0 = self.units[u as usize].sprite;
+        let old_coloring = if mode != 0 { (self.images[self.sprites[s0 as usize].main_image as usize].coloring & 0xffff) as u16 } else { 0 };
         let saved = self.iscript_unit;
         self.iscript_unit = Some(u);
         let s = self.units[u as usize].sprite;
@@ -787,7 +835,13 @@ impl State {
         let heading = self.units[u as usize].fl.heading;
         self.replace_sprite_images(d, s, img, heading);
         self.iscript_unit = saved;
-        // 0x492da0: status overlays (ensnare, plague, ...) are re-added here; new units have none.
+        if st & 0x300 != 0 {
+            self.sprite_cloak_mode(d, s, mode, old_coloring);
+            if self.units[u as usize].visibility & self.local_vision_mask as u32 != 0 {
+                self.sprite_detected(s);
+            }
+        }
+        self.reapply_status_overlays(d, u);
         let main = self.sprites[s as usize].main_image;
         self.units[u as usize].building_overlay_state = d.damage_overlay_count(self.images[main as usize].image_id);
     }

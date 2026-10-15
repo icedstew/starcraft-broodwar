@@ -14,7 +14,7 @@ const SCARAB: u16 = 0x55;
 
 impl State {
     fn is_reaver(&self, u: u32) -> bool {
-        matches!(self.units[u as usize].unit_type, 0x53 | 0x51)
+        super::attack::is_reaver_type(self.units[u as usize].unit_type)
     }
 
     /// 0x495240 for a unit: head straight for `p` (no path).

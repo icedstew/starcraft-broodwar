@@ -426,7 +426,14 @@ impl State {
             }
         }
         if lost {
-            todo_port!("0x4ebe10", "local player lost sight: deselect (0x4c3b40), drop selection images, fog sprite copy (0x488410)");
+            // 0x4c3b40 / 0x4975d0 / 0x497590: deselect, selection circle and health bar
+            // images (UI).
+            let un = &self.units[u as usize];
+            let t = un.unit_type;
+            let s = un.sprite;
+            if (un.status & 2 != 0 || (0xcb..0xd6).contains(&t)) && s != NIL && (un.order != 0 || un.order_state != 1) {
+                self.create_fog_thingy(d, t, s);
+            }
         }
     }
 }

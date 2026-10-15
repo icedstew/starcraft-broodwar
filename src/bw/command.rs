@@ -60,19 +60,30 @@ impl State {
                 // 0x48cf00: "too many queued orders" message.
                 return;
             }
-            // 0x474b90
-            match kind {
-                0 => self.order_queue_append(d, u, order, 0xe4, (0, 0), NIL),
-                1 => {
-                    let p = if target != NIL { self.unit_sprite_pos(target) } else { (0, 0) };
-                    self.order_queue_append(d, u, order, 0xe4, p, target)
-                }
-                2 => self.order_queue_append(d, u, order, unit_type, pos, NIL),
-                _ => self.order_queue_append(d, u, order, 0xe4, pos, NIL),
-            };
+            self.command_queue_order(d, u, kind, order, target, unit_type, pos);
             return;
         }
-        // 0x475470
+        self.command_order_now(d, u, kind, order, target, unit_type, pos);
+    }
+
+    /// 0x474b90: queue a command's order (`kind` as in 0x4754f0).
+    #[allow(clippy::too_many_arguments)]
+    fn command_queue_order(&mut self, d: &Data, u: u32, kind: u8, order: u8, target: u32, unit_type: u16, pos: (i16, i16)) {
+        match kind {
+            0 => {
+                self.order_queue_append(d, u, order, 0xe4, (0, 0), NIL);
+            }
+            1 => self.order_queue_append_target(d, u, order, target),
+            2 => {
+                self.order_queue_append(d, u, order, unit_type, pos, NIL);
+            }
+            _ => self.order_queue_append_at(d, u, order, pos),
+        }
+    }
+
+    /// 0x475470: issue a command's order now.
+    #[allow(clippy::too_many_arguments)]
+    fn command_order_now(&mut self, d: &Data, u: u32, kind: u8, order: u8, target: u32, unit_type: u16, pos: (i16, i16)) {
         match kind {
             0 => self.order_now(d, u, order),
             1 => self.order_with_target(d, u, order, target),
@@ -836,6 +847,39 @@ impl State {
         }
     }
 
+    /// 0x4c1430 / 0x4c1240 / 0x4c1050: every selected unit that may take `order`
+    /// takes it now.
+    fn command_order_now_sel(&mut self, d: &Data, player: u8, sel: &[u32], order: u8) {
+        for u in self.live_selection(sel) {
+            if self.can_issue_order(d, u, order, player).is_ok() {
+                self.order_now(d, u, order);
+            }
+        }
+    }
+
+    /// 0x4bfcd0: cancel nuke: selected ghosts (anyone's) let go of their nuke.
+    fn command_cancel_nuke(&mut self, sel: &[u32]) {
+        for u in self.live_selection(sel) {
+            let n = self.units[u as usize].connected_unit;
+            if super::unit::is_ghost(self.units[u as usize].unit_type) && n != NIL && self.units[n as usize].unit_type == 0xe {
+                self.units[u as usize].connected_unit = NIL;
+                self.units[n as usize].connected_unit = NIL;
+            }
+        }
+    }
+
+    /// 0x4bff30: cancel addon: the one selected building stops the addon it is building.
+    fn command_cancel_addon(&mut self, d: &Data, player: u8, sel: &[u32]) {
+        let [u] = self.live_selection(sel)[..] else { return };
+        let un = &self.units[u as usize];
+        let a = un.current_build_unit;
+        if un.secondary_order == 0x25 && un.status & 2 != 0 && a != NIL && self.units[a as usize].status & 1 == 0 && un.status & 1 != 0 && un.player == player {
+            // 0x4e66e0
+            self.cancel_unit(d, a);
+            // 0x4c36c0: UI refresh.
+        }
+    }
+
     /// Hold position command (0x4c20c0).
     pub fn command_hold(&mut self, d: &Data, player: u8, sel: &[u32], queued: bool) {
         for u in self.live_selection(sel) {
@@ -891,12 +935,10 @@ impl State {
         // 0x48dbd0
         let ok = match order {
             0x19 | 0x1e | 0x1f | 0x20 | 0x24 => self.can_make_unit(d, u, t, player) == Ok(1),
-            // Landing: the building's own type.
-            0x47 => self.units[u as usize].unit_type == t,
-            0x9b | 0x2e => {
-                todo_port!("0x48dbd0", "nydus exit / addon builds (type in AX)");
-                false
-            }
+            // Landing, a nydus exit, and (in the first 600 seconds) PlaceCOP: the unit's
+            // own type.
+            0x47 | 0x2e => self.units[u as usize].unit_type == t,
+            0x9b => self.trig.elapsed <= 600 && self.units[u as usize].unit_type == t,
             _ => false,
         };
         if ok && self.can_issue_order(d, u, order, player).is_ok() {
@@ -972,6 +1014,18 @@ impl State {
         }
     }
 
+    /// 0x474500: `ty` is the refinery of unit type `t`'s race.
+    fn own_race_refinery(d: &Data, t: u16, ty: u16) -> bool {
+        let g = d.dat.units.staredit_group_flags[t as usize];
+        if g & 1 != 0 {
+            ty == 0x95
+        } else if g & 4 != 0 {
+            ty == 0x9d
+        } else {
+            g & 2 != 0 && ty == 0x6e
+        }
+    }
+
     /// 0x4746d0: a remembered fog unit of type `ty` suits `order`.
     fn fog_target_valid(&self, d: &Data, u: u32, order: u8, ty: u16) -> Result<(), u16> {
         match order {
@@ -981,8 +1035,8 @@ impl State {
                 if ty == 0xbc {
                     return Err(err);
                 }
-                if !matches!(ty, 0xb0..=0xb2) {
-                    todo_port!("0x474500", "fog gather target check");
+                if !matches!(ty, 0xb0..=0xb2) && !Self::own_race_refinery(d, self.units[u as usize].unit_type, ty) {
+                    return Err(0x37c);
                 }
                 Ok(())
             }
@@ -1330,6 +1384,12 @@ impl State {
             0x31 => self.command_cancel_research(d, player, sel),
             0x32 => self.command_upgrade(d, player, sel, byte(1)),
             0x33 => self.command_cancel_upgrade(d, player, sel),
+            // 0x4c1430 / 0x4c1240 / 0x4c1050: carrier stop, reaver stop, order nothing.
+            0x1b => self.command_order_now_sel(d, player, sel, 0x34),
+            0x1c => self.command_order_now_sel(d, player, sel, 7),
+            0x1d => self.command_order_now_sel(d, player, sel, 0x17),
+            0x2e => self.command_cancel_nuke(sel),
+            0x34 => self.command_cancel_addon(d, player, sel),
             _ => todo_port!("0x4865d0", "command receiver not ported yet"),
         }
     }

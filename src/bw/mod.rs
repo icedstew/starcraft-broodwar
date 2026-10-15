@@ -85,6 +85,12 @@ macro_rules! todo_port {
     }};
 }
 
+/// 0x4215d0 / 0x4212c0: fatal error: the game shows `msg` with the last system error
+/// and exits.
+pub fn fatal_error(msg: &str) -> ! {
+    panic!("fatal error: {msg}")
+}
+
 /// Read-only game data (dat tables, iscript, GRP sizes, LO overlay offsets).
 pub struct Data<'a> {
     pub dat: &'a Dat,
@@ -166,6 +172,11 @@ pub struct State {
     pub ff_free: List,
     pub free_thingies: List,
     pub active_thingies: List,
+    /// 0x652928 pool, 0x6509d0 free and 0x654868 active lists: the local player's fogged
+    /// copies of buildings and resources (`hp` holds the unit type).
+    pub fog_thingies: Vec<Thingy>,
+    pub free_fog_thingies: List,
+    pub active_fog_thingies: List,
     /// 0x652918: placeholder sprite 0x13e made by 0x488550.
     pub marker_thingy: Option<u32>,
     /// 0x652920: the right-click marker is shown (drawn by 0x488180 though hidden).
@@ -351,6 +362,7 @@ impl State {
         let (images, free_images) = pool_after_head::<Image>(MAX_IMAGES);
         let (sprites, free_sprites) = pool_after_head(MAX_SPRITES);
         let (thingies, free_thingies) = pool_after_head(MAX_THINGIES);
+        let (fog_thingies, free_fog_thingies) = pool_after_head(MAX_THINGIES);
         // New game (0x49f380) builds the unit free list like the other pools.
         let (units, free_units) = pool_after_head::<Unit>(max_units as usize);
         let (orders, free_orders) = pool_after_head::<orders::Order>(orders::MAX_ORDERS);
@@ -367,6 +379,9 @@ impl State {
             ff_free: List { head: 0, tail: 0 },
             free_thingies,
             active_thingies: List::default(),
+            fog_thingies,
+            free_fog_thingies,
+            active_fog_thingies: List::default(),
             marker_thingy: None,
             marker_shown: false,
             units,

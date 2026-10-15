@@ -907,7 +907,7 @@ impl State {
                 }
             }
         }
-        if matches!(t, 0x48 | 0x52 | 0x53 | 0x51) {
+        if super::unit::has_hangar(t as u16) {
             // 0x45fe80: interceptors / scarabs in the hangar.
             let n = self.units[u as usize].u8_at(0xc8) as i32;
             let h = if matches!(t, 0x48 | 0x52) { 0x49 } else { 0x55 };
@@ -1900,8 +1900,9 @@ impl State {
                 let next = self.units[u as usize].player_next;
                 let ty = self.units[u as usize].unit_type as usize;
                 if d.dat.units.flags[ty] & 0x10 == 0 && self.trigger_unit_alive(u) && self.trigger_unit_matches(d, p, t, u) {
-                    if d.dat.units.flags[ty] & 0x800 != 0 && self.units[u as usize].ptr_at(0xd4) != NIL {
-                        todo_port!("0x4f3c60", "a beacon's flag goes home");
+                    let carrier = self.units[u as usize].ptr_at(0xd4);
+                    if d.dat.units.flags[ty] & 0x800 != 0 && carrier != NIL {
+                        self.kill_carried_powerup(d, carrier);
                     } else {
                         if remove {
                             self.hide_unit(d, u);
@@ -1960,8 +1961,9 @@ impl State {
         if !self.trigger_unit_alive(u) || !self.trigger_unit_matches(d, p, t, u) {
             return false;
         }
-        if d.dat.units.flags[ty] & 0x800 != 0 && self.units[u as usize].ptr_at(0xd4) != NIL {
-            todo_port!("0x4f3c60", "a beacon's flag goes home");
+        let carrier = self.units[u as usize].ptr_at(0xd4);
+        if d.dat.units.flags[ty] & 0x800 != 0 && carrier != NIL {
+            self.kill_carried_powerup(d, carrier);
         } else {
             if remove {
                 if transport {

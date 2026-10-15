@@ -304,7 +304,27 @@ impl Minimap {
             }
             u = st.units[u as usize].player_next;
         }
-        // Fog sprites (0x654868) are drawn last; they are not ported (0x488350).
+        // Fogged copies of buildings and resources (0x654868), drawn last.
+        let mut t = st.active_fog_thingies.head;
+        while t != NIL {
+            let th = &st.fog_thingies[t as usize];
+            let ut = th.hp as u16;
+            if !(0xcb..=0xd5).contains(&ut) && !(st.replay && st.fog_thingy_area_unexplored(d, t)) {
+                let sp = &st.sprites[th.sprite as usize];
+                let color = if matches!(sp.sprite_id, 0x113 | 0x117..=0x119) {
+                    self.colors[0x19]
+                } else if self.ally_colors {
+                    // 0x58d634: the local player's alliances.
+                    if st.alliances[st.local_player as usize][sp.owner as usize] != 0 { self.colors[0x11] } else { self.colors[0x14] }
+                } else {
+                    self.player_colors[sp.owner as usize]
+                };
+                let pb = d.dat.units.placement_box[ut as usize];
+                self.draw_box(color, sp.x as i32, sp.y as i32, pb as u8, (pb >> 16) as u8, true);
+                self.boxes = self.boxes.wrapping_sub(1);
+            }
+            t = th.link.next;
+        }
     }
 
     /// 0x4a5200 (each game frame): fog and units over the current terrain.

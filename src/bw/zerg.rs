@@ -188,8 +188,7 @@ impl State {
             self.local_error(player, 0x96 + race, 0x353);
             return self.drone_build_failed(d, u);
         }
-        self.players.minerals[p] -= m;
-        self.players.gas[p] -= g;
+        self.spend(p, m, g);
         let powerup = if d.dat.units.flags[self.units[u as usize].unit_type as usize] & 8 != 0 { self.units[u as usize].ptr_at(0xc0) } else { NIL };
         if powerup != NIL {
             self.drop_powerup(d, u);
@@ -575,10 +574,7 @@ impl State {
             b.acid_spore_count,
             b.acid_spore_time,
         ) = copy;
-        let b = &self.units[c as usize];
-        if b.defense_matrix_timer | b.lockdown_timer | b.maelstrom_timer | b.irradiate_timer | b.ensnare_timer | b.stasis_timer | b.plague_timer | b.acid_spore_count != 0 {
-            todo_port!("0x492da0", "twin takes the egg's status overlays");
-        }
+        self.reapply_status_overlays(d, c);
         self.update_speed(d, c);
         // 0x45d040: local selection (UI).
         c

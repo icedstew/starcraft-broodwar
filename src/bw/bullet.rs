@@ -83,6 +83,28 @@ impl Default for Bullets {
 }
 
 impl State {
+    /// 0x4759c0: `u` (and, for an interceptor, its carrier and so on) counts a kill.
+    pub(super) fn credit_kill(&mut self, mut u: u32) {
+        loop {
+            let un = &mut self.units[u as usize];
+            if un.kill_count != 0xff {
+                un.kill_count += 1;
+            }
+            if un.unit_type != 0x49 {
+                break;
+            }
+            u = un.ptr_at(0xc0);
+            if u == NIL {
+                break;
+            }
+        }
+    }
+}
+
+/// 0x513650: the spread pattern (valkyrie rockets), ended by a 0 x.
+const SPREAD: [(i16, i16); 15] = [(1, 1), (51, 31), (7, 12), (-36, -52), (-49, 25), (40, -46), (-4, -19), (28, 50), (50, -15), (-54, -13), (11, -53), (15, -9), (-19, 50), (-17, 8), (0, 0)];
+
+impl State {
     pub(super) fn bullet_sprite_pos(&self, b: u32) -> (i16, i16) {
         let s = &self.sprites[self.bullets.pool[b as usize].sprite as usize];
         (s.x, s.y)
@@ -246,8 +268,6 @@ impl State {
                 }
             }
             8 => {
-                // 0x513650: the spread pattern, ended by a 0 x.
-                const SPREAD: [(i16, i16); 15] = [(1, 1), (51, 31), (7, 12), (-36, -52), (-49, 25), (40, -46), (-4, -19), (28, 50), (50, -15), (-54, -13), (11, -53), (15, -9), (-19, 50), (-17, 8), (0, 0)];
                 let n = self.units[source as usize].bullet_spread;
                 let i = n as u8 as usize;
                 let bu = &mut self.bullets.pool[b as usize];
@@ -563,9 +583,12 @@ impl State {
         let bu = &self.bullets.pool[b as usize];
         let t = bu.target;
         if t != NIL && bu.flags & 1 == 0 {
-            todo_port!("0x48b440", "spread offset target point (0x495240 args)");
-            let p = self.unit_pos(t);
-            self.bullet_set_targets(b, p);
+            // The target's position less the bullet's spread offset, kept on the map.
+            let i = bu.spread_index as usize;
+            let (tx, ty) = self.unit_pos(t);
+            let x = (tx as i32 - SPREAD[i].0 as i32).max(0).min(self.map_px.0 as i32 - 1);
+            let y = (ty as i32 - SPREAD[i].1 as i32).max(0).min(self.map_px.1 as i32 - 1);
+            self.bullet_set_targets(b, (x as i16, y as i16));
         } else if t != NIL {
             self.bullet_set_state(b, 1);
         } else {
@@ -721,7 +744,7 @@ impl State {
                 }
                 self.search.pop();
             }
-            _ => todo_port!("0x48b770", "other weapon explosion types"),
+            _ => super::fatal_error("CBullet: Damage"),
         }
     }
 
@@ -1052,18 +1075,7 @@ impl State {
             self.kill_unit(d, t);
             self.count_death(d, t, player);
             if source != NIL && self.alliances[self.units[source as usize].player as usize][self.alliance_owner_pub(t)] == 0 {
-                // 0x4759c0
-                let mut k = source;
-                loop {
-                    let ku = &mut self.units[k as usize];
-                    if ku.kill_count != 0xff {
-                        ku.kill_count += 1;
-                    }
-                    if ku.unit_type != 0x49 || ku.connected_unit == NIL {
-                        break;
-                    }
-                    k = ku.connected_unit;
-                }
+                self.credit_kill(source);
             }
         }
     }

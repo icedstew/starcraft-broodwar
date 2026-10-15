@@ -7,7 +7,23 @@ use crate::todo_port;
 /// Weapon id meaning "none".
 pub const NO_WEAPON: u8 = 0x82;
 
+/// 0x401470: carrier or Gantrithor.
+pub(super) fn is_carrier(t: u16) -> bool {
+    matches!(t, 0x48 | 0x52)
+}
+
+/// 0x401490: reaver or Warbringer.
+pub(super) fn is_reaver_type(t: u16) -> bool {
+    matches!(t, 0x53 | 0x51)
+}
+
+/// 0x402750: queen or Matriarch.
+pub(super) fn is_queen(t: u16) -> bool {
+    matches!(t, 0x2d | 0x31)
+}
+
 impl State {
+    /// 0x401d40: `u` is a turret (subunit).
     fn is_turret(&self, d: &Data, u: u32) -> bool {
         u != NIL && d.dat.units.flags[self.units[u as usize].unit_type as usize] & 0x10 != 0
     }
@@ -84,16 +100,14 @@ impl State {
         }
         let w = self.weapon_unit(d, u);
         let t = un.unit_type;
-        if matches!(t, 0x48 | 0x52) {
-            // Carriers (0x401470).
+        if is_carrier(t) {
             return true;
         }
-        if matches!(t, 0x53 | 0x51) {
-            // Reavers (0x401490): ground targets in the same region group (0x49cbb0).
-            return ts & 4 == 0 && self.same_group(target, self.unit_sprite_pos(u));
+        if is_reaver_type(t) {
+            // Reavers: ground targets in the same region group.
+            return ts & 4 == 0 && self.units_same_group(u, target);
         }
-        if matches!(t, 0x2d | 0x31) {
-            // 0x402750
+        if is_queen(t) {
             return self.damaged_6a(d, target);
         }
         if t == 0x47 && un.ai != NIL {
@@ -401,7 +415,7 @@ impl State {
         let un = &self.units[u as usize];
         let t = un.unit_type;
         let p = un.player as usize;
-        if matches!(t, 1 | 0x10 | 100 | 99 | 0x68) && un.status & 0x300 != 0 && un.order != 0x6b {
+        if super::unit::is_ghost(t) && un.status & 0x300 != 0 && un.order != 0x6b {
             return 0;
         }
         let base = self.acquisition[t as usize] as u32;

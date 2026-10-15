@@ -326,17 +326,9 @@ impl State {
         }
         let gf = d.dat.units.staredit_group_flags[ut];
         if gf & 5 == 0 && gf & 2 != 0 && (self.units[u as usize].status & 2 != 0 || d.dat.units.flags[ut] & 0x20 != 0) {
-            // 0x4022c0: under 34% hp, Terran buildings burn 0x14 (fp8) a frame.
-            let un = &self.units[u as usize];
-            let mut max = d.dat.units.hit_points[ut] as i32 >> 8;
-            if max == 0 {
-                max = (un.hp + 0xff) >> 8;
-                if max == 0 {
-                    max = 1;
-                }
-            }
-            if ((((un.hp + 0xff) >> 8) * 100) / max) < 0x22 {
-                let p = un.last_attacking_player;
+            // Under 34% hp, Terran buildings burn 0x14 (fp8) a frame.
+            if self.hp_below_third(d, u) {
+                let p = self.units[u as usize].last_attacking_player;
                 self.apply_damage_pub(d, u, 0x14, NIL, p, true);
             }
         }
@@ -626,7 +618,137 @@ impl State {
             self.update_thingy(d, t);
             t = next;
         }
-        todo_port!("0x488350", "fog sprites (0x654868)");
+        let mut t = self.active_fog_thingies.head;
+        while t != NIL {
+            let next = self.fog_thingies[t as usize].link.next;
+            self.update_fog_thingy(d, t);
+            t = next;
+        }
+    }
+
+    /// 0x488410: a fogged copy of sprite `src` (a building of `unit_type` the local player
+    /// just lost sight of).
+    pub(super) fn create_fog_thingy(&mut self, d: &Data, unit_type: u16, src: u32) -> Option<u32> {
+        let t = super::sprite::pop(&mut self.fog_thingies, &mut self.free_fog_thingies)?;
+        let s = self.copy_sprite(d, src);
+        self.fog_thingies[t as usize].hp = 1;
+        self.fog_thingies[t as usize].sprite = s.unwrap_or(NIL);
+        if s.is_none() {
+            super::list::insert_after_head(&mut self.fog_thingies, t, &mut self.free_fog_thingies);
+            return None;
+        }
+        self.fog_thingies[t as usize].hp = unit_type as i32;
+        super::list::insert_after_head(&mut self.fog_thingies, t, &mut self.active_fog_thingies);
+        Some(t)
+    }
+
+    /// 0x488350: a fogged copy goes away once the local player sees any of its area.
+    fn update_fog_thingy(&mut self, d: &Data, t: u32) {
+        let s = self.fog_thingies[t as usize].sprite;
+        if self.sprites[s as usize].selection_timer != 0 {
+            // 0x4ebbd0: only a local click (0x456490) starts the timer.
+            todo_port!("0x4ebbd0", "selection circle flash after a click");
+        }
+        if self.fog_thingy_area_fogged(d, t) {
+            return;
+        }
+        // 0x4975d0: the copy has no selection circle (UI).
+        self.free_sprite_images(s);
+        self.fog_thingies[t as usize].sprite = NIL;
+        super::list::remove(&mut self.fog_thingies, t, &mut self.active_fog_thingies);
+        super::list::insert_after_head(&mut self.fog_thingies, t, &mut self.free_fog_thingies);
+    }
+
+    /// 0x487cf0 (eax = 0, 0x402380): every tile under fog thingy `t`'s placement box is
+    /// fogged for the local player (in a replay: hidden from every shown player).
+    fn fog_thingy_area_fogged(&self, d: &Data, t: u32) -> bool {
+        let th = &self.fog_thingies[t as usize];
+        let sp = &self.sprites[th.sprite as usize];
+        let b = d.dat.units.placement_box[th.hp as usize];
+        let (w, h) = ((b & 0xffff) as i16 as i32, (b >> 16) as i16 as i32);
+        let div32 = |v: i32| (v + ((v >> 31) & 0x1f)) >> 5;
+        let (x0, y0) = (div32(sp.x as i32 - w / 2), div32(sp.y as i32 - h / 2));
+        let (cols, rows) = (div32(w + 0x1f), div32(h + 0x1f));
+        let mw = self.terrain.width as i32;
+        for y in (y0..y0 + rows).rev() {
+            for x in (x0..x0 + cols).rev() {
+                // ponytail: tiles off the map (1.16.1 reads past the flags) count as fogged.
+                let f = self.terrain.tile_flags.get((mw * y + x) as usize).copied().unwrap_or(u32::MAX);
+                let seen = if self.replay { !(f as u8) & self.local_vision_mask != 0 || self.reveal_all } else { f as u8 & self.local_vision_mask == 0 };
+                if seen {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    /// 0x487cf0 (eax = 1, 0x402440) in a replay: some tile under fog thingy `t` is
+    /// unexplored by every shown player.
+    pub(super) fn fog_thingy_area_unexplored(&self, d: &Data, t: u32) -> bool {
+        let th = &self.fog_thingies[t as usize];
+        let sp = &self.sprites[th.sprite as usize];
+        let b = d.dat.units.placement_box[th.hp as usize];
+        let (w, h) = ((b & 0xffff) as i16 as i32, (b >> 16) as i16 as i32);
+        let div32 = |v: i32| (v + ((v >> 31) & 0x1f)) >> 5;
+        let (x0, y0) = (div32(sp.x as i32 - w / 2), div32(sp.y as i32 - h / 2));
+        let (cols, rows) = (div32(w + 0x1f), div32(h + 0x1f));
+        let mw = self.terrain.width as i32;
+        let m = (self.local_vision_mask as u32) << 8;
+        (y0..y0 + rows).any(|y| {
+            (x0..x0 + cols).any(|x| {
+                let f = self.terrain.tile_flags.get((mw * y + x) as usize).copied().unwrap_or(u32::MAX);
+                m & !f == 0 && !self.reveal_all
+            })
+        })
+    }
+
+    /// 0x487b00: a fogged mineral field or geyser copy whose placement box, in tiles, is
+    /// within `range` tiles of tile (x, y).
+    pub(super) fn fog_resource_near(&self, d: &Data, x: i32, y: i32, range: i32) -> Option<u32> {
+        let mut t = self.active_fog_thingies.head;
+        while t != NIL {
+            let sp = &self.sprites[self.fog_thingies[t as usize].sprite as usize];
+            let ut = match sp.sprite_id {
+                0xb2 | 0xcc | 0x107 | 0x113 => Some(0xbc),
+                0x117..=0x119 => Some(sp.sprite_id - 0x67),
+                _ => None,
+            };
+            if let Some(ut) = ut {
+                let b = d.dat.units.placement_box[ut as usize];
+                let (w, h) = ((b & 0xffff) as i16 as i32, (b >> 16) as i16 as i32);
+                let div32 = |v: i32| (v + ((v >> 31) & 0x1f)) >> 5;
+                let x0 = div32(sp.x as i32 - w / 2);
+                if ((x - x0 + range) as u32) < (div32(w) + range * 2) as u32 {
+                    let y0 = div32(sp.y as i32 - h / 2);
+                    if ((y - y0 + range) as u32) < (div32(h) + range * 2) as u32 {
+                        return Some(t);
+                    }
+                }
+            }
+            t = self.fog_thingies[t as usize].link.next;
+        }
+        None
+    }
+
+    /// 0x487c70: a fog copy of sprite `sprite_id` whose `w` x `h` box centered on it holds
+    /// (x, y), skipping the unit types of 0x46ed80.
+    pub(super) fn fog_sprite_at(&self, sprite_id: u16, x: i32, y: i32, w: i16, h: i16) -> Option<u32> {
+        let mut t = self.active_fog_thingies.head;
+        while t != NIL {
+            let th = &self.fog_thingies[t as usize];
+            let sp = &self.sprites[th.sprite as usize];
+            let skip = super::select::never_picked(th.hp as u16);
+            if sp.sprite_id == sprite_id
+                && !skip
+                && ((w as i32 / 2 + sp.x as i32 - x) as u32) < w as i32 as u32
+                && ((h as i32 / 2 + sp.y as i32 - y) as u32) < h as i32 as u32
+            {
+                return Some(t);
+            }
+            t = th.link.next;
+        }
+        None
     }
 
     /// 0x487690 / 0x4877b0: a map sprite's visibility from the fog over its area:

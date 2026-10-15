@@ -123,7 +123,8 @@ impl State {
         row.min(self.map_tiles.1.saturating_sub(1))
     }
 
-    /// 0x140197270 create_sprite.
+    /// 0x4990f0 / SC:R 0x140197270 create_sprite: off the free list, initialized and put
+    /// in its tile row.
     pub fn create_sprite(&mut self, d: &Data, sprite_id: u16, x: i16, y: i16, owner: u8) -> Option<u32> {
         let s = pop(&mut self.sprites, &mut self.free_sprites)?;
         if !self.initialize_sprite(d, s, sprite_id, x, y, owner) {
@@ -140,7 +141,7 @@ impl State {
         Some(s)
     }
 
-    /// 0x14019ab60 initialize_sprite (obfuscated in SC:R; reconstructed from its readable parts).
+    /// 0x499030 / SC:R 0x14019ab60 initialize_sprite.
     fn initialize_sprite(&mut self, d: &Data, s: u32, sprite_id: u16, x: i16, y: i16, owner: u8) -> bool {
         if x as u16 >= self.map_px.0 || y as u16 >= self.map_px.1 {
             return false;
@@ -421,6 +422,75 @@ impl State {
         r
     }
 
+    /// 0x498f40: image `image_id` on top of sprite `s` (first in its list; the main image
+    /// when the sprite has none), without starting its iscript.
+    fn add_image_on_top(&mut self, d: &Data, s: u32, image_id: u16, x: i8, y: i8, dir: u8) -> Option<u32> {
+        let img = pop(&mut self.images, &mut self.free_images)?;
+        let mut l = self.sprites[s as usize].images;
+        if l.head == NIL {
+            self.sprites[s as usize].main_image = img;
+            list::insert_after_head(&mut self.images, img, &mut l);
+        } else {
+            list::insert_before(&mut self.images, l.head, img, &mut l);
+        }
+        self.sprites[s as usize].images = l;
+        self.initialize_image(d, img, image_id, s, x, y);
+        // 0x4d58b0 / 0x4d6640: draw function and iscript header; no Init animation.
+        let id = image_id as usize;
+        let i = &mut self.images[img as usize];
+        i.modifier = d.dat.images.draw_function[id];
+        if i.modifier == 0x11 {
+            i.coloring = 0x230;
+        }
+        i.flags |= iflag::REDRAW;
+        i.flags = (i.flags & !iflag::HAS_ISCRIPT_ANIMATIONS) | (((d.dat.images.full_iscript[id] & 1) as u16) << 4);
+        let script = d.dat.images.iscript[id];
+        i.iscript.header = d.iscript_header(script).unwrap_or_else(|| panic!("script {script} does not exist"));
+        self.image_set_direction32(d, img, dir);
+        Some(img)
+    }
+
+    /// 0x499210: a still copy of sprite `src` (same frames and flips; health bar and
+    /// selection circle images left out). None, with nothing left behind, if the pools run out.
+    pub(super) fn copy_sprite(&mut self, d: &Data, src: u32) -> Option<u32> {
+        let sp = &self.sprites[src as usize];
+        let s = self.create_sprite(d, sp.sprite_id, sp.x, sp.y, sp.owner)?;
+        let mut i = self.sprites[s as usize].images.head;
+        while i != NIL {
+            let next = self.images[i as usize].link.next;
+            self.destroy_image(i);
+            i = next;
+        }
+        self.sprites[s as usize].main_image = NIL;
+        let mut i = self.sprites[src as usize].images.tail;
+        while i != NIL {
+            let o = self.images[i as usize].clone();
+            if o.modifier != 0xb && o.modifier != 0xd {
+                let Some(n) = self.add_image_on_top(d, s, o.image_id, o.x, o.y, o.direction) else {
+                    self.free_sprite_images(s);
+                    return None;
+                };
+                let im = &mut self.images[n as usize];
+                im.frameset = o.frameset;
+                im.frame = o.frame;
+                let flip = o.flags & iflag::FLIPPED;
+                if im.flags & iflag::FLIPPED != flip {
+                    // The draw routines (0x512514 / 0x5125a4) follow the flip (render only).
+                    im.flags = (im.flags & !iflag::FLIPPED) | flip | iflag::REDRAW;
+                    if im.flags & iflag::USES_SPECIAL_OFFSET != 0 {
+                        self.image_update_special_offset(d, n);
+                    }
+                }
+                // 0x4d57b0: screen position (render only).
+                if i == self.sprites[src as usize].main_image {
+                    self.sprites[s as usize].main_image = n;
+                }
+            }
+            i = self.images[i as usize].link.prev;
+        }
+        Some(s)
+    }
+
     /// 0x14019fb00 create_thingy: a free-standing sprite (dust, effects).
     pub fn create_thingy(&mut self, d: &Data, sprite_id: u16, x: i16, y: i16, owner: u8) -> Option<u32> {
         let t = pop(&mut self.thingies, &mut self.free_thingies)?;
@@ -452,7 +522,8 @@ impl State {
         Some(ts)
     }
 
-    /// iscript `end` (0x16): unlink the image and return it to the free list.
+    /// 0x4d4ce0 (iscript `end`, 0x16): unlink the image and return it to the free list
+    /// (its screen area is redrawn, 0x4970a0).
     pub fn destroy_image(&mut self, img: u32) {
         let s = self.images[img as usize].sprite;
         let mut l = self.sprites[s as usize].images;

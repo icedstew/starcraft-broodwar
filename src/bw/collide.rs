@@ -1280,6 +1280,11 @@ impl State {
         self.sai.regions[r as usize].group
     }
 
+    /// 0x49cbb0: `a` and `b` stand in the same region group.
+    pub(super) fn units_same_group(&self, a: u32, b: u32) -> bool {
+        self.region_group_at(self.unit_sprite_pos(a)) == self.region_group_at(self.unit_sprite_pos(b))
+    }
+
     /// 0x49cb60: `p` is in the same region group as `u`.
     pub(super) fn same_group(&self, u: u32, p: Pt) -> bool {
         self.region_group_at(self.unit_sprite_pos(u)) == self.region_group_at(p)

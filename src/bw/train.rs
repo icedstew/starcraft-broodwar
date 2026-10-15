@@ -150,6 +150,18 @@ impl State {
         }
     }
 
+    /// 0x42ce40: pay the cost checked last (0x6ca51c minerals, 0x6ca4ec gas).
+    pub(super) fn spend(&mut self, p: usize, m: i32, g: i32) {
+        self.players.minerals[p] -= m;
+        self.players.gas[p] -= g;
+    }
+
+    /// 0x42ce70: refund 3/4 of `t`'s cost.
+    pub(super) fn refund_three_quarters(&mut self, d: &Data, p: usize, t: u16) {
+        self.players.minerals[p] += (d.dat.units.mineral_cost[t as usize] as i32 * 3) >> 2;
+        self.players.gas[p] += (d.dat.units.gas_cost[t as usize] as i32 * 3) >> 2;
+    }
+
     /// 0x42cec0: refund `t`.
     pub(super) fn refund(&mut self, d: &Data, p: usize, t: u16) {
         self.players.minerals[p] += d.dat.units.mineral_cost[t as usize] as i32;
@@ -341,9 +353,7 @@ impl State {
         }
         let (t, p) = (un.unit_type, un.player as usize);
         let hp = (un.previous_hp as i32) << 8;
-        // 0x42ce70
-        self.players.minerals[p] += (d.dat.units.mineral_cost[t as usize] as i32 * 3) >> 2;
-        self.players.gas[p] += (d.dat.units.gas_cost[t as usize] as i32 * 3) >> 2;
+        self.refund_three_quarters(d, p, t);
         self.players.unit_score[p] -= d.dat.units.build_score[0x29] as i32;
         self.players.units_produced[p] -= 1;
         let s = self.units[c as usize].sprite;
@@ -394,7 +404,7 @@ impl State {
     /// buildings), then cocoons turn back into their unit and anything else dies.
     pub(super) fn cancel_unit(&mut self, d: &Data, c: u32) {
         let un = &self.units[c as usize];
-        if un.sprite == NIL || un.order == 0 || un.status & 1 != 0 {
+        if un.is_dead() || un.status & 1 != 0 {
             return;
         }
         let t = un.unit_type;
@@ -406,9 +416,7 @@ impl State {
             if Self::supply_race_of(d, t) == 0 {
                 return self.cancel_zerg_building(d, c);
             }
-            // 0x42ce70
-            self.players.minerals[p] += (d.dat.units.mineral_cost[t as usize] as i32 * 3) >> 2;
-            self.players.gas[p] += (d.dat.units.gas_cost[t as usize] as i32 * 3) >> 2;
+            self.refund_three_quarters(d, p, t);
         } else {
             let paid = if matches!(t, 0x24 | 0x3b | 0x61) { un.build_queue[un.build_queue_slot as usize % 5] } else { t };
             self.refund(d, p, paid);

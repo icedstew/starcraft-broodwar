@@ -4,7 +4,6 @@ use super::list::{self, NIL};
 use super::unit::status;
 use super::{Data, State};
 use crate::game::flingy::mflags;
-use crate::todo_port;
 
 /// 0x6a4: unit limit checked by 0x4a06c0.
 pub const UNIT_LIMIT: u32 = 0x6a4;
@@ -42,6 +41,18 @@ fn dims(d: &Data, ut: u16) -> (i32, i32, i32, i32) {
 }
 
 impl State {
+    /// 0x4a0990: undo a unit whose creation failed: its subunit too, then out of the
+    /// game and its sprite freed. The unit itself is not returned to the free list.
+    fn destroy_partial_unit(&mut self, d: &Data, u: u32) {
+        let sub = self.units[u as usize].subunit;
+        if sub != NIL && d.dat.units.flags[self.units[sub as usize].unit_type as usize] & 0x10 != 0 {
+            self.destroy_partial_unit(d, sub);
+            self.units[u as usize].subunit = NIL;
+        }
+        self.remove_unit(d, u);
+        self.free_unit_sprite(u);
+    }
+
     /// 0x4a09d0 create_unit (ECX = type, EAX = x, stack: y, player).
     pub fn create_unit(&mut self, d: &Data, unit_type: u16, x: i16, y: i16, player: u8) -> Option<u32> {
         // Drawn and discarded (site 14).
@@ -65,7 +76,7 @@ impl State {
             return Some(u);
         }
         let Some(sub) = self.alloc_unit(d, sub_type, x, y, player) else {
-            todo_port!("0x4a0990", "destroy partially created unit");
+            self.destroy_partial_unit(d, u);
             return None;
         };
         self.units[u as usize].subunit = sub;

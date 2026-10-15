@@ -20,7 +20,8 @@ impl Default for Rng {
 }
 
 impl Rng {
-    /// Returns 0 without advancing when disabled; otherwise the next 15-bit value.
+    /// 0x4dc4a0 sync_rand: returns 0 without advancing when disabled; otherwise the next
+    /// 15-bit value.
     pub fn rand(&mut self, site: u32) -> u32 {
         if !self.enabled {
             return 0;

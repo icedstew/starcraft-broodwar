@@ -52,13 +52,20 @@ impl State {
             let st = d.dat.units.subunit1[t as usize];
             self.transform_subunit(d, sub, st);
         }
-        // 0x492da0: status overlays; none on the units transformed so far.
+        self.reapply_status_overlays(d, u);
     }
 
     /// 0x49f6a0: the turret `sub` becomes type `t` and is put back on its base's
     /// attachment point.
     fn transform_subunit(&mut self, d: &Data, sub: u32, t: u16) {
         let cloak = self.units[sub as usize].status & 0x300;
+        let mode = (self.units[sub as usize].status >> 8 & 3) as u8;
+        let old_coloring = if mode != 0 {
+            let s0 = self.units[sub as usize].sprite;
+            (self.images[self.sprites[s0 as usize].main_image as usize].coloring & 0xffff) as u16
+        } else {
+            0
+        };
         self.iscript_unit = Some(sub);
         self.change_unit_type(d, sub, t);
         let base = self.units[sub as usize].subunit;
@@ -66,7 +73,10 @@ impl State {
         let ss = self.units[sub as usize].sprite;
         self.sprites[ss as usize].flags |= 0x10;
         if cloak != 0 {
-            todo_port!("0x497fd0", "cloaked turret: re-cloak its new images");
+            self.sprite_cloak_mode(d, ss, mode, old_coloring);
+            if self.units[base as usize].visibility & self.local_vision_mask as u32 != 0 {
+                self.sprite_detected(ss);
+            }
         }
         let bs = self.units[base as usize].sprite;
         let mi = self.sprites[bs as usize].main_image;
@@ -90,11 +100,8 @@ impl State {
     fn transform_unit_counted(&mut self, d: &Data, u: u32, t: u16) {
         let s = self.units[u as usize].sprite;
         let vis = self.sprites[s as usize].visibility;
-        if self.units[u as usize].status & 0x300 != 0 {
-            todo_port!("0x4e6290", "cloaked unit: leave and rejoin the cloak list");
-        }
-        // 0x4975d0 / 0x497590: selection circle and health bar images (UI) are dropped
-        // here and re-added afterwards.
+        // 0x4e6290 (selected sprites), 0x4975d0 / 0x497590: selection, selection circle
+        // and health bar images (UI) are dropped here and re-added afterwards.
         self.modify_unit_counters(d, u, -1);
         if self.units[u as usize].status & 1 != 0 {
             self.modify_completed_counters(d, u, -1, true);
@@ -180,10 +187,7 @@ impl State {
         if self.units[u as usize].status & 1 != 0 {
             self.modify_completed_counters(d, u, -1, false);
         }
-        let s = self.units[u as usize].sprite;
-        if self.sprites[s as usize].flags & 8 != 0 {
-            todo_port!("0x4e6290", "selected unit changes owner (selection lists)");
-        }
+        // 0x4e6290 for a selected sprite (flag 8): selection lists (UI).
         // Player unit list (0x6283f8, +0x68 / +0x6c).
         let (prev, next) = (self.units[u as usize].player_prev, self.units[u as usize].player_next);
         if prev != NIL {
@@ -352,7 +356,7 @@ impl State {
         self.selections_remove_unit(u);
         if self.units[u as usize].status & 2 != 0 {
             let un = &self.units[u as usize];
-            if un.build_queue[un.build_queue_slot as usize % 5] < 0x6a {
+            if un.queue_slot_holds_unit(0) {
                 self.clear_build_queue(d, u);
                 // 0x499d00(0x14, 1)
                 let s = self.units[u as usize].sprite;
@@ -365,7 +369,7 @@ impl State {
                 self.cancel_upgrade(d, u);
             }
         }
-        if matches!(t, 0x48 | 0x52 | 0x53 | 0x51) {
+        if super::unit::has_hangar(t) {
             self.clear_build_queue(d, u);
         }
         self.change_owner(d, u, player, true);
@@ -431,6 +435,21 @@ impl State {
         self.player_defeated(d, player);
     }
 
+    /// 0x4f3c60: `carrier` loses the powerup it carries, which dies.
+    pub(super) fn kill_carried_powerup(&mut self, d: &Data, carrier: u32) {
+        if self.units[carrier as usize].resource_type == 0 {
+            return;
+        }
+        self.remove_carried_image(carrier);
+        let pw = self.units[carrier as usize].ptr_at(0xc0);
+        if pw != NIL {
+            self.units[pw as usize].order_flags |= 4;
+            self.kill_unit(d, pw);
+        }
+        self.units[carrier as usize].resource_type = 0;
+        self.units[carrier as usize].set_ptr_at(0xc0, NIL);
+    }
+
     /// 0x489fc0: a defeated player's slot turns into a left one and their units become
     /// neutral (capture the flag / sudden death: they die).
     pub fn player_defeated(&mut self, d: &Data, player: u8) {
@@ -443,7 +462,22 @@ impl State {
             _ => {}
         }
         if matches!(self.template[8], 4 | 5) {
-            todo_port!("0x48a087", "capture the flag / sudden death: the defeated player's units die");
+            // Capture the flag / sudden death: the defeated player's units die; a carried
+            // powerup is taken from its carrier and dies.
+            let mut u = self.player_units[p];
+            while u != NIL {
+                let next = self.units[u as usize].player_next;
+                let un = &self.units[u as usize];
+                if d.dat.units.flags[un.unit_type as usize] & 0x10 == 0 && un.sprite != NIL && un.order != 0 {
+                    let carrier = un.ptr_at(0xd4);
+                    if d.dat.units.flags[un.unit_type as usize] & 0x800 != 0 && carrier != NIL {
+                        self.kill_carried_powerup(d, carrier);
+                    } else {
+                        self.kill_unit(d, u);
+                    }
+                }
+                u = next;
+            }
         } else {
             let mut u = self.player_units[p];
             while u != NIL {

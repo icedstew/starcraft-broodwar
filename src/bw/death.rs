@@ -64,13 +64,7 @@ impl State {
         if self.units[u as usize].resource_type != 0 {
             self.drop_powerup(d, u);
         }
-        loop {
-            let h = self.units[u as usize].order_queue_head;
-            if h == NIL {
-                break;
-            }
-            self.order_remove(d, u, h);
-        }
+        self.clear_order_queue(d, u);
         self.units[u as usize].order_flags |= 1;
         let pos = self.units[u as usize].order_target_pos;
         if self.units[u as usize].order != 0 {
@@ -224,7 +218,7 @@ impl State {
             self.units[u as usize].is_cloaked = 0;
             self.unlink_cloaked(u);
             if self.units[u as usize].status & 0x100 != 0 {
-                todo_port!("0x49b440", "cloaked unit list");
+                self.end_cloak(d, u);
             }
         }
         if self.units[u as usize].status & 2 != 0 {
@@ -241,7 +235,7 @@ impl State {
             self.abort_research(d, u);
             self.abort_upgrade(d, u);
             let un = &self.units[u as usize];
-            if un.build_queue[un.build_queue_slot as usize % 5] < 0x6a {
+            if un.queue_slot_holds_unit(0) {
                 self.clear_build_queue(d, u);
             }
             // 0x48e6e0: minimap (UI).

@@ -72,10 +72,8 @@ impl State {
         let p = self.units[u as usize].ptr_at(0xc0);
         self.remove_carried_image(u);
         let (x, y) = self.unit_sprite_pos(u);
-        // 0x472f80(-1, 0x8000000): any flag on the tile, but not 0x8000000.
-        let f = self.terrain.tile_flags[((y as i32 / 32) * self.terrain.width as i32 + x as i32 / 32) as usize];
         let pt = self.units[p as usize].unit_type;
-        let here = f != 0 && f & 0x800_0000 == 0 && self.terrain_fits(d, pt, x, y);
+        let here = self.tile_flags_match(x, y, u32::MAX, 0x800_0000) && self.terrain_fits(d, pt, x, y);
         let spot = if here {
             (x, y)
         } else {
