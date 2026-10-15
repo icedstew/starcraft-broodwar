@@ -27,13 +27,15 @@ pub struct Settings {
     pub color_cycling: bool,
     /// 0x515224: 0 disabled, 1 still, 2 animating.
     pub portraits: i16,
+    /// 0x6cdfe8: the tip shown (1-based, rez\tips.tbl).
+    pub tip: i16,
 }
 
 impl Default for Settings {
     fn default() -> Self {
         // ponytail: the registry defaults for speed / scroll / sound flags are not
         // traced; fastest and middle scroll speeds, all sounds on.
-        Settings { game_speed: 6, mouse_scroll: 3, key_scroll: 3, music: 25, digital: 50, sound_flags: 7, cpu_throttle: false, gamma: 100, color_cycling: true, portraits: 2 }
+        Settings { game_speed: 6, mouse_scroll: 3, key_scroll: 3, music: 25, digital: 50, sound_flags: 7, cpu_throttle: false, gamma: 100, color_cycling: true, portraits: 2, tip: 1 }
     }
 }
 
@@ -54,6 +56,7 @@ pub enum Kind {
     Sound,
     Video,
     Help,
+    Tips,
     Objectives,
     EndMission,
     Restart,
@@ -70,6 +73,7 @@ impl Kind {
             Kind::Sound => "rez/snd_dlg.bin",
             Kind::Video => "rez/video.bin",
             Kind::Help => "rez/helpmenu.bin",
+            Kind::Tips => "rez/tips_dlg.bin",
             Kind::Objectives => "rez/objctdlg.bin",
             Kind::EndMission => "rez/abrtmenu.bin",
             Kind::Restart => "rez/restart.bin",
@@ -209,6 +213,11 @@ impl Menu {
                     }
                 }
             }
+            Kind::Tips => {
+                if let Some(c) = find(&mut dlg, 2) {
+                    c.checked = set.sound_flags & 0x100 != 0;
+                }
+            }
             _ => {}
         }
         // Check / option boxes: 0x4e1b50 / 0x4e1bc0 (user 10): graphic 0xb, at least
@@ -225,6 +234,35 @@ impl Menu {
             }
         }
         Some(Menu { kind, dlg, depth, saved: *set, pressed: None, dragging: None })
+    }
+
+    /// 0x47e480: step the tip by `d` (1..=0x67 in the expansion, wrapping) and show it
+    /// in label -10, in font16 when it fits in its lines but one, else font10.
+    pub fn show_tip(&mut self, skin: &Skin, tips: &[String], set: &mut Settings, d: i16) {
+        set.tip += d;
+        if set.tip >= 0x68 {
+            set.tip = 1;
+        } else if set.tip == 0 {
+            set.tip = 0x67;
+        }
+        let text = tips.get(set.tip as usize - 1).map_or(String::new(), |s| s.split('\0').next().unwrap_or("").to_string());
+        let font = &skin.fonts[2];
+        let Some(c) = find(&mut self.dlg, -10) else { return };
+        let (w, h) = (c.rect.2 - c.rect.0, c.rect.3 - c.rect.1);
+        c.flags = if font.width(&text) < (h / font.height.max(1) - 1) * w { c.flags & !0x4400 | 0x800 } else { c.flags & !0x4c00 };
+        c.text = text.into_bytes();
+        c.update = crate::dlg::Update::Tip;
+    }
+
+    /// The tips dialog's buttons (0x47e630): next (1), previous (3); the box (2) is
+    /// "show tips at startup" (0x6cdfec 0x100).
+    pub fn tips_button(&mut self, skin: &Skin, tips: &[String], id: i16, set: &mut Settings) -> bool {
+        match id {
+            1 => self.show_tip(skin, tips, set, 1),
+            3 => self.show_tip(skin, tips, set, -1),
+            _ => return false,
+        }
+        true
     }
 
     /// Replaces control `id`'s text (a label's +0x14).
@@ -349,6 +387,11 @@ impl Menu {
                     }
                 }
             }
+            Kind::Tips => match ck(2) {
+                Some(true) => set.sound_flags |= 0x100,
+                Some(false) => set.sound_flags &= !0x100,
+                None => {}
+            },
             Kind::Video => {
                 set.gamma = v(1).unwrap_or(set.gamma);
                 set.color_cycling = ck(2).unwrap_or(set.color_cycling);
@@ -381,6 +424,10 @@ impl Menu {
             (Kind::Game, -3) => (None, Action::Closed),
             (Kind::Game, 3) => (Some((Kind::Options, self.depth)), Action::None),
             (Kind::Game, 4) => (Some((Kind::Help, self.depth)), Action::None),
+            // 0x4ca010
+            (Kind::Help, 2) => (Some((Kind::Tips, self.depth)), Action::None),
+            // 0x47e690 (OK) / 0x47e630 (next, previous)
+            (Kind::Tips, -2 | -3) => back(Kind::Help),
             (Kind::Game, 5) => (Some((Kind::Objectives, self.depth)), Action::None),
             (Kind::Game, 6) => (Some((Kind::EndMission, self.depth)), Action::None),
             (Kind::Game, 7) => (None, Action::Pause),

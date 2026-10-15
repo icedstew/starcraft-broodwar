@@ -732,13 +732,16 @@ fn main() -> std::io::Result<()> {
             // (SCBW_MENU_REPLAY=1: as while watching a replay).
             let menu = std::env::var("SCBW_MENU").ok().and_then(|k| {
                 use menu::Kind::*;
-                let kind = match k.as_str() { "game" => Game, "options" => Options, "speed" => Speed, "sound" => Sound, "video" => Video, "help" => Help, "end" => EndMission, "objectives" => Objectives, _ => return None };
+                let kind = match k.as_str() { "game" => Game, "options" => Options, "speed" => Speed, "sound" => Sound, "video" => Video, "help" => Help, "end" => EndMission, "objectives" => Objectives, "tips" => Tips, _ => return None };
                 let ctx = menu::Ctx { replay: std::env::var("SCBW_MENU_REPLAY").is_ok(), multiplayer: false, replay_speed: 6 };
                 let skin = &ui.as_ref()?.skin;
                 let mut set = menu::Settings::default();
                 let mut m = menu::Menu::open(kind, 0, &a.files, skin, ctx, &set);
                 if let (Some(m), Some(u)) = (m.as_mut().filter(|m| m.kind == Objectives), ui.as_ref()) {
                     m.set_text(2, &view::objectives_text(&scene, u));
+                }
+                if let (Some(m), Some(u)) = (m.as_mut().filter(|m| m.kind == Tips), ui.as_ref()) {
+                    m.show_tip(&u.skin, &u.tips, &mut set, 0);
                 }
                 // SCBW_MENU_INPUT="c x y;k s;..." clicks / presses keys (k esc, k enter).
                 for step in std::env::var("SCBW_MENU_INPUT").unwrap_or_default().split(';').filter(|s| !s.is_empty()) {
@@ -755,10 +758,13 @@ fn main() -> std::io::Result<()> {
                         ["k", c] => cur.key(c.as_bytes()[0], &mut set),
                         _ => None,
                     };
-                    if let Some(id) = id {
+                    if let Some(id) = id.filter(|&id| !(cur.kind == Tips && cur.tips_button(skin, &ui.as_ref().unwrap().tips, id, &mut set))) {
                         let (next, action) = cur.on_activate(id, &mut set, ctx);
                         eprintln!("menu {:?}: {id} -> {next:?} {action:?}", cur.kind);
                         m = next.and_then(|(k, depth)| menu::Menu::open(k, depth, &a.files, skin, ctx, &set));
+                        if let Some(t) = m.as_mut().filter(|m| m.kind == Tips) {
+                            t.show_tip(skin, &ui.as_ref().unwrap().tips, &mut set, 0);
+                        }
                     }
                 }
                 eprintln!("settings {set:?}");

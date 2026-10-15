@@ -57,6 +57,8 @@ pub enum Update {
     Default,
     /// 0x4f4fb0: the console's MENU button (set by 0x4f5180).
     MenuButton,
+    /// 0x47e590: a tip: color 2, left aligned, no line gap.
+    Tip,
 }
 
 #[derive(Clone, Debug)]
@@ -297,6 +299,17 @@ impl Skin {
     pub fn draw_ctl(&self, c: &Ctl, r: (i32, i32, i32, i32), s: &mut Surf) {
         let f = c.flags;
         let (l, t, rr, b) = r;
+        if c.update == Update::Tip {
+            let font = &self.fonts[match c.flags & 0x4c00 {
+                0x400 => 0,
+                0x800 => 2,
+                0x4000 => 3,
+                _ => 1,
+            }];
+            let o = TextOpts { flags: 0x11, spacing: 1, line_gap: 0, clip: r };
+            font.draw_text(&String::from_utf8_lossy(&c.text), l, t, 2, &o, TextDst { rows: &self.text_rows, out: s.px, w: s.w, h: s.h });
+            return;
+        }
         if c.update == Update::MenuButton {
             // 0x4f4fb0
             let fr = c.graphic as u8 + if f & flag::DISABLED != 0 { 0 } else if f & flag::PRESSED != 0 { 2 } else { 1 };

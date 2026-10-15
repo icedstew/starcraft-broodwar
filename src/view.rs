@@ -1537,6 +1537,14 @@ fn run_with(a: &Assets, mut scene: Scene, mut replay: Option<ReplayPlay>) -> io:
             }
             Some(m)
         };
+        // 0x47e480 when the tips open.
+        let open_menu = |kind, depth, settings: &mut crate::menu::Settings| {
+            let mut m = open_menu(kind, depth, settings)?;
+            if let (crate::menu::Kind::Tips, Some(u)) = (kind, ui.as_ref()) {
+                m.show_tip(&u.skin, &u.tips, settings, 0);
+            }
+            Some(m)
+        };
         if menu.is_some() {
             let ldown = win.get_mouse_down(minifb::MouseButton::Left);
             let mut act = None;
@@ -1554,10 +1562,14 @@ fn run_with(a: &Assets, mut scene: Scene, mut replay: Option<ReplayPlay>) -> io:
                 }
             }
             lmb_was_down = ldown;
-            if let Some(id) = act {
+            let tips_step = match (menu.as_mut(), ui.as_ref(), act) {
+                (Some(m), Some(u), Some(id)) if m.kind == crate::menu::Kind::Tips => m.tips_button(&u.skin, &u.tips, id, &mut settings),
+                _ => false,
+            };
+            if let Some(id) = act.filter(|_| !tips_step) {
                 let m = menu.take().unwrap();
                 let (next, action) = m.on_activate(id, &mut settings, ctx);
-                menu = next.and_then(|(k, depth)| open_menu(k, depth, &settings));
+                menu = next.and_then(|(k, depth)| open_menu(k, depth, &mut settings));
                 match action {
                     crate::menu::Action::QuitMission | crate::menu::Action::ExitProgram => break 'frames,
                     // ponytail: restarting rebuilds nothing yet; the menu just closes.
@@ -1585,7 +1597,7 @@ fn run_with(a: &Assets, mut scene: Scene, mut replay: Option<ReplayPlay>) -> io:
         let menu_clicked = menu_btn_down && !mdown && on_menu_btn;
         menu_btn_down = mdown && (menu_btn_down || (on_menu_btn && !lmb_was_down));
         if menu_clicked || win.is_key_pressed(Key::F10, minifb::KeyRepeat::No) {
-            menu = open_menu(crate::menu::Kind::Game, 0, &settings);
+            menu = open_menu(crate::menu::Kind::Game, 0, &mut settings);
             menu_paused = true;
             if replay.is_some() && !scene.st.replay_paused {
                 scene.st.replay_paused = true;

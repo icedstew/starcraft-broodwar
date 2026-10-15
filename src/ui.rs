@@ -400,6 +400,8 @@ pub struct Ui {
     /// ticon.pcx: 6 states x 16 colors for command icons.
     pub ticon: Vec<u8>,
     pub stat_txt: Vec<String>,
+    /// rez\tips.tbl (0x658adc).
+    pub tips: Vec<String>,
     /// rez\network.tbl (0x6d1220, 0x4cdbd0).
     pub network: Vec<String>,
     /// rez\gluAll.tbl (0x4ddd30).
@@ -461,6 +463,7 @@ impl Ui {
         let cmdicons = Grp::parse(files.read("unit/cmdbtns/cmdicons.grp")?);
         let ticon = crate::view::pcx(&files.read("unit/cmdbtns/ticon.pcx")?).2;
         let stat_txt = crate::dat::parse_tbl(&files.read("rez/stat_txt.tbl")?);
+        let tips = files.read("rez/tips.tbl").map(|d| crate::dat::parse_tbl(&d)).unwrap_or_default();
         let network = files.read("rez/network.tbl").map(|d| crate::dat::parse_tbl(&d)).unwrap_or_default();
         let glu_all = files.read("rez/gluAll.tbl").map(|d| crate::dat::parse_tbl(&d)).unwrap_or_default();
         let statbtn = crate::dlg::Dialog::parse(&files.read(&format!("rez/statbtn{}.bin", if replay { 'n' } else { race.as_bytes()[0] as char }))?);
@@ -508,7 +511,7 @@ impl Ui {
         if let Some(c) = minimap.get_mut(1) {
             c.flags &= !crate::dlg::flag::VISIBLE;
         }
-        Ok(Ui { console, font, font8, icons, cursors, wireframe, grpwire, tranwire, twire, cmdicons, ticon, stat_txt, network, glu_all, statbtn, text_colors, statdata, cmdbtns, pbar_empty, pbar_full, skin, stat_f10, statres, res_shown: std::cell::Cell::new((0, 0, 0xff)), minimap })
+        Ok(Ui { console, font, font8, icons, cursors, wireframe, grpwire, tranwire, twire, cmdicons, ticon, stat_txt, tips, network, glu_all, statbtn, text_colors, statdata, cmdbtns, pbar_empty, pbar_full, skin, stat_f10, statres, res_shown: std::cell::Cell::new((0, 0, 0xff)), minimap })
     }
 
     pub fn text_color(&self, c: usize) -> &[u8] {
