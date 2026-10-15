@@ -15,11 +15,15 @@ pub struct Voices {
     clicked: u32,
     clicks: i32,
     delay: u32,
+    /// 0x6cdfec (2 acknowledgements, 4 building sounds) and whether the digital volume
+    /// 0x6cdfe4 is above 0: 0x48ed50 plays nothing otherwise.
+    pub sound_flags: u32,
+    pub muted: bool,
 }
 
 impl Voices {
     pub fn new() -> Voices {
-        Voices { holdrand: 1, clicked: bw::list::NIL, ..Default::default() }
+        Voices { holdrand: 1, clicked: bw::list::NIL, sound_flags: 7, ..Default::default() }
     }
 
     fn rand(&mut self) -> u32 {
@@ -62,7 +66,13 @@ impl Voices {
         if t >= 0x6a || lo == 0 {
             return None;
         }
-        Some(self.pick(lo, d.dat.units.yes_sound_end[t] as u32) as u16)
+        let last = self.last;
+        let id = self.pick(lo, d.dat.units.yes_sound_end[t] as u32) as u16;
+        if self.sound_flags & 2 == 0 || self.muted {
+            self.last = last;
+            return None;
+        }
+        Some(id)
     }
 
     /// 0x48f910: `u` was selected.
@@ -85,6 +95,7 @@ impl Voices {
         }
         let t = un.unit_type as usize;
         let building = d.dat.units.flags[t] & 1 != 0 && un.status & 1 != 0;
+        let last = self.last;
         let g = d.dat.units.staredit_group_flags[t];
         let id = if !building {
             let n = (self.clicks - 3).max(0);
@@ -107,6 +118,13 @@ impl Voices {
             }
         };
         if id == 0 {
+            return None;
+        }
+        // 0x48ed50: buildings by flag 4, units by flag 2; unplayed lines are not
+        // remembered (0x6d5be0 restored).
+        let bit = if d.dat.units.flags[t] & 1 != 0 { 4 } else { 2 };
+        if self.sound_flags & bit == 0 || self.muted {
+            self.last = last;
             return None;
         }
         if !building {

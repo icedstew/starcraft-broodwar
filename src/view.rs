@@ -1159,21 +1159,7 @@ fn draw_hud(scene: &Scene, ui: &crate::ui::Ui, vx: i32, vy: i32, cursor: Option<
     }
     let (rx, ry, rw, rh) = (ox + vx / scale, oy + vy / scale, w / scale, (h - 120) / scale);
     rect(out, w, h, (rx, ry, rx + rw, ry + rh), scene.minimap.colors[0]);
-    // Resource bar. icons.grp frames: 0 minerals, 1..=3 gas (z/t/p), 4..=6 supply (z/t/p).
-    let col = ui.text_color(2);
-    let race = scene.local_race();
-    let me = scene.local_player() as usize;
-    let (used, max) = scene.supply(me as u8, race);
-    let (supply, minerals, gas) = (format!("{}/{}", used, max), scene.st.players.minerals[me].to_string(), scene.st.players.gas[me].to_string());
-    let mut x = 440;
-    // Watching a replay shows no resources (statres is not shown).
-    if !scene.st.replay {
-        for (icon, text) in [(0, minerals.as_str()), (1 + race, gas.as_str()), (4 + race, supply.as_str())] {
-            ui.draw_icon(icon, x, 2, out, w, h);
-            ui.font.draw(text, x + 16, 4, col, out, w, h);
-            x += 66;
-        }
-    }
+    draw_resources(scene, ui, out);
     if scene.st.replay {
         draw_replay_panel(scene, ui, out, w, h);
     }
@@ -1581,6 +1567,8 @@ fn run_with(a: &Assets, mut scene: Scene, mut replay: Option<ReplayPlay>) -> io:
             if let Some(au) = audio.as_mut() {
                 au.set_volumes(settings.music, settings.digital);
             }
+            scene.voices.sound_flags = settings.sound_flags;
+            scene.voices.muted = settings.digital == 0;
             if menu.is_none() && menu_paused {
                 menu_paused = false;
                 if replay.is_some() {
@@ -1837,6 +1825,58 @@ fn coded_width(ui: &crate::ui::Ui, s: &str) -> i32 {
 fn draw_coded(ui: &crate::ui::Ui, s: &str, x: i32, y: i32, out: &mut [u8], w: i32, h: i32) {
     let o = crate::ui::TextOpts::new();
     ui.font.draw_text(s, x, y, 2, &o, crate::ui::TextDst { rows: &ui.text_colors, out, w, h });
+}
+
+/// 0x4e5640 (statres.bin's timer) and its controls' draw 0x4e5460: from the right, the
+/// supply of each race with supply (icons.grp 4..6, "used/available" halved, used in
+/// color 6 when over), gas (1 + race) and minerals (0). The shown amounts step toward
+/// the real ones by 1/16 of the difference (0x4e52e0). A replay shows the first
+/// selected unit's owner, nothing for none or neutral.
+fn draw_resources(scene: &Scene, ui: &crate::ui::Ui, out: &mut [u8]) {
+    let (w, h) = (SCREEN_W, SCREEN_H);
+    let st = &scene.st;
+    let mut jump = false;
+    let p = if st.replay {
+        let owner = scene.selected.first().map(|&u| st.units[u as usize].player).filter(|&p| p != 11);
+        let Some(p) = owner else {
+            ui.res_shown.set((ui.res_shown.get().0, ui.res_shown.get().1, 0xff));
+            return;
+        };
+        jump = ui.res_shown.get().2 != p;
+        p
+    } else {
+        scene.local_player()
+    } as usize;
+    let pl = &st.players;
+    let mut items: Vec<(u16, String)> = Vec::new();
+    for race in 0..3 {
+        // 0x488900: available = min(provided, cap).
+        let avail = pl.supply_provided[race][p].min(pl.supply_max[race][p]);
+        if avail as u16 != 0 {
+            let (used, avail) = ((pl.supply_used[race][p] as u16 as u32 + 1) / 2, (avail as u16 as u32 + 1) / 2);
+            items.push((4 + race as u16, format!("{}{used}\x01/{avail}", if avail < used { '\x06' } else { '\x07' })));
+        }
+    }
+    // 0x4e52e0: the counters (0x68c22c gas, 0x68c230 minerals).
+    // ponytail: one step per drawn frame; the original's dialog timer runs every 20 ms
+    // (0x416090), add a real-time step count when it matters.
+    let step = |shown: i32, real: i32| {
+        let d = real - shown;
+        if d == 0 || jump { real } else { shown + ((d + (d >> 31 & 0xf)) >> 4) + if d > 0 { 1 } else { -1 } }
+    };
+    let (m0, g0, _) = ui.res_shown.get();
+    let (m, g) = (step(m0, pl.minerals[p] as i32), step(g0, pl.gas[p] as i32));
+    ui.res_shown.set((m, g, p as u8));
+    items.push((1 + scene.local_race() as u16, g.to_string()));
+    items.push((0, m.to_string()));
+    let o = crate::ui::TextOpts { flags: 0x21, ..crate::ui::TextOpts::new() };
+    for (id, (icon, text)) in (1..=5i16).zip(items) {
+        let Some(r) = ui.statres.screen_rect(id) else { continue };
+        let Some(f) = ui.icons.frame(icon as usize) else { continue };
+        blit_frame(&ui.icons, icon as usize, r.0, r.1 + (r.3 - r.1 + 1 - f.h) / 2, f.w, f.h, None, out, w, h);
+        let o = crate::ui::TextOpts { clip: r, ..o };
+        ui.font.draw_text(&text, r.0 + f.w + 2, r.1, 7, &o, crate::ui::TextDst { rows: &ui.text_colors, out, w, h });
+    }
 }
 
 /// 0x481510: a tooltip: `text` (font8, color 2, no line gap) on the black box of its
