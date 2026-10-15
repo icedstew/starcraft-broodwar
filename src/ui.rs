@@ -422,6 +422,9 @@ pub struct Ui {
     pub skin: crate::dlg::Skin,
     /// rez\stat_f10.bin: the MENU button (0x4f5300).
     pub stat_f10: crate::dlg::Dialog,
+    /// rez\statport.bin: the portrait (0x45f320) and arr\portdata.
+    pub statport: crate::dlg::Dialog,
+    pub portraits: Option<crate::portrait::Portraits>,
     /// rez\statres.bin: the resource bar (0x4e5a80).
     pub statres: crate::dlg::Dialog,
     /// 0x68c230 / 0x68c22c: the minerals and gas the bar shows (they count toward the
@@ -493,6 +496,8 @@ impl Ui {
             c.update = crate::dlg::Update::MenuButton;
         }
         let statres = crate::dlg::Dialog::parse(&files.read("rez/statres.bin")?);
+        let statport = crate::dlg::Dialog::parse(&files.read("rez/statport.bin")?);
+        let portraits = crate::portrait::Portraits::load(files);
         let mut minimap = crate::dlg::Dialog::parse(&files.read("rez/minimap.bin")?);
         // 0x4a5230 (button init), single player (0x57f0b4 = 0): button 2 (graphic 3)
         // shows unless watching a replay; 4 (83, a replay's vision button 140) shows
@@ -511,7 +516,7 @@ impl Ui {
         if let Some(c) = minimap.get_mut(1) {
             c.flags &= !crate::dlg::flag::VISIBLE;
         }
-        Ok(Ui { console, font, font8, icons, cursors, wireframe, grpwire, tranwire, twire, cmdicons, ticon, stat_txt, tips, network, glu_all, statbtn, text_colors, statdata, cmdbtns, pbar_empty, pbar_full, skin, stat_f10, statres, res_shown: std::cell::Cell::new((0, 0, 0xff)), minimap })
+        Ok(Ui { console, font, font8, icons, cursors, wireframe, grpwire, tranwire, twire, cmdicons, ticon, stat_txt, tips, network, glu_all, statbtn, text_colors, statdata, cmdbtns, pbar_empty, pbar_full, skin, stat_f10, statport, portraits, statres, res_shown: std::cell::Cell::new((0, 0, 0xff)), minimap })
     }
 
     pub fn text_color(&self, c: usize) -> &[u8] {

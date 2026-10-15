@@ -94,6 +94,10 @@ pub struct Scene<'a> {
     pub selected: Vec<u32>,
     /// Unit voices (selection and acknowledgement lines).
     pub voices: crate::voices::Voices,
+    /// The console portrait's video (UI state).
+    pub portrait: std::cell::RefCell<crate::portrait::Player>,
+    /// A voice line played for the status unit: its portrait talks.
+    pub talked: bool,
     /// 0x59724c: the selection last sent to the simulation as select commands.
     sent_selection: Vec<u32>,
     /// Command card submenu (button set index) opened by a Menu button, e.g. SCV "Build".
@@ -195,7 +199,7 @@ impl<'a> Scene<'a> {
             minimap.refresh(d, &mut st)
         });
         let creep_grp = a.files.read(&format!("tileset/{}.grp", map::TILESETS[chk.tileset()])).ok().map(crate::grp::Grp::parse);
-        Ok(Scene { st, creep_grp, minimap, selected: Vec::new(), voices: crate::voices::Voices::new(), sent_selection: Vec::new(), card_menu: None, placing: None, targeting: None, error: 0, error_frames: 0, place_ok: false, drag_box: None, a, chk, ts, terrain, player_colors, local, shadow, dark, fog: crate::fog::Fog::new(), tselect, thpbar, remaps })
+        Ok(Scene { st, creep_grp, minimap, selected: Vec::new(), voices: crate::voices::Voices::new(), portrait: Default::default(), talked: false, sent_selection: Vec::new(), card_menu: None, placing: None, targeting: None, error: 0, error_frames: 0, place_ok: false, drag_box: None, a, chk, ts, terrain, player_colors, local, shadow, dark, fog: crate::fog::Fog::new(), tselect, thpbar, remaps })
     }
 
     /// Send the local selection to the simulation (0x4c0860) and return the local
@@ -540,6 +544,7 @@ impl<'a> Scene<'a> {
         let (st, v) = (&self.st, &mut self.voices);
         if let Some(id) = with_data(self.a, |d| v.yes(st, d, u)) {
             self.st.ui_sounds.push(id);
+            self.talked = true;
         }
     }
 
@@ -557,6 +562,7 @@ impl<'a> Scene<'a> {
         let (st, v) = (&self.st, &mut self.voices);
         if let Some(id) = with_data(self.a, |d| v.what(st, d, u)) {
             self.st.ui_sounds.push(id);
+            self.talked = true;
         }
     }
 
@@ -710,6 +716,20 @@ impl<'a> Scene<'a> {
         })
     }
 
+    /// The portrait follows the status unit (the first selected) and talks after its
+    /// voice lines; `mode` is the video option (0 none, 1 still, 2 animating).
+    pub fn portrait_tick(&mut self, ui: &crate::ui::Ui, ms: u32, mode: i16) {
+        let Some(ps) = ui.portraits.as_ref() else { return };
+        let p = self.selected.first().map(|&u| self.a.dat().units.portrait[self.st.units[u as usize].unit_type as usize]).filter(|&p| p < 110 && mode != 0);
+        let files = &self.a.files;
+        let mut pl = self.portrait.borrow_mut();
+        pl.show(ps, files, p);
+        if std::mem::take(&mut self.talked) {
+            pl.talk(ps, files);
+        }
+        pl.tick(ps, files, ms, mode == 2);
+    }
+
     /// A click at screen (x, y) on a status panel button (0x4573a0); true if handled.
     pub fn status_click(&mut self, ui: &crate::ui::Ui, x: i32, y: i32, shift: bool, ctrl: bool) -> bool {
         let Some((panel, ctls)) = self.status_panel(ui) else { return false };
@@ -773,7 +793,11 @@ fn new_game(a: &Assets, chk: &Chk, rep: Option<&crate::replay::Header>) -> io::R
     let name = map::TILESETS[chk.tileset()];
     let vf4 = a.files.read(&format!("tileset/{name}.vf4"))?;
     let ts = bw::map::TilesetData { vf4: vf4.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect(), cv5: a.files.read(&format!("tileset/{name}.cv5"))? };
-    st.rng.seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |t| t.as_secs() as u32);
+    #[cfg(not(target_arch = "wasm32"))]
+    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |t| t.as_secs() as u32);
+    #[cfg(target_arch = "wasm32")] // std has no clock there
+    let secs = (js_sys::Date::now() / 1000.0) as u32;
+    st.rng.seed = secs;
     with_data(a, |d| {
         st.search.init(d);
         st.init_tech_defaults(d);
@@ -1172,6 +1196,9 @@ fn draw_hud(scene: &Scene, ui: &crate::ui::Ui, vx: i32, vy: i32, cursor: Option<
     let (rx, ry, rw, rh) = (ox + vx / scale, oy + vy / scale, w / scale, (h - 120) / scale);
     rect(out, w, h, (rx, ry, rx + rw, ry + rh), scene.minimap.colors[0]);
     draw_resources(scene, ui, out);
+    if let Some((l, t, r, b)) = ui.statport.screen_rect(1) {
+        scene.portrait.borrow_mut().draw(scene.palette(), l, t, r - l + 1, b - t + 1, out, w, h);
+    }
     if scene.st.replay {
         draw_replay_panel(scene, ui, out, w, h);
     }
@@ -1519,15 +1546,22 @@ pub fn run_replay(a: &mut Assets, rep: crate::replay::Replay) -> io::Result<()> 
     run_with(a, scene, Some(ReplayPlay::new(rep)))
 }
 
+/// Show a 0RGB frame. minifb's web canvas takes the buffer's bytes as RGBA instead.
+fn present(win: &mut minifb::Window, rgb: &[u32], w: usize, h: usize) -> io::Result<()> {
+    #[cfg(target_arch = "wasm32")]
+    let rgb = &rgb.iter().map(|&c| 0xff00_0000 | (c & 0xff) << 16 | (c & 0xff00) | (c >> 16 & 0xff)).collect::<Vec<u32>>();
+    win.update_with_buffer(rgb, w, h).map_err(|e| io::Error::other(e.to_string()))
+}
+
 fn run_with(a: &Assets, scene: Scene, replay: Option<ReplayPlay>) -> io::Result<()> {
     let mut frame = frame_loop(a, scene, replay)?;
-    while frame() {}
+    while frame()? {}
     Ok(())
 }
 
-/// The game window's loop body: one call per displayed frame, false once the window
+/// The game window's loop body: one call per displayed frame, Ok(false) once the window
 /// closes or the player quits. The browser build calls it from requestAnimationFrame.
-pub fn frame_loop<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Option<ReplayPlay>) -> io::Result<impl FnMut() -> bool + 'a> {
+pub fn frame_loop<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Option<ReplayPlay>) -> io::Result<impl FnMut() -> io::Result<bool> + 'a> {
     use minifb::{Key, Scale, Window, WindowOptions};
     let mut following = replay.is_some();
     let mut replay_acc = 0u32;
@@ -1564,7 +1598,7 @@ pub fn frame_loop<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Option<Re
     let mut menu_btn_down = false;
     Ok(move || {
         if !win.is_open() {
-            return false;
+            return Ok(false);
         }
         tick += 1;
         let shift = win.is_key_down(Key::LeftShift) || win.is_key_down(Key::RightShift);
@@ -1614,7 +1648,7 @@ pub fn frame_loop<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Option<Re
                 let (next, action) = m.on_activate(id, &mut settings, ctx);
                 menu = next.and_then(|(k, depth)| open_menu(k, depth, &mut settings));
                 match action {
-                    crate::menu::Action::QuitMission | crate::menu::Action::ExitProgram => return false,
+                    crate::menu::Action::QuitMission | crate::menu::Action::ExitProgram => return Ok(false),
                     // ponytail: restarting rebuilds nothing yet; the menu just closes.
                     _ => {}
                 }
@@ -1632,8 +1666,8 @@ pub fn frame_loop<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Option<Re
             }
             let counter = tick * 42 / 100;
             compose_with_cursor(&scene, ui.as_ref(), vx, vy, Some((0, counter, cx, cy)), menu.as_ref(), &mut idx, &mut rgb);
-            win.update_with_buffer(&rgb, vw as usize, vh as usize).map_err(|e| io::Error::other(e.to_string()))?;
-            continue;
+            present(&mut win, &rgb, vw as usize, vh as usize)?;
+            return Ok(true);
         }
         let mdown = win.get_mouse_down(minifb::MouseButton::Left);
         let on_menu_btn = ui.as_ref().and_then(|u| u.stat_f10.screen_rect(1)).is_some_and(|(l, t, r, b)| (l..=r).contains(&cx) && (t..=b).contains(&cy));
@@ -1648,7 +1682,7 @@ pub fn frame_loop<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Option<Re
                 menu_paused = false;
             }
             lmb_was_down = mdown;
-            continue;
+            return Ok(true);
         }
         if menu_btn_down {
             lmb_was_down = mdown;
@@ -1839,11 +1873,14 @@ pub fn frame_loop<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Option<Re
                 au.play(&a.files, a.dat(), id, 1.0);
             }
         }
+        if let Some(u) = ui.as_ref() {
+            scene.portrait_tick(u, 42, settings.portraits);
+        }
         let kind = scene.cursor_kind(cx, cy, vx, vy, drag_start.is_some());
         let counter = tick * 42 / 100;
         compose_with_cursor(&scene, ui.as_ref(), vx, vy, Some((kind, counter, cx, cy)), None, &mut idx, &mut rgb);
-        win.update_with_buffer(&rgb, vw as usize, vh as usize).map_err(|e| io::Error::other(e.to_string()))?;
-        true
+        present(&mut win, &rgb, vw as usize, vh as usize)?;
+        Ok(true)
     })
 }
 

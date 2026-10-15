@@ -7,6 +7,8 @@ mod storm;
 mod dat;
 mod dlg;
 mod menu;
+mod smk;
+mod portrait;
 mod fog;
 mod game;
 mod grid;
@@ -20,6 +22,8 @@ mod statdata;
 mod ui;
 mod view;
 mod voices;
+#[cfg(target_arch = "wasm32")]
+mod web;
 
 use std::path::PathBuf;
 
@@ -30,6 +34,11 @@ fn install_dir() -> PathBuf {
     })
 }
 
+// The browser build starts from web::start instead.
+#[cfg(target_arch = "wasm32")]
+fn main() {}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn main() -> std::io::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().map(String::as_str) == Some("mpqls") {
@@ -581,6 +590,22 @@ fn main() -> std::io::Result<()> {
             std::fs::write(dir.join("report.txt"), &report)?;
             println!("mean {:.2}% over {n} shots; ours/, diff/ (native | ours | red = differs), report.txt in {}", total / n as f64, dir.display());
         }
+        Some("smk") => {
+            // smk <mpq path> <out prefix>: decode a Smacker video's frames to PNGs.
+            let d = files.read(&args[1])?;
+            let mut v = smk::Smk::parse(d).ok_or_else(|| std::io::Error::other("not a smacker file"))?;
+            let mut i = 0;
+            while v.next_frame() {
+                let rgb: Vec<u32> = v.pixels.iter().map(|&c| { let [r, g, b] = v.palette[c as usize]; (r as u32) << 16 | (g as u32) << 8 | b as u32 }).collect();
+                write_png_rgb(&format!("{}{i:02}.png", args[2]), v.w, v.h, &rgb)?;
+                i += 1;
+            }
+            eprintln!("{}x{} {} frames, {} ms", v.w, v.h, v.frames, v.ms);
+            let mut used: Vec<u8> = v.pixels.clone();
+            used.sort();
+            used.dedup();
+            eprintln!("indices {used:?}");
+        }
         Some("shot") => {
             let mut a = view::Assets::load(files)?;
             let chk = load_chk(&args[1])?;
@@ -779,6 +804,9 @@ fn main() -> std::io::Result<()> {
                 eprintln!("settings {set:?}");
                 m
             });
+            if let Some(u) = ui.as_ref() {
+                scene.portrait_tick(u, 0, 2);
+            }
             view::compose_with_cursor(&scene, ui.as_ref(), x, y, cursor, menu.as_ref(), &mut idx, &mut rgb);
             write_png_rgb(&args[2], w, h, &rgb)?;
         }

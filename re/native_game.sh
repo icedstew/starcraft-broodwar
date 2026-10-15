@@ -41,9 +41,10 @@ xdotool mousemove 268 323; sleep 0.3; xdotool mousedown 1; sleep 1; xdotool mous
 click 515 392 25                 # Ok
 click 200 262 3                  # the tips dialog's OK (shown at startup)
 save hud
-click 320 180 2; save cc         # the command center at the start view's middle
+click 127 380 2                  # the minimap at our base
+click 420 200 2; save cc         # the command center
 xdotool key s; sleep 1; save train
-xdotool mousemove 20 40; sleep 0.3; xdotool mousedown 1; sleep 0.2; xdotool mousemove 620 300; sleep 0.3; xdotool mouseup 1; sleep 1; save group
+xdotool mousemove 250 120; sleep 0.3; xdotool mousedown 1; sleep 0.2; xdotool mousemove 630 320; sleep 0.3; xdotool mouseup 1; sleep 1; save group
 xdotool mousemove 523 375; sleep 2; import -window root "$OUT/$(printf %02d $((n + 1)))_tooltip.png"; n=$((n + 1))
 xdotool key F10; sleep 2; save gamemenu
 echo "$n shots in $OUT"
