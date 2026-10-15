@@ -102,6 +102,14 @@ impl State {
         let vis = self.sprites[s as usize].visibility;
         // 0x4e6290 (selected sprites), 0x4975d0 / 0x497590: selection, selection circle
         // and health bar images (UI) are dropped here and re-added afterwards.
+        // The cloak state and the main image's fade level, to carry over.
+        let cloak = self.units[u as usize].status;
+        let fade = if (cloak >> 8) & 3 != 0 {
+            let mi = self.sprites[s as usize].main_image;
+            self.images[mi as usize].coloring as u8
+        } else {
+            0
+        };
         self.modify_unit_counters(d, u, -1);
         if self.units[u as usize].status & 1 != 0 {
             self.modify_completed_counters(d, u, -1, true);
@@ -112,6 +120,12 @@ impl State {
             self.modify_completed_counters(d, u, 1, true);
         }
         let s = self.units[u as usize].sprite;
+        if cloak & 0x300 != 0 {
+            self.sprite_cloak_mode(d, s, ((cloak >> 8) & 3) as u8, fade as u16);
+            if self.units[u as usize].visibility & self.local_vision_mask as u32 != 0 {
+                self.sprite_detected(s);
+            }
+        }
         self.sprite_set_visibility(s, vis);
     }
 
