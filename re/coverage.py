@@ -1,6 +1,6 @@
 """Port coverage of 1.16.1 StarCraft.exe, per original source file.
 
-usage: python -I re/coverage.py <decomp.c> [src_dir] [--html out.html] [--missing game_step|command|both]
+usage: python -I re/coverage.py <decomp.c> [src_dir] [--html out.html] [--missing game_step|command|both|ai]
 
 <decomp.c> is the Ghidra export (`// ==== 00ADDR NAME` headers; not part of the repo).
 Functions are tagged with a source file when their body mentions an assert path like
@@ -30,6 +30,24 @@ SIM_ROOTS = [
     ("command dispatch 0x4865d0", [0x4865d0]),
     ("both", [0x4d94b0, 0x4865d0]),
 ]
+
+# Entry points into the computer players' AI. Functions only reachable through these
+# are counted in a separate "AI" bucket (traversal from the simulation roots stops at
+# them).
+AI_ROOTS = {
+    0x4a2b00,  # ai_update (scripts, regions, towns)
+    0x4a28b0,  # ComputerAI order: worker / building / military AI
+    0x4a1e50, 0x439d60, 0x434c90, 0x4477c0,  # a unit leaves the AI (death, transfers)
+    0x45aef0, 0x45b170, 0x45aea0,  # AI scripts started by triggers
+    0x477160,  # AI target choice in attack orders
+    0x462930,  # AI flee destination
+    0x447a70, 0x4f39a0, 0x444430,  # AI resource bookkeeping from harvesting
+    # AI hooks in unit code: towns gaining units, region reachability, spellcasting,
+    # stim, cloak, medics, guards, building AI train slots.
+    0x433dd0, 0x433fe0, 0x435770, 0x437e70, 0x438e70, 0x43f320, 0x43db50, 0x43c580,
+    0x438410, 0x439550, 0x43aa10, 0x43c170, 0x43b970, 0x43df30, 0x43ffd0, 0x442460,
+    0x462830, 0x462ea0, 0x463040, 0x4a13c0, 0x432430,
+}
 
 # Out of scope: networking is rewritten from scratch (and Storm's SNet lives outside the exe).
 EXCLUDE = re.compile(r"^(net_|gluBN|gluChat|gluJoin|gluCreate|gluConn|snp|bnet|battle)", re.I)
@@ -133,18 +151,32 @@ def main():
     # some register-passed and indirect calls, so this undercounts).
     by_name = {f[1]: f[0] for f in funcs}
     calls = {f[0]: {by_name[n] for n in f[3] if n in by_name} for f in funcs}
-    for label, roots in SIM_ROOTS:
+    def reach(roots, cut=frozenset()):
         seen, stack = set(), list(roots)
         while stack:
             a = stack.pop()
             if a in seen or a not in calls:
                 continue
             seen.add(a)
-            stack.extend(calls[a])
+            if a not in cut:
+                stack.extend(calls[a])
+        return seen
+
+    def line(label, seen):
         p = len(seen & ported)
         print(f"reachable from {label}: {len(seen)} functions, {p} ported ({100 * p // max(len(seen), 1)}%), "
               f"{len(seen & todo)} named by todo_port!")
-        if missing and label.startswith(missing):
+
+    for label, roots in SIM_ROOTS:
+        full = reach(roots)
+        # Without the AI: stop at the AI entry points (they themselves are AI too).
+        sim = reach(roots, AI_ROOTS) - AI_ROOTS
+        ai = full - sim
+        line(label + " (no AI)", sim)
+        line(label + " (AI only)", ai)
+        line(label, full)
+        if missing and (label.startswith(missing) or missing == "ai" and label == "both"):
+            seen = ai if missing == "ai" else sim
             # Unported reachable functions, those called by ported code first (the frontier),
             # then by how many reachable functions call them.
             info = {f[0]: f for f in funcs}
