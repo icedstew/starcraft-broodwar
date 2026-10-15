@@ -52,8 +52,10 @@ impl Grp {
                 }
             })
             .collect();
-        // Raw frames are packed back to back with no row-offset table.
-        let raw = frames.len() > 1 && frames.windows(2).all(|p| p[1].off == p[0].off + (p[0].w * p[0].h) as usize || p[1].off == p[0].off);
+        // Raw frames are packed back to back with no row-offset table. RLE grps whose
+        // frames all share one offset (zerg building shadows) are not raw.
+        let packed = |p: &[Frame]| p[1].off == p[0].off + (p[0].w * p[0].h) as usize;
+        let raw = frames.len() > 1 && frames.windows(2).all(|p| packed(p) || p[1].off == p[0].off) && frames.windows(2).any(packed);
         Grp { w, h, data, frames, raw }
     }
 

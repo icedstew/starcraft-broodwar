@@ -626,6 +626,15 @@ fn main() -> std::io::Result<()> {
             }) {
                 scene.selected = scene.unit_at(sx, sy).into_iter().collect();
             }
+            // Debug: SCBW_PANEL_CLICK="x,y[,shift|ctrl]" clicks the status panel there.
+            if let Ok(v) = std::env::var("SCBW_PANEL_CLICK") {
+                let p: Vec<&str> = v.split(',').collect();
+                if let (Some(x), Some(y), Ok(ui)) = (p.first().and_then(|s| s.parse().ok()), p.get(1).and_then(|s| s.parse().ok()), ui::Ui::load(&a.files, ["zerg", "terran", "protoss"][scene.local_race()])) {
+                    let m = p.get(2).copied().unwrap_or("");
+                    scene.status_click(&ui, x, y, m == "shift", m == "ctrl");
+                    eprintln!("selected {:?}", scene.selected);
+                }
+            }
             // Debug: SCBW_KEYS="sm..." presses command card hotkeys with the selection.
             if let Ok(keys) = std::env::var("SCBW_KEYS") {
                 let ui = ui::Ui::load(&a.files, ["zerg", "terran", "protoss"][scene.local_race()]).ok();

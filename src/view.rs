@@ -711,7 +711,7 @@ impl<'a> Scene<'a> {
     }
 
     /// A click at screen (x, y) on a status panel button (0x4573a0); true if handled.
-    pub fn status_click(&mut self, ui: &crate::ui::Ui, x: i32, y: i32) -> bool {
+    pub fn status_click(&mut self, ui: &crate::ui::Ui, x: i32, y: i32, shift: bool, ctrl: bool) -> bool {
         let Some((panel, ctls)) = self.status_panel(ui) else { return false };
         for (id, show) in ctls {
             let Some((l, t, r, b)) = ui.statdata.screen_rect(id) else { continue };
@@ -722,9 +722,21 @@ impl<'a> Scene<'a> {
                         let h = self.st.unit_handle(unit) as u16;
                         Some(vec![0x29, h as u8, (h >> 8) as u8])
                     }
-                    // A unit of a multiple selection: select just it.
+                    // 0x458220, a unit of a multiple selection: shift drops it, ctrl keeps
+                    // the shown units of its type, else it alone stays selected.
                     crate::statdata::Show::GroupWire(unit) => {
-                        self.selected = vec![unit];
+                        let shown: Vec<u32> = self.selected.iter().copied().take(12).collect();
+                        let ty = self.st.units[unit as usize].unit_type;
+                        self.selected = if shift {
+                            shown.into_iter().filter(|&u| u != unit).collect()
+                        } else if ctrl {
+                            shown.into_iter().filter(|&u| self.st.units[u as usize].unit_type == ty).collect()
+                        } else {
+                            vec![unit]
+                        };
+                        self.card_menu = None;
+                        self.placing = None;
+                        self.voice_what();
                         return true;
                     }
                     _ => crate::statdata::click(panel, id),
@@ -1195,10 +1207,30 @@ fn draw_hud(scene: &Scene, ui: &crate::ui::Ui, vx: i32, vy: i32, cursor: Option<
                     ui.tranwire.draw(frame, false, l, t, out, w, h, Blend::Colors(&colors));
                 }
                 crate::statdata::Show::GroupWire(u) => {
-                    let wt = crate::ui::wire_type(&scene.st, *u) as usize;
-                    let frame = if wt < ui.grpwire.frame_count() { wt } else { 0 };
+                    // 0x456f50: the button frame (0x1f hallucination, 0x13 hero, 0x19
+                    // parasited, else 0xd; 0x456d30), then the unit's grpwire.grp frame
+                    // (its type, 0x425960) centered, in its wireframe colors.
+                    let un = &scene.st.units[*u as usize];
+                    let flags = scene.a.dat().units.flags[un.unit_type as usize];
+                    let gr = if un.status & 0x4000_0000 != 0 {
+                        0x1f
+                    } else if flags & 0x40 != 0 {
+                        0x13
+                    } else if un.parasite_flags != 0 {
+                        0x19
+                    } else {
+                        0xd
+                    };
+                    if let Some(f) = ui.cmdbtns.frame(gr) {
+                        let (fw, fh) = (f.w.min(cw), f.h.min(ch));
+                        blit_frame(&ui.cmdbtns, gr, l + (cw - fw) / 2, t + (ch - fh) / 2, fw, fh, None, out, w, h);
+                    }
+                    let frame = un.unit_type as usize;
+                    let frame = if frame < ui.grpwire.frame_count() { frame } else { 0 };
                     let colors = with_data(scene.a, |d| crate::ui::wireframe_colors(&scene.st, d, *u, &ui.twire));
-                    ui.grpwire.draw(frame, false, l, t, out, w, h, Blend::Colors(&colors));
+                    if let Some(f) = ui.grpwire.frame(frame) {
+                        blit_frame(&ui.grpwire, frame, l + (cw - f.w) / 2, t + (ch - f.h) / 2, f.w, f.h, Some(&colors), out, w, h);
+                    }
                 }
                 crate::statdata::Show::Info { icon, level, .. } => {
                     // 0x425600: graphic 0xc, disabled (ticon row 4); drawn by 0x4574e0.
@@ -1487,7 +1519,15 @@ pub fn run_replay(a: &mut Assets, rep: crate::replay::Replay) -> io::Result<()> 
     run_with(a, scene, Some(ReplayPlay::new(rep)))
 }
 
-fn run_with(a: &Assets, mut scene: Scene, mut replay: Option<ReplayPlay>) -> io::Result<()> {
+fn run_with(a: &Assets, scene: Scene, replay: Option<ReplayPlay>) -> io::Result<()> {
+    let mut frame = frame_loop(a, scene, replay)?;
+    while frame() {}
+    Ok(())
+}
+
+/// The game window's loop body: one call per displayed frame, false once the window
+/// closes or the player quits. The browser build calls it from requestAnimationFrame.
+pub fn frame_loop<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Option<ReplayPlay>) -> io::Result<impl FnMut() -> bool + 'a> {
     use minifb::{Key, Scale, Window, WindowOptions};
     let mut following = replay.is_some();
     let mut replay_acc = 0u32;
@@ -1522,7 +1562,10 @@ fn run_with(a: &Assets, mut scene: Scene, mut replay: Option<ReplayPlay>) -> io:
     let mut game_acc = 0u32;
     let mut ctx = crate::menu::Ctx { replay: replay.is_some(), multiplayer: false, replay_speed: 0 };
     let mut menu_btn_down = false;
-    'frames: while win.is_open() {
+    Ok(move || {
+        if !win.is_open() {
+            return false;
+        }
         tick += 1;
         let shift = win.is_key_down(Key::LeftShift) || win.is_key_down(Key::RightShift);
         let (cx, cy) = win.get_mouse_pos(minifb::MouseMode::Clamp).map_or((vw / 2, vh / 2), |(x, y)| (x as i32, y as i32));
@@ -1571,7 +1614,7 @@ fn run_with(a: &Assets, mut scene: Scene, mut replay: Option<ReplayPlay>) -> io:
                 let (next, action) = m.on_activate(id, &mut settings, ctx);
                 menu = next.and_then(|(k, depth)| open_menu(k, depth, &mut settings));
                 match action {
-                    crate::menu::Action::QuitMission | crate::menu::Action::ExitProgram => break 'frames,
+                    crate::menu::Action::QuitMission | crate::menu::Action::ExitProgram => return false,
                     // ponytail: restarting rebuilds nothing yet; the menu just closes.
                     _ => {}
                 }
@@ -1662,7 +1705,8 @@ fn run_with(a: &Assets, mut scene: Scene, mut replay: Option<ReplayPlay>) -> io:
         }
         if clicked && pressed.is_none() {
             if let Some(ui) = ui.as_ref() {
-                scene.status_click(ui, cx, cy);
+                let ctrl = win.is_key_down(Key::LeftCtrl) || win.is_key_down(Key::RightCtrl);
+                scene.status_click(ui, cx, cy, shift, ctrl);
             }
         }
         let on_card = clicked && cy >= vh - 120 && !on_minimap_pt(cx, cy);
@@ -1799,8 +1843,8 @@ fn run_with(a: &Assets, mut scene: Scene, mut replay: Option<ReplayPlay>) -> io:
         let counter = tick * 42 / 100;
         compose_with_cursor(&scene, ui.as_ref(), vx, vy, Some((kind, counter, cx, cy)), None, &mut idx, &mut rgb);
         win.update_with_buffer(&rgb, vw as usize, vh as usize).map_err(|e| io::Error::other(e.to_string()))?;
-    }
-    Ok(())
+        true
+    })
 }
 
 /// 0x4c9de0: the mission objectives: network.tbl lines for the built-in game types

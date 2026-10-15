@@ -29,6 +29,12 @@ impl Storage {
         Ok(Storage { archives })
     }
 
+    /// The browser build: storm.dll and the archives' bytes, already in priority order.
+    pub fn from_mem(storm: &[u8], archives: Vec<Vec<u8>>) -> io::Result<Storage> {
+        crate::storm::load(storm)?;
+        Ok(Storage { archives: archives.into_iter().map(Mpq::new).collect::<io::Result<_>>()? })
+    }
+
     /// Read `name` ("unit/terran/marine.grp" or with backslashes) from the first
     /// archive that has it.
     pub fn read(&self, name: &str) -> io::Result<Vec<u8>> {
