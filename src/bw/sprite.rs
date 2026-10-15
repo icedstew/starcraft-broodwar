@@ -105,7 +105,7 @@ impl Node for Thingy {
     }
 }
 
-/// Pop the head of a free list (0x14018dfe0 for images).
+/// Pop the head of a free list (images: 1.16.1 0x4d4e30 / SC:R 0x14018dfe0).
 pub fn pop<T: Node>(v: &mut [T], l: &mut List) -> Option<u32> {
     let h = l.head;
     if h == NIL {
@@ -169,7 +169,8 @@ impl State {
         true
     }
 
-    /// 0x140197090 create_image: the first image becomes the main image; later ones go before `rel`.
+    /// 0x498e00 (with `rel` = the main image) / SC:R 0x140197090 create_image: the first
+    /// image becomes the main image; later ones go before `rel`.
     pub fn create_image(&mut self, d: &Data, s: u32, rel: u32, image_id: u16, x: i8, y: i8, dir: u8) -> Option<u32> {
         let img = pop(&mut self.images, &mut self.free_images)?;
         let mut l = self.sprites[s as usize].images;
@@ -186,7 +187,7 @@ impl State {
         Some(img)
     }
 
-    /// 0x1401900c0 initialize_image.
+    /// 0x4d5a50 / SC:R 0x1401900c0 initialize_image.
     pub(crate) fn initialize_image(&mut self, d: &Data, img: u32, image_id: u16, s: u32, x: i8, y: i8) {
         let id = image_id as usize;
         let im = &d.dat.images;
@@ -211,7 +212,8 @@ impl State {
         }
     }
 
-    /// 0x14018fea0: modifier, iscript header, Init animation.
+    /// 0x4d66b0 (draw function 0x4d58b0, header 0x4d6640) / SC:R 0x14018fea0: modifier,
+    /// iscript header, Init animation.
     pub(crate) fn image_post_init(&mut self, d: &Data, img: u32) {
         let id = self.images[img as usize].image_id as usize;
         let i = &mut self.images[img as usize];
@@ -236,7 +238,7 @@ impl State {
         }
     }
 
-    /// 0x14018ea00: set direction from a 0..=31 direction index.
+    /// 0x4d5ea0 / SC:R 0x14018ea00: set direction from a 0..=31 direction index.
     pub fn image_set_direction32(&mut self, d: &Data, img: u32, dir: u8) {
         let i = &self.images[img as usize];
         if i.flags & iflag::HAS_DIRECTIONAL_FRAMES == 0 {
@@ -259,7 +261,7 @@ impl State {
         }
     }
 
-    /// 0x1401927f0: set direction from a 0..=255 heading.
+    /// 0x4d5f80 / SC:R 0x1401927f0: set direction from a 0..=255 heading.
     pub fn image_set_direction(&mut self, d: &Data, img: u32, heading: u8) {
         if self.images[img as usize].flags & iflag::USES_SPECIAL_OFFSET != 0 {
             self.image_update_special_offset(d, img);
@@ -283,7 +285,7 @@ impl State {
         self.set_frame_from_direction(img);
     }
 
-    /// 0x140190e00: follow the main image's special-overlay (LO) offset.
+    /// 0x4d5a00 / SC:R 0x140190e00: follow the main image's special-overlay (LO) offset.
     pub fn image_update_special_offset(&mut self, d: &Data, img: u32) {
         let s = self.images[img as usize].sprite;
         let main = self.sprites[s as usize].main_image;
@@ -303,7 +305,7 @@ impl State {
         }
     }
 
-    /// 0x1401928e0: start animation `anim` (with BW's attack-repeat fallbacks and no-restart rules).
+    /// 0x4d8470 / SC:R 0x1401928e0: start animation `anim` (with BW's attack-repeat fallbacks and no-restart rules).
     pub fn image_run_anim(&mut self, d: &Data, img: u32, anim: u8) {
         let cur = self.images[img as usize].iscript.anim;
         let flags = self.images[img as usize].flags;
@@ -331,7 +333,8 @@ impl State {
         super::iscript::run(self, d, img, false, None);
     }
 
-    /// 0x14019c7d0: run `anim` on every image of a sprite (unless the sprite opts out).
+    /// 0x499d00 / SC:R 0x14019c7d0: run `anim` on every image of a sprite (unless the
+    /// sprite opts out).
     pub fn sprite_run_anim(&mut self, d: &Data, s: u32, anim: u8, force: bool) {
         let mut cur = self.sprites[s as usize].images.head;
         while cur != NIL {
@@ -343,7 +346,7 @@ impl State {
         }
     }
 
-    /// 0x14019c6f0: set every image's direction from a heading.
+    /// 0x498c30 / SC:R 0x14019c6f0: set every image's direction from a heading.
     pub fn sprite_set_direction(&mut self, d: &Data, s: u32, heading: u8) {
         let mut cur = self.sprites[s as usize].images.head;
         while cur != NIL {

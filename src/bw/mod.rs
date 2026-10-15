@@ -124,7 +124,8 @@ impl Data<'_> {
         u16::from_le_bytes([self.iscript_u8(at), self.iscript_u8(at + 1)])
     }
 
-    /// 0x14018e5c0: header offset for an iscript id (table at the u32 at offset 0).
+    /// 0x4d6640 / SC:R 0x14018e5c0: header offset for an iscript id (table at the u32 at
+    /// offset 0).
     pub fn iscript_header(&self, id: u32) -> Option<u16> {
         let mut p = u32::from_le_bytes(self.iscript.get(0..4)?.try_into().ok()?) as usize;
         loop {

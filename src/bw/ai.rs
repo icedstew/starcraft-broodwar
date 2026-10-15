@@ -82,7 +82,7 @@ pub fn strength_table(dat: &Dat) -> [[u32; 228]; 2] {
 
 impl State {
     /// 0x4026d0: current hp + shields (whole points).
-    fn life_now(&self, d: &Data, u: u32) -> i32 {
+    pub(super) fn life_now(&self, d: &Data, u: u32) -> i32 {
         let un = &self.units[u as usize];
         let sh = if d.dat.units.shield_enable[un.unit_type as usize] != 0 { un.shields >> 8 } else { 0 };
         ((un.hp + 0xff) >> 8) + sh
@@ -103,7 +103,7 @@ impl State {
     }
 
     /// 0x402710: max hp + max shields (whole points).
-    fn life_max(&self, d: &Data, u: u32) -> i32 {
+    pub(super) fn life_max(&self, d: &Data, u: u32) -> i32 {
         let t = self.units[u as usize].unit_type as usize;
         let sh = if d.dat.units.shield_enable[t] != 0 { d.dat.units.shields[t] as i32 } else { 0 };
         self.max_hp_points(d, u) + sh
@@ -725,7 +725,7 @@ impl State {
     }
 
     /// 0x448920: one computer player's cooldowns and checks.
-    fn ai_player_tick(&mut self, _d: &Data) {
+    fn ai_player_tick(&mut self, d: &Data) {
         self.ai.update_player = (self.ai.update_player + 1) % 8;
         let p = self.ai.update_player as usize;
         if self.player_types[p] != 1 || self.ai.players[p].flags & 2 == 0 {
@@ -736,7 +736,59 @@ impl State {
         pa.strategic_suicide_mission_cooldown = pa.strategic_suicide_mission_cooldown.saturating_sub(1);
         pa.spell_cooldown = pa.spell_cooldown.saturating_sub(1);
         pa.attack_failed = pa.attack_failed.saturating_sub(1);
-        crate::todo_port!("0x448890", "AI player tick (0x448890, 0x4630c0, 0x43f990, 0x436320)");
+        self.ai_reset_budget(d, p as u8);
+        crate::todo_port!("0x4630c0", "AI player tick (0x4630c0, 0x43f990, 0x436320)");
+    }
+
+    /// 0x448890: start a new round of spending: no requests or needs, flag 1, and what
+    /// is available is the bank minus the buildings workers are about to place
+    /// (0x434480) and the free supply of the race's worker.
+    fn ai_reset_budget(&mut self, d: &Data, player: u8) {
+        let p = player as usize;
+        let pa = &mut self.ai.players[p];
+        pa.flags |= 1;
+        pa.mineral_need = 0;
+        pa.gas_need = 0;
+        pa.supply_need = 0;
+        pa.request_count = 0;
+        let (mut m, mut g) = (self.players.minerals[p], self.players.gas[p]);
+        // 0x434480
+        let mut town = self.ai.town_lists[p];
+        while town != NIL {
+            let mut w = self.ai.towns.items[town as usize].workers;
+            while w != NIL {
+                let u = self.ai.workers.items[w as usize].parent;
+                let un = &self.units[u as usize];
+                if matches!(un.order, 0x1e | 0x1f | 0x46 | 0x1a | 0x19) {
+                    let t = un.build_queue[un.build_queue_slot as usize % 5];
+                    let (bm, bg) = (d.dat.units.mineral_cost[t as usize] as i32, d.dat.units.gas_cost[t as usize] as i32);
+                    if self.supply_ok_show(d, p, t) {
+                        let race = self.player_races[self.local_player as usize] as u16;
+                        if self.players.minerals[p] < bm {
+                            self.local_error(player, 0x93 + race, 0x352);
+                        } else if self.players.gas[p] < bg {
+                            self.local_error(player, 0x96 + race, 0x353);
+                        } else {
+                            m = m.wrapping_sub(bm);
+                            g = g.wrapping_sub(bg);
+                        }
+                    }
+                }
+                w = self.ai.workers.items[w as usize].link.next;
+            }
+            town = self.ai.towns.items[town as usize].link.next;
+        }
+        let worker = match self.player_races[p] {
+            1 => 7,
+            0 => 0x29,
+            _ => 0x40,
+        };
+        let free = self.supply_free(d, p, worker);
+        let pa = &mut self.ai.players[p];
+        pa.minerals_available = m as u32;
+        pa.gas_available = g as u32;
+        pa.supply_available = free as u32;
+        pa.defense_priority_base = 9;
     }
 
     /// 0x435bd0: the next player's towns.
@@ -939,6 +991,202 @@ impl State {
             if let Some((pos, bw)) = find_ai_script(d, id) {
                 self.start_ai_script(p as u32, pos, bw, Some([x - 1, y - 1, x + 1, y + 1]));
             }
+        }
+    }
+}
+
+/// 0x438bf0: an AI region as a request value (`player`'s region `id`).
+pub fn ai_region_ref(player: u8, id: u16) -> u32 {
+    (player as u32) << 16 | id as u32
+}
+
+/// Spending request types (`SpendingRequest::ty`).
+pub const REQ_UNIT: u8 = 1;
+pub const REQ_BUILDING: u8 = 3;
+pub const REQ_UPGRADE: u8 = 5;
+pub const REQ_TECH: u8 = 6;
+
+/// The AI's spending requests: a max-heap on priority per player (0x68ff00, count +0x210).
+impl State {
+    /// 0x447830: `player` has reached its build limit for unit `id` (0xff: never build;
+    /// siege mode tanks count as tanks).
+    pub(super) fn ai_at_build_limit(&self, player: u8, id: u16) -> bool {
+        let lim = self.ai.players[player as usize].build_limits[id as usize];
+        if lim == 0 {
+            return false;
+        }
+        if lim == 0xff {
+            return true;
+        }
+        let c = &self.players.unit_counts;
+        let mut n = c[id as usize][player as usize] as u32;
+        if id == 5 {
+            n = n.wrapping_add(c[0x1e][player as usize] as u32);
+        }
+        lim as u32 <= n
+    }
+
+    /// 0x447980: push a request (types 1, 2, 4 and 8 only below the build limit); a full
+    /// heap overwrites its last slot.
+    pub(super) fn ai_push_request(&mut self, player: u8, ty: u8, id: u16, priority: u8, val: u32) {
+        if matches!(ty, 1 | 2 | 4 | 8) && self.ai_at_build_limit(player, id) {
+            return;
+        }
+        let pa = &mut self.ai.players[player as usize];
+        let mut i = if pa.request_count == 0x3f {
+            0x3e
+        } else {
+            pa.request_count += 1;
+            pa.request_count as usize - 1
+        };
+        pa.requests[i] = SpendingRequest { priority, ty, id, val };
+        while i > 0 {
+            let parent = (i - 1) / 2;
+            if pa.requests[i].priority <= pa.requests[parent].priority {
+                return;
+            }
+            pa.requests.swap(i, parent);
+            i = parent;
+        }
+    }
+
+    /// 0x4476d0: drop the top request.
+    pub(super) fn ai_pop_request(&mut self, player: u8) {
+        let pa = &mut self.ai.players[player as usize];
+        pa.request_count = pa.request_count.wrapping_sub(1);
+        let n = pa.request_count as usize;
+        if n == 0 {
+            return;
+        }
+        pa.requests[0] = pa.requests[n];
+        if n == 1 {
+            return;
+        }
+        let mut i = 0usize;
+        loop {
+            let (a, b) = (i * 2 + 1, i * 2 + 2);
+            let c = if n <= b || pa.requests[b].priority < pa.requests[a].priority { a } else { b };
+            if pa.requests[c].priority <= pa.requests[i].priority {
+                return;
+            }
+            pa.requests.swap(i, c);
+            i = c;
+            if i * 2 + 1 > n - 1 {
+                return;
+            }
+        }
+    }
+
+    /// 0x447590: type of the top request (0 when there is none).
+    pub(super) fn ai_top_request_type(&self, player: u8) -> u8 {
+        let pa = &self.ai.players[player as usize];
+        if pa.request_count != 0 { pa.requests[0].ty } else { 0 }
+    }
+
+    /// 0x4487b0: `player` can pay for unit `id` now (errors shown as for a human) and
+    /// out of what the AI has set aside (+0xc, +0x10, +0x14).
+    pub(super) fn ai_can_afford(&mut self, d: &Data, player: u8, id: u16) -> bool {
+        let p = player as usize;
+        let (m, g) = (d.dat.units.mineral_cost[id as usize] as u32, d.dat.units.gas_cost[id as usize] as u32);
+        if !self.supply_ok_show(d, p, id) {
+            return false;
+        }
+        let race = self.player_races[self.local_player as usize] as u16;
+        if self.players.minerals[p] < m as i32 {
+            self.local_error(player, 0x93 + race, 0x352);
+            return false;
+        }
+        if self.players.gas[p] < g as i32 {
+            self.local_error(player, 0x96 + race, 0x353);
+            return false;
+        }
+        // 0x6ca4bc: the supply 0x42cf70 worked out.
+        let flags = d.dat.units.flags[id as usize];
+        let mut s = d.dat.units.supply_required[id as usize] as u32;
+        if flags & 0x400 != 0 {
+            s *= 2;
+        }
+        if s != 0 && flags & 0x100_0000 == 0 && id == 0x67 {
+            s = s.wrapping_sub(d.dat.units.supply_required[0x26] as u32);
+        }
+        let pa = &self.ai.players[p];
+        m <= pa.minerals_available && g <= pa.gas_available && s <= pa.supply_available
+    }
+
+    /// 0x447b30 (0x42cdf0 for units): (minerals, gas, supply) of request `ty`/`id`.
+    fn ai_request_cost(&self, d: &Data, player: u8, ty: u8, id: u16) -> (u32, u32, u8) {
+        let i = id as usize;
+        match ty {
+            REQ_UPGRADE => {
+                let (m, g, _) = self.upgrade_cost(d, player, id as u8);
+                (m as u16 as u32, g as u16 as u32, 0)
+            }
+            REQ_TECH => (d.dat.techdata.mineral_cost[i] as u32, d.dat.techdata.gas_cost[i] as u32, 0),
+            _ => {
+                let u = &d.dat.units;
+                let mut s = u.supply_required[i];
+                if u.flags[i] & 0x400 != 0 {
+                    s = s.wrapping_shl(1);
+                }
+                (u.mineral_cost[i] as u32, u.gas_cost[i] as u32, s)
+            }
+        }
+    }
+
+    /// 0x447dc0: add the cost of `ty`/`id` to the player's needs.
+    pub(super) fn ai_add_need(&mut self, d: &Data, player: u8, ty: u8, id: u16) {
+        let (m, g, s) = self.ai_request_cost(d, player, ty, id);
+        let pa = &mut self.ai.players[player as usize];
+        pa.mineral_need = pa.mineral_need.wrapping_add(m);
+        pa.gas_need = pa.gas_need.wrapping_add(g);
+        pa.supply_need = pa.supply_need.wrapping_add(s as u32);
+    }
+
+    /// 0x447d00: the top request is done with: take its cost off the needs (not for
+    /// morphs, whose parts were requested separately) and, when `spent`, off what is
+    /// available.
+    pub(super) fn ai_request_done(&mut self, d: &Data, player: u8, spent: bool) {
+        let top = self.ai.players[player as usize].requests[0];
+        if matches!(top.id, 0x2c | 0x67 | 0x3e | 0x44 | 0x3f) {
+            return;
+        }
+        let (m, g, s) = self.ai_request_cost(d, player, top.ty, top.id);
+        let pa = &mut self.ai.players[player as usize];
+        pa.mineral_need = pa.mineral_need.saturating_sub(m);
+        pa.gas_need = pa.gas_need.saturating_sub(g);
+        pa.supply_need = pa.supply_need.saturating_sub(s as u32);
+        if spent {
+            pa.minerals_available = pa.minerals_available.wrapping_sub(m);
+            pa.gas_available = pa.gas_available.wrapping_sub(g);
+            pa.supply_available = pa.supply_available.wrapping_sub(s as u32);
+        }
+    }
+
+    /// 0x4485b0: request unit `id` (with the units a morph is made from, 0x4484a0).
+    /// Without `force` nothing is requested while flag 0x200 is set; without `keep` flag
+    /// 1 is cleared. Flag 0x40 is set.
+    pub(super) fn ai_request_unit(&mut self, d: &Data, player: u8, id: u16, priority: u8, val: u32, force: bool, keep: bool) {
+        let p = player as usize;
+        if !force && self.ai.players[p].flags & 0x200 != 0 {
+            return;
+        }
+        if !keep {
+            self.ai.players[p].flags &= !1;
+        }
+        self.ai.players[p].flags |= 0x40;
+        self.ai_add_need(d, player, REQ_UNIT, id);
+        self.ai_push_request(player, REQ_UNIT, id, priority, val);
+        // 0x4484a0
+        let (part, n) = match id {
+            0x2c | 0x3e => (0x2b, 1),
+            0x44 => (0x43, 2),
+            0x3f => (0x3d, 2),
+            0x67 => (0x26, 1),
+            _ => return,
+        };
+        for _ in 0..n {
+            self.ai_add_need(d, player, REQ_UNIT, part);
+            self.ai_push_request(player, REQ_UNIT, part, priority.wrapping_sub(1), val);
         }
     }
 }

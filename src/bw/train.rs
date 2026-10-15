@@ -29,7 +29,7 @@ impl State {
     }
 
     /// 0x4889d0: free supply of `t`'s race (provided, capped, minus used).
-    fn supply_free(&self, d: &Data, p: usize, t: u16) -> i32 {
+    pub(super) fn supply_free(&self, d: &Data, p: usize, t: u16) -> i32 {
         let Some(r) = Self::supply_race(d, t) else { return 0 };
         let max = self.players.supply_max[r][p];
         let used = self.players.supply_used[r][p];

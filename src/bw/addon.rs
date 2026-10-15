@@ -69,11 +69,9 @@ impl State {
                 }
             };
             if next != 0 {
-                // 0x475260 then 0x474c70: land / lift there, then place the addon again.
-                self.units[u as usize].order_flags |= 1;
-                self.issue_order(d, u, next, true, p, NIL, 0xe4);
-                self.order_nothing(d, u);
-                self.issue_order(d, u, 0x24, false, p, NIL, 0xe4);
+                // Land / lift there, then place the addon again.
+                self.order_at(d, u, next, p);
+                self.queue_order_at(d, u, 0x24, p, false);
                 return;
             }
         }

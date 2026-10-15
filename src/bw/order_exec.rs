@@ -990,11 +990,7 @@ impl State {
                 diff = -0x80;
             }
             if (diff as i32).abs() >= 0x20 {
-                // 0x494bb0
-                let f = &mut self.units[u as usize].fl;
-                if f.next_target_waypoint != tp {
-                    f.next_target_waypoint = tp;
-                }
+                self.set_target_waypoint(u, tp);
             }
         }
     }
@@ -1289,12 +1285,9 @@ impl State {
         } else if self.units[u as usize].ai != NIL {
             self.order_now(d, u, 0x9c);
         } else {
-            // 0x475260
             let p = self.units[u as usize].order_target_pos;
             let o = d.dat.units.ai_return_to_idle[self.units[u as usize].unit_type as usize];
-            self.units[u as usize].order_flags |= 1;
-            self.issue_order(d, u, o, true, p, NIL, 0xe4);
-            self.order_nothing(d, u);
+            self.order_at(d, u, o, p);
         }
     }
 
@@ -1533,9 +1526,57 @@ impl State {
         todo_port!("0x4e41a0", "CTFCOP1");
     }
 
-    /// 0x4a28b0: ComputerAI.
-    fn order_computer_ai(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x4a28b0", "ComputerAI");
+    /// 0x4a28b0: ComputerAI: every 15 frames the unit's AI (worker, building or
+    /// military) decides what it does; a unit without AI goes to its human idle order.
+    fn order_computer_ai(&mut self, d: &Data, u: u32) {
+        if self.units[u as usize].main_order_timer != 0 {
+            return;
+        }
+        self.units[u as usize].main_order_timer = 0xf;
+        let t = self.units[u as usize].unit_type;
+        if t == 0x23 {
+            todo_port!("0x4e9f90", "AI larva");
+            let un = &self.units[u as usize];
+            if un.sprite == NIL || un.order == 0 {
+                return;
+            }
+        } else if t == 0x22 {
+            todo_port!("0x436ae0", "AI medic");
+        }
+        let ai = self.units[u as usize].ai;
+        if ai == NIL {
+            let idle = d.dat.units.ai_human_idle[t as usize];
+            self.order_now(d, u, idle);
+            return;
+        }
+        if self.ai_special_unit_order(d, u) {
+            return;
+        }
+        match super::ai_town::ai_kind(ai) {
+            super::ai_town::AI_WORKER => self.worker_ai(d, u),
+            super::ai_town::AI_BUILDING => {
+                todo_port!("0x4361a0", "AI building");
+                self.units[u as usize].main_order_timer = 3;
+            }
+            super::ai_town::AI_MILITARY => {
+                todo_port!("0x43d910", "AI military");
+                self.units[u as usize].main_order_timer = 3;
+            }
+            _ => {
+                let idle = d.dat.units.ai_human_idle[t as usize];
+                self.order_now(d, u, idle);
+            }
+        }
+        let flags = d.dat.units.flags[t as usize];
+        let st = self.units[u as usize].status;
+        if self.race_of(d, u) == 1 && flags & 0x4000_0000 != 0 {
+            todo_port!("0x436e70", "AI: mechanical terran units go for repairs (0x440770)");
+            let _ = st;
+        } else if t == 5 {
+            todo_port!("0x4a12c0", "AI siege tank mode");
+        } else if flags & 0x10_0000 != 0 {
+            todo_port!("0x4a1340", "AI burrowing");
+        }
     }
 
     /// 0x478de0: AtkMoveEP.

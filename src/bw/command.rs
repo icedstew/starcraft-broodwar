@@ -912,7 +912,7 @@ impl State {
 
 impl State {
     /// 0x474d90: `target` suits `order` given by `u` (Err holds the stat_txt message).
-    fn order_target_valid(&self, d: &Data, u: u32, order: u8, target: u32) -> Result<(), u16> {
+    pub(super) fn order_target_valid(&self, d: &Data, u: u32, order: u8, target: u32) -> Result<(), u16> {
         let un = &self.units[u as usize];
         match order {
             0x22 => {

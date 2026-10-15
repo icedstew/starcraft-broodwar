@@ -291,12 +291,8 @@ impl State {
             self.order_now(d, u, 0x5a);
             return true;
         }
-        // 0x494bb0
-        let un = &mut self.units[u as usize];
-        let p = un.order_target_pos;
-        if un.fl.next_target_waypoint != p {
-            un.fl.next_target_waypoint = p;
-        }
+        let p = self.units[u as usize].order_target_pos;
+        self.set_target_waypoint(u, p);
         self.queue_front_target(d, u, 0x56, m);
         self.order_done_or_next(d, u);
         true
@@ -759,7 +755,7 @@ impl State {
 
     /// 0x4432d0: nearest mineral nobody is mining (`ai_only`: AI workers skip
     /// fields marked +0xd9).
-    fn find_free_mineral(&mut self, d: &Data, u: u32, from: (i16, i16), ai_only: bool) -> u32 {
+    pub(super) fn find_free_mineral(&mut self, d: &Data, u: u32, from: (i16, i16), ai_only: bool) -> u32 {
         if !self.any_minerals() {
             return NIL;
         }

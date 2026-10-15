@@ -9,7 +9,7 @@ use super::sprite::iflag;
 use super::{Data, State};
 
 impl State {
-    /// 0x140188220: unsigned angular distance between two headings.
+    /// 0x494bd0 / SC:R 0x140188220: unsigned angular distance between two headings.
     pub fn angle_diff(a: u8, b: u8) -> u32 {
         let d = (b as u32).wrapping_sub(a as u32) & 0xff;
         if d < 0x81 { d } else { 0x100 - d }

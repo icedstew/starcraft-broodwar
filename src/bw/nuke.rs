@@ -133,9 +133,8 @@ impl State {
                     return;
                 }
                 if self.units[u as usize].order_queue_head == NIL {
-                    // 0x474d60: queue the idle order.
                     let o = d.dat.units.ai_return_to_idle[self.units[u as usize].unit_type as usize];
-                    self.issue_order(d, u, o, true, (0, 0), NIL, 0xe4);
+                    self.queue_order(d, u, o, true);
                 }
                 self.order_next_or_idle(d, u);
                 // 0x4e5d60: the button set goes back to the unit's own.

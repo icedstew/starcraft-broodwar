@@ -211,6 +211,31 @@ impl State {
         self.prepare_next_order(d, u);
     }
 
+    /// 0x475260: replace the queue with `order` at `pos` and start it.
+    pub fn order_at(&mut self, d: &Data, u: u32, order: u8, pos: (i16, i16)) {
+        self.units[u as usize].order_flags |= 1;
+        self.issue_order(d, u, order, true, pos, NIL, 0xe4);
+        self.prepare_next_order(d, u);
+    }
+
+    /// 0x474c70: queue `order` at `pos` (`clear`: drop the interruptible orders first).
+    pub fn queue_order_at(&mut self, d: &Data, u: u32, order: u8, pos: (i16, i16), clear: bool) {
+        self.issue_order(d, u, order, clear, pos, NIL, 0xe4);
+    }
+
+    /// 0x474d60: queue `order` without a target.
+    pub fn queue_order(&mut self, d: &Data, u: u32, order: u8, clear: bool) {
+        self.issue_order(d, u, order, clear, (0, 0), NIL, 0xe4);
+    }
+
+    /// 0x494bb0: aim the unit's next target waypoint at `p` (only written when it differs).
+    pub fn set_target_waypoint(&mut self, u: u32, p: (i16, i16)) {
+        let f = &mut self.units[u as usize].fl;
+        if f.next_target_waypoint != p {
+            f.next_target_waypoint = p;
+        }
+    }
+
     /// 0x475220: issue_order + prepare_next_order.
     pub fn order_issue_now(&mut self, d: &Data, u: u32, order: u8, pos: (i16, i16), target: u32, unit_type: u16) {
         self.units[u as usize].order_flags |= 1;

@@ -1720,17 +1720,13 @@ impl State {
         };
         if self.units[u as usize].status & 0x10 != 0 {
             self.unburrow(d, u);
-            // 0x474c70
-            self.issue_order(d, u, order, false, dest, NIL, 0xe4);
+            self.queue_order_at(d, u, order, dest, false);
         } else {
             let p = self.units[u as usize].player;
             if self.can_issue_order(d, u, order, p) != Ok(()) {
                 return;
             }
-            // 0x475260
-            self.units[u as usize].order_flags |= 1;
-            self.issue_order(d, u, order, true, dest, NIL, 0xe4);
-            self.prepare_next_order(d, u);
+            self.order_at(d, u, order, dest);
         }
         if self.units[u as usize].ai != NIL && matches!(order, 6 | 0xe) {
             todo_port!("0x4c779c", "a computer's unit keeps the trigger's destination");

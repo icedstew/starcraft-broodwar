@@ -32,7 +32,8 @@ fn tan_table() -> &'static [u32; 64] {
     })
 }
 
-/// 0x1401881b0: signed slope (fp8) -> direction offset within a quadrant (binary search).
+/// 0x494c10 / SC:R 0x1401881b0: signed slope (fp8) -> direction offset within a quadrant
+/// (binary search over 0x513528).
 fn atan_dir(slope: i32) -> i32 {
     let t = tan_table();
     let a = slope.unsigned_abs();
@@ -53,7 +54,7 @@ fn atan_dir(slope: i32) -> i32 {
     if slope < 0 { -(mid as i32) } else { mid as i32 }
 }
 
-/// Direction from (x, y) to (tx, ty), as computed in 0x140189e50.
+/// 0x495300: direction from (x, y) to (tx, ty) (as in SC:R 0x140189e50).
 pub fn direction_to(x: i32, y: i32, tx: i32, ty: i32) -> u8 {
     let dx = tx - x;
     let dy = ty - y;

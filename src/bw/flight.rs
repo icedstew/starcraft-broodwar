@@ -24,12 +24,10 @@ impl State {
         if x as u16 >= self.map_px.0 || y as u16 >= self.map_px.1 {
             return;
         }
-        // 0x475260: BuildingLiftOff now, then 0x474c70: the idle order queued above it.
-        self.units[u as usize].order_flags |= 1;
-        self.issue_order(d, u, 0x48, true, (x, y), NIL, 0xe4);
-        self.order_nothing(d, u);
+        // BuildingLiftOff now, then the idle order queued above it.
+        self.order_at(d, u, 0x48, (x, y));
         let idle = d.dat.units.ai_return_to_idle[self.units[u as usize].unit_type as usize];
-        self.issue_order(d, u, idle, false, (x, y.wrapping_sub(0x2a)), NIL, 0xe4);
+        self.queue_order_at(d, u, idle, (x, y.wrapping_sub(0x2a)), false);
     }
 
     /// 0x46a560: take a unit out of the unit finder, its building tiles and the repulse grid.

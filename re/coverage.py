@@ -1,6 +1,6 @@
 """Port coverage of 1.16.1 StarCraft.exe, per original source file.
 
-usage: python -I re/coverage.py <decomp.c> [src_dir] [--html out.html]
+usage: python -I re/coverage.py <decomp.c> [src_dir] [--html out.html] [--missing game_step|command|both]
 
 <decomp.c> is the Ghidra export (`// ==== 00ADDR NAME` headers; not part of the repo).
 Functions are tagged with a source file when their body mentions an assert path like
@@ -21,6 +21,7 @@ DOC = re.compile(r"///\s*(?:[^\n]*?)\b0x(4[0-9a-f]{5})\b")
 CALL = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(")
 LIST = re.compile(r"///\s*(0x4[0-9a-f]{5}(?:\s*(?:/|,|\+|and|or|\(|\))\s*0x4[0-9a-f]{5})+)")
 ADDR = re.compile(r"0x(4[0-9a-f]{5})")
+HEAD = re.compile(r"///\s*(0x4[0-9a-f]{5}[^:\n]*):")
 TODO = re.compile(r'todo_port!\("0x(4[0-9a-f]{5})"')
 
 # Entry points whose call trees make up the simulation.
@@ -41,9 +42,10 @@ def functions(path):
         for line in f:
             m = HEADER.match(line)
             if m:
-                cur = [int(m.group(1), 16), m.group(2), Counter(), set()]
+                cur = [int(m.group(1), 16), m.group(2), Counter(), set(), 0]
                 funcs.append(cur)
             elif cur is not None:
+                cur[4] += 1
                 for s in SRC.findall(line):
                     cur[2][s.replace("\\\\", "/").lower()] += 1
                 cur[3].update(CALL.findall(line))
@@ -76,6 +78,9 @@ def scan_src(root):
                 # A doc line may open with several addresses: "/// 0xA / 0xB + 0xC:".
                 for run in LIST.findall(t):
                     ported |= {int(a, 16) for a in ADDR.findall(run)}
+                # "/// 0xA (set) / 0xB (clear): ...": every address before the first colon.
+                for head in HEAD.findall(t):
+                    ported |= {int(a, 16) for a in ADDR.findall(head)}
                 todo |= {int(a, 16) for a in TODO.findall(t)}
     return ported, todo - ported
 
@@ -83,6 +88,11 @@ def scan_src(root):
 def main():
     args = sys.argv[1:]
     out_html = None
+    missing = None
+    if "--missing" in args:
+        i = args.index("--missing")
+        missing = args[i + 1]
+        del args[i:i + 2]
     if "--html" in args:
         i = args.index("--html")
         out_html = args[i + 1]
@@ -134,6 +144,25 @@ def main():
         p = len(seen & ported)
         print(f"reachable from {label}: {len(seen)} functions, {p} ported ({100 * p // max(len(seen), 1)}%), "
               f"{len(seen & todo)} named by todo_port!")
+        if missing and label.startswith(missing):
+            # Unported reachable functions, those called by ported code first (the frontier),
+            # then by how many reachable functions call them.
+            info = {f[0]: f for f in funcs}
+            file_of = {f[0]: fn for f, fn in zip(funcs, files)}
+            callers = defaultdict(set)
+            for a in seen:
+                for c in calls[a]:
+                    callers[c].add(a)
+            rows_m = []
+            for a in seen - ported:
+                pc = len(callers[a] & ported)
+                rows_m.append((-(pc > 0), -len(callers[a]), a, pc, len(callers[a]), info[a][4]))
+            rows_m.sort()
+            print(f"\nunported, reachable from {label}: {len(rows_m)}")
+            print(f"{'addr':10} {'name':24} {'ported callers':>14} {'callers':>8} {'lines':>6}  file")
+            for _, _, a, pc, nc, ln in rows_m:
+                st = " todo" if a in todo else ""
+                print(f"0x{a:06x}   {info[a][1][:24]:24} {pc:14} {nc:8} {ln:6}  {file_of[a]}{st}")
     if out_html:
         with open(out_html, "w") as o:
             o.write("<!doctype html><meta charset=utf-8><title>scbw coverage</title>"
