@@ -106,15 +106,21 @@ part of this repo:
 
 ```sh
 cd ~/src/decomp/scbw
-python3 -I re/coverage.py /tmp/claude-1000/-home-stubob/76c93498-4528-4c2d-b789-d58b9cc39c19/scratchpad/dump/bw116n.c . | tail -5      # summary: in scope / reachable from game_step
-python3 -I re/coverage.py /tmp/claude-1000/-home-stubob/76c93498-4528-4c2d-b789-d58b9cc39c19/scratchpad/dump/bw116n.c . --html cov.html  # per source file, as HTML
+python3 -I re/coverage.py agent/local/scratch/dump/bw116n.c . | tail -11     # summary: in scope / reachable from game_step
+python3 -I re/coverage.py agent/local/scratch/dump/bw116n.c . --html cov.html  # per source file, as HTML
+python3 -I re/coverage.py agent/local/scratch/dump/bw116n.c . --missing both  # unported non-AI functions reachable from the sim
+python3 -I re/coverage.py agent/local/scratch/dump/bw116n.c . --missing ai    # unported computer-player AI functions
 ```
+
+Each "reachable from" row is also split into "(no AI)" and "(AI only)": the walk from
+the simulation roots stops at the computer players' AI entry points (`AI_ROOTS` in
+`re/coverage.py`), and what is only reachable through them is the AI bucket.
 
 Summary as a table (`column -N` is util-linux):
 
 ```sh
 cd ~/src/decomp/scbw
-python3 -I re/coverage.py /tmp/claude-1000/-home-stubob/76c93498-4528-4c2d-b789-d58b9cc39c19/scratchpad/dump/bw116n.c . | sed -nE \
+python3 -I re/coverage.py agent/local/scratch/dump/bw116n.c . | sed -nE \
   's/^all functions: ([0-9]+) functions, ([0-9]+) ported \(([0-9]+%)\).*/All functions|\1|\2 (\3)/p;
    s/^in scope: ([0-9]+) functions, ([0-9]+) ported \(([0-9]+%)\).*/In scope|\1|\2 (\3)/p;
    s/^reachable from (.*): ([0-9]+) functions, ([0-9]+) ported \(([0-9]+%)\).*/Reachable from \1|\2|\3 (\4)/p' \
