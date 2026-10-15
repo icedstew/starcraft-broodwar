@@ -8,6 +8,7 @@ pub mod addon;
 pub mod ai;
 pub mod ai_areas;
 pub mod ai_place;
+pub mod ai_region;
 pub mod ai_script;
 pub mod ai_town;
 pub mod attack;

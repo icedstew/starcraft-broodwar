@@ -148,7 +148,7 @@ impl State {
     }
 
     /// 0x432ad0: `player` has a building or worker in region `r`.
-    fn player_has_base_unit_in(&mut self, d: &Data, r: u16, player: u8) -> bool {
+    pub(super) fn player_has_base_unit_in(&mut self, d: &Data, r: u16, player: u8) -> bool {
         self.units_in_region(r).into_iter().any(|u| {
             let un = &self.units[u as usize];
             un.player == player && d.dat.units.flags[un.unit_type as usize] & 9 != 0
@@ -398,7 +398,7 @@ impl State {
             }
             let tw = &self.ai.towns.items[town as usize];
             if tw.worker_count > 1 || (tw.worker_count == 1 && tw.main_building != NIL && self.player_races[tw.player as usize] == 0) {
-                todo_port!("0x433660", "AI town gas request");
+                self.town_gas_request(d, town);
             }
             town = self.ai.towns.items[town as usize].link.next;
         }
@@ -414,7 +414,7 @@ impl State {
             }
         }
         if last != NIL {
-            todo_port!("0x433730", "AI supply request");
+            self.town_supply_request(d, last);
             todo_port!("0x43ebb0", "AI town defense requests");
             todo_port!("0x43aae0", "AI town requests 0x43aae0");
         }
@@ -890,6 +890,124 @@ impl State {
         }
         self.ai.town_merging = false;
         true
+    }
+
+    /// 0x448400: request building `t` for `town` at `priority` (soon after a building
+    /// was hit only gas buildings and urgent ones, 0x8c, go through).
+    fn town_request_building(&mut self, d: &Data, player: u8, t: u16, priority: u8, town: u32) {
+        let hit = self.ai.players[player as usize].previous_building_hit_second;
+        if hit != 0 && self.trig.elapsed.wrapping_sub(hit) < 0x1e && t != self.refinery_type(player) && priority != 0x8c {
+            return;
+        }
+        let flags = d.dat.units.flags[t as usize];
+        let ty = if flags & 8 != 0 { 4 } else { ((flags & 2) << 1 | 3) as u8 };
+        self.ai_add_need(d, player, ty, t);
+        self.ai_push_request(player, ty, t, priority, town);
+    }
+
+    /// 0x433660: a town asks for a gas building on its geyser: right away (0x5a) when
+    /// it has no working one, else (0x50) once it has 15 workers or all it wants and
+    /// 500 minerals; not while minerals are all that is needed.
+    fn town_gas_request(&mut self, d: &Data, town: u32) {
+        let player = self.ai.towns.items[town as usize].player;
+        let (gas_pct, _) = self.ai_need_split(player);
+        if gas_pct == 0 && self.ai.towns.items[town as usize].mineral != NIL {
+            return;
+        }
+        let priority = if self.town_gas(town, 3, 1) != NIL {
+            if self.town_gas(town, 1, 1) == NIL {
+                return;
+            }
+            let tw = &self.ai.towns.items[town as usize];
+            if tw.worker_count < tw.worker_limit && tw.worker_count < 0xf {
+                return;
+            }
+            if self.players.minerals[player as usize] < 500 {
+                return;
+            }
+            0x50
+        } else {
+            if self.town_gas(town, 1, 1) == NIL {
+                return;
+            }
+            0x5a
+        };
+        let t = self.refinery_type(player);
+        self.town_request_building(d, player, t, priority, town);
+    }
+
+    /// 0x433730: more supply when free supply drops under 13 (or a protoss building
+    /// lacks power): enough depots / overlords / pylons beyond the town hall's for what
+    /// is used plus 13, at 0x78 (0x8c when 8 or less is free).
+    fn town_supply_request(&mut self, d: &Data, town: u32) {
+        let player = self.ai.towns.items[town as usize].player;
+        let p = player as usize;
+        let race = self.player_races[p];
+        let depot: u16 = match race {
+            1 => 0x6d,
+            0 => 0x2a,
+            _ => 0x9c,
+        };
+        let worker: u16 = match race {
+            1 => 7,
+            0 => 0x29,
+            _ => 0x40,
+        };
+        let free = self.supply_free(d, p, worker);
+        let want = if self.unpowered_building(d, player) {
+            self.player_count_making(d, player, depot) + 1
+        } else {
+            if free >= 0xd {
+                return;
+            }
+            let g = d.dat.units.staredit_group_flags[depot as usize];
+            let r = if g & 1 != 0 { 0 } else if g & 2 != 0 { 1 } else if g & 4 != 0 { 2 } else { 3 };
+            // 0x4888c0
+            let used = if r < 3 { self.players.supply_used[r][p] } else { 0 };
+            let need = (used + 0xd) as u32;
+            let hall = self.town_hall_type(player);
+            let hall_supply = d.dat.units.supply_provided[hall as usize] as u32;
+            if need <= hall_supply {
+                return;
+            }
+            (need - hall_supply) / d.dat.units.supply_provided[depot as usize] as u32 + 1
+        };
+        if free != 0 && self.ai.players[p].flags & 0x10 != 0 && !self.unpowered_building(d, player) {
+            return;
+        }
+        if want > self.player_count_making(d, player, depot) {
+            let priority = if free > 8 { 0x78 } else { 0x8c };
+            self.town_request_building(d, player, depot, priority, town);
+        }
+    }
+
+    /// 0x433410: no pylon is being built and a building of `player` without power
+    /// stands in a safe region.
+    fn unpowered_building(&self, _d: &Data, player: u8) -> bool {
+        let p = player as usize;
+        if self.players.completed_counts[0x9c][p] < self.players.unit_counts[0x9c][p] {
+            return false;
+        }
+        let mut u = self.player_units[p];
+        while u != NIL {
+            let un = &self.units[u as usize];
+            if un.sprite != NIL && un.order != 0 && un.status & 0x400 != 0 && self.ai_building_safe(u) {
+                return true;
+            }
+            u = un.player_next;
+        }
+        false
+    }
+
+    /// 0x433470: unit type `t` in all of `player`'s towns, made or about to be.
+    fn player_count_making(&self, d: &Data, player: u8, t: u16) -> u32 {
+        let mut n = 0;
+        let mut town = self.ai.town_lists[player as usize];
+        while town != NIL {
+            n += self.town_count_making(d, town, t);
+            town = self.ai.towns.items[town as usize].link.next;
+        }
+        n
     }
 
     /// 0x4355c0: town `town` takes up to `n` idle finished workers from the player's

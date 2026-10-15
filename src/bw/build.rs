@@ -97,7 +97,7 @@ impl State {
     }
 
     /// 0x42fa00: a ground unit can walk to `p` (same region group).
-    fn can_reach_spot(&self, u: u32, p: (i16, i16)) -> bool {
+    pub(super) fn can_reach_spot(&self, u: u32, p: (i16, i16)) -> bool {
         self.units[u as usize].pathing_flags & 1 == 0 || self.same_group(u, p)
     }
 

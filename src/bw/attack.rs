@@ -1165,7 +1165,7 @@ impl State {
 
     /// 0x476a50: a point 192, 128, 64, 32 or 16 pixels from `u`, away from `from`,
     /// that a ground unit can reach (its own position if none).
-    fn flee_point(&self, _d: &Data, from: u32, u: u32) -> (i16, i16) {
+    fn flee_point(&mut self, d: &Data, from: u32, u: u32) -> (i16, i16) {
         let fp = self.unit_sprite_pos(from);
         let up = self.unit_sprite_pos(u);
         let dir = crate::game::flingy::direction_to(fp.0 as i32, fp.1 as i32, up.0 as i32, up.1 as i32);
@@ -1185,44 +1185,8 @@ impl State {
             if g1 != g2 {
                 continue;
             }
-            // 0x437e70
             let player = self.units[u as usize].player;
-            if player >= 8 || r1 == r2 {
-                return p;
-            }
-            let reg = &self.sai.regions[r2 as usize];
-            let n = reg.neighbor_count as usize - reg.zero_neighbors as usize;
-            if (0..n).any(|i| self.sai.neighbor(r2 as usize, i) == r1) {
-                return p;
-            }
-            // 0x437070: flood from r1 through walkable neighbors; regions with enemy
-            // strength (AI region data +0x1c / +0x20) stop the flood.
-            // ponytail: the AI region strengths are not ported (always 0), so the flood
-            // is plain reachability; the 10-frame cache (0x69f448) is skipped as it
-            // only matters once strengths change.
-            let n = self.sai.regions.len();
-            let mut map = vec![0u8; n];
-            map[r1 as usize] = 1;
-            loop {
-                let mut grew = false;
-                for r in 1..n {
-                    if map[r] != 1 {
-                        continue;
-                    }
-                    map[r] = 2;
-                    for i in 0..self.sai.regions[r].walkable_neighbors as usize {
-                        let nb = self.sai.neighbor(r, i) as usize;
-                        if map[nb] == 0 {
-                            map[nb] = 1;
-                            grew = true;
-                        }
-                    }
-                }
-                if !grew {
-                    break;
-                }
-            }
-            if map[r2 as usize] == 2 {
+            if self.ai_region_reachable(d, player, r2, r1) {
                 return p;
             }
         }

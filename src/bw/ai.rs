@@ -119,7 +119,7 @@ impl State {
 
     /// 0x4316d0: `u`'s full-health strength of `kind` (0 air, 1 ground): a bunker counts
     /// its passengers as marines, casters add half their energy.
-    fn base_strength(&self, d: &Data, u: u32, kind: usize) -> u32 {
+    pub(super) fn base_strength(&self, d: &Data, u: u32, kind: usize) -> u32 {
         let un = &self.units[u as usize];
         let t = un.unit_type as usize;
         let mut v = d.strength[kind][t];
@@ -518,6 +518,11 @@ pub struct Ai {
     pub town_update_player: u32,
     /// 0x6d63e8: 0x434330 is moving a town's units (no town is removed meanwhile).
     pub town_merging: bool,
+    /// 0x69a628 (0x9c4 regions per player), 0x69f448 and 0x6957b0: 0x437070's region
+    /// flood, when and from where it was made.
+    pub flood: Vec<Vec<u8>>,
+    pub flood_time: [u32; 8],
+    pub flood_start: [u32; 8],
     /// 0x68aca8 script pool, 0x68c100 active scripts.
     pub scripts: AiPool<AiScript>,
     pub active_scripts: u32,
@@ -548,6 +553,9 @@ impl Default for Ai {
             town_lists: [NIL; 8],
             town_update_player: 0,
             town_merging: false,
+            flood: vec![vec![0; 0x9c4]; 8],
+            flood_time: [0; 8],
+            flood_start: [0; 8],
             scripts: AiPool::new(100),
             active_scripts: NIL,
             script_return: 0,
@@ -581,6 +589,9 @@ impl State {
         }
         self.ai.region_step = 0;
         self.ai.region_player = 0;
+        // 0x437a70 also forgets the region floods (0x69a628, 0x69f448).
+        self.ai.flood = vec![vec![0; 0x9c4]; 8];
+        self.ai.flood_time = [0; 8];
     }
 }
 
@@ -621,7 +632,7 @@ impl State {
         for _ in 0..0x14d {
             let p = self.ai.region_player as usize;
             if self.ai.region_step < rc && self.player_types[p] == 1 {
-                crate::todo_port!("0x43fc60", "AI region step");
+                self.ai_region_step(d, p as u8, self.ai.region_step as u16);
             }
             self.ai.region_step += 1;
             if self.ai.region_step == 0x9c4 {

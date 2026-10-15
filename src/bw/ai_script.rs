@@ -112,7 +112,9 @@ impl State {
                 self.ai.players[p].difficulty = self.ai.unk_692628;
                 // 0x45b810: every region of a computer player gets a step (0x43fc60).
                 if self.player_types[p] == 1 {
-                    todo_port!("0x43fc60", "AI region step");
+                    for r in 0..self.sai.region_count {
+                        self.ai_region_step(d, p as u8, r);
+                    }
                 }
             }
             // wait_build (finished) / wait_buildstart (also being made)
