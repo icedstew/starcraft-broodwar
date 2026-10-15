@@ -7,7 +7,6 @@
 use super::list::NIL;
 use super::sprite::iflag;
 use super::{Data, State};
-use crate::todo_port;
 
 impl State {
     /// 0x140188220: unsigned angular distance between two headings.
@@ -266,7 +265,10 @@ pub fn run(st: &mut State, d: &Data, img: u32, nse: bool, mut distance: Option<&
             0x12 => {
                 p = a + 2;
                 if !nse {
-                    todo_port!("0x140188240", "uflunstable: create flingy + randomize (0x140188a50)");
+                    let im = &st.images[img as usize];
+                    let sp = &st.sprites[im.sprite as usize];
+                    let (x, y) = (sp.x.wrapping_add(im.x as i16), sp.y.wrapping_add(im.y as i16));
+                    st.spawn_unstable_flingy(d, u16_(a), x, y);
                 }
             }
             0x13 | 0x14 => {
@@ -644,7 +646,17 @@ pub fn run(st: &mut State, d: &Data, img: u32, nse: bool, mut distance: Option<&
             0x3a => {
                 p = a + 4;
                 if !nse {
-                    todo_port!("0x1401b7700/0x14019f440", "trgtrangecondjmp");
+                    // trgtrangecondjmp: jump when the target's box (shrunk by a quarter
+                    // per side) is within the distance (0x4762c0, 0x401240).
+                    if let Some(u) = unit {
+                        let t = st.units[u as usize].order_target_unit;
+                        if t != NIL {
+                            let q = st.target_box_point(d, u, t);
+                            if st.near_point(u, u16_(a) as u32, q) {
+                                p = u16_(a + 2) as usize;
+                            }
+                        }
+                    }
                 }
             }
             0x3b => {

@@ -339,6 +339,15 @@ fn main() -> std::io::Result<()> {
                 if f % 25 == 0 {
                     writeln!(t, "{}", tile_trace(st, f))?;
                 }
+                if let Ok(p) = std::env::var("SCBW_TILEDUMP") {
+                    if f.to_string() == std::env::var("SCBW_TILEDUMP_AT").unwrap_or("0".into()) {
+                        let m = &st.terrain;
+                        let n = m.width as usize * m.height as usize;
+                        let mut out: Vec<u8> = m.mtxm[..n].iter().flat_map(|v| v.to_le_bytes()).collect();
+                        out.extend(m.tile_flags[..n].iter().flat_map(|v| v.to_le_bytes()));
+                        std::fs::write(p + ".rust", out)?;
+                    }
+                }
                 writeln!(t, "{}", bullet_trace(st, f))?;
                 let res: Vec<String> = (0..8).map(|p| format!("{},{}", st.players.minerals[p], st.players.gas[p])).collect();
                 writeln!(t, "f{f} res {}", res.join(" "))?;

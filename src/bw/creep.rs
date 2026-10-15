@@ -287,6 +287,23 @@ impl State {
         self.creep_rec.push(n, 9);
     }
 
+    /// 0x414560 with callback 0x49def0 (no other source counts): the creep in `t`'s
+    /// creep box at (x, y) goes at once (a dying extractor).
+    pub(super) fn creep_clear_under(&mut self, d: &Data, t: u16, x: i32, y: i32) {
+        let ([l, top, r, b], ellipse) = self.creep_box(d, t, x, y, true);
+        let mut dy = top * 32 - y + 0x10;
+        for ty in top..=b {
+            let mut dx = l * 32 - x + 0x10;
+            for tx in l..=r {
+                if self.creep_at(tx, ty) && (!ellipse || dy * dy * 0x100 + dx * dx * 100 < 0x9c_4001) {
+                    self.remove_creep_tile(tx, ty);
+                }
+                dx += 32;
+            }
+            dy += 32;
+        }
+    }
+
     /// 0x413fa0 with 0x413aa0: the tile under the creep comes back.
     fn remove_creep_tile(&mut self, x: i32, y: i32) {
         let i = (y * self.terrain.width as i32 + x) as usize;

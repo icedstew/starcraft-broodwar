@@ -23,7 +23,7 @@ impl State {
         }
         self.update_units(d);
         self.update_bullets(d);
-        todo_port!("0x496330", "update flingies (0x63ff34)");
+        self.update_free_flingies(d);
         self.update_thingies(d);
         self.rng.enabled = false; // 0x4dc540(0)
     }

@@ -1186,6 +1186,25 @@ impl State {
 
 type Pt = (i16, i16);
 
+impl State {
+    /// 0x4762c0: where the line from `t`'s middle to `u` leaves `t`'s box shrunk by a
+    /// quarter on each side (the middle when it doesn't).
+    pub(super) fn target_box_point(&self, d: &Data, u: u32, t: u32) -> Pt {
+        let [mut l, mut top, mut r, mut b] = self.unit_box(d, t);
+        let sx = ((r as i32 - l as i32) >> 2) as i16;
+        l = l.wrapping_add(sx);
+        r = r.wrapping_sub(sx);
+        let sy = ((b as i32 - top as i32) >> 2) as i16;
+        top = top.wrapping_add(sy);
+        b = b.wrapping_sub(sy);
+        let mid = ((((r as i32 - l as i32) / 2) as i16).wrapping_add(l), (((b as i32 - top as i32) / 2) as i16).wrapping_add(top));
+        match clip_segment(mid, self.unit_sprite_pos(u), [l, top, r, b]) {
+            Some((_, q)) => q,
+            None => mid,
+        }
+    }
+}
+
 /// 0x42a5c0: clip segment (a, b) to `rc` (left, top, right, bottom), Cohen-Sutherland.
 pub fn clip_segment(mut a: Pt, mut b: Pt, rc: [i16; 4]) -> Option<(Pt, Pt)> {
     let code = |p: Pt| -> u8 {

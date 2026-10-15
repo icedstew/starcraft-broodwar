@@ -25,6 +25,7 @@ pub mod death;
 pub mod finder;
 pub mod finish;
 pub mod flight;
+pub mod freeflingy;
 pub mod flingy;
 pub mod frame;
 pub mod harvest;
@@ -143,6 +144,10 @@ pub struct State {
     /// Per tile-row sprite lists (heads 0x140e76c90, tails 0x140e77490).
     pub sprite_rows: Vec<List>,
     pub thingies: Vec<Thingy>,
+    /// 0x63fee0: free flingies (one), active 0x63ff34, free 0x63ff38.
+    pub free_flingies: Vec<freeflingy::FreeFlingy>,
+    pub ff_active: List,
+    pub ff_free: List,
     pub free_thingies: List,
     pub active_thingies: List,
     /// 0x652918: placeholder sprite 0x13e made by 0x488550.
@@ -323,6 +328,9 @@ impl State {
             free_sprites,
             sprite_rows: vec![List::default(); map_tiles.1.max(1)],
             thingies,
+            free_flingies: vec![freeflingy::FreeFlingy::default()],
+            ff_active: List::default(),
+            ff_free: List { head: 0, tail: 0 },
             free_thingies,
             active_thingies: List::default(),
             marker_thingy: None,

@@ -142,7 +142,8 @@ impl State {
         if matches!(t, 0x6e | 0x95 | 0x9d) && self.sprites[s as usize].flags & super::sprite::sflag::HIDDEN == 0 {
             // 0x4a0080: a dying gas building turns back into a neutral geyser.
             if t == 0x95 {
-                todo_port!("0x414560", "extractor: creep under it recedes (0x49def0)");
+                let (x, y) = (self.sprites[s as usize].x as i32, self.sprites[s as usize].y as i32);
+                self.creep_clear_under(d, 0x95, x, y);
             }
             if self.units[u as usize].status & 1 != 0 {
                 self.modify_completed_counters(d, u, -1, false);
