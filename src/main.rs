@@ -121,6 +121,8 @@ fn main() -> std::io::Result<()> {
             }
             st.player_types = [2; 12];
             st.init_alliances(Default::default());
+            // 0x4eee00 order: the AI's player data before the starting money.
+            st.init_player_ai();
             for p in 0..8 {
                 st.players.minerals[p] = 10000;
                 st.players.gas[p] = 10000;
@@ -139,6 +141,17 @@ fn main() -> std::io::Result<()> {
                     let sites: Vec<_> = st.rng.per_site.iter().enumerate().filter(|(_, c)| **c != 0).collect();
                     eprintln!("melee rng sites {sites:?} total {}", st.rng.total);
                 }
+            }
+            // SCBW_AI "p,p,...": those players are computers running their race's melee
+            // script (0x437a70(1), 0x4ab230).
+            if let Ok(a) = std::env::var("SCBW_AI") {
+                for p in a.split(',').filter_map(|p| p.parse::<usize>().ok()) {
+                    st.player_types[p] = 1;
+                }
+                st.init_ai_regions();
+                st.template[0xe] = 1;
+                st.template[0xc] = 2;
+                st.start_game_type_ai(&d);
             }
             let mut made = Vec::new();
             for e in std::env::var("SCBW_UNITS").unwrap_or("0,320,320,0".into()).split(';').filter(|e| !e.is_empty()) {
@@ -939,14 +952,16 @@ fn unit_trace(st: &bw::State, f: u32, u: u32) -> String {
     let s = &st.sprites[un.sprite as usize];
     let fl = &un.fl;
     format!(
-        "f{f} u{u} pos {},{} order {:#x} ost {} mv {:#x} mt {},{} nw {},{} ntw {},{} fl {:#x} dir {} vdir {} ddir {} spd {} nspd {} top {} exact {},{} vel {},{} status {:#x} path {} ot {} mot {} hp {} sh {} gcd {} tgt {} vis {}",
+        "f{f} u{u} pos {},{} order {:#x} ost {} mv {:#x} mt {},{} nw {},{} ntw {},{} fl {:#x} dir {} vdir {} ddir {} spd {} nspd {} top {} exact {},{} vel {},{} status {:#x} path {} ot {} mot {} hp {} sh {} gcd {} tgt {} vis {} str {},{}",
         s.x, s.y, un.order, un.order_state, un.movement_state, fl.move_target.0, fl.move_target.1,
         fl.next_waypoint.0, fl.next_waypoint.1, fl.next_target_waypoint.0, fl.next_target_waypoint.1,
         fl.flags, fl.heading, fl.velocity_dir_prev, fl.desired_dir, fl.speed, fl.next_speed, fl.top_speed,
         fl.exact.0, fl.exact.1, fl.velocity.0, fl.velocity.1, un.status, (un.path != bw::list::NIL) as u8, un.order_process_timer, un.main_order_timer,
         un.hp, un.shields, un.ground_cooldown,
         if un.order_target_unit == bw::list::NIL { "-".to_string() } else { un.order_target_unit.to_string() },
-        s.visibility
+        s.visibility,
+        un.air_strength,
+        un.ground_strength
     )
 }
 

@@ -148,3 +148,23 @@ SC:R excludes screen_pos_tiles from the snapshot (viewer-local), but in 1.16.1 t
 tile feeds creep updates, so for scbw the camera stays sim state.
 Other cross-check sources: neivv's bw_dat / samase (struct layouts), aise (AI scripts).
 ShieldBattery pathing.rs: walkability 0x1ffd = unwalkable split-region minitile check.
+
+## AI memory map (1.16.1; field names from neivv's aise bw_dat structs, layout checked)
+
+- Player AI 0x68fee8 + p * 0x4e8 (PlayerAiData): needs/availables, 0x3f spending
+  requests (8 bytes) at +0x18, request count +0x210, build cooldown +0x211 (0x6900f9),
+  flags +0x218 (0x690100; 2 = AI running, 0x20 = ...), panic script pos +0x21a, attack
+  grouping region +0x21e, strategic suicide / spell cooldown / attack failed / difficulty
+  +0x22c..0x22f (0x690114..7), attack force u16[0x3f] +0x230 (0x690118), defense units
+  u16[8][0x14], build limits u8[0xe4], free medic, gencmd area.
+- AI scripts: pool head 0x68c0fc (array 0x68aca8), active list 0x68c100; node = next,
+  prev, pos, wait, player, area (rect32), center, town, flags (bit 0 = bwscript.bin
+  0x68c108 instead of aiscript.bin 0x68c104, bit 2 = killed). Runner 0x45cbd0,
+  interpreter 0x45b850.
+- Towns 0x6aa054 (per player list, 8 bytes each: free/first), town struct 0x1cc.
+- ai_update 0x4a2b00 = 0x45cbd0 scripts, 0x43fd80 (computer players' region/attack
+  timers, 0x43a250 every 0x9c4 steps), 0x445610 (resource areas, 0x695568 count),
+  0x4a2a40 (status 0x80 reset every 300*6 frames; every 0x25 frames 0x448920,
+  0x435bd0, 0x43e7d0).
+- Pool inits the emulator harness runs at game init: 0x447680, 0x462a50, 0x437a70(0),
+  0x45b5f0, 0x432610.

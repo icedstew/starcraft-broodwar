@@ -228,6 +228,45 @@ impl State {
         worst
     }
 
+    /// 0x4741a0: can `t` be created at tile (tx, ty) by a trigger / the editor: terrain
+    /// (0x473bd0, no fog test) and units in the way (0x473720). 0 = yes.
+    pub(super) fn creation_placement_check(&mut self, d: &Data, player: u8, tx: i16, ty: i16, t: u16, slot: usize) -> u8 {
+        let flags = d.dat.units.flags[t as usize];
+        let (pw, ph) = placement(d, t);
+        let (w, h) = ((pw / 32) as i16, (ph / 32) as i16);
+        if tx < 0 || ty < 0 || w as i32 + tx as i32 > self.terrain.width as i32 || h as i32 + ty as i32 > self.terrain.height as i32 {
+            self.placement[slot * 0x30..slot * 0x30 + 0x30].fill(3);
+            return 3;
+        }
+        let terrain = self.creation_terrain_check(d, t, tx, ty, w, h, slot);
+        let units = self.units_check(d, NIL, tx, ty, player, t, w, h, slot, flags & 2 == 0, true, false);
+        terrain.max(units)
+    }
+
+    /// 0x473bd0: terrain per tile without the player's fog (4 unbuildable, 2 a town hall
+    /// too close to resources).
+    #[allow(clippy::too_many_arguments)]
+    fn creation_terrain_check(&mut self, d: &Data, t: u16, tx: i16, ty: i16, w: i16, h: i16, slot: usize) -> u8 {
+        let beacon = (0xc2..=0xc7).contains(&t);
+        let flags = d.dat.units.flags[t as usize];
+        let blocking: u32 = if d.dat.units.staredit_group_flags[t as usize] & 1 != 0 { 0x2880_0000 } else { 0x28c0_0000 };
+        let mut worst = 0;
+        for row in 0..h.max(0) as i32 {
+            for col in 0..w.max(0) as i32 {
+                let (x, y) = (tx as i32 + col, ty as i32 + row);
+                let f = self.tile_flag(x, y);
+                let v = if blocking & f == 0 || (beacon && (f as i32) < 0) {
+                    if flags & 0x1000 != 0 && self.near_resource(d, false, x as i16, y as i16) { 2 } else { 0 }
+                } else {
+                    4
+                };
+                self.placement[(row as usize + slot * 8) * 6 + col as usize] = v;
+                worst = worst.max(v);
+            }
+        }
+        worst
+    }
+
     /// 0x473990: a resource within 3 tiles of tile (x, y).
     fn near_resource(&mut self, d: &Data, a7: bool, x: i16, y: i16) -> bool {
         if a7 {

@@ -173,7 +173,7 @@ impl State {
 
     /// 0x49b2b0: a burrowed unit cloaks at once (draw function 3, no fade): it joins
     /// the cloak list and keeps the Cloak secondary order.
-    fn burrowed_cloak(&mut self, d: &Data, u: u32) {
+    pub(super) fn burrowed_cloak(&mut self, d: &Data, u: u32) {
         if self.units[u as usize].status & 0x100 != 0 {
             return;
         }

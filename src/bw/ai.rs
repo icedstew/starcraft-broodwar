@@ -1,0 +1,944 @@
+//! Computer player AI (tai_*.cpp, sai_*.cpp): unit strengths, player AI data, AI
+//! regions and the per-frame update (ai_update 0x4a2b00).
+//!
+//! Memory map and field names: agent/re-notes.md ("AI memory map").
+
+use super::list::NIL;
+use super::{Data, State};
+use crate::dat::Dat;
+
+/// 0x431150: a unit type's weapon strength, adjusted (workers and scourge count less,
+/// zealots and mutalisks double, mines / interceptors / scarabs nothing).
+fn adjust_strength(t: usize, v: u32) -> u32 {
+    match t {
+        7 | 0x29 | 0x40 => v >> 2,
+        13 | 0x49 | 0x55 => 0,
+        0x20 | 0x2b | 0x41 => v * 2,
+        0x2f | 0x32 => v >> 4,
+        0x53 => v / 10,
+        _ => v,
+    }
+}
+
+/// 0x431270: strength of unit type `t` with weapon `w`: sqrt of its damage rate times
+/// its durability, scaled by 7.58.
+fn weapon_strength(dat: &Dat, t: usize, w: u8) -> u32 {
+    let u = &dat.units;
+    let sh = if u.shield_enable[t] != 0 { u.shields[t] as u32 } else { 0 };
+    let life = ((u.hit_points[t] as i32 >> 8) as u32).wrapping_add(sh);
+    if life == 0 {
+        return 0;
+    }
+    let ws = &dat.weapons;
+    let wi = w as usize;
+    let factor = ws.damage_factor[wi] as u32;
+    let cooldown = ws.cooldown[wi] as u32;
+    let damage = ws.damage[wi] as u32;
+    let range = (ws.max_range[wi] / cooldown).wrapping_mul(factor).wrapping_mul(damage);
+    let rate = if w == 0x82 { 0 } else { (((factor * damage) << 11) as i32 / cooldown as i32) as u32 };
+    let v = (rate.wrapping_mul(life) >> 8).wrapping_add(range);
+    let mut f = v as i32 as f64;
+    if (v as i32) < 0 {
+        f += 4294967296.0;
+    }
+    // 0x4f7b70 (_ftol): truncation.
+    (f.sqrt() * 7.58) as u32
+}
+
+/// 0x4313c0: air (0) and ground (1) strength of every unit type (the AI's 0x6bb210 /
+/// 0x6bb5a0), from the turret's or hangar fighter's weapons. A unit with only the other
+/// kind of weapon gets 0 instead of 1.
+pub fn strength_table(dat: &Dat) -> [[u32; 228]; 2] {
+    let mut out = [[0u32; 228]; 2];
+    for t in 0..228usize {
+        let skip = matches!(t, 0x23 | 0x24 | 0x3b | 0x61);
+        let weapon_unit = || match t {
+            0x48 | 0x52 => 0x49,
+            0x53 | 0x51 => 0x55,
+            _ => {
+                let s = dat.units.subunit1[t];
+                if s != 0xe4 { s as usize } else { t }
+            }
+        };
+        let air = if skip {
+            0
+        } else {
+            let wu = weapon_unit();
+            let w = dat.units.air_weapon[wu];
+            if w == 0x82 { 1 } else { adjust_strength(t, weapon_strength(dat, t, w)) }
+        };
+        let ground = if skip {
+            0
+        } else {
+            let wu = weapon_unit();
+            let w = dat.units.ground_weapon[wu];
+            if w == 0x82 { 1 } else { adjust_strength(t, weapon_strength(dat, t, w)) }
+        };
+        out[0][t] = if air == 1 && ground > 1 { 0 } else { air };
+        out[1][t] = if ground == 1 && air > 1 { 0 } else { ground };
+    }
+    out
+}
+
+impl State {
+    /// 0x4026d0: current hp + shields (whole points).
+    fn life_now(&self, d: &Data, u: u32) -> i32 {
+        let un = &self.units[u as usize];
+        let sh = if d.dat.units.shield_enable[un.unit_type as usize] != 0 { un.shields >> 8 } else { 0 };
+        ((un.hp + 0xff) >> 8) + sh
+    }
+
+    /// 0x401400: max hp in whole points (the current hp, at least 1, when the type has
+    /// none).
+    fn max_hp_points(&self, d: &Data, u: u32) -> i32 {
+        let un = &self.units[u as usize];
+        let mut m = d.dat.units.hit_points[un.unit_type as usize] as i32 >> 8;
+        if m == 0 {
+            m = (un.hp + 0xff) >> 8;
+            if m == 0 {
+                m = 1;
+            }
+        }
+        m
+    }
+
+    /// 0x402710: max hp + max shields (whole points).
+    fn life_max(&self, d: &Data, u: u32) -> i32 {
+        let t = self.units[u as usize].unit_type as usize;
+        let sh = if d.dat.units.shield_enable[t] != 0 { d.dat.units.shields[t] as i32 } else { 0 };
+        self.max_hp_points(d, u) + sh
+    }
+
+    /// 0x4e7170: space taken by `u`'s passengers.
+    pub(super) fn loaded_space(&self, d: &Data, u: u32) -> u32 {
+        (0..8)
+            .filter_map(|i| self.unit_from_handle(self.units[u as usize].loaded_units[i] as u32))
+            .map(|c| d.dat.units.space_required[self.units[c as usize].unit_type as usize] as u32)
+            .sum()
+    }
+
+    /// 0x4316d0: `u`'s full-health strength of `kind` (0 air, 1 ground): a bunker counts
+    /// its passengers as marines, casters add half their energy.
+    fn base_strength(&self, d: &Data, u: u32, kind: usize) -> u32 {
+        let un = &self.units[u as usize];
+        let t = un.unit_type as usize;
+        let mut v = d.strength[kind][t];
+        if t == 0x7d {
+            v = self.loaded_space(d, u).wrapping_mul(d.strength[kind][0]);
+        }
+        if d.dat.units.flags[t] & 0x20_0000 != 0 && un.status & 0x4000_0000 == 0 {
+            v = v.wrapping_add(((un.energy >> 8) as u32) >> 1);
+        }
+        v
+    }
+
+    /// 0x431800: `u`'s strength of `kind` scaled by its remaining hp + shields
+    /// (damaged hallucinations count nothing).
+    pub(super) fn unit_strength(&self, d: &Data, u: u32, kind: usize) -> u32 {
+        let t = self.units[u as usize].unit_type;
+        if matches!(t, 0x23 | 0x24 | 0x3b | 0x61) {
+            return 0;
+        }
+        if self.units[u as usize].status & 0x4000_0000 != 0 && self.life_now(d, u) < self.life_max(d, u) {
+            return 0;
+        }
+        let v = self.base_strength(d, u, kind);
+        let now = self.life_now(d, u);
+        let sh = if d.dat.units.shield_enable[t as usize] != 0 { d.dat.units.shields[t as usize] as i32 } else { 0 };
+        let mut max = (self.max_hp_points(d, u) + sh) as u32;
+        if max == 0 {
+            max = 1;
+        }
+        (now as u32).wrapping_mul(v) / max
+    }
+
+    /// The `+0x138` / `+0x13a` refresh the hp and completion code does (0x431800(0/1)).
+    pub(super) fn refresh_strength(&mut self, d: &Data, u: u32) {
+        let air = self.unit_strength(d, u, 0) as u16;
+        let ground = self.unit_strength(d, u, 1) as u16;
+        let un = &mut self.units[u as usize];
+        un.air_strength = air;
+        un.ground_strength = ground;
+    }
+}
+
+/// An AI pool entry's links (BW: +0 next, +4 prev); the pools hand out entries from a
+/// free list kept in array order at start.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AiLink {
+    pub next: u32,
+    pub prev: u32,
+}
+
+impl Default for AiLink {
+    fn default() -> AiLink {
+        AiLink { next: NIL, prev: NIL }
+    }
+}
+
+pub trait AiNode: Default + Clone {
+    fn ai_link(&mut self) -> &mut AiLink;
+}
+
+/// A fixed AI pool (`AiArray`): 1000 guards / workers / buildings / military, 100 towns
+/// and scripts.
+#[derive(Clone)]
+pub struct AiPool<T: AiNode> {
+    pub items: Vec<T>,
+    pub free: u32,
+}
+
+impl<T: AiNode> AiPool<T> {
+    /// 0x402c60 / 0x403650 / 0x403db0 / 0x404280 / 0x404550 / 0x403130: every entry free,
+    /// linked in array order.
+    pub fn new(n: usize) -> AiPool<T> {
+        let mut items = vec![T::default(); n];
+        for (i, it) in items.iter_mut().enumerate() {
+            let l = it.ai_link();
+            l.prev = if i == 0 { NIL } else { i as u32 - 1 };
+            l.next = if i + 1 == n { NIL } else { i as u32 + 1 };
+        }
+        AiPool { items, free: if n == 0 { NIL } else { 0 } }
+    }
+
+    /// Take the first free entry and put it first in the list `head`.
+    pub fn alloc(&mut self, head: &mut u32) -> Option<u32> {
+        let n = self.free;
+        if n == NIL {
+            return None;
+        }
+        let next_free = self.items[n as usize].ai_link().next;
+        self.free = next_free;
+        if next_free != NIL {
+            self.items[next_free as usize].ai_link().prev = NIL;
+        }
+        *self.items[n as usize].ai_link() = AiLink { next: *head, prev: NIL };
+        if *head != NIL {
+            self.items[*head as usize].ai_link().prev = n;
+        }
+        *head = n;
+        Some(n)
+    }
+
+    /// Unlink `n` from the list `head` and put it first in the free list.
+    pub fn release(&mut self, head: &mut u32, n: u32) {
+        let AiLink { next, prev } = *self.items[n as usize].ai_link();
+        if prev != NIL {
+            self.items[prev as usize].ai_link().next = next;
+        }
+        if next != NIL {
+            self.items[next as usize].ai_link().prev = prev;
+        }
+        if *head == n {
+            *head = next;
+        }
+        *self.items[n as usize].ai_link() = AiLink { next: self.free, prev: NIL };
+        if self.free != NIL {
+            self.items[self.free as usize].ai_link().prev = n;
+        }
+        self.free = n;
+    }
+}
+
+macro_rules! ai_node {
+    ($($t:ident),*) => {$(impl AiNode for $t { fn ai_link(&mut self) -> &mut AiLink { &mut self.link } })*};
+}
+
+/// 0x20 bytes: a unit the AI keeps at a guard post.
+#[derive(Clone, Default, Debug)]
+pub struct GuardAi {
+    pub link: AiLink,
+    pub ai_type: u8,
+    pub times_died: u8,
+    pub parent: u32,
+    pub unit_id: u16,
+    pub home: (i16, i16),
+    pub other_home: (i16, i16),
+    pub previous_update: u32,
+}
+
+/// 0x18 bytes.
+#[derive(Clone, Default, Debug)]
+pub struct WorkerAi {
+    pub link: AiLink,
+    pub ai_type: u8,
+    pub target_resource: u8,
+    pub reassign_count: u8,
+    pub wait_timer: u8,
+    pub last_update_second: u32,
+    pub parent: u32,
+    pub town: u32,
+}
+
+/// 0x2c bytes.
+#[derive(Clone, Default, Debug)]
+pub struct BuildingAi {
+    pub link: AiLink,
+    pub ai_type: u8,
+    pub train_queue_types: [u8; 5],
+    pub parent: u32,
+    pub town: u32,
+    pub train_queue_values: [u32; 5],
+}
+
+/// 0x14 bytes.
+#[derive(Clone, Default, Debug)]
+pub struct MilitaryAi {
+    pub link: AiLink,
+    pub ai_type: u8,
+    pub unk9: u8,
+    pub unka: u16,
+    pub parent: u32,
+    /// (player, region index).
+    pub region: (u8, u16),
+}
+
+/// 0x1cc bytes.
+#[derive(Clone, Debug)]
+pub struct AiTown {
+    pub link: AiLink,
+    pub workers: u32,
+    pub buildings: u32,
+    pub player: u8,
+    pub inited: u8,
+    pub worker_count: u8,
+    pub worker_limit: u8,
+    pub resource_area: u8,
+    pub resource_units_not_set: u8,
+    pub in_battle: u8,
+    pub unk1f: u8,
+    pub position: (i16, i16),
+    pub main_building: u32,
+    pub building_scv: u32,
+    pub mineral: u32,
+    pub gas_buildings: [u32; 3],
+    /// (flags and count, priority, id)
+    pub town_units: [(u8, u8, u16); 0x64],
+}
+
+impl Default for AiTown {
+    fn default() -> AiTown {
+        AiTown {
+            link: AiLink::default(),
+            workers: NIL,
+            buildings: NIL,
+            player: 0,
+            inited: 0,
+            worker_count: 0,
+            worker_limit: 0,
+            resource_area: 0,
+            resource_units_not_set: 0,
+            in_battle: 0,
+            unk1f: 0,
+            position: (0, 0),
+            main_building: NIL,
+            building_scv: NIL,
+            mineral: NIL,
+            gas_buildings: [NIL; 3],
+            town_units: [(0, 0, 0); 0x64],
+        }
+    }
+}
+
+/// 0x34 bytes: a running AI script thread.
+#[derive(Clone, Default, Debug)]
+pub struct AiScript {
+    pub link: AiLink,
+    pub pos: u32,
+    pub wait: u32,
+    pub player: u32,
+    pub area: [i32; 4],
+    pub center: (i32, i32),
+    pub town: u32,
+    pub flags: u32,
+}
+
+ai_node!(GuardAi, WorkerAi, BuildingAi, MilitaryAi, AiTown, AiScript);
+
+/// 0x34 bytes per region per player (0x69a604).
+#[derive(Clone, Debug)]
+pub struct AiRegion {
+    pub id: u16,
+    pub target_region_id: u16,
+    pub player: u8,
+    pub state: u8,
+    pub defense_priority_add: u8,
+    pub unk_count: u8,
+    pub flags: u8,
+    pub unk: u8,
+    pub ground_unit_count: u16,
+    pub needed_ground_strength: u16,
+    pub needed_air_strength: u16,
+    pub local_military_ground_strength: u16,
+    pub local_military_air_strength: u16,
+    pub all_military_ground_strength: u16,
+    pub all_military_air_strength: u16,
+    /// +0x18 / +0x1a
+    pub enemy_air_strength: u16,
+    pub enemy_ground_strength: u16,
+    pub air_target: u32,
+    pub ground_target: u32,
+    pub slowest_military: u32,
+    pub detector: u32,
+    /// Its military AIs (list in the shared pool 0x6957e0).
+    pub military: u32,
+}
+
+impl AiRegion {
+    fn new(id: u16, player: u8) -> AiRegion {
+        AiRegion {
+            id,
+            target_region_id: 0,
+            player,
+            state: 0,
+            defense_priority_add: 0,
+            unk_count: 0,
+            flags: 0,
+            unk: 0,
+            ground_unit_count: 0,
+            needed_ground_strength: 0,
+            needed_air_strength: 0,
+            local_military_ground_strength: 0,
+            local_military_air_strength: 0,
+            all_military_ground_strength: 0,
+            all_military_air_strength: 0,
+            enemy_air_strength: 0,
+            enemy_ground_strength: 0,
+            air_target: NIL,
+            ground_target: NIL,
+            slowest_military: NIL,
+            detector: NIL,
+            military: NIL,
+        }
+    }
+}
+
+/// 8 bytes.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SpendingRequest {
+    pub priority: u8,
+    pub ty: u8,
+    pub id: u16,
+    pub val: u32,
+}
+
+/// 0x4e8 bytes per player (0x68fee8).
+#[derive(Clone, Debug)]
+pub struct PlayerAi {
+    pub mineral_need: u32,
+    pub gas_need: u32,
+    pub supply_need: u32,
+    pub minerals_available: u32,
+    pub gas_available: u32,
+    pub supply_available: u32,
+    pub requests: [SpendingRequest; 0x3f],
+    pub request_count: u8,
+    pub build_cooldown: u8,
+    pub nuke_rate_minutes: u8,
+    pub unk_attack: u8,
+    pub previous_nuke_timer: u32,
+    pub flags: u16,
+    pub panic_script_pos: u16,
+    pub max_region_strength_need: u16,
+    pub attack_grouping_region: u16,
+    pub train_unit_id: u16,
+    pub default_min_strength_for_regions: u8,
+    pub defense_priority_base: u8,
+    pub previous_building_hit_second: u32,
+    pub last_attack_second: u32,
+    pub strategic_suicide_mission_cooldown: u8,
+    pub spell_cooldown: u8,
+    pub attack_failed: u8,
+    pub difficulty: u8,
+    pub attack_force: [u16; 0x40],
+    pub defense_units: [[u16; 0x14]; 8],
+    pub build_limits: [u8; 0xe4],
+    pub free_medic: u32,
+    pub gencmd_area: [i32; 4],
+}
+
+impl Default for PlayerAi {
+    fn default() -> PlayerAi {
+        PlayerAi {
+            mineral_need: 0,
+            gas_need: 0,
+            supply_need: 0,
+            minerals_available: 0,
+            gas_available: 0,
+            supply_available: 0,
+            requests: [SpendingRequest::default(); 0x3f],
+            request_count: 0,
+            build_cooldown: 0,
+            nuke_rate_minutes: 0,
+            unk_attack: 0,
+            previous_nuke_timer: 0,
+            flags: 0,
+            panic_script_pos: 0,
+            max_region_strength_need: 0,
+            attack_grouping_region: 0,
+            train_unit_id: 0,
+            default_min_strength_for_regions: 0,
+            defense_priority_base: 0,
+            previous_building_hit_second: 0,
+            last_attack_second: 0,
+            strategic_suicide_mission_cooldown: 0,
+            spell_cooldown: 0,
+            attack_failed: 0,
+            difficulty: 0,
+            attack_force: [0; 0x40],
+            defense_units: [[0; 0x14]; 8],
+            build_limits: [0; 0xe4],
+            free_medic: NIL,
+            gencmd_area: [0; 4],
+        }
+    }
+}
+
+/// Everything the AI keeps.
+#[derive(Clone)]
+pub struct Ai {
+    pub players: Vec<PlayerAi>,
+    /// 0x68fee4: the player 0x448920 looks at next.
+    pub update_player: u32,
+    /// 0x692628
+    pub unk_692628: u8,
+    /// 0x69a604: regions per player.
+    pub regions: Vec<Vec<AiRegion>>,
+    /// 0x6957e0: military AIs of every region.
+    pub military: AiPool<MilitaryAi>,
+    /// 0x67d400 and the per-player guard lists 0x685108.
+    pub guards: AiPool<GuardAi>,
+    pub guard_lists: [u32; 8],
+    /// Workers 0x6b5448?, buildings, towns 0x6aa090 (lists 0x6aa050 per player).
+    pub workers: AiPool<WorkerAi>,
+    pub buildings: AiPool<BuildingAi>,
+    pub towns: AiPool<AiTown>,
+    pub town_lists: [u32; 8],
+    /// 0x6aa04c: the player 0x435bd0 looks at next.
+    pub town_update_player: u32,
+    /// 0x68aca8 script pool, 0x68c100 active scripts.
+    pub scripts: AiPool<AiScript>,
+    pub active_scripts: u32,
+    /// 0x6d63e0: the call opcode's return position (one for all threads).
+    pub script_return: u32,
+    /// 0x6957d4 / 0x6957d8: 0x43fd80's step counter and player.
+    pub region_step: u32,
+    pub region_player: u32,
+    /// 0x59cc8c / 0x59cc90 / 0x59cc94: 0x4a2a40's timers.
+    pub timer_300: u32,
+    pub timer_6: u32,
+    pub timer_tick: u32,
+}
+
+impl Default for Ai {
+    fn default() -> Ai {
+        Ai {
+            players: vec![PlayerAi::default(); 8],
+            update_player: 0,
+            unk_692628: 0,
+            regions: vec![Vec::new(); 8],
+            military: AiPool::new(1000),
+            guards: AiPool::new(1000),
+            guard_lists: [NIL; 8],
+            workers: AiPool::new(1000),
+            buildings: AiPool::new(1000),
+            towns: AiPool::new(100),
+            town_lists: [NIL; 8],
+            town_update_player: 0,
+            scripts: AiPool::new(100),
+            active_scripts: NIL,
+            script_return: 0,
+            region_step: 0,
+            region_player: 0,
+            timer_300: 0xf,
+            timer_6: 6,
+            timer_tick: 0x3c,
+        }
+    }
+}
+
+impl State {
+    /// 0x447680: every player's AI data cleared; resources from the players' start.
+    pub fn init_player_ai(&mut self) {
+        let ai = &mut self.ai;
+        ai.update_player = 0;
+        for p in 0..8 {
+            ai.players[p] = PlayerAi { minerals_available: self.players.minerals[p] as u32, gas_available: self.players.gas[p] as u32, difficulty: 1, ..PlayerAi::default() };
+        }
+        ai.unk_692628 = 1;
+    }
+
+    /// 0x437a70(0) / 0x437a70(1): the AI regions of every player, one per pathing region
+    /// (after the scenario loads); the region minimum strength default is 100.
+    pub fn init_ai_regions(&mut self) {
+        let n = self.sai.region_count as usize;
+        for p in 0..8 {
+            self.ai.regions[p] = (0..n).map(|i| AiRegion::new(i as u16, p as u8)).collect();
+            self.ai.players[p].default_min_strength_for_regions = 100;
+        }
+        self.ai.region_step = 0;
+        self.ai.region_player = 0;
+    }
+}
+
+impl State {
+    /// 0x4a2b00 ai_update (start of game_step).
+    pub fn ai_update(&mut self, d: &Data) {
+        self.run_ai_scripts(d);
+        self.ai_region_steps(d);
+        // 0x445610: resource areas, every 0x1c2 frames.
+        if self.ai_resource_areas_used() {
+            crate::todo_port!("0x445610", "AI resource area refresh");
+        }
+        self.ai_timers(d);
+    }
+
+    fn ai_resource_areas_used(&self) -> bool {
+        false
+    }
+
+    /// 0x45cbd0: run the AI scripts whose wait is over (killed ones go back to the pool).
+    fn run_ai_scripts(&mut self, d: &Data) {
+        let mut s = self.ai.active_scripts;
+        while s != NIL && self.ai.active_scripts != NIL {
+            let next = self.ai.scripts.items[s as usize].link.next;
+            let w = self.ai.scripts.items[s as usize].wait;
+            self.ai.scripts.items[s as usize].wait = w.wrapping_sub(1);
+            if w == 0 {
+                if self.ai.scripts.items[s as usize].flags & 4 == 0 {
+                    self.run_script(d, s);
+                } else {
+                    let mut head = self.ai.active_scripts;
+                    self.ai.scripts.release(&mut head, s);
+                    self.ai.active_scripts = head;
+                }
+            }
+            s = next;
+        }
+    }
+
+    /// 0x43fd80: 0x14d steps a frame over each computer player's regions (0x43fc60); a
+    /// full sweep of 0x9c4 steps moves on to the next player, recounting enemy
+    /// strength per region (0x43a250) and the player's attack timers (0x43b9e0).
+    fn ai_region_steps(&mut self, d: &Data) {
+        let rc = self.sai.region_count as u32;
+        for _ in 0..0x14d {
+            let p = self.ai.region_player as usize;
+            if self.ai.region_step < rc && self.player_types[p] == 1 {
+                crate::todo_port!("0x43fc60", "AI region step");
+            }
+            self.ai.region_step += 1;
+            if self.ai.region_step == 0x9c4 {
+                self.ai.region_player = (self.ai.region_player + 1) % 8;
+                self.ai.region_step = 1;
+                self.count_enemy_strength(d);
+                let p = self.ai.region_player as usize;
+                if self.player_types[p] == 1 && self.ai.players[p].flags & 0x20 == 0 {
+                    crate::todo_port!("0x43b9e0", "AI attack timers");
+                }
+            }
+        }
+    }
+
+    /// 0x43a250: once per sweep (player 0), every region's enemy air / ground strength
+    /// from scratch (0x438c20 per unit).
+    fn count_enemy_strength(&mut self, _d: &Data) {
+        if self.ai.region_player != 0 {
+            return;
+        }
+        for p in 0..8 {
+            for r in self.ai.regions[p].iter_mut().skip(1) {
+                r.enemy_air_strength = 0;
+                r.enemy_ground_strength = 0;
+            }
+        }
+        let mut u = self.visible_units.head;
+        while u != NIL {
+            let un = &self.units[u as usize];
+            if un.sprite != NIL && un.order != 0 {
+                self.add_enemy_strength(u);
+            }
+            u = self.units[u as usize].link.next;
+        }
+    }
+
+    /// 0x438c20: `u` counts as enemy strength in its region for each computer player
+    /// not allied with its owner (a neutral unit counts for its sprite's owner).
+    fn add_enemy_strength(&mut self, u: u32) {
+        let un = &self.units[u as usize];
+        let s = un.air_strength.max(un.ground_strength);
+        if s == 0 {
+            return;
+        }
+        let sp = &self.sprites[un.sprite as usize];
+        let r = super::path::region_at(&self.sai, sp.x as i32, sp.y as i32) as usize;
+        let owner = if un.player == 0xb { sp.owner } else { un.player };
+        let air = un.status & 4 != 0;
+        for q in 0..8usize {
+            if self.player_types[q] != 1 || un.player as usize == q {
+                continue;
+            }
+            if self.alliances[q][owner as usize] != 0 {
+                continue;
+            }
+            let Some(reg) = self.ai.regions[q].get_mut(r) else { continue };
+            if air {
+                reg.enemy_air_strength = reg.enemy_air_strength.wrapping_add(s);
+            } else {
+                reg.enemy_ground_strength = reg.enemy_ground_strength.wrapping_add(s);
+            }
+        }
+    }
+
+    /// 0x4a2a40: every 300 * 6 frames (sooner after a map change) units lose status
+    /// 0x80; every 0x25 frames (7 in the first 0x1194 seconds) the computer players' AI
+    /// timers, towns and army comparison run.
+    fn ai_timers(&mut self, d: &Data) {
+        if self.ai.timer_300 == 0 {
+            self.ai.timer_300 = 300;
+            let reset = if self.ai.timer_6 == 0 {
+                true
+            } else {
+                self.ai.timer_6 -= 1;
+                self.map_changed
+            };
+            if reset {
+                self.ai.timer_6 = 6;
+                self.map_changed = false;
+                let mut u = self.visible_units.head;
+                while u != NIL {
+                    self.units[u as usize].status &= !0x80;
+                    u = self.units[u as usize].link.next;
+                }
+            }
+        } else {
+            self.ai.timer_300 -= 1;
+        }
+        let t = self.ai.timer_tick;
+        self.ai.timer_tick = t.wrapping_sub(1);
+        if t == 0 {
+            self.ai.timer_tick = if self.trig.elapsed < 0x1194 { 7 } else { 0x25 };
+            self.ai_player_tick(d);
+            self.ai_town_tick(d);
+            self.ai_compare_armies(d);
+        }
+    }
+
+    /// 0x448920: one computer player's cooldowns and checks.
+    fn ai_player_tick(&mut self, _d: &Data) {
+        self.ai.update_player = (self.ai.update_player + 1) % 8;
+        let p = self.ai.update_player as usize;
+        if self.player_types[p] != 1 || self.ai.players[p].flags & 2 == 0 {
+            return;
+        }
+        let pa = &mut self.ai.players[p];
+        pa.build_cooldown = pa.build_cooldown.saturating_sub(1);
+        pa.strategic_suicide_mission_cooldown = pa.strategic_suicide_mission_cooldown.saturating_sub(1);
+        pa.spell_cooldown = pa.spell_cooldown.saturating_sub(1);
+        pa.attack_failed = pa.attack_failed.saturating_sub(1);
+        crate::todo_port!("0x448890", "AI player tick (0x448890, 0x4630c0, 0x43f990, 0x436320)");
+    }
+
+    /// 0x435bd0: the next player's towns.
+    fn ai_town_tick(&mut self, _d: &Data) {
+        self.ai.town_update_player = (self.ai.town_update_player + 1) % 8;
+        let p = self.ai.town_update_player as usize;
+        if self.ai.town_lists[p] == NIL {
+            return;
+        }
+        crate::todo_port!("0x435bd0", "AI town tick");
+    }
+
+    /// 0x43e7d0: after 0x167 seconds (unless a computer has flag 0x20): compare each
+    /// computer's ground strength with its enemies' and allies'; flag 2 (+0x219) when
+    /// outnumbered, and 0x43e050 (give up / attack) when far ahead.
+    fn ai_compare_armies(&mut self, _d: &Data) {
+        if self.trig.elapsed <= 0x167 {
+            return;
+        }
+        if self.ai.players.iter().any(|p| p.flags & 0x20 != 0) {
+            return;
+        }
+        let mut own = [0u32; 8];
+        let mut enemy = [0u32; 8];
+        let mut allied = [0u32; 8];
+        let al = |a: usize, b: usize| self.alliances[a][b];
+        let mut u = self.visible_units.head;
+        while u != NIL {
+            let un = &self.units[u as usize];
+            let p = un.player as usize;
+            if un.sprite != NIL && un.order != 0 && p < 8 {
+                let v = un.ground_strength as u32;
+                own[p] = own[p].wrapping_add(v);
+                if _d.dat.units.flags[un.unit_type as usize] & 9 == 0 {
+                    for q in 0..8 {
+                        if p == q || al(p, q) == 2 {
+                            allied[q] = allied[q].wrapping_add(v);
+                        }
+                    }
+                }
+                for q in 0..8 {
+                    if al(q, p) == 0 || al(p, q) == 0 {
+                        enemy[q] = enemy[q].wrapping_add(v);
+                    }
+                }
+            }
+            u = self.units[u as usize].link.next;
+        }
+        let mut best = [0u32; 8];
+        for p in 0..8 {
+            for q in 0..8 {
+                if al(p, q) == 0 && best[q] < allied[p] {
+                    best[q] = allied[p];
+                }
+            }
+        }
+        for p in 0..8 {
+            if self.player_types[p] != 1 {
+                continue;
+            }
+            let pa = &mut self.ai.players[p];
+            if best[p] < own[p] {
+                pa.flags |= 0x200;
+            } else {
+                pa.flags &= !0x200;
+            }
+            if (allied[p] > 5999 || self.trig.elapsed > 0xa8b) && enemy[p] != 0 && enemy[p] * 2 < allied[p] {
+                crate::todo_port!("0x43e050", "AI: far ahead of its enemies");
+            }
+        }
+    }
+}
+
+/// 0x51acc0: scripts any player's trigger may run.
+const ALWAYS_ALLOWED_SCRIPTS: [&[u8; 4]; 21] = [
+    b"EnBk", b"EnTr", b"ExTr", b"DWHe", b"PB3F", b"+Vi0", b"+Vi1", b"+Vi2", b"+Vi3", b"+Vi4", b"+Vi5", b"+Vi6", b"+Vi7", b"-Vi0",
+    b"-Vi1", b"-Vi2", b"-Vi3", b"-Vi4", b"-Vi5", b"-Vi6", b"-Vi7",
+];
+
+fn rd32(b: &[u8], o: usize) -> u32 {
+    b.get(o..o + 4).map_or(0, |v| u32::from_le_bytes(v.try_into().unwrap()))
+}
+
+/// 0x45b170: a script's start: aiscript.bin's header entries (0x10 bytes: id, position)
+/// first, then bwscript.bin's (8 bytes). Some((position, from bwscript.bin)).
+pub fn find_ai_script(d: &Data, id: u32) -> Option<(u32, bool)> {
+    let a = d.aiscript;
+    let mut o = rd32(a, 0) as usize;
+    loop {
+        let k = rd32(a, o);
+        if k == 0 {
+            break;
+        }
+        if k == id {
+            let pos = rd32(a, o + 4);
+            if pos != 0 {
+                return Some((pos, false));
+            }
+            break;
+        }
+        o += 0x10;
+    }
+    let b = d.bwscript;
+    let mut o = rd32(b, 0) as usize;
+    loop {
+        let k = rd32(b, o);
+        if k == 0 {
+            return None;
+        }
+        if k == id {
+            let pos = rd32(b, o + 4);
+            return if pos != 0 { Some((pos, true)) } else { None };
+        }
+        o += 8;
+    }
+}
+
+impl State {
+    /// 0x45aea0: `player` may run script `id` (computers any, neutral only "Rscu").
+    pub fn ai_script_allowed(&self, id: u32, player: u8) -> bool {
+        if ALWAYS_ALLOWED_SCRIPTS.iter().any(|s| u32::from_le_bytes(**s) == id) {
+            return true;
+        }
+        match self.player_type(player) {
+            1 => true,
+            7 => id == u32::from_le_bytes(*b"Rscu"),
+            _ => false,
+        }
+    }
+
+    /// 0x45aef0: start a script thread for `player` at `pos` (in bwscript.bin when
+    /// `bw`), optionally over `area` (its centre recorded too).
+    pub fn start_ai_script(&mut self, player: u32, pos: u32, bw: bool, area: Option<[i32; 4]>) -> Option<u32> {
+        let mut head = self.ai.active_scripts;
+        let s = self.ai.scripts.alloc(&mut head)?;
+        self.ai.active_scripts = head;
+        let sc = &mut self.ai.scripts.items[s as usize];
+        sc.pos = pos;
+        sc.player = player;
+        sc.wait = 0;
+        sc.flags = (sc.flags & !1) | bw as u32;
+        match area {
+            Some(a) => {
+                sc.area = a;
+                sc.center = (a[0] + (a[2] - a[0]) / 2, a[1] + (a[3] - a[1]) / 2);
+            }
+            None => {
+                sc.area = [0; 4];
+                sc.center = (0, 0);
+            }
+        }
+        sc.town = NIL;
+        sc.flags &= 7;
+        Some(s)
+    }
+
+    /// 0x4c5720 / 0x4c56c0: RunAIScript (at location): the trigger's player runs the
+    /// script if allowed.
+    pub fn trigger_run_ai_script(&mut self, d: &Data, id: u32, area: Option<[i32; 4]>) {
+        let p = self.trig.player;
+        if !self.ai_script_allowed(id, p as u8) {
+            return;
+        }
+        if let Some((pos, bw)) = find_ai_script(d, id) {
+            self.start_ai_script(p, pos, bw, area);
+        }
+    }
+}
+
+impl State {
+    /// 0x4abaf0 head: melee-style game types start the computers' race scripts
+    /// (0x4ab230); other games mark every player's AI with flag 0x20.
+    pub fn start_game_type_ai(&mut self, d: &Data) {
+        let t = self.template;
+        if matches!(t[0xe], 1 | 3) && (t[8] != 0 || t[0xc] != 0 || t[0x12] != 0) {
+            self.start_melee_ai(d);
+        } else {
+            for p in self.ai.players.iter_mut() {
+                p.flags |= 0x20;
+            }
+        }
+    }
+
+    /// 0x4ab230: each computer runs its race's melee script ("ZMCx" / "TMCx" / "PMCx";
+    /// "..Cu" without Brood War) around its start location.
+    fn start_melee_ai(&mut self, d: &Data) {
+        for p in 0..8usize {
+            if self.player_types[p] != 1 {
+                continue;
+            }
+            let r = match self.player_races[p] {
+                0 => b'Z',
+                1 => b'T',
+                2 => b'P',
+                _ => continue,
+            };
+            let id = u32::from_le_bytes([r, b'M', b'C', if self.is_expansion { b'x' } else { b'u' }]);
+            let (x, y) = self.start_locations[p];
+            let (x, y) = (x as i32, y as i32);
+            if let Some((pos, bw)) = find_ai_script(d, id) {
+                self.start_ai_script(p as u32, pos, bw, Some([x - 1, y - 1, x + 1, y + 1]));
+            }
+        }
+    }
+}

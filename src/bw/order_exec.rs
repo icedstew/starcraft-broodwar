@@ -894,7 +894,9 @@ impl State {
             let c = d.dat.units.construction_image[new_type as usize] as u16;
             if c < 999 {
                 let s = self.units[u as usize].sprite;
-                self.create_image(d, s, NIL, c, 0, 0, 0);
+                // 0x498e00: before the main image.
+                let main = self.sprites[s as usize].main_image;
+                self.create_image(d, s, main, c, 0, 0, 0);
             }
             let hp = d.dat.units.hit_points[new_type as usize] as i32;
             self.set_unit_hp(d, u, hp);

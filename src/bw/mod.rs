@@ -5,6 +5,9 @@
 //! callees are explicit `todo_port!` markers, never approximations.
 
 pub mod addon;
+pub mod ai;
+pub mod ai_script;
+pub mod ai_town;
 pub mod attack;
 pub mod battery;
 pub mod build;
@@ -86,7 +89,13 @@ pub struct Data<'a> {
     /// (frame count, width, height) per images.dat id.
     pub grp: &'a dyn Fn(u16) -> (u16, u16, u16),
     /// LO files per [type 0..=4 (attack, damage, special, landing, liftoff)][image id].
-    pub lo: &'a [Vec<Option<Vec<u8>>>; 5],
+    pub lo: &'a [Vec<Option<Vec<u8>>>; 6],
+    /// 0x6bb210 / 0x6bb5a0: AI air / ground strength per unit type (0x4313c0, from the
+    /// dat tables before the scenario's settings).
+    pub strength: &'a [[u32; 228]; 2],
+    /// scripts\aiscript.bin / scripts\bwscript.bin.
+    pub aiscript: &'a [u8],
+    pub bwscript: &'a [u8],
     /// GRP files by images.dat grp index (empty when missing).
     pub grp_files: &'a [Vec<u8>],
 }
@@ -188,6 +197,8 @@ pub struct State {
     pub player_left: [u8; 12],
     /// Trigger state (0x51a280 lists, timers, switches, locations).
     pub trig: triggers::Triggers,
+    /// Computer player AI.
+    pub ai: ai::Ai,
     pub reveal_all: bool,
     /// 0x6d5bd0: a building or door changed the map (read by the AI timers 0x4a2a40).
     pub map_changed: bool,
@@ -384,6 +395,7 @@ impl State {
             template: [0; 0x20],
             player_left: [0; 12],
             trig: Default::default(),
+            ai: Default::default(),
             replay_speed: 6,
             replay_mult: 1,
             replay_paused: false,

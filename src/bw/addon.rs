@@ -176,6 +176,49 @@ impl State {
         self.set_secondary_order(u, 0x17);
     }
 
+    /// 0x463dd0: a terran building that lands or appears takes a neutral addon lined
+    /// up with it (0x4404a0).
+    pub(super) fn take_adjacent_addon(&mut self, d: &Data, b: u32) {
+        if let Some(a) = self.find_adjacent_addon(d, b) {
+            self.attach_addon(d, b, a);
+        }
+    }
+
+    /// 0x4404a0: a neutral addon of `b`'s type at the addon position next to `b`
+    /// (0x4402f0 over the units in `b`'s placement box grown by 0x20 each way).
+    fn find_adjacent_addon(&mut self, d: &Data, b: u32) -> Option<u32> {
+        let bt = self.units[b as usize].unit_type;
+        let (pw, ph) = (d.dat.units.placement_box[bt as usize] as i16, (d.dat.units.placement_box[bt as usize] >> 16) as i16);
+        let (bx, by) = self.unit_sprite_pos(b);
+        let l = (bx as u16).wrapping_sub((pw / 2) as u16).wrapping_sub(0x20);
+        let t = (by as u16).wrapping_sub((ph / 2) as u16).wrapping_sub(0x20);
+        let r = (pw as u16).wrapping_add(l).wrapping_add(0x40);
+        let bt_ = (ph as u16).wrapping_add(t).wrapping_add(0x40);
+        let mut search = std::mem::replace(&mut self.search, super::collide::UnitSearch::empty());
+        let start = search.units_in_finder_box(self, [l as i16, t as i16, r as i16, bt_ as i16]);
+        let found = search.results(start);
+        search.pop();
+        self.search = search;
+        let tile = |v: i32| (v + ((v >> 31) & 0x1f)) >> 5;
+        found.into_iter().find(|&c| {
+            let cu = &self.units[c as usize];
+            let ct = cu.unit_type;
+            if d.dat.units.flags[ct as usize] & 2 == 0 || cu.player != 0xb || super::requirements::addon_parent_type(ct) != bt {
+                return false;
+            }
+            let (cx, cy) = self.unit_sprite_pos(c);
+            let cbox = d.dat.units.placement_box[ct as usize];
+            let (cpw, cph) = (cbox as i16 as i32, (cbox >> 16) as i16 as i32);
+            let ap = d.dat.units.addon_position[ct as usize];
+            let (ax, ay) = (ap as i16 as i32, (ap >> 16) as i16 as i32);
+            let cxl = (cx.wrapping_sub((cpw / 2) as i16)) as i32 - ax;
+            let bxl = (bx.wrapping_sub((pw / 2) as i16)) as i32;
+            let cyl = (cy.wrapping_sub((cph / 2) as i16)) as i32 - ay;
+            let byl = (by.wrapping_sub((ph / 2) as i16)) as i32;
+            tile(bxl) == tile(cxl) && tile(byl) == tile(cyl)
+        })
+    }
+
     /// 0x463d50: building `b` takes addon `a`: the addon becomes its owner's and plays
     /// its landing ("attach") animation.
     pub fn attach_addon(&mut self, d: &Data, b: u32, a: u32) {

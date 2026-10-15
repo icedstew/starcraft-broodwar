@@ -112,7 +112,7 @@ impl State {
     }
 
     /// 0x49df10: the unit's box at (x, y) lies inside the map.
-    fn unit_fits_in_map(&self, d: &Data, ut: u16, x: i32, y: i32) -> bool {
+    pub(super) fn unit_fits_in_map(&self, d: &Data, ut: u16, x: i32, y: i32) -> bool {
         let (l, t, r, b) = dims(d, ut);
         x - l >= 0 && r + x < self.map_px.0 as i32 && y - t >= 0 && b + y < self.map_px.1 as i32
     }

@@ -58,7 +58,7 @@ impl State {
     }
 
     /// 0x401360: set or clear the air status (0x4), dropping the path and movement state.
-    fn set_air(&mut self, u: u32, air: bool) {
+    pub(super) fn set_air(&mut self, u: u32, air: bool) {
         let un = &mut self.units[u as usize];
         un.status = (un.status & !4) | if air { 4 } else { 0 };
         self.path_free(u);
@@ -411,7 +411,7 @@ impl State {
         self.land_blocked_check(d, u);
         self.order_next_or_idle(d, u);
         if matches!(self.units[u as usize].unit_type, 0x6a | 0x71 | 0x72 | 0x74) {
-            todo_port!("0x4404a0", "a landed building attaches an addon next to it (0x463d50)");
+            self.take_adjacent_addon(d, u);
         }
     }
 

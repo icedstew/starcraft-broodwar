@@ -1308,7 +1308,8 @@ impl State {
         }
         let w = self.ground_weapon(d, u);
         if self.units[u as usize].status & 0x4000_0000 != 0 {
-            self.hallucination_hit(d, t, u, w);
+            let dir = self.units[u as usize].fl.heading;
+            self.hallucination_hit(d, t, u, w, dir);
             return;
         }
         let (player, dir) = (self.units[u as usize].player, self.units[u as usize].fl.heading);

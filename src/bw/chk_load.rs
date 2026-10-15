@@ -366,7 +366,7 @@ impl State {
     }
 
     /// 0x4cd480: apply the UNIT entry's properties (`p` = entry + 0xc).
-    fn chk_unit_props(&mut self, d: &Data, u: u32, p: &[u8]) {
+    pub(super) fn chk_unit_props(&mut self, d: &Data, u: u32, p: &[u8]) {
         let valid = u32::from_le_bytes([p[0], p[1], p[2], p[3]]);
         let state = p[0xe];
         let ut = self.units[u as usize].unit_type as usize;
@@ -402,17 +402,69 @@ impl State {
                 self.mineral_frames(d, u);
             }
         }
-        if valid & 0x200000 != 0 && matches!(ut, 0x48 | 0x52 | 0x53 | 0x51) {
-            todo_port!("0x4cd260", "map-placed carrier/reaver hangar units");
+        if valid & 0x200000 != 0 {
+            self.fill_hangar(d, u, p[0xc]);
         }
         if valid & 1 != 0 && state & 1 != 0 {
-            todo_port!("0x491a50", "map-placed cloaked unit");
+            // 0x491a50: personnel cloaking (10) for ghosts and their heroes, cloaking
+            // field (9) for wraiths, none (0x2c) otherwise.
+            let tech = match ut {
+                1 | 0x10 | 100 | 99 | 0x68 | 0x33 => 10,
+                8 | 0x15 => 9,
+                _ => 0x2c,
+            };
+            let pl = self.units[u as usize].player;
+            if self.can_use_tech(d, u, tech, pl) == Ok(1) {
+                self.burrowed_cloak(d, u);
+            }
         }
+        // 0x4ccf20
         if valid & 2 != 0 && state & 2 != 0 {
-            todo_port!("0x4ccf20", "map-placed burrowed unit");
+            let pl = self.units[u as usize].player;
+            if self.can_use_tech(d, u, 0xb, pl) == Ok(1) {
+                let s = self.units[u as usize].sprite;
+                self.sprite_images_run_anim(d, s, 0xe);
+                self.go_underground(u);
+                self.burrowed_cloak(d, u);
+                self.units[u as usize].status |= 0x20_0000;
+                self.order_now(d, u, 0x75);
+            }
         }
+        // 0x4cc470: a lifted building, if its owner could lift it off (0x46dc20 inline,
+        // its error code into 0x66ff60).
         if valid & 4 != 0 && state & 4 != 0 {
-            todo_port!("0x4cc470", "map-placed lifted building / unit in transit");
+            let pl = self.units[u as usize].player;
+            if self.can_issue_order(d, u, 0x48, pl).is_ok() {
+                let s = self.units[u as usize].sprite;
+                let tail = self.sprites[s as usize].images.tail;
+                if tail != NIL && self.images[tail as usize].modifier == 10 && self.images[tail as usize].y != 0x2a {
+                    self.images[tail as usize].flags |= 1;
+                    self.images[tail as usize].y = 0x2a;
+                }
+                self.sprite_images_run_anim(d, s, 0xd);
+                self.unit_leave_map_grids(d, u);
+                // 0x463470
+                {
+                    let t = self.units[u as usize].unit_type;
+                    let un = &mut self.units[u as usize];
+                    un.status = (un.status & !2) | 0x1_0000;
+                    if d.dat.units.flags[t as usize] & 0x10 == 0 {
+                        un.status |= 0x2_0000;
+                    } else {
+                        un.status &= !0x2_0000;
+                    }
+                }
+                self.path_free(u);
+                {
+                    let elev = self.sprites[s as usize].elevation;
+                    let un = &mut self.units[u as usize];
+                    un.movement_state = 0;
+                    un.pathing_flags = (un.pathing_flags & !1) | (elev < 0xc) as u8;
+                }
+                self.sprites[s as usize].elevation = 0xc;
+                self.set_air(u, true);
+                self.unit_enter_map_grids(d, u);
+            }
         }
         if valid & 8 != 0 && state & 8 != 0 {
             self.make_hallucination(d, u);
@@ -484,7 +536,8 @@ impl State {
         if un.remove_timer == 0 || 0x546 < un.remove_timer {
             un.remove_timer = 0x546;
         }
-        todo_port!("0x431800", "unit air/ground strength (AI)");
+        self.refresh_strength(d, u);
+        let un = &mut self.units[u as usize];
         if un.secondary_order != 0x95 {
             un.secondary_order = 0x95;
             un.secondary_order_pos = (0, 0);
@@ -634,6 +687,41 @@ impl State {
     pub fn chk_uprp(&mut self, b: &[u8]) {
         if b.len() == 0x500 {
             self.trig.unit_properties = b.chunks_exact(0x14).map(|c| c.try_into().unwrap()).collect();
+        }
+    }
+}
+
+impl State {
+    /// 0x4653d0: how many interceptors / scarabs `u`'s hangar holds (0 for others).
+    pub(super) fn hangar_capacity(&self, d: &Data, u: u32) -> u8 {
+        let un = &self.units[u as usize];
+        let t = un.unit_type;
+        let hero = d.dat.units.flags[t as usize] & 0x40 != 0;
+        let up = |i: usize| self.players.upgrade_sc[un.player as usize][i] != 0;
+        match t {
+            0x48 | 0x52 => if hero { 8 } else if up(0x2b) { 8 } else { 4 },
+            0x53 | 0x51 => if hero { 10 } else if up(0x24) { 10 } else { 5 },
+            _ => 0,
+        }
+    }
+
+    /// 0x4cd260: `u` starts with up to `n` interceptors / scarabs docked.
+    pub(super) fn fill_hangar(&mut self, d: &Data, u: u32, n: u8) {
+        let ht = match self.units[u as usize].unit_type {
+            0x48 | 0x52 => 0x49,
+            0x53 | 0x51 => 0x55,
+            _ => return,
+        };
+        let n = n.min(self.hangar_capacity(d, u));
+        for _ in 0..n {
+            let (x, y) = self.unit_sprite_pos(u);
+            let pl = self.units[u as usize].player;
+            let Some(c) = self.create_unit(d, ht, x, y, pl) else { continue };
+            self.finish_unit_pre(d, c);
+            self.finish_unit_post(d, c);
+            self.units[c as usize].set_ptr_at(0xc0, u);
+            // 0x466300 inline
+            self.dock_fighter(d, u, c);
         }
     }
 }

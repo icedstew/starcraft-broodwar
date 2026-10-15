@@ -859,7 +859,7 @@ impl State {
 
     /// 0x479730: a hallucination's hit does no damage, but the target still notices
     /// it (and its shields flash).
-    pub(super) fn hallucination_hit(&mut self, d: &Data, t: u32, source: u32, w: u8) {
+    pub(super) fn hallucination_hit(&mut self, d: &Data, t: u32, source: u32, w: u8, dir: u8) {
         let tu = &self.units[t as usize];
         if tu.hp == 0 || tu.status & 0x400_0000 != 0 {
             return;
@@ -872,16 +872,28 @@ impl State {
         }
         let tu = &self.units[t as usize];
         if d.dat.units.shield_enable[tu.unit_type as usize] != 0 && tu.shields > 0xff && d.dat.weapons.damage_type[w as usize] != 0 {
-            todo_port!("0x4e6140", "shield hit overlay");
+            self.shield_hit_overlay(d, t, dir);
         }
+    }
+
+    /// 0x4e6140: the shield flash (image 0x1a8) on `t`, placed by its main image's
+    /// shield LO for a hit from direction `dir`.
+    fn shield_hit_overlay(&mut self, d: &Data, t: u32, dir: u8) {
+        let s = self.units[t as usize].sprite;
+        let main = self.sprites[s as usize].main_image;
+        let im = &self.images[main as usize];
+        let idx = ((dir as u32).wrapping_sub(0x7c) >> 3) & 0x1f;
+        let (x, y) = d.lo_offset(5, im.image_id, im.direction as u16, idx as i8).unwrap_or((0, 0));
+        // 0x498e00: before the main image.
+        self.create_image(d, s, main, 0x1a8, x, y, idx as u8);
     }
 
     /// 0x479ae0: damage the bullet's target.
     pub(super) fn weapon_hit(&mut self, d: &Data, b: u32, target: u32, divisor: u8) {
         let bu = &self.bullets.pool[b as usize];
         if bu.flags & 2 != 0 {
-            let (w, source) = (bu.weapon, bu.source);
-            self.hallucination_hit(d, target, source, w);
+            let (w, source, dir) = (bu.weapon, bu.source, bu.fl.heading);
+            self.hallucination_hit(d, target, source, w, dir);
             return;
         }
         let (w, player, dir, source) = (bu.weapon, bu.player, bu.fl.heading, bu.source);
@@ -927,7 +939,11 @@ impl State {
         if tu.hp == 0 || tu.status & 0x400_0000 != 0 {
             return;
         }
-        todo_port!("0x479950", "no-damage game option 0x6d5a6c & 4");
+        // Game option 0x6d5a6c & 4: only human players do damage.
+        if self.game_options & 4 != 0 && self.player_type(player) != 2 {
+            dmg = 0;
+        }
+        let tu = &self.units[t as usize];
         if tu.status & 0x4000_0000 != 0 {
             dmg = dmg.wrapping_mul(2);
         }
@@ -970,11 +986,10 @@ impl State {
             let tu = &mut self.units[t as usize];
             tu.shields -= sh;
             if dtype != 0 && tu.shields != 0 {
-                let _ = dir;
-                todo_port!("0x4e6140", "shield hit overlay");
+                self.shield_hit_overlay(d, t, dir);
             }
         }
-        todo_port!("0x431800", "AI strength refresh after damage");
+        self.refresh_strength(d, t);
     }
 
     /// 0x453fc0: armor upgrade level (+2 for ultralisks with chitinous plating in BW).
@@ -1006,7 +1021,7 @@ impl State {
         let tu = &mut self.units[t as usize];
         if dmg < tu.hp {
             tu.hp -= dmg;
-            todo_port!("0x431800", "AI unit strength after damage");
+            self.refresh_strength(d, t);
             let s = self.units[t as usize].sprite;
             let main = self.sprites[s as usize].main_image;
             if self.units[t as usize].status & 1 != 0 && main != NIL && d.has_damage_overlays(self.images[main as usize].image_id) {

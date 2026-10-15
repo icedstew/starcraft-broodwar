@@ -1383,7 +1383,7 @@ impl State {
             if d.dat.units.flags[t] & 0x10 != 0 {
                 return;
             }
-            // 0x431800: AI strengths (AI only).
+            self.refresh_strength(d, u);
             self.set_secondary(u, 0x95);
             u = self.units[u as usize].subunit;
             if u == NIL {

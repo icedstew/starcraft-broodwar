@@ -11,7 +11,7 @@ impl State {
     pub fn game_step(&mut self, d: &Data) {
         self.rng.enabled = true; // 0x4dc540(1)
         self.random_event_tick(d);
-        todo_port!("0x4a2b00", "ai_update");
+        self.ai_update(d);
         if self.counter_100 == 0 {
             self.counter_100 = 100;
         }

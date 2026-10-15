@@ -17,7 +17,7 @@ impl State {
                 self.mark_building_tiles(d, u, p, false);
             }
             if self.units[u as usize].status & 4 != 0 {
-                todo_port!("0x4533d0", "air unit repulse grid");
+                self.repulse_remove(d, u);
             }
         }
         self.transform_unit_counted(d, u, t);
@@ -135,7 +135,8 @@ impl State {
         let old_max = d.dat.units.hit_points[old as usize] as i32 >> 8;
         nhp = if old_max == 0 { 1 } else { nhp / old_max };
         un.hp = if nhp << 8 == 0 { 1 } else { nhp << 8 };
-        todo_port!("0x431800", "unit air/ground strength (AI)");
+        self.refresh_strength(d, u);
+        let un = &mut self.units[u as usize];
         un.status = ((d.dat.orders.interruptible[order as usize] == 0) as u32) << 12 | (st & 0xffff_cbff);
         let s = un.sprite;
         if self.sprites[s as usize].owner != owner {

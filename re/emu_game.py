@@ -285,7 +285,7 @@ def unit_trace(e, f, u):
             f"ddir {e.r8(a + 0x4b)} spd {s32(e, a + 0x38)} nspd {s32(e, a + 0x3c)} top {s32(e, a + 0x34)} "
             f"exact {s32(e, a + 0x2c)},{s32(e, a + 0x30)} vel {s32(e, a + 0x40)},{s32(e, a + 0x44)} "
             f"status {e.r32(a + 0xdc):#x} path {int(e.r32(a + 0x100) != 0)} ot {e.r8(a + 0x85)} mot {e.r8(a + 0x54)} "
-            f"hp {s32(e, a + 8)} sh {s32(e, a + 0x60)} gcd {e.r8(a + 0x55)} tgt {tgt(e, e.r32(a + 0x5c))} vis {e.r8(sp + 0xc)}")
+            f"hp {s32(e, a + 8)} sh {s32(e, a + 0x60)} gcd {e.r8(a + 0x55)} tgt {tgt(e, e.r32(a + 0x5c))} vis {e.r8(sp + 0xc)} str {e.r16(a + 0x138)},{e.r16(a + 0x13a)}")
 
 
 def pcx(path):
@@ -476,6 +476,14 @@ def scenario(e, units, move, frames, out):
         e.w32(0x6d11c8, 0)
         if os.environ.get("SCBW_RNGDBG"):
             print("melee rng total", e.r32(0x51ca18))
+    ai = os.environ.get("SCBW_AI")
+    if ai:  # "p,p,...": computers running their race's melee script
+        for p in (int(v) for v in ai.split(",")):
+            e.w8(0x57eee8 + p * 0x24, 1)
+        e.call(0x437a70, stack=[1])
+        e.w8(0x596873, 1)
+        e.w8(0x596871, 2)
+        e.call(0x4ab230)
     made = []
     for spec in units:
         t, x, y, p = spec

@@ -188,6 +188,17 @@ fn unit_offsets() -> &'static [u16] {
     static O: OnceLock<Vec<u16>> = OnceLock::new();
     O.get_or_init(|| offsets(UNITS, 228, 0xffff))
 }
+/// 0x46e170: the type an addon is built from (its unit requirement list starts with
+/// "current unit is"), 0xe4 for others.
+pub fn addon_parent_type(t: u16) -> u16 {
+    let off = unit_offsets().get(t as usize).copied().unwrap_or(0) as usize;
+    if off != 0 && UNITS[off] == 0xff02 {
+        UNITS[off + 1]
+    } else {
+        0xe4
+    }
+}
+
 fn tech_use_offsets() -> &'static [u16] {
     static O: OnceLock<Vec<u16>> = OnceLock::new();
     O.get_or_init(|| offsets(TECH_USE, 44, 0xffff))

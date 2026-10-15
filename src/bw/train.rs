@@ -282,7 +282,7 @@ impl State {
         }
         let g = d.dat.units.staredit_group_flags[self.units[c as usize].unit_type as usize];
         if g & 5 == 0 && g & 2 != 0 {
-            todo_port!("0x4404a0", "terran building completion (addon / AI hooks)");
+            self.take_adjacent_addon(d, c);
         }
         true
     }

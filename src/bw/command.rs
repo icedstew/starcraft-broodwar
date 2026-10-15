@@ -310,9 +310,12 @@ impl State {
         if d.dat.units.flags[t.unit_type as usize] & 1 != 0 && (self.race_of(d, u) != 1 || d.dat.units.space_required[un.unit_type as usize] > 1) {
             return false;
         }
-        todo_port!("0x4e6c40", "units already loaded in the transport");
         let space = d.dat.units.space_provided[t.unit_type as usize] as u32;
-        d.dat.units.space_required[un.unit_type as usize] as u32 <= space
+        let used: u32 = (0..space as usize)
+            .filter_map(|i| self.loaded_unit(tr, i))
+            .map(|c| d.dat.units.space_required[self.units[c as usize].unit_type as usize] as u32)
+            .sum();
+        d.dat.units.space_required[un.unit_type as usize] as u32 <= space.wrapping_sub(used)
     }
 
     /// 0x47b150: race of `u` (0 zerg, 1 terran, 2 protoss, 4 other).
@@ -398,8 +401,9 @@ impl State {
         if ts & 0x10 != 0 {
             return 6;
         }
-        if (un.unit_type == 0x2d || un.unit_type == 0x31) && ts & 0x400_0000 == 0 {
-            todo_port!("0x491e80", "queen / medic special right-click");
+        // 0x491e80(0xc): a queen right-clicking an infestable command center infests it.
+        if (un.unit_type == 0x2d || un.unit_type == 0x31) && ts & 0x400_0000 == 0 && self.tech_target_error(d, t, 0xc, un.player) == 0 {
+            return 0x1b;
         }
         if un.unit_type == 0x22 { 0xb1 } else { 0x31 }
     }

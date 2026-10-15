@@ -823,6 +823,8 @@ fn new_game(a: &Assets, chk: &Chk, rep: Option<&crate::replay::Header>) -> io::R
             None => 1 << st.local_player,
         };
         st.init_alliances(modes);
+        // 0x4eee00: the AI's player data (0x447680) before the scenario loads.
+        st.init_player_ai();
         // 0x4eec30 -> 0x489b30: trigger state for a new game (0x489790: who is in it).
         st.init_trigger_players();
         // 0x4eee00 loads the scenario right after 0x4ef100 seeds the RNG, with it on.
@@ -869,7 +871,11 @@ fn new_game(a: &Assets, chk: &Chk, rep: Option<&crate::replay::Header>) -> io::R
         st.rng.enabled = true;
         st.melee_start_units(d, st.template[0xc]);
         st.rng.enabled = false;
-        // 0x4ef100 -> 0x4abaf0: the game type's own triggers.
+        // 0x4eee00 tail: 0x437a70(1) AI regions for the map's region count.
+        st.init_ai_regions();
+        // todo_port: 0x446350 resource areas.
+        // 0x4ef100 -> 0x4abaf0: the game type's computer scripts and own triggers.
+        st.start_game_type_ai(d);
         if let Some(name) = bw::triggers::game_type_triggers(&st.template) {
             if let Ok(t) = a.files.read(name) {
                 st.load_triggers(&t);

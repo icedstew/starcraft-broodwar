@@ -13,49 +13,29 @@ Storm's, no map editor), matching the original frame for frame. Assets are read 
 runtime from the user's 1.16.1 install (`~/Downloads/StarCraft-BroodWar_1.16.1`,
 `SCBW_INSTALL`); none are in the repo.
 
-## Where the work is (updated 2026-10-14)
+## Where the work is (updated 2026-10-15)
 
-**tl1412 replay**: scbw equals the emulator (which equals the real 1.16.1) for the whole
-game (24641 frames; the diff starts only where the native trace ends). Also with a
-follow camera (`SCBW_CAMERA`, see below).
+**Replays vs the emulator (whole replay, trigger state and unit AI strengths traced):**
+tl1412, tl1359, tl1363, tl1346, tl1347, tl1352, tl1366 MATCH; tl1361 (Use Map Settings,
+map triggers) MATCH; tl1339 MATCH through f50700 after the transform repulse fix (the
+rest was being re-diffed against `$W/tl1339/ra`). Not yet run: the other UMS replays
+tl1330, 1340, 1341, 1349, 1354, 1356.
 
-**Replay camera**: 1.16.1 replays keep no camera; `view::Follow` derives one from a
-player's commands (latest commanded point or the middle of a new selection).
-`scbw view <rep>` plays a replay following a player (Tab / F). `scbw repcam <rep> <out>`
-writes the per-frame screen positions (as 0x49c440 sets them; the screen tile feeds
-creep updates, so the sim depends on it). `SCBW_CAMERA` feeds them to reptrace /
-repshot / the emulator, `NATIVE_CAMERA` to re/native_shots.sh (gdb calls the game's
-0x49c440 after each draw / step). tl1412_p0 shots: mean 8% differing; late frames
-differ a lot: check against the native trace with camera (NATIVE_MODE=trace, running
-into shots/tl1412_p0/native/trace.txt) before blaming rendering.
+**Triggers** (src/bw/triggers.rs): engine, every condition, nearly every action (create
+unit 0x4a0ad0, move unit incl. buildings, order, give, modify, kill/remove, alliance,
+locations, doodads, waits, run AI script). Melee.trg etc. from the game type; UMS
+sections MASK/UNIx/UPGx/TECx/PUNI/PUPx/PTEx/UPRP/MRGN/TRIG. The emulator runs 0x48a460
+too (needs `$DATA/triggers/*.trg`).
 
-**tl1359 (ZvT), tl1363 (PvT), tl1346 (PvZ)** (2026-10-14): scbw == emulator for the whole
-replay (36567 / 32459 / 58129 frames). Done by porting medics,
-the spell system (shared cast order 0x492850, castspell, every spell explosion type but
-yamato-style is done; defensive matrix; status timers/overlays), glave wurm bounces,
-lurker spines (0x48b680, grdsprol), burrowed cloak, AttackFixedRange, bunker muzzle
-flash / target stand-in, valkyrie spread, Move-to-unit. Full emulator trace in
-`$W/e59/ra` (re-diff: `scbw reptrace <rep> 37000`, blank unit ids, diff).
-
-**Also ported (not yet exercised by a replay)**: carriers / reavers / interceptors /
-scarabs (src/bw/carrier.rs), shield batteries and arbiters (battery.rs), spider mines
-(mines.rs), disruption web marking, AI alert searches (AI reaction itself todo),
-hallucination hits and the Hallucination2 secondary. Still todo: nukes (0x479200 family),
-CastHallucination (0x4f6c40), CastRecall (0x494470), CastMindControl (0x4f6950),
-CastFeedback (0x4f6d40), AI (ai_update 0x4a2b00 and everything AI-gated).
-
-**Creep**: the view drew terrain once from the CHK, so creep never showed. It now draws
-from the live megatile map (0x628494) each frame, with the creep edge map (0x6d0e80)
-and the tileset's edge GRP (0x414100 / 0x49b9f0) ported.
-
-**Other 1.16.1 replays** (2026-10-14, 6000 frames each, `OUT=<dir>` lets repcmp.sh run
-several at once): tl1363, tl1359, tl1346 MATCH the emulator. tl1339 / tl1347 / tl1352: the
-emulator crashes at eip 0x41f82f (fix the harness first); tl1366: emulator CHK load fails.
-Game type 10 in headers is **Use Map Settings** (not top-vs-bottom; that is 0x0f). UMS
-starts need the template (0x596865, 0x20 bytes; +0xc starting units) and 0x59bda8 (replay
-header +0x271) in 0x49da40 / the UNIT loader (`ScenarioModes`, `melee_map_units` exist
-but callers pass defaults); where replays restore the template is not found yet, and the
-emulator hardcodes the melee setup too.
+**AI** (src/bw/ai.rs, ai_script.rs; memory map in re-notes.md): unit strengths
+(0x431800 / 0x4313c0, traced as `str a,g`), player AI data, AI regions, pools, the
+ai_update frame (0x4a2b00: scripts, region sweep + enemy strength 0x43a250, 0x4a2a40
+timers, 0x43e7d0), script threads (start 0x45aef0, lookup 0x45b170, melee start
+0x4ab230, RunAIScript actions) and the interpreter with its self-contained opcodes.
+Next: towns (0x434220 start_town, 0x432020, 0x433dd0, 0x4626e0), AI regions state
+machine (0x4390a0, 0x43a010, 0x43fc60), building/training requests (0x447230,
+0x4474f0...), attacks (0x43abb0, 0x43e050), and an AI verification scenario (computer
+player with its melee script in bwsim and the emulator).
 
 **Late-game divergence vs the real game** (user report "desync around f17044, goliaths?"):
 scbw == emulator with and without the p0 camera through f18000, but native screenshots

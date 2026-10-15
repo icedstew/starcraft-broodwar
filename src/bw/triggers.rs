@@ -225,6 +225,8 @@ pub struct Triggers {
     pub locations: Vec<Location>,
     /// 0x596cd8: UPRP unit property slots.
     pub unit_properties: Vec<[u8; 0x14]>,
+    /// 0x63ff44: set once 0x4a0ad0 created a unit.
+    pub unit_created: bool,
 }
 
 impl Default for Triggers {
@@ -255,6 +257,7 @@ impl Default for Triggers {
             snap: CountSnapshot::default(),
             locations: vec![Location::default(); 255],
             unit_properties: vec![[0; 0x14]; 64],
+            unit_created: false,
         }
     }
 }
@@ -1134,10 +1137,7 @@ impl State {
                             0x32 => st.trigger_set_energy(_d, u, value),
                             0x33 => st.trigger_set_shields(_d, u, value),
                             0x34 => st.trigger_set_resources(_d, u, value),
-                            _ => {
-                                todo_port!("0x4c8a30", "add interceptors / scarabs to a hangar");
-                                false
-                            }
+                            _ => st.trigger_add_fighters(_d, u, value),
                         };
                         if done {
                             count -= 1;
@@ -1246,11 +1246,267 @@ impl State {
                 }
                 true
             }
+            // 0x4c8d90 create unit with properties, 0x2c create unit.
+            0xb | 0x2c => {
+                if a.location as u8 == 0 {
+                    return true;
+                }
+                // 0x51ca10 (the game's start seed) reads 0x75bcd15 meanwhile; nothing in
+                // unit creation uses it.
+                let n = if a.modifier == 0 { 1 } else { a.modifier as u32 };
+                let loc = a.location as u8 - 1;
+                let props = a.number;
+                for _ in 0..n {
+                    self.for_group(a.player, |st, q| st.trigger_create_unit(_d, q, a.unit_type, loc, props));
+                }
+                true
+            }
+            // 0x4c5720: run AI script; 0x4c56c0: run AI script at location.
+            0xf => {
+                self.trigger_run_ai_script(_d, a.number, None);
+                true
+            }
+            0x10 => {
+                let l = a.location as u8;
+                if l != 0 {
+                    let loc = self.trig.locations[l as usize - 1];
+                    self.trigger_run_ai_script(_d, a.number, Some([loc.left as i32, loc.top as i32, loc.right as i32, loc.bottom as i32]));
+                }
+                true
+            }
+            // 0x4c7570: talking portrait (local player, UI).
+            0x1d => true,
+            // 0x4c7ac0: pause game (single player).
+            5 => {
+                let ty = self.player_types[cur];
+                if !self.trig.trigger_paused && !matches!(ty, 1 | 3 | 4 | 7) && self.trig.lists[p][i].flags() & 0x10 == 0 {
+                    // 0x6d120c / 0x5968e0 dialog handlers, 0x4be0b0: UI.
+                    // 0x488800
+                    self.trig.paused = true;
+                    let f = self.trig.lists[p][i].flags();
+                    self.trig.lists[p][i].set_flags(f | 0x20);
+                    self.trig.trigger_paused = true;
+                }
+                true
+            }
+            // 0x4c6de0: center view; 0x4c7890: transmission. Single player: the trigger
+            // waits until the screen scroll (0x4894a0) / the transmission ends.
+            0xa | 7 => {
+                let ty = self.player_types[cur];
+                if a.id == 0xa && (a.location as u8 == 0 || self.trig.paused) {
+                    return true;
+                }
+                if a.id == 7 && a.location as u8 == 0 {
+                    return true;
+                }
+                if matches!(ty, 1 | 3 | 4 | 7) {
+                    return true;
+                }
+                if self.trig.waiting[cur] != 0 {
+                    return false;
+                }
+                let fl = self.trig.lists[p][i].action_flags_mut(k);
+                if *fl & 1 != 0 {
+                    *fl &= !1;
+                    return true;
+                }
+                if self.trig.lists[p][i].flags() & 0x10 != 0 {
+                    return true;
+                }
+                *self.trig.lists[p][i].action_flags_mut(k) |= 1;
+                self.trig.waiting[cur] = 1;
+                // ponytail: without the screen and sound the local player's wait (-1)
+                // never ends; 0x4894a0 / the transmission end would clear it.
+                self.trig.wait_ms[cur] = u32::MAX;
+                if cur == self.local_player as usize {
+                    todo_port!("0x47eb70", "center view scroll / transmission for the local player (UI)");
+                }
+                false
+            }
             _ => {
                 todo_port!("0x512800", "trigger action");
                 true
             }
         }
+    }
+
+    /// 0x4c8c20 (one player): create a `t` for player `p` (< 8) in the middle of location
+    /// `loc`, with UPRP slot `props` (1..=64) applied.
+    fn trigger_create_unit(&mut self, d: &Data, p: u32, t: u16, loc: u8, props: u32) {
+        if p >= 8 {
+            return;
+        }
+        // Resources go to the neutral player.
+        let owner = if matches!(t, 0xb0 | 0xb1 | 0xb2 | 0xbc) { 0xb } else { p as u8 };
+        let l = self.trig.locations[loc as usize];
+        let (x, y) = ((l.left as i32 + l.right as i32) / 2, (l.top as i32 + l.bottom as i32) / 2);
+        let Some(u) = self.create_unit_checked(d, t, x, y, owner) else { return };
+        if props != 0 && props <= 0x40 {
+            let slot = self.trig.unit_properties[props as usize - 1];
+            self.chk_unit_props(d, u, &slot);
+        }
+    }
+
+    /// 0x4a0ad0 / 0x4c82d0: keep a `t` at (x, y) inside the map by its box.
+    fn clamp_to_map(&self, d: &Data, t: u16, x: i32, y: i32) -> (i32, i32) {
+        let dim = d.dat.units.dimensions[t as usize];
+        let (l, up, r, dn) = (dim as i16, (dim >> 16) as i16, (dim >> 32) as i16, (dim >> 48) as i16);
+        let (mw, mh) = (self.map_px.0 as i32, self.map_px.1 as i32);
+        let (mut x, mut y) = (x, y);
+        let a = (x as i16).wrapping_sub(l);
+        if a < 0 {
+            x -= a as i32;
+        } else {
+            let e = r.wrapping_add(x as i16) as i32;
+            if e >= mw {
+                x += mw - e - 1;
+            }
+        }
+        let a = (y as i16).wrapping_sub(up);
+        if a < 0 {
+            y -= a as i32;
+        } else {
+            let e = dn.wrapping_add(y as i16) as i32;
+            if e >= mh {
+                y += mh - e - 1;
+            }
+        }
+        (x, y)
+    }
+
+    /// A building's top-left corner on the tile grid (inside the map), back to its centre.
+    fn snap_building(&self, d: &Data, t: u16, x: i32, y: i32) -> (i32, i32) {
+        let v = d.dat.units.placement_box[t as usize];
+        let (hw, hh) = ((v as i16 as i32) / 2, ((v >> 16) as i16 as i32) / 2);
+        let (mw, mh) = (self.map_px.0 as i32, self.map_px.1 as i32);
+        let bx = (x - hw).clamp(0, mw - 1);
+        let by = (y - hh).clamp(0, mh - 1);
+        ((bx & !0x1f) + hw, (by & !0x1f) + hh)
+    }
+
+    /// 0x4c82d0: move the completed building `u` to (x, y) if it fits there; a terran one
+    /// drops its addon (and takes one lined up at the new spot), zerg creep follows.
+    fn trigger_move_building(&mut self, d: &Data, u: u32, x: i32, y: i32) {
+        if self.units[u as usize].status & 1 == 0 {
+            return;
+        }
+        let t = self.units[u as usize].unit_type;
+        let (x, y) = self.clamp_to_map(d, t, x, y);
+        let (x, y) = self.snap_building(d, t, x, y);
+        let v = d.dat.units.placement_box[t as usize];
+        let (hw, hh) = ((v as i16 as i32) / 2, ((v >> 16) as i16 as i32) / 2);
+        let tile = |v: i32| (v + ((v >> 31) & 0x1f)) >> 5;
+        let pl = self.units[u as usize].player;
+        if self.creation_placement_check(d, pl, (x as u32 >> 5) as i16 - tile(hw) as i16, (y as u32 >> 5) as i16 - tile(hh) as i16, t, 0) != 0 {
+            return;
+        }
+        if !self.unit_fits_in_map(d, t, x, y) {
+            return;
+        }
+        let (ox, oy) = self.unit_sprite_pos(u);
+        let terran_building = self.units[u as usize].status & 2 != 0 && self.race_of(d, u) == 1;
+        if terran_building {
+            if self.units[u as usize].ptr_at(0xc0) != NIL {
+                self.detach_addon(d, u);
+            }
+            // 0x4e66b0 / 0x4e66e0: an addon being built is cancelled.
+            let un = &self.units[u as usize];
+            let b = un.current_build_unit;
+            if un.secondary_order == 0x25 && b != NIL && self.units[b as usize].status & 1 == 0 {
+                self.cancel_unit(d, b);
+            }
+            if d.dat.units.flags[t as usize] & 2 != 0 {
+                // 0x463330: the building this addon belongs to.
+                let mut p = self.visible_units.head;
+                while p != NIL && self.units[p as usize].ptr_at(0xc0) != u {
+                    p = self.units[p as usize].link.next;
+                }
+                if p != NIL {
+                    self.detach_addon(d, p);
+                }
+            }
+        }
+        self.lift_off_map(d, u);
+        self.set_unit_position(d, u, x as i16, y as i16);
+        self.put_back_on_map(d, u);
+        if self.units[u as usize].status & 2 != 0 && self.race_of(d, u) == 1 {
+            self.take_adjacent_addon(d, u);
+        }
+        self.creep_start_receding(d, t, ox as i32, oy as i32, true);
+        let colony = matches!(t, 0x83 | 0x8f | 0x84 | 0x85 | 0x90 | 0x92);
+        let (nx, ny) = self.unit_sprite_pos(u);
+        if colony {
+            self.creep_under_building(d, t, nx as i32, ny as i32);
+            self.creep_unmark_receding(d, u);
+            self.set_secondary_order(u, 0x66);
+        } else if d.dat.units.flags[t as usize] & 0x2_0000 != 0 {
+            self.spread_creep_instantly(d, t, nx as i32, ny as i32);
+            self.creep_unmark_receding(d, u);
+        }
+        self.trig.unit_created = true;
+    }
+
+    /// 0x4a0ad0: create a `t` at (x, y) (kept inside the map; buildings snapped to the
+    /// tile grid and checked for room), finished and placed, with creep and starting
+    /// resources.
+    pub fn create_unit_checked(&mut self, d: &Data, t: u16, x: i32, y: i32, player: u8) -> Option<u32> {
+        if t > 0xe3 || d.dat.units.staredit_availability[t as usize] & 2 == 0 {
+            return None;
+        }
+        let ti = t as usize;
+        let flags = d.dat.units.flags[ti];
+        let (x, y) = self.clamp_to_map(d, t, x, y);
+        let (x, y) = if flags & 1 != 0 { self.snap_building(d, t, x, y) } else { (x, y) };
+        if flags & 1 != 0 {
+            let v = d.dat.units.placement_box[ti];
+            let (hw, hh) = ((v as i16 as i32) / 2, ((v >> 16) as i16 as i32) / 2);
+            let (tx, ty) = ((x / 32 - hw / 32) as i16, (y / 32 - hh / 32) as i16);
+            if self.creation_placement_check(d, player, tx, ty, t, 0) != 0 {
+                // String 0x12 "can't create unit" at the spot (UI).
+                return None;
+            }
+        }
+        let Some(u) = self.create_unit(d, t, x as i16, y as i16, player) else {
+            self.show_last_error(player);
+            return None;
+        };
+        let (ux, uy) = self.unit_sprite_pos(u);
+        let colony = matches!(t, 0x83 | 0x8f | 0x84 | 0x85 | 0x90 | 0x92);
+        if colony {
+            self.creep_under_building(d, t, ux as i32, uy as i32);
+            self.creep_unmark_receding(d, u);
+        } else if flags & 0x2_0000 != 0 {
+            self.spread_creep_instantly(d, t, ux as i32, uy as i32);
+            self.creep_unmark_receding(d, u);
+        }
+        // 0x4a0960
+        self.finish_unit_pre(d, u);
+        if !self.place_unit(d, u) {
+            // String 0x12 at the spot (UI).
+            self.kill_unit(d, u);
+            return None;
+        }
+        self.finish_unit_post(d, u);
+        if colony {
+            self.creep_unmark_receding(d, u);
+        }
+        if d.dat.units.flags[self.units[u as usize].unit_type as usize] & 2 != 0 {
+            self.change_owner(d, u, 0xb, false);
+        }
+        if self.units[u as usize].status & 2 != 0 && self.race_of(d, u) == 1 {
+            self.take_adjacent_addon(d, u);
+        }
+        self.ai_take_unit(u);
+        self.trig.unit_created = true;
+        let ut = self.units[u as usize].unit_type;
+        let gas_done = self.units[u as usize].status & 1 != 0 && matches!(ut, 0x6e | 0x9d | 0x95);
+        if ut == 0xbc || gas_done {
+            self.units[u as usize].set_u16_at(0xd0, 5000);
+        } else if (0xb0..=0xb2).contains(&ut) {
+            self.units[u as usize].set_u16_at(0xd0, 1500);
+            self.mineral_frames(d, u);
+        }
+        Some(u)
     }
 
     /// 0x4c58f0 (one player): the current player's alliance with `q` (0 enemy, 1 ally,
@@ -1415,7 +1671,7 @@ impl State {
         let l = self.trig.locations[dst as usize];
         let (x, y) = (((l.left as i32 + l.right as i32) / 2) as i16, ((l.top as i32 + l.bottom as i32) / 2) as i16);
         if self.units[u as usize].status & 2 != 0 {
-            todo_port!("0x4c82d0", "move a building (it lands on the location's tiles)");
+            self.trigger_move_building(d, u, x as i32, y as i32);
         } else {
             // 0x4c7cf0
             let orig = self.unit_sprite_pos(u);
@@ -1479,6 +1735,33 @@ impl State {
         if self.units[u as usize].ai != NIL && matches!(order, 6 | 0xe) {
             todo_port!("0x4c779c", "a computer's unit keeps the trigger's destination");
         }
+    }
+
+    /// 0x4c8a30: up to `n` new interceptors / scarabs docked in `u` while its owner may
+    /// make them; true when at least one was made.
+    fn trigger_add_fighters(&mut self, d: &Data, u: u32, n: u32) -> bool {
+        let ht = match self.units[u as usize].unit_type {
+            0x48 | 0x52 => 0x49,
+            0x53 | 0x51 => 0x55,
+            _ => return false,
+        };
+        let mut made = 0;
+        while (made as i32) < n as i32 {
+            let pl = self.units[u as usize].player;
+            if self.can_make_unit(d, u, ht, pl) != Ok(1) {
+                break;
+            }
+            let (x, y) = self.unit_sprite_pos(u);
+            if let Some(c) = self.create_unit(d, ht, x, y, pl) {
+                self.finish_unit_pre(d, c);
+                self.finish_unit_post(d, c);
+                self.units[c as usize].set_ptr_at(0xc0, u);
+                self.dock_fighter(d, u, c);
+            }
+            made += 1;
+        }
+        // 0x68c1e8 / 0x68c1ec / 0x68c1b0 / 0x68ac74 / 0x68c1f8: UI refresh.
+        made != 0
     }
 
     /// 0x4c7b60: hp to `pct` percent of the maximum (at least 1/256).

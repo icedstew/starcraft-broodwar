@@ -4,7 +4,6 @@
 use super::list::{self, NIL};
 use super::unit::status;
 use super::{Data, State};
-use crate::todo_port;
 
 impl State {
     /// 0x4a01f0 finish_unit_pre.
@@ -166,9 +165,7 @@ impl State {
             self.issue_order(d, u, order, true, (0, 0), NIL, 0xe4);
             self.prepare_next_order(d, u);
         }
-        todo_port!("0x431800", "unit air/ground strength (AI)");
-        self.units[u as usize].air_strength = 0;
-        self.units[u as usize].ground_strength = 0;
+        self.refresh_strength(d, u);
     }
 
     /// 0x4e6490: make a hidden unit visible: finder, vision, movement reset, visible list.

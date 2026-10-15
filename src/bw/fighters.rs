@@ -105,7 +105,7 @@ impl State {
     }
 
     /// 0x466300: fighter `f` goes into `parent`'s hangar (off the map, first in the list).
-    fn dock_fighter(&mut self, d: &Data, parent: u32, f: u32) {
+    pub(super) fn dock_fighter(&mut self, d: &Data, parent: u32, f: u32) {
         self.hide_unit(d, f);
         let head = self.units[parent as usize].ptr_at(0xc0);
         self.units[f as usize].set_ptr_at(0xc4, head);

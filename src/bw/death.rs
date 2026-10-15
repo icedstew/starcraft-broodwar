@@ -648,7 +648,7 @@ impl State {
         if main != NIL && d.has_damage_overlays(self.images[main as usize].image_id) {
             self.update_damage_overlays(d, u);
         }
-        todo_port!("0x431800", "AI unit strength after an hp change");
+        self.refresh_strength(d, u);
     }
 
     /// 0x4e6090: as many damage flames as the hp below two thirds calls for, one level
