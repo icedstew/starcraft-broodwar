@@ -66,6 +66,34 @@ impl State {
         un.pathing_flags = (un.pathing_flags & !1) | (elev < 0xc) as u8;
     }
 
+    /// 0x463470: no longer a grounded building; 0x20000 unless a subunit type.
+    pub(super) fn lift_off_status(&mut self, d: &Data, u: u32) {
+        let t = self.units[u as usize].unit_type;
+        let un = &mut self.units[u as usize];
+        un.status = (un.status & !2) | 0x1_0000;
+        if d.dat.units.flags[t as usize] & 0x10 == 0 {
+            un.status |= 0x2_0000;
+        } else {
+            un.status &= !0x2_0000;
+        }
+        self.path_free(u);
+        let elev = self.sprites[self.units[u as usize].sprite as usize].elevation;
+        let un = &mut self.units[u as usize];
+        un.movement_state = 0;
+        un.pathing_flags = (un.pathing_flags & !1) | (elev < 0xc) as u8;
+    }
+
+    /// 0x4634e0: grounded building again.
+    pub(super) fn land_status(&mut self, u: u32) {
+        let un = &mut self.units[u as usize];
+        un.status = (un.status & 0xfffc_ffff) | 2;
+        self.path_free(u);
+        let elev = self.sprites[self.units[u as usize].sprite as usize].elevation;
+        let un = &mut self.units[u as usize];
+        un.movement_state = 0;
+        un.pathing_flags = (un.pathing_flags & !1) | (elev < 0xc) as u8;
+    }
+
     /// 0x4649b0: BuildingLiftOff: the building leaves the ground grid and becomes a
     /// flyer, then LiftingOff (0x4a) animates it.
     pub fn order_building_lift_off(&mut self, d: &Data, u: u32) {
@@ -86,24 +114,8 @@ impl State {
             self.units[u as usize].rally_unit = u;
         }
         self.unit_leave_map_grids(d, u);
-        // 0x463470: no longer a grounded building; 0x20000 unless a subunit type.
-        {
-            let un = &mut self.units[u as usize];
-            un.status = (un.status & !2) | 0x1_0000;
-            if d.dat.units.flags[t as usize] & 0x10 == 0 {
-                un.status |= 0x2_0000;
-            } else {
-                un.status &= !0x2_0000;
-            }
-        }
-        self.path_free(u);
+        self.lift_off_status(d, u);
         let s = self.units[u as usize].sprite;
-        {
-            let elev = self.sprites[s as usize].elevation;
-            let un = &mut self.units[u as usize];
-            un.movement_state = 0;
-            un.pathing_flags = (un.pathing_flags & !1) | (elev < 0xc) as u8;
-        }
         self.sprites[s as usize].elevation = 0xc;
         self.set_air(u, true);
         self.unit_enter_map_grids(d, u);
@@ -376,18 +388,7 @@ impl State {
         let tgt = self.units[u as usize].order_target_pos;
         self.mark_building_tiles(d, u, tgt, false);
         self.unit_leave_map_grids(d, u);
-        // 0x4634e0: grounded building again.
-        {
-            let un = &mut self.units[u as usize];
-            un.status = (un.status & 0xfffc_ffff) | 2;
-        }
-        self.path_free(u);
-        {
-            let elev = self.sprites[s as usize].elevation;
-            let un = &mut self.units[u as usize];
-            un.movement_state = 0;
-            un.pathing_flags = (un.pathing_flags & !1) | (elev < 0xc) as u8;
-        }
+        self.land_status(u);
         self.sprites[s as usize].elevation = 4;
         self.set_air(u, false);
         self.place_unit_at(d, u, tgt.0, tgt.1);

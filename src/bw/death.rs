@@ -287,9 +287,9 @@ impl State {
                 self.ghost_drop_nuke_dot(d, u);
             }
             _ => {
-                // 0x4688b0: minerals and completed gas buildings hold resources.
+                // Minerals and completed gas buildings (0x4688b0) hold resources.
                 let st = self.units[u as usize].status;
-                if (0xb0..=0xb2).contains(&t) || (st & 1 != 0 && matches!(t, 0x6e | 0x9d | 0x95)) {
+                if (0xb0..=0xb2).contains(&t) || self.is_completed_refinery(u) {
                     self.clear_resource_workers(u);
                 }
                 match t {

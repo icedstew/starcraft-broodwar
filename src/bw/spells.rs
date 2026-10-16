@@ -1467,6 +1467,67 @@ impl State {
 }
 
 impl State {
+    /// 0x4688b0: a completed refinery (status bit 0; extractor, refinery or assimilator).
+    pub(super) fn is_completed_refinery(&self, u: u32) -> bool {
+        let un = &self.units[u as usize];
+        un.status & 1 != 0 && matches!(un.unit_type, 0x6e | 0x9d | 0x95)
+    }
+
+    /// 0x468a60: the owner's worker (order 0x53) that is inside refinery `r`, or NIL.
+    fn refinery_gas_worker(&self, d: &Data, r: u32) -> u32 {
+        let mut h = self.player_units[self.units[r as usize].player as usize];
+        while h != NIL {
+            let hu = &self.units[h as usize];
+            if hu.order == 0x53
+                && d.dat.units.flags[hu.unit_type as usize] & 8 != 0
+                && self.sprites[hu.sprite as usize].flags & 0x20 != 0
+                && hu.order_target_unit == r
+            {
+                return h;
+            }
+            h = hu.player_next;
+        }
+        NIL
+    }
+
+    /// 0x465200: call `f` on each hangar child (interceptors/scarabs inside, then outside),
+    /// stopping with true when it returns true. The next link is read after the call.
+    fn hangar_children_any(&mut self, u: u32, mut f: impl FnMut(&mut State, u32) -> bool) -> bool {
+        for (list, count) in [(0xc0, 0xc8), (0xc4, 0xc9)] {
+            let mut c = self.units[u as usize].ptr_at(list);
+            for _ in 0..self.units[u as usize].u8_at(count) {
+                if f(self, c) {
+                    return true;
+                }
+                c = self.units[c as usize].ptr_at(0xc4);
+            }
+        }
+        false
+    }
+
+    /// 0x466a30: the unit a worker or building is producing: the order target of orders
+    /// 0x1e/0x21/0x22 or an incomplete 0x1f target, else the current build unit while
+    /// training (secondary order 0x25 with an incomplete unit, or 0x26/0x3f), else NIL.
+    pub(super) fn build_target(&self, u: u32) -> u32 {
+        let un = &self.units[u as usize];
+        let tgt = un.order_target_unit;
+        if matches!(un.order, 0x1e | 0x22 | 0x21) {
+            return tgt;
+        }
+        // 0x4e4c40
+        if un.order == 0x1f && un.status & 2 != 0 && tgt != NIL && self.units[tgt as usize].status & 1 == 0 {
+            return tgt;
+        }
+        let b = un.current_build_unit;
+        if un.secondary_order != 0x26 && un.secondary_order != 0x3f {
+            // 0x4e66b0
+            if !(un.secondary_order == 0x25 && un.status & 2 != 0 && b != NIL && self.units[b as usize].status & 1 == 0) {
+                return NIL;
+            }
+        }
+        b
+    }
+
     /// 0x4c8040: give `u` to `player` with what belongs to it: the worker inside a
     /// refinery, passengers, fighters, an addon, an addon being built, a nydus exit.
     pub(super) fn give_unit_with_parts(&mut self, d: &Data, u: u32, player: u8) -> bool {
@@ -1482,20 +1543,9 @@ impl State {
         {
             return true;
         }
-        // 0x4688b0 / 0x468a60: a completed refinery gives its gas worker too.
-        if un.status & 1 != 0 && matches!(t, 0x6e | 0x9d | 0x95) {
-            let mut h = self.player_units[un.player as usize];
-            while h != NIL {
-                let hu = &self.units[h as usize];
-                if hu.order == 0x53
-                    && d.dat.units.flags[hu.unit_type as usize] & 8 != 0
-                    && self.sprites[hu.sprite as usize].flags & 0x20 != 0
-                    && hu.order_target_unit == u
-                {
-                    break;
-                }
-                h = hu.player_next;
-            }
+        // A completed refinery gives its gas worker too.
+        if self.is_completed_refinery(u) {
+            let h = self.refinery_gas_worker(d, u);
             if h != NIL {
                 self.give_unit(d, h, player);
             }
@@ -1516,27 +1566,21 @@ impl State {
             }
         }
         if super::unit::has_hangar(self.units[u as usize].unit_type) {
-            for (list, count) in [(0xc0, 0xc8), (0xc4, 0xc9)] {
-                let mut f = self.units[u as usize].ptr_at(list);
-                for _ in 0..self.units[u as usize].u8_at(count) {
-                    let next = self.units[f as usize].ptr_at(0xc4);
-                    self.give_unit(d, f, player);
-                    f = next;
-                }
-            }
+            self.hangar_children_any(u, |st, f| {
+                st.give_unit(d, f, player);
+                false
+            });
         }
         if self.units[u as usize].status & 2 != 0 {
             let addon = self.units[u as usize].ptr_at(0xc0);
             if addon != NIL {
                 self.give_unit(d, addon, player);
             }
-            // 0x4e66b0: an addon under construction goes too (0x466a30 picks it).
+            // 0x4e66b0: an addon under construction goes too.
             let un = &self.units[u as usize];
             let b = un.current_build_unit;
             if un.secondary_order == 0x25 && b != NIL && self.units[b as usize].status & 1 == 0 {
-                let tgt = un.order_target_unit;
-                let building_target = un.order == 0x1f && tgt != NIL && self.units[tgt as usize].status & 1 == 0;
-                let x = if matches!(un.order, 0x1e | 0x22 | 0x21) || building_target { tgt } else { b };
+                let x = self.build_target(u);
                 self.give_unit(d, x, player);
             }
             let un = &self.units[u as usize];

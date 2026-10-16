@@ -104,11 +104,7 @@ impl State {
             if !self.facing_target(u) || !self.facing_target(t) {
                 return;
             }
-            let nt = match self.units[u as usize].unit_type {
-                5 => 0x1e,
-                0x17 => 0x19,
-                x => x,
-            };
+            let nt = siege_unit_type(self.units[u as usize].unit_type);
             self.transform_unit(d, u, nt);
             self.units[u as usize].order_state = 3;
             st = 3;
@@ -170,5 +166,14 @@ impl State {
             let t = self.units[u as usize].subunit;
             self.mode_switch_done(d, t);
         }
+    }
+}
+
+/// 0x463310: the unit type a tank (5) or the hero tank (0x17) becomes when it sieges.
+fn siege_unit_type(t: u16) -> u16 {
+    match t {
+        5 => 0x1e,
+        0x17 => 0x19,
+        x => x,
     }
 }

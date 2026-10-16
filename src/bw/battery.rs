@@ -122,7 +122,7 @@ impl State {
             let main = self.sprites[s as usize].main_image;
             self.create_image(d, s, main, 0x170 + size, 0, 0, 0);
             // 0x4749d0: order 0x5b first in the queue.
-            self.order_queue_front(d, u, 0x5b, (0, 0));
+            self.order_queue_front(d, u, 0x5b, (0, 0)); // 0x4749d0
             self.units[u as usize].order_state = 3;
             st = 3;
         }

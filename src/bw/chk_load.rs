@@ -476,24 +476,7 @@ impl State {
                 }
                 self.sprite_images_run_anim(d, s, 0xd);
                 self.unit_leave_map_grids(d, u);
-                // 0x463470
-                {
-                    let t = self.units[u as usize].unit_type;
-                    let un = &mut self.units[u as usize];
-                    un.status = (un.status & !2) | 0x1_0000;
-                    if d.dat.units.flags[t as usize] & 0x10 == 0 {
-                        un.status |= 0x2_0000;
-                    } else {
-                        un.status &= !0x2_0000;
-                    }
-                }
-                self.path_free(u);
-                {
-                    let elev = self.sprites[s as usize].elevation;
-                    let un = &mut self.units[u as usize];
-                    un.movement_state = 0;
-                    un.pathing_flags = (un.pathing_flags & !1) | (elev < 0xc) as u8;
-                }
+                self.lift_off_status(d, u);
                 self.sprites[s as usize].elevation = 0xc;
                 self.set_air(u, true);
                 self.unit_enter_map_grids(d, u);

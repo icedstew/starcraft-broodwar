@@ -37,6 +37,22 @@ pub fn has_rally(t: u16) -> bool {
 }
 
 impl State {
+    /// 0x466910: clear the rally unit and set the rally position.
+    fn clear_rally(&mut self, u: u32, p: (i16, i16)) {
+        let un = &mut self.units[u as usize];
+        un.rally_unit = NIL;
+        un.rally_pos = p;
+    }
+
+    /// 0x466b40: rally to unit `t` (itself when NIL) and its position.
+    fn rally_to_unit(&mut self, u: u32, t: u32) {
+        let r = if t != NIL { t } else { u };
+        let rp = self.unit_sprite_pos(r);
+        let un = &mut self.units[u as usize];
+        un.rally_unit = r;
+        un.rally_pos = rp;
+    }
+
     /// 0x49a850: live units of a selection (dying units are skipped).
     pub fn live_selection(&self, sel: &[u32]) -> Vec<u32> {
         sel.iter()
@@ -588,20 +604,12 @@ impl State {
         match ord {
             0x27 => {
                 if rally {
-                    // 0x466b40
-                    let r = if t != NIL { t } else { u };
-                    let rp = self.unit_sprite_pos(r);
-                    let un = &mut self.units[u as usize];
-                    un.rally_unit = r;
-                    un.rally_pos = rp;
+                    self.rally_to_unit(u, t);
                 }
             }
             0x28 => {
                 if rally {
-                    // 0x466910
-                    let un = &mut self.units[u as usize];
-                    un.rally_unit = NIL;
-                    un.rally_pos = p;
+                    self.clear_rally(u, p);
                 }
             }
             _ => {

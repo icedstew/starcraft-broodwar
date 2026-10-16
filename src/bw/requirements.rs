@@ -746,7 +746,7 @@ impl State {
                     0xff0e => {
                         // 0x465270 / 0x4653d0: queued interceptors / scarabs plus those in the
                         // hangar against its capacity.
-                        let queued = un.build_queue.iter().filter(|&&q| q == 0x49 || q == 0x55).count() as u8;
+                        let queued = queued_fighters(un);
                         let have = match un.unit_type {
                             0x48 | 0x52 => queued.wrapping_add(un.u8_at(0xc9)).wrapping_add(un.u8_at(0xc8)),
                             0x53 | 0x51 => queued.wrapping_add(un.u8_at(0xc8)),
@@ -830,4 +830,9 @@ impl State {
             }
         }
     }
+}
+
+/// 0x465270: interceptors / scarabs among the 5 queued build slots.
+fn queued_fighters(un: &super::unit::Unit) -> u8 {
+    un.build_queue.iter().filter(|&&q| q == 0x49 || q == 0x55).count() as u8
 }

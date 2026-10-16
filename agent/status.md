@@ -17,7 +17,7 @@ renderer at 2x/4x); the 8-bit 1.16.1 renderer stays the default and the test ref
 ## Metric (the user watches this)
 
 `python3 -I re/coverage.py agent/local/scratch/dump/bw116n.c .` "reachable from both":
-2026-10-16: no AI 974/1615 (60%), AI only 145/358 (40%), all 1119/1973 (56%).
+2026-10-16: no AI 987/1615 (61%), AI only 145/358 (40%), all 1132/1973 (57%).
 Next targets: `--missing both` (frontier list, one line per function).
 
 ## Current direction (user, 2026-10-16)
@@ -28,14 +28,12 @@ Delegate per agents.md: Haiku triage, Sonnet porting, Opus review / hard RE / co
 
 ## In flight
 
-- Porting loop running: triaged 0x4010e0..0x4046d0 and 0x4258b0..0x437290. Skipped for
-  now: save/load pointer fixups (0x402d10..0x4046d0, Rust uses indices; port with
-  save/load), CRT 0x404e00..0x410000. Triaged up to 0x47da80. Next porter batch: triage F extractions
-  (0x463310, 0x463470, 0x4634e0, 0x465200, 0x465270, 0x466910, 0x466a30 (check order
-  0x1e/0x21/0x22 branch: possible bug in spells.rs), 0x466b40, 0x466ee0, 0x4688b0,
-  0x468a60), H (0x4756e0, 0x475ec0, 0x47b8f0/0x47b5f0), and G suspects: doodads.rs
-  cites 0x474d10 (looks like 0x474d60), order_exec.rs 0x475350 branches mismatch,
-  battery.rs 0x4749d0 always queues front (native: front only if queue non-empty).
+- Porting loop: triaged through 0x48d560 (non-AI). The remaining non-AI frontier is
+  mostly save/load (pool pointer <-> index fixups, section writers via 0x4c3450) and UI
+  (message ring 0x48cd30 / 0x48d0c0, chat 0x48d1c0, placebox, dialogs). Sim leads:
+  pause / unpause 0x488800 / 0x488790 (tick record, replay branch); 0x48a180 (player
+  result slot vs leave_game 0x48a1c0); ported callers pass (0,0) where 0x4756e0 passes
+  globals 0x6d5c20 / 0x6d5c24 (identify them).
 
 ## Next steps
 

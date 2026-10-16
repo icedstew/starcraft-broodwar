@@ -485,11 +485,20 @@ impl State {
             self.iscript_speed(d, u);
             return;
         }
+        let top = self.adjust_top_speed(u, d.dat.flingy.top_speed[fid]);
+        let acc = self.unit_acceleration(d, u);
+        let turn = self.unit_turn_rate(d, u);
+        let f = &mut self.units[u as usize].fl;
+        f.top_speed = top as i32;
+        f.acceleration = acc as u16;
+        f.turn_rate = turn as u8;
+    }
+
+    /// 0x47b5f0: `base` top speed with the unit's speed modifiers.
+    pub fn adjust_top_speed(&self, u: u32, base: u32) -> u32 {
         let m = self.speed_mod(u);
-        // 0x47b5f0
-        let base = d.dat.flingy.top_speed[fid];
-        let top = if m > 0 {
-            if matches!(t, 0x46 | 0x50 | 0x58) {
+        if m > 0 {
+            if matches!(self.units[u as usize].unit_type, 0x46 | 0x50 | 0x58) {
                 0x6ab
             } else {
                 let v = base.wrapping_add(base >> 1);
@@ -499,13 +508,7 @@ impl State {
             base >> 1
         } else {
             base
-        };
-        let acc = self.unit_acceleration(d, u);
-        let turn = self.unit_turn_rate(d, u);
-        let f = &mut self.units[u as usize].fl;
-        f.top_speed = top as i32;
-        f.acceleration = acc as u16;
-        f.turn_rate = turn as u8;
+        }
     }
 
     /// 0x47b8a0: flingy acceleration with speed modifiers.

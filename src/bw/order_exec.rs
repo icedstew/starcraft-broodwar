@@ -337,12 +337,7 @@ impl State {
                     // 0x466d10 / 0x466ee0: can the first tick be paid (error otherwise).
                     let (m, g, _) = self.repair_tick_cost(d, t);
                     let p = self.units[u as usize].player;
-                    let race = self.player_races[self.local_player as usize] as u16;
-                    if self.players.minerals[p as usize] < m {
-                        self.local_error(p, 0x93 + race, 0x352);
-                    } else if self.players.gas[p as usize] < g {
-                        self.local_error(p, 0x96 + race, 0x353);
-                    }
+                    self.repair_precheck(p, m, g);
                     self.units[u as usize].set_u16_at(0xcc, 0);
                     self.units[u as usize].order_state = 1;
                 }
@@ -463,17 +458,25 @@ impl State {
         }
     }
 
+    /// 0x466ee0: can player `p` pay `m` minerals and `g` gas (the error otherwise, minerals first).
+    fn repair_precheck(&mut self, p: u8, m: i32, g: i32) -> bool {
+        let race = self.player_races[self.local_player as usize] as u16;
+        if self.players.minerals[p as usize] < m {
+            self.local_error(p, 0x93 + race, 0x352);
+            return false;
+        }
+        if self.players.gas[p as usize] < g {
+            self.local_error(p, 0x96 + race, 0x353);
+            return false;
+        }
+        true
+    }
+
     /// 0x466fb0: pay the next repair tick, or false when the player can't.
     fn repair_pay(&mut self, d: &Data, u: u32, t: u32) -> bool {
         let (m, g, time) = self.repair_tick_cost(d, t);
         let p = self.units[u as usize].player as usize;
-        let race = self.player_races[self.local_player as usize] as u16;
-        if self.players.minerals[p] < m {
-            self.local_error(p as u8, 0x93 + race, 0x352);
-            return false;
-        }
-        if self.players.gas[p] < g {
-            self.local_error(p as u8, 0x96 + race, 0x353);
+        if !self.repair_precheck(p as u8, m, g) {
             return false;
         }
         self.units[u as usize].set_u16_at(0xcc, time as u16);
@@ -1394,7 +1397,7 @@ impl State {
                 return;
             }
         }
-        // 0x475350
+        // 0x475350 (args: the order target position).
         if self.units[u as usize].order_queue_head != NIL {
             self.order_nothing(d, u);
         } else if self.units[u as usize].ai != NIL {

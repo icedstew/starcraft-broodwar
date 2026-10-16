@@ -787,7 +787,7 @@ impl State {
         true
     }
 
-    /// 0x474a20 (0x474b40 with p = (0, 0)): queue `order` at `p` in front of the queue.
+    /// 0x474a20 (0x474b40 and 0x4749d0 with p = (0, 0)): queue `order` at `p` in front of the queue.
     pub(super) fn order_queue_front(&mut self, d: &Data, u: u32, order: u8, p: (i16, i16)) {
         let head = self.units[u as usize].order_queue_head;
         if head != NIL {
@@ -1278,6 +1278,14 @@ impl State {
         self.prepare_next_order(d, u);
     }
 
+    /// 0x475ec0: the damage bonus of weapon `w` for the owner's upgrade level.
+    pub(super) fn weapon_upgrade_bonus(&self, d: &Data, u: u32, w: u8) -> u32 {
+        let p = self.units[u as usize].player as usize;
+        let up = d.dat.weapons.damage_upgrade[w as usize] as usize;
+        let level = if up < 0x2e { self.players.upgrade_sc[p][up] } else { self.players.upgrade_bw[p][up - 0x2e] } as u32;
+        d.dat.weapons.damage_bonus[w as usize] as u32 * level
+    }
+
     /// 0x479b40: melee hit on the order target with the ground weapon.
     pub fn attack_melee(&mut self, d: &Data, u: u32) {
         let t = self.units[u as usize].order_target_unit;
@@ -1291,10 +1299,7 @@ impl State {
             return;
         }
         let (player, dir) = (self.units[u as usize].player, self.units[u as usize].fl.heading);
-        // 0x475ec0: upgrade bonus.
-        let up = d.dat.weapons.damage_upgrade[w as usize] as usize;
-        let level = if up < 0x2e { self.players.upgrade_sc[player as usize][up] } else { self.players.upgrade_bw[player as usize][up - 0x2e] } as u32;
-        let bonus = (d.dat.weapons.damage_bonus[w as usize] as u32 * level) & 0xffff;
+        let bonus = self.weapon_upgrade_bonus(d, u, w);
         let dmg = (bonus + d.dat.weapons.damage[w as usize] as u32) << 8;
         self.damage_unit(d, t, dmg, w, 1, dir, u, player);
     }
