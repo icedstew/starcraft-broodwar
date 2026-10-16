@@ -576,7 +576,7 @@ impl State {
         if self.players.upgrade_max[player as usize][up as usize] <= self.players.upgrade_level(player, up as usize) {
             return Err(0xe);
         }
-        if self.players.upgrade_in_progress[player as usize][(up >> 3) as usize] & (1 << (up & 7)) != 0 {
+        if self.upgrade_in_progress(player, up as u8) {
             return Err(0xc);
         }
         let start = upgrade_offsets()[up as usize];
@@ -584,6 +584,16 @@ impl State {
             return Err(0x17);
         }
         self.run_requirements(d, u, player, up, UPGRADES, start)
+    }
+
+    /// 0x4281b0: upgrade `up` is being researched by `player`.
+    pub fn upgrade_in_progress(&self, player: u8, up: u8) -> bool {
+        self.players.upgrade_in_progress[player as usize][(up >> 3) as usize] & (1 << (up & 7)) != 0
+    }
+
+    /// 0x428240: tech `tech` is being researched by `player`.
+    pub fn research_in_progress(&self, player: u8, tech: u8) -> bool {
+        self.players.research_in_progress[player as usize][(tech >> 3) as usize] & (1 << (tech & 7)) != 0
     }
 
     /// 0x46de90: `player` may research tech `tech` with `u`.
@@ -606,7 +616,7 @@ impl State {
         if !self.tech_available(player, tech) && !cheat {
             return Err(2);
         }
-        if self.players.research_in_progress[player as usize][(tech >> 3) as usize] & (1 << (tech & 7)) != 0 {
+        if self.research_in_progress(player, tech as u8) {
             return Err(0xc);
         }
         if self.tech_researched(player, tech) || cheat {

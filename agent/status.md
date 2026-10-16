@@ -17,7 +17,7 @@ renderer at 2x/4x); the 8-bit 1.16.1 renderer stays the default and the test ref
 ## Metric (the user watches this)
 
 `python3 -I re/coverage.py agent/local/scratch/dump/bw116n.c .` "reachable from both":
-2026-10-16: no AI 959/1615 (59%), AI only 145/358 (40%), all 1104/1973 (55%).
+2026-10-16: no AI 965/1615 (59%), AI only 145/358 (40%), all 1110/1973 (56%).
 Next targets: `--missing both` (frontier list, one line per function).
 
 ## Current direction (user, 2026-10-16)
@@ -30,8 +30,7 @@ Delegate per agents.md: Haiku triage, Sonnet porting, Opus review / hard RE / co
 
 - Porting loop running: triaged 0x4010e0..0x4046d0 and 0x4258b0..0x437290. Skipped for
   now: save/load pointer fixups (0x402d10..0x4046d0, Rust uses indices; port with
-  save/load), CRT 0x404e00..0x410000. Next porter batch (triaged): extract inline
-  0x4281b0, 0x428240, 0x42d600, 0x42e0e0, 0x42d400 (view.rs heap), 0x42f8f0.
+  save/load), CRT 0x404e00..0x410000. Triaging 0x448b20..0x458850 and 0x463310..0x4688b0 next.
 
 ## Next steps
 

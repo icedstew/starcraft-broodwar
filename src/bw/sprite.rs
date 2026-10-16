@@ -34,6 +34,24 @@ pub struct IscriptState {
     pub wait: u8,      // +0x1f
 }
 
+impl IscriptState {
+    /// 0x42d600: start animation `anim` (header table lookup). Returns false (pc and
+    /// the rest untouched) when the header has no such animation or its entry is 0.
+    pub fn start_anim(&mut self, d: &Data, anim: u8) -> bool {
+        let header = self.header as usize;
+        self.anim = anim;
+        if anim as u16 <= d.iscript_u16(header + 4) {
+            self.pc = d.iscript_u16(header + 8 + anim as usize * 2);
+            if self.pc != 0 {
+                self.wait = 0;
+                self.ret = 0;
+                return true;
+            }
+        }
+        false
+    }
+}
+
 #[derive(Clone, Default, Debug)]
 pub struct Image {
     pub link: Link,

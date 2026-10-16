@@ -988,6 +988,21 @@ fn sprite_draw_key(sp: &bw::sprite::Sprite, index: u32) -> u32 {
     ((((e << 13) | y) << 5 | (sp.flags & 0x10) as u32) << 9) | (index & 0xffff)
 }
 
+/// 0x42d400: sift the last entry of the 1-based max-heap `h` up.
+fn heap_sift_up(h: &mut [(u32, u32)]) {
+    let e = h[h.len() - 1];
+    let mut i = h.len() - 1;
+    while i > 1 {
+        let p = i >> 1;
+        if e.0 <= h[p].0 {
+            break;
+        }
+        h[i] = h[p];
+        i = p;
+    }
+    h[i] = e;
+}
+
 /// The draw order 0x498d40 gets from the sprite heap: entries pushed in row-list order
 /// (0x42d4c0 / 0x42d400, max-heap), popped largest first (0x42d460 / 0x42d370) into
 /// 0x6c2318 and drawn from the last popped back to the first.
@@ -996,16 +1011,7 @@ fn heap_draw_order(entries: Vec<(u32, u32)>) -> Vec<u32> {
     let mut h: Vec<(u32, u32)> = vec![(0, 0)];
     for e in entries {
         h.push(e);
-        let mut i = h.len() - 1;
-        while i > 1 {
-            let p = i >> 1;
-            if e.0 <= h[p].0 {
-                break;
-            }
-            h[i] = h[p];
-            i = p;
-        }
-        h[i] = e;
+        heap_sift_up(&mut h);
     }
     let mut popped = Vec::with_capacity(h.len());
     let mut n = h.len() - 1;

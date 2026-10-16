@@ -176,6 +176,19 @@ impl State {
         }
     }
 
+    /// 0x42e0e0: `o` blocks (collision_gate against `other`) and its finder box overlaps `b`.
+    pub fn path_search_gate(&self, o: u32, other: Option<u32>, b: [i16; 4]) -> bool {
+        if !self.collision_gate(o, other) {
+            return false;
+        }
+        let fi = self.units[o as usize].finder_index;
+        let f = &self.finder;
+        (b[0] as i32) <= f.x[fi[1] as usize].1
+            && f.x[fi[0] as usize].1 <= b[2] as i32
+            && (b[1] as i32) <= f.y[fi[3] as usize].1
+            && f.y[fi[2] as usize].1 <= b[3] as i32
+    }
+
     /// 0x4308a0: units whose finder boxes overlap `b`. Returns the result start; close
     /// with `self.search.pop()`.
     pub fn units_in_box(&mut self, d: &Data, b: [i16; 4]) -> usize {
@@ -788,20 +801,10 @@ impl State {
         let mut best = None;
         let mut best_area = 0i32;
         for o in self.search.results(start) {
-            // 0x42e0e0
-            if !self.collision_gate(o, Some(u)) {
+            if !self.path_search_gate(o, Some(u), b) {
                 continue;
             }
             let ou = &self.units[o as usize];
-            let fi = ou.finder_index;
-            let f = &self.finder;
-            if !((b[0] as i32) <= f.x[fi[1] as usize].1
-                && f.x[fi[0] as usize].1 <= b[2] as i32
-                && (b[1] as i32) <= f.y[fi[3] as usize].1
-                && f.y[fi[2] as usize].1 <= b[3] as i32)
-            {
-                continue;
-            }
             let ov = d.dat.units.dimensions[ou.unit_type as usize];
             let [ol, ou_, or, od] = [ov as i16, (ov >> 16) as i16, (ov >> 32) as i16, (ov >> 48) as i16];
             let area = (od.wrapping_add(ou_).wrapping_add(1) as i32) * (or.wrapping_add(ol).wrapping_add(1) as i32);
@@ -1118,19 +1121,8 @@ impl State {
             };
             let mut dist = speed as u32;
             if self.images[mi as usize].iscript.anim != 0xb {
-                // 0x42d600: start Walking on the copy.
-                let is = &mut self.images[mi as usize].iscript;
-                is.anim = 0xb;
-                let header = is.header as usize;
-                if 0xb <= d.iscript_u16(header + 4) {
-                    let pc = d.iscript_u16(header + 8 + 0xb * 2);
-                    let is = &mut self.images[mi as usize].iscript;
-                    is.pc = pc;
-                    if pc != 0 {
-                        is.wait = 0;
-                        is.ret = 0;
-                    }
-                }
+                // Start Walking on the copy.
+                self.images[mi as usize].iscript.start_anim(d, 0xb);
                 dry_run(self, &mut dist);
             }
             for _ in 0..n {

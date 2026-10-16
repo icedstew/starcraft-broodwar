@@ -532,19 +532,10 @@ impl State {
         let s = self.units[u as usize].sprite;
         let mi = self.sprites[s as usize].main_image;
         let saved = self.images[mi as usize].clone();
-        // 0x42d600: start anim 0xb (Walking) on a copy of the iscript state.
-        let header = saved.iscript.header as usize;
-        let count = d.iscript_u16(header + 4);
-        let pc = if 0xb <= count { d.iscript_u16(header + 8 + 0xb * 2) } else { 0 };
-        if pc == 0 {
+        // Start anim 0xb (Walking) on a copy of the iscript state.
+        if !self.images[mi as usize].iscript.start_anim(d, 0xb) {
+            self.images[mi as usize] = saved;
             return;
-        }
-        {
-            let st = &mut self.images[mi as usize].iscript;
-            st.pc = pc;
-            st.ret = 0;
-            st.anim = 0xb;
-            st.wait = 0;
         }
         let mut total = 0i32;
         for _ in 0..0x20 {

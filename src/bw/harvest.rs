@@ -817,6 +817,12 @@ impl State {
         self.path_distance(m, up) <= radius * 2
     }
 
+    /// 0x42f8f0: octile distance from unit `m`'s sprite position to the path target.
+    fn distance_to_target(&self, m: u32, ctx: &super::path::PathCtx) -> i32 {
+        let mp = self.unit_sprite_pos(m);
+        super::path::approx_distance(mp.0 as i32, ctx.target.0 as i32, mp.1 as i32, ctx.target.1 as i32) as i32
+    }
+
     /// 0x42fa30: distance from `m` to `p` (along the region path for ground units).
     pub(super) fn path_distance(&mut self, m: u32, p: (i16, i16)) -> i32 {
         let mp = self.unit_sprite_pos(m);
@@ -840,8 +846,7 @@ impl State {
             return 0x7ffe;
         }
         if ctx.region_count <= 2 {
-            // 0x42f8f0
-            return straight(mp, ctx.target);
+            return self.distance_to_target(m, &ctx);
         }
         let center = |st: &State, r: u16| {
             let c = st.sai.regions[r as usize].center;
