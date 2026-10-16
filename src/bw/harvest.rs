@@ -563,7 +563,8 @@ impl State {
                 self.kill_unit(d, r);
             }
         } else if a < 8 {
-            todo_port!("0x48ee30", "geyser depleted notice");
+            // 0x48ee30: "Geyser depleted." (0x36b) and sound 0x14 for the owner.
+            self.local_error(self.units[r as usize].player, 0x14, 0x36b);
         }
         8
     }

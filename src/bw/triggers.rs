@@ -938,6 +938,22 @@ impl State {
         }
     }
 
+    /// 0x489e80: "%s was eliminated." (a computer's name too in a replay) or "Player %d
+    /// was eliminated." for a computer, in melee-style games (0x59686d / 71 / 77).
+    // ponytail: team games (0x57f0b4 / 0x596875: the team's name) are never set here.
+    fn defeat_notice(&mut self, p: u8) {
+        let m = super::chk_load::ScenarioModes::of_template(&self.template);
+        if !(m.flag_59686d || m.flag_596871 || m.flag_596877) {
+            return;
+        }
+        match self.player_types[p as usize] {
+            2 => self.notices.push((0x34, p)),
+            _ if self.replay => self.notices.push((0x34, p)),
+            1 => self.notices.push((0x35, p)),
+            _ => {}
+        }
+    }
+
     /// 0x512800: action table. False when the trigger waits here.
     fn action(&mut self, _d: &Data, p: usize, i: usize, k: usize, a: &Action) -> bool {
         let cur = self.trig.player as usize;
@@ -2162,7 +2178,7 @@ impl State {
             if r != 0 && self.player_left[p] == 0 {
                 self.player_left[p] = r;
                 if r == 2 {
-                    // 0x489e80: the "player was defeated" message (UI).
+                    self.defeat_notice(p as u8);
                     self.player_defeated(d, p as u8);
                 }
             }

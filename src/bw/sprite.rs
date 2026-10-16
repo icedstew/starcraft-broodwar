@@ -312,6 +312,30 @@ impl State {
         (if im.flags & iflag::FLIPPED != 0 { ox.wrapping_neg() } else { ox }, oy)
     }
 
+    /// 0x497460: sprite `s`'s first image with an id in `lo..=hi`, or NIL.
+    pub(crate) fn sprite_find_image(&self, s: u32, lo: u16, hi: u16) -> u32 {
+        let mut i = self.sprites[s as usize].images.head;
+        while i != NIL && !(lo..=hi).contains(&self.images[i as usize].image_id) {
+            i = self.images[i as usize].link.next;
+        }
+        i
+    }
+
+    /// 0x497dc0: sprite `s`'s normally drawn images switch to the hallucination draw
+    /// function (modifier 0x10, redrawn; coloring from BL, 0 at both callers).
+    pub(crate) fn sprite_hallucinate(&mut self, s: u32) {
+        let mut i = self.sprites[s as usize].images.head;
+        while i != NIL {
+            let img = &mut self.images[i as usize];
+            if img.modifier == 0 || img.modifier == 0x10 {
+                img.modifier = 0x10;
+                img.flags |= 1;
+                img.coloring = 0;
+            }
+            i = img.link.next;
+        }
+    }
+
     /// 0x401e40: set the offset of sprite `s`'s main image; redraw only if it changed.
     pub fn sprite_set_main_offset(&mut self, s: u32, x: i8, y: i8) {
         let mi = self.sprites[s as usize].main_image;

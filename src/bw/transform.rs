@@ -326,32 +326,22 @@ impl State {
         let t = self.units[u as usize].unit_type;
         let old = self.units[u as usize].player as usize;
         let p = player as usize;
-        // 0x4e2c00 with 0x47b3c0: techs the old owner has.
-        for (ty, techs) in GIVE_TECHS.iter().rev() {
-            if *ty != t {
-                continue;
-            }
-            for &tech in techs.iter().take_while(|&&x| x != 0x2c) {
-                let tech = tech as usize;
-                if self.players.tech_researched[old][tech] != 0 && self.players.tech_researched[p][tech] == 0 && (tech < 0x18 || self.is_expansion) {
-                    self.players.tech_researched[p][tech] = 1;
-                }
+        // 0x47b3c0 for each: techs the old owner has.
+        for tech in give_techs(t) {
+            let tech = tech as usize;
+            if self.players.tech_researched[old][tech] != 0 && self.players.tech_researched[p][tech] == 0 && (tech < 0x18 || self.is_expansion) {
+                self.players.tech_researched[p][tech] = 1;
             }
         }
-        // 0x4e2b50 with 0x47b340: upgrade levels the old owner has.
-        for (ty, ups) in GIVE_UPGRADES.iter().rev() {
-            if *ty != t {
-                continue;
-            }
-            for &up in ups.iter().take_while(|&&x| x != 0x3d) {
-                let up = up as usize;
-                let lvl = self.players.upgrade_level(old as u8, up);
-                if self.players.upgrade_level(player, up) < lvl {
-                    if up < 0x2e {
-                        self.players.upgrade_sc[p][up] = lvl;
-                    } else if self.is_expansion {
-                        self.players.upgrade_bw[p][up - 0x2e] = lvl;
-                    }
+        // 0x47b340 for each: upgrade levels the old owner has.
+        for up in give_upgrades(t) {
+            let up = up as usize;
+            let lvl = self.players.upgrade_level(old as u8, up);
+            if self.players.upgrade_level(player, up) < lvl {
+                if up < 0x2e {
+                    self.players.upgrade_sc[p][up] = lvl;
+                } else if self.is_expansion {
+                    self.players.upgrade_bw[p][up - 0x2e] = lvl;
                 }
             }
         }
@@ -379,16 +369,11 @@ impl State {
         if player < 8 {
             self.set_unit_colors(d, u, player);
         }
-        // 0x4e2b50 with 0x47b940: the new owner's upgrades take effect.
-        for (ty, ups) in GIVE_UPGRADES.iter().rev() {
-            if *ty != t {
-                continue;
-            }
-            for &up in ups.iter().take_while(|&&x| x != 0x3d) {
-                if self.players.upgrade_level(self.units[u as usize].player, up as usize) != 0 {
-                    let pl = self.units[u as usize].player;
-                    self.apply_upgrade(d, pl, up as u8);
-                }
+        // 0x47b940 for each: the new owner's upgrades take effect.
+        for up in give_upgrades(t) {
+            if self.players.upgrade_level(self.units[u as usize].player, up as usize) != 0 {
+                let pl = self.units[u as usize].player;
+                self.apply_upgrade(d, pl, up as u8);
             }
         }
         let un = &self.units[u as usize];
@@ -565,3 +550,13 @@ const GIVE_UPGRADES: [(u16, [u16; 4]); 25] = [
     (0x3f, [0x31, 0x3d, 0, 0]),
     (0x3c, [0x2f, 0x3d, 0, 0]),
 ];
+
+/// 0x4e2c00: the techs (table 0x5012de) a unit of type `t` carries to a new owner.
+fn give_techs(t: u16) -> impl Iterator<Item = u16> {
+    GIVE_TECHS.iter().rev().filter(move |(ty, _)| *ty == t).flat_map(|(_, l)| l.iter().copied().take_while(|&x| x != 0x2c))
+}
+
+/// 0x4e2b50: the upgrades (table 0x5013dc) a unit of type `t` carries to a new owner.
+fn give_upgrades(t: u16) -> impl Iterator<Item = u16> {
+    GIVE_UPGRADES.iter().rev().filter(move |(ty, _)| *ty == t).flat_map(|(_, l)| l.iter().copied().take_while(|&x| x != 0x3d))
+}

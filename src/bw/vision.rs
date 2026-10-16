@@ -310,18 +310,7 @@ impl State {
             && (t != 0x2a || self.players.upgrade_sc[un.player as usize][0x18] != 0)
             && d.dat.units.space_provided[t] != 0
         {
-            // 0x4e7080: a passenger carries a flag.
-            for i in 0..8 {
-                let h = un.loaded_units[i] as u32;
-                if h == 0 {
-                    continue;
-                }
-                let c = (h & 0x7ff) - 1;
-                let cu = &self.units[c as usize];
-                if cu.sprite != NIL && (cu.order != 0 || cu.order_state != 1) && cu.unique_id as u32 == h >> 11 && carries_flag(self, c) {
-                    return true;
-                }
-            }
+            return self.passenger_carries_flag(d, u);
         }
         false
     }

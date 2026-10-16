@@ -73,7 +73,8 @@ impl State {
         let cur = self.units[u as usize].order;
         if queued && d.dat.orders.queueable[order as usize] != 0 && !matches!(cur, 2 | 3 | 0x17 | 0x5d | 0x98 | 0xaf) {
             if self.units[u as usize].order_queue_count >= 8 || self.order_count >= 0x708 {
-                // 0x48cf00: "too many queued orders" message.
+                // 0x48cf00: "Unit's waypoint list is full."
+                self.local_error_line(self.units[u as usize].player, 0x367);
                 return;
             }
             self.command_queue_order(d, u, kind, order, target, unit_type, pos);
@@ -221,26 +222,9 @@ impl State {
         if ground && adjust_ground {
             let centre = ((sx / n) as i16, (sy / n) as i16);
             if n == 1 {
-                // 0x4e4520
-                let u = units[0];
-                let ut = self.units[u as usize].unit_type;
-                if !self.terrain_fits(d, ut, t.ground.0, t.ground.1) {
-                    let v = d.dat.units.dimensions[ut as usize];
-                    let dims = [v as i16, (v >> 16) as i16, (v >> 32) as i16, (v >> 48) as i16];
-                    let from = self.unit_sprite_pos(u);
-                    let mut g = t.ground;
-                    self.nearest_open_spot(d, &mut g, dims, from);
-                    t.ground = g;
-                }
+                self.fit_unit_ground(d, units[0], &mut t.ground);
             } else {
-                // 0x4e44b0
-                let r = radius as i32;
-                if !self.square_fits(d, t.ground, r, r) {
-                    let (h1, h2) = ((r / 2) as i16, (r - r / 2) as i16);
-                    let mut g = t.ground;
-                    self.nearest_open_spot(d, &mut g, [h1, h1, h2, h2], centre);
-                    t.ground = g;
-                }
+                self.fit_group_ground(d, radius as i32, centre, &mut t.ground);
             }
             // 0x4020f0
             let (mw, mh) = (self.map_px.0 as i16, self.map_px.1 as i16);
@@ -883,14 +867,42 @@ impl State {
         }
     }
 
+    /// 0x4e4520: a lone unit's ground target moves to the nearest spot its type fits
+    /// (0x42d810, 0x4e4380 from the unit).
+    fn fit_unit_ground(&mut self, d: &Data, u: u32, g: &mut (i16, i16)) {
+        let ut = self.units[u as usize].unit_type;
+        if !self.terrain_fits(d, ut, g.0, g.1) {
+            let v = d.dat.units.dimensions[ut as usize];
+            let dims = [v as i16, (v >> 16) as i16, (v >> 32) as i16, (v >> 48) as i16];
+            let from = self.unit_sprite_pos(u);
+            self.nearest_open_spot(d, g, dims, from);
+        }
+    }
+
+    /// 0x4e44b0: a group's ground target moves to the nearest spot an `r` x `r` square
+    /// fits (0x42d740, 0x4e4380 from the group's centre).
+    fn fit_group_ground(&mut self, d: &Data, r: i32, centre: (i16, i16), g: &mut (i16, i16)) {
+        if !self.square_fits(d, *g, r, r) {
+            let (h1, h2) = ((r / 2) as i16, (r - r / 2) as i16);
+            self.nearest_open_spot(d, g, [h1, h1, h2, h2], centre);
+        }
+    }
+
+    /// 0x4e66e0: building `u` cancels the unit it is building, if still incomplete.
+    fn cancel_current_build(&mut self, d: &Data, u: u32) {
+        let a = self.units[u as usize].current_build_unit;
+        if a != NIL && self.units[a as usize].status & 1 == 0 {
+            self.cancel_unit(d, a);
+        }
+    }
+
     /// 0x4bff30: cancel addon: the one selected building stops the addon it is building.
     fn command_cancel_addon(&mut self, d: &Data, player: u8, sel: &[u32]) {
         let [u] = self.live_selection(sel)[..] else { return };
         let un = &self.units[u as usize];
         let a = un.current_build_unit;
         if un.secondary_order == 0x25 && un.status & 2 != 0 && a != NIL && self.units[a as usize].status & 1 == 0 && un.status & 1 != 0 && un.player == player {
-            // 0x4e66e0
-            self.cancel_unit(d, a);
+            self.cancel_current_build(d, u);
             // 0x4c36c0: UI refresh.
         }
     }
@@ -1084,15 +1096,7 @@ impl State {
         let e = if ty == 0xe4 {
             self.tech_target_error(d, t, tech, self.units[u as usize].player)
         } else {
-            // 0x4914b0: what a remembered fog unit of type `ty` allows.
-            match tech {
-                6 | 7 => 0x36d,
-                0xc => {
-                    if ty == 0x6a { 0 } else { 0x366 }
-                }
-                0x10 => 0x381,
-                _ => 0x36c,
-            }
+            fog_target_error(tech, ty)
         };
         if e == 0 { Ok(()) } else { Err(e) }
     }
@@ -1381,8 +1385,10 @@ impl State {
             0x2d => self.command_unburrow(d, player, sel),
             0x36 => self.command_stim(d, player, sel),
             0x57 => {
-                // 0x4c2e90: only replays act on it (0x4c4d60 -> 0x48a1c0; the message is UI).
+                // 0x4c2e90: only replays act on it (0x4c4d60): "%s has left the game."
+                // (the reason byte is never 0x40000006, the dropped message), 0x48a1c0.
                 if self.replay {
+                    self.notices.push((0x4a, player));
                     self.leave_game(d, player);
                 }
             }
@@ -1407,5 +1413,18 @@ impl State {
             0x34 => self.command_cancel_addon(d, player, sel),
             _ => todo_port!("0x4865d0", "command receiver not ported yet"),
         }
+    }
+}
+
+/// 0x4914b0: what a remembered fog unit of type `ty` allows tech `tech` (0 or the
+/// stat_txt error).
+fn fog_target_error(tech: u8, ty: u16) -> u16 {
+    match tech {
+        6 | 7 => 0x36d,
+        0xc => {
+            if ty == 0x6a { 0 } else { 0x366 }
+        }
+        0x10 => 0x381,
+        _ => 0x36c,
     }
 }

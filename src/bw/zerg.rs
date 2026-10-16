@@ -168,10 +168,7 @@ impl State {
         let (tx, ty) = Self::build_tile(d, t, x, y);
         let err = self.placement_check(d, u, player, tx, ty, t, 0, false, true, true);
         if err != 0 || self.unit_sprite_pos(u) != self.units[u as usize].order_target_pos {
-            // 0x48f6c0(0x358): "can't build here" with the unit race's sound (0xa2 + race).
-            // ponytail: the sound cooldown check 0x48ed50 is not ported.
-            let race = Self::supply_race_of(d, self.units[u as usize].unit_type);
-            self.local_error(player, 0xa2 + race, 0x358);
+            self.advisor_error(d, u, 0x358);
             return self.drone_build_failed(d, u);
         }
         let p = player as usize;
@@ -268,10 +265,7 @@ impl State {
             0 if left < total * 3 >> 2 => self.units[u as usize].order_state = 1,
             1 => {
                 if self.units[u as usize].unit_type == 0x95 {
-                    let mut i = self.sprites[s as usize].images.head;
-                    while i != NIL && self.images[i as usize].image_id != 0x159 {
-                        i = self.images[i as usize].link.next;
-                    }
+                    let i = self.sprite_find_image(s, 0x159, 0x159);
                     if i != NIL {
                         self.destroy_image(i);
                     }

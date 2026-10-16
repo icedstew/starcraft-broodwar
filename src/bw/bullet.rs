@@ -490,7 +490,13 @@ impl State {
         if p.0 < 0 || p.0 as i32 >= mw || p.1 < 0 || p.1 as i32 >= mh {
             self.bullets.pool[b as usize].remaining_time = 0;
         }
-        // 0x4958c0
+        self.bullet_clamp(b);
+    }
+
+    /// 0x4958c0: a bullet off the map edge is put back on it, each axis moving its
+    /// sprite (0x497a10).
+    fn bullet_clamp(&mut self, b: u32) {
+        let (mw, mh) = (self.map_px.0 as i32, self.map_px.1 as i32);
         let f = &mut self.bullets.pool[b as usize].fl;
         let mut moved = false;
         if f.pos.0 < 0 {

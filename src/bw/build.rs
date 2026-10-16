@@ -499,8 +499,7 @@ impl State {
             return;
         }
         let (m, g) = (d.dat.units.mineral_cost[t as usize] as i32, d.dat.units.gas_cost[t as usize] as i32);
-        if self.players.minerals[p as usize] < m || self.players.gas[p as usize] < g {
-            todo_port!("0x48ee30", "not enough minerals / gas message");
+        if !self.afford_or_error(p, m, g) {
             return;
         }
         self.order_issue_now(d, u, order, pos, NIL, 0xe4);
@@ -539,8 +538,7 @@ impl State {
         if !self.supply_ok_show(d, p as usize, t) {
             return false;
         }
-        if self.players.minerals[p as usize] < m || self.players.gas[p as usize] < g {
-            todo_port!("0x48ee30", "not enough minerals / gas message");
+        if !self.afford_or_error(p, m, g) {
             return false;
         }
         let (pw, ph) = placement(d, t);
@@ -548,7 +546,7 @@ impl State {
         let tx = ((pos.0 as i32 - pw / 2) / 32) as i16;
         let ty = ((pos.1 as i32 - ph / 2) / 32) as i16;
         if self.placement_check(d, u, p, tx, ty, t, 0, false, true, false) != 0 {
-            // 0x48f6c0: error sound.
+            self.advisor_error(d, u, 0x358);
             return false;
         }
         self.spend(p as usize, m, g);

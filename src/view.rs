@@ -257,6 +257,15 @@ impl<'a> Scene<'a> {
                 self.msgs.trigger_text(&ui.font, t, now, crate::msgs::reading_ms(t));
             }
         }
+        for (fmt, p) in std::mem::take(&mut self.st.notices) {
+            // 0x41f1b0 formats the network.tbl line; 0x48d0c0 shows it 7 s.
+            let Some(f) = ui.network.get(fmt as usize) else { continue };
+            let f = f.split('\0').next().unwrap_or("");
+            let name = self.st.player_names.get(p as usize).map_or("", String::as_str);
+            let t = f.replacen("%s", name, 1).replacen("%d", &(p as u32 + 1).to_string(), 1);
+            self.msgs.print(&ui.font, t.as_bytes(), now, 0);
+            self.st.ui_sounds.push(0x17);
+        }
         self.clock_ms = now.wrapping_add(ms);
         self.msgs.expire(self.clock_ms);
     }
@@ -836,6 +845,7 @@ fn new_game(a: &Assets, chk: &Chk, rep: Option<&crate::replay::Header>) -> io::R
             for (p, s) in h.slots.iter().enumerate().take(8) {
                 st.player_types[p] = s.kind;
                 st.player_races[p] = s.race;
+                st.player_names[p] = s.name.clone();
                 // Melee starting resources go to all eight players, empty slots too (as
                 // the real game's memory shows; todo: the routine applying game settings).
                 st.players.minerals[p] = 50;

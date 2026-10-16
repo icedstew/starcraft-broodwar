@@ -215,7 +215,7 @@ impl State {
             return;
         }
         if self.spell_target_invalid(d, u) {
-            // 0x48ef30: the error message and sound for the local player (UI).
+            self.race_error(d, self.units[u as usize].player, u, 0x36c);
             self.unit_halt(d, u);
             self.order_done_or_next(d, u);
             return;
@@ -224,7 +224,7 @@ impl State {
         let cost = if tech < 0x2c { (d.dat.techdata.energy_cost[tech as usize] as u8 as u16) << 8 } else { 0 };
         let cheat = self.game_options & 0x800 != 0;
         if !cheat && self.units[u as usize].energy < cost {
-            // 0x48ccb0: "Not enough energy" for the local player (UI).
+            self.energy_error(d, u);
             self.order_done_or_next(d, u);
             return;
         }
@@ -279,9 +279,7 @@ impl State {
                 return;
             }
         }
-        if !cheat {
-            self.units[u as usize].energy -= cost;
-        }
+        self.spend_energy(u, cost);
         let cd = self.weapon_cooldown(d, u, w);
         let r = self.rng.rand(0x31) as u8;
         let un = &mut self.units[u as usize];
@@ -692,14 +690,15 @@ impl State {
     /// `range` facing it. `cost` gets the energy cost.
     fn direct_cast_ready(&mut self, d: &Data, u: u32, tech: u8, range: u32, cost: &mut u16) -> bool {
         let t = self.units[u as usize].order_target_unit;
-        if t == NIL || self.tech_target_ok(d, u, tech, t, self.unit_sprite_pos(t)).is_err() {
-            // 0x48ef30: the error for the local player (UI).
+        let ok = if t == NIL { Err(0) } else { self.tech_target_ok(d, u, tech, t, self.unit_sprite_pos(t)) };
+        if let Err(e) = ok {
+            self.race_error(d, self.units[u as usize].player, u, e);
             self.spell_give_up(d, u);
             return false;
         }
         *cost = (d.dat.techdata.energy_cost[tech as usize] as u8 as u16) << 8;
         if self.game_options & 0x800 == 0 && self.units[u as usize].energy < *cost {
-            // 0x48ccb0: "Not enough energy" for the local player (UI).
+            self.energy_error(d, u);
             self.order_done_or_next(d, u);
             return false;
         }
@@ -1278,6 +1277,20 @@ impl State {
         }
     }
 
+    /// 0x4f6910: `u` goes to caster `src`'s owner with its parts (0x4c8040); a dark
+    /// archon taken loses its energy. A hallucination dies instead.
+    fn mind_control_take(&mut self, d: &Data, u: u32, src: u32) {
+        if self.units[u as usize].status & 0x4000_0000 != 0 {
+            self.kill_unit(d, u);
+            return;
+        }
+        let player = self.units[src as usize].player;
+        self.give_unit_with_parts(d, u, player);
+        if self.units[u as usize].unit_type == 0x3f {
+            self.units[u as usize].energy = 0;
+        }
+    }
+
     /// 0x4f6d40: CastFeedback: the target's energy becomes damage to it (hallucinated
     /// casters' targets just die).
     pub(super) fn order_cast_feedback(&mut self, d: &Data, u: u32) {
@@ -1294,22 +1307,17 @@ impl State {
         if !self.direct_cast_ready(d, u, 0x1d, range, &mut cost) {
             return;
         }
-        let cheat = self.game_options & 0x800 != 0;
         let size = self.overlay_size(d, t);
         if self.units[t as usize].status & 0x4000_0000 != 0 {
             self.sprite_on_unit(d, t, 0x1f4 + size);
-            if !cheat {
-                self.units[u as usize].energy -= cost;
-            }
+            self.spend_energy(u, cost);
             self.kill_unit(d, t);
         } else if self.units[t as usize].energy != 0 {
             let e = self.units[t as usize].energy as u32;
             let player = self.units[u as usize].player;
             self.damage_unit(d, t, e, 0x6a, 1, 1, u, player);
             self.units[t as usize].energy = 0;
-            if !cheat {
-                self.units[u as usize].energy -= cost;
-            }
+            self.spend_energy(u, cost);
             // 0x48ed50: the feedback sound.
             let tu = &self.units[t as usize];
             if tu.sprite != NIL && tu.order != 0 {
@@ -1344,17 +1352,8 @@ impl State {
             self.issue_order(d, u, o, true, (0, 0), NIL, 0xe4);
             self.prepare_next_order(d, u);
             if self.replay || self.units[u as usize].player == self.local_player {
-                // 0x497dc0: the hallucination draw function.
-                let mut i = self.sprites[self.units[u as usize].sprite as usize].images.head;
-                while i != NIL {
-                    let img = &mut self.images[i as usize];
-                    if img.modifier == 0 || img.modifier == 0x10 {
-                        img.modifier = 0x10;
-                        img.flags |= 1;
-                        img.coloring = 0;
-                    }
-                    i = img.link.next;
-                }
+                let s = self.units[u as usize].sprite;
+                self.sprite_hallucinate(s);
             }
             if d.dat.units.flags[t] & 0x10 != 0 {
                 return;
@@ -1613,12 +1612,7 @@ impl State {
         }
         if self.units[t as usize].status & 0x4000_0000 == 0 {
             self.add_spell_overlay(d, t, 0x3cd);
-            // 0x4f6910
-            let player = self.units[u as usize].player;
-            self.give_unit_with_parts(d, t, player);
-            if self.units[t as usize].unit_type == 0x3f {
-                self.units[t as usize].energy = 0;
-            }
+            self.mind_control_take(d, t, u);
             self.order_done_or_next(d, t);
         } else {
             self.kill_unit(d, t);
@@ -1774,7 +1768,7 @@ impl State {
         let cost = (d.dat.techdata.energy_cost[0x15] as u8 as u16) << 8;
         let cheat = self.game_options & 0x800 != 0;
         if !cheat && self.units[u as usize].energy < cost {
-            // 0x48ccb0: "Not enough energy" (UI).
+            self.energy_error(d, u);
             self.order_done_or_next(d, u);
             return;
         }

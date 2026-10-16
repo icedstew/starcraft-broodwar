@@ -3,7 +3,6 @@
 use super::list::{self, Link, List, Node, NIL};
 use super::{Data, State};
 use crate::game::flingy::mflags;
-use crate::todo_port;
 
 /// 0x48c590: 2000 queued-order nodes.
 pub const MAX_ORDERS: usize = 2000;
@@ -67,9 +66,9 @@ impl State {
         un.order_queue_tail = l.tail;
     }
 
+    /// 0x474540 / 0x4745f0 without a free order (0x48c510): "Unable to add order."
     fn order_failed(&mut self, u: u32) {
-        let _ = u;
-        todo_port!("0x48ccb0", "show 'too many orders' error to the local player");
+        self.local_error_line(self.units[u as usize].player, 0x368);
     }
 
     fn bump_queue_count(&mut self, d: &Data, u: u32, order: u8) {

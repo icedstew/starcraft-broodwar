@@ -992,8 +992,7 @@ impl State {
                         let ne = (vel.0 / div + exact.0, vel.1 / div + exact.1);
                         self.mv.new_exact = ne;
                         self.mv.new_pos = ((ne.0 >> 8) as i16, (ne.1 >> 8) as i16);
-                        // 0x4f2240
-                        let still = self.units[u as usize].status & status::IS_NORMAL != 0 && self.unit_blocking_move(u).is_some();
+                        let still = self.normal_unit_blocked(u);
                         if !still {
                             stop = false;
                             break;
@@ -1058,6 +1057,26 @@ impl State {
         true
     }
 
+    /// 0x4f17c0: `o` (ESI) moves (+0x23, by quadrant) more than 0x40 away from the
+    /// direction from `u` to it.
+    fn moving_away_from(&self, o: u32, u: u32) -> bool {
+        let us = &self.sprites[self.units[u as usize].sprite as usize];
+        let os = &self.sprites[self.units[o as usize].sprite as usize];
+        let dir = crate::game::flingy::direction_to(us.x as i32, us.y as i32, os.x as i32, os.y as i32) as u32;
+        let vd = self.units[o as usize].fl.velocity_dir_prev;
+        let q: u32 = if vd < 0x20 { 0 } else if vd < 0x60 { 0x40 } else if vd < 0xa0 { 0x80 } else if vd < 0xe0 { 0xc0 } else { 0 };
+        let mut diff = q.wrapping_sub(dir) & 0xff;
+        if diff > 0x80 {
+            diff = 0x100 - diff;
+        }
+        diff > 0x40
+    }
+
+    /// 0x4f2240: a normal unit (0x100000) that something blocks (0x4f20d0).
+    fn normal_unit_blocked(&mut self, u: u32) -> bool {
+        self.units[u as usize].status & status::IS_NORMAL != 0 && self.unit_blocking_move(u).is_some()
+    }
+
     /// 0x46bf60: decide how to resolve a collision.
     fn mv_collision_resolve(&mut self, d: &Data, u: u32) -> bool {
         if self.mv_check_path_state(u, true) {
@@ -1099,17 +1118,7 @@ impl State {
             let in_box = |st: &State, p: (i16, i16), center: (i16, i16)| st.point_in_unit_box(d, o, center, ut, p);
             let os = self.units[o as usize].sprite as usize;
             let opos = (self.sprites[os].x, self.sprites[os].y);
-            let facing_away = |st: &State| {
-                let us = &st.sprites[st.units[u as usize].sprite as usize];
-                let dir = crate::game::flingy::direction_to(us.x as i32, us.y as i32, opos.0 as i32, opos.1 as i32) as u32;
-                let vd = st.units[o as usize].fl.velocity_dir_prev;
-                let q: u32 = if vd < 0x20 { 0 } else if vd < 0x60 { 0x40 } else if vd < 0xa0 { 0x80 } else if vd < 0xe0 { 0xc0 } else { 0 };
-                let mut diff = q.wrapping_sub(dir) & 0xff;
-                if diff > 0x80 {
-                    diff = 0x100 - diff;
-                }
-                diff > 0x40
-            };
+            let facing_away = |st: &State| st.moving_away_from(o, u);
             if in_box(self, mt, opos) {
                 if self.units[o as usize].pathing_collision_interval > 0x1d || in_box(self, mt, ot) {
                     (mtu != NIL) as u32 + 2

@@ -236,6 +236,8 @@ pub struct State {
     pub player_types: [u8; 12],
     /// 0x57eee9 (player struct +9): race (0 zerg, 1 terran, 2 protoss).
     pub player_races: [u8; 12],
+    /// Player struct +0xb (0x57eeeb): the name.
+    pub player_names: [String; 12],
     /// 0x57eeea (player struct +2): force 1..4.
     pub player_force: [u8; 12],
     /// 0x58d5b8: FORC force properties (1 random start, 2 allies, 4 allied victory, 8 shared vision).
@@ -307,6 +309,9 @@ pub struct State {
     /// Trigger texts for the front end (0x4c5770): map string id and the action's
     /// "always display" flag (else shown only with subtitles on, 0x6cdfec 0x400).
     pub shown_text: Vec<(u16, bool)>,
+    /// Notices for the front end's message lines (0x48d0c0): a network.tbl format
+    /// (0-based) and the player its %s (name) or %d (number) names.
+    pub notices: Vec<(u16, u8)>,
     /// 0x66ff60: why the last requirement check failed (soft failures, Ok(-1), set it
     /// here; hard ones return it as the error).
     pub req_error: std::cell::Cell<u8>,
@@ -417,6 +422,7 @@ impl State {
             scanner_units: List::default(),
             player_types: [0; 12],
             player_races: [0; 12],
+            player_names: Default::default(),
             player_force: [0; 12],
             force_flags: [0; 4],
             player_vision: [0; 12],
@@ -443,6 +449,7 @@ impl State {
             last_error: 0,
             shown_error: 0,
             shown_text: Vec::new(),
+            notices: Vec::new(),
             req_error: std::cell::Cell::new(0),
             builder_override: NIL,
             areas: vec![ai_areas::ResourceArea::default(); ai_areas::AREA_SLOTS],

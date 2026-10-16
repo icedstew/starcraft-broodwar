@@ -218,7 +218,12 @@ impl State {
             }
             1 => {
                 if self.units[u as usize].main_order_timer < 0x2e || self.unit_at_move_target(u) != 0 {
-                    // 0x48ed50 / 0x48cf00: "Nuclear launch detected" (UI).
+                    // 0x48ed50: the local race's advisor (0x7f + race); 0x48cf00:
+                    // "Nuclear launch detected." for everyone.
+                    // ponytail: 0x48ed50's volume gate is not ported (as in 0x48f230).
+                    let me = self.local_player;
+                    self.ui_sounds.push(0x7f + self.player_races[me as usize] as u16);
+                    self.local_error_line(me, 0x417);
                     self.units[u as usize].order_state = 2;
                 }
             }

@@ -417,18 +417,8 @@ impl State {
     /// 0x441130: players that see cloaked `u`: its owner, players sharing the owner's
     /// vision, parasite owners, and owners of detectors within range (0x4408a0).
     fn detected_by(&mut self, d: &Data, u: u32) -> u32 {
-        // 0x491810: affected by a spell; 0x4f3a80: carrying a flag.
-        let un = &self.units[u as usize];
-        if un.defense_matrix_damage != 0
-            || un.lockdown_timer != 0
-            || un.maelstrom_timer != 0
-            || un.irradiate_timer != 0
-            || un.ensnare_timer != 0
-            || un.stasis_timer != 0
-            || un.plague_timer != 0
-            || un.acid_spore_count != 0
-            || self.carries_flag(d, u)
-        {
+        // 0x4f3a80: carrying a flag.
+        if self.units[u as usize].under_spell() || self.carries_flag(d, u) {
             return 0xff;
         }
         let (x, y) = self.unit_sprite_pos(u);
@@ -491,12 +481,7 @@ impl State {
         if un.unit_type == 0x2a && self.players.upgrade_sc[un.player as usize][0x18] == 0 {
             return false;
         }
-        // 0x4e7080
-        (0..8).filter_map(|i| self.loaded_unit(u, i)).any(|c| {
-            let cu = &self.units[c as usize];
-            let p = cu.ptr_at(0xc0);
-            d.dat.units.flags[cu.unit_type as usize] & 8 != 0 && p != NIL && self.units[p as usize].unit_type == 0xd7
-        })
+        self.passenger_carries_flag(d, u)
     }
 
     /// 0x491c00: energy cap (a dark archon still warping in has 50).
@@ -529,22 +514,14 @@ impl State {
                 self.units[u as usize].energy = self.energy_cap(d, u);
             }
         } else {
-            // 0x491a90: per-frame cloak cost.
-            let cost = match t {
-                1 | 0x10 | 100 | 99 | 0x68 | 0x33 => 10,
-                8 | 0x15 => 0xd,
-                _ => 0,
-            };
-            let cheat = self.game_options & 0x800 != 0;
-            if !cheat && self.units[u as usize].energy < cost {
+            let cost = cloak_energy_cost(t);
+            if self.energy_short(u, cost) {
                 if self.units[u as usize].secondary_order == 0x6d {
                     self.set_secondary_order(u, 0x17);
                 }
                 return;
             }
-            if !cheat {
-                self.units[u as usize].energy -= cost;
-            }
+            self.spend_energy(u, cost);
         }
         // 0x497430: selected units redraw their energy bar (UI).
     }
@@ -625,5 +602,14 @@ impl State {
             let sub = un.subunit;
             self.units[sub as usize].status |= 0x8000;
         }
+    }
+}
+
+/// 0x491a90: energy a cloaked unit of type `t` pays each frame (0 when not a cloaker).
+pub(super) fn cloak_energy_cost(t: u16) -> u16 {
+    match t {
+        1 | 0x10 | 100 | 99 | 0x68 | 0x33 => 10,
+        8 | 0x15 => 0xd,
+        _ => 0,
     }
 }

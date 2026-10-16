@@ -254,6 +254,19 @@ impl Default for Unit {
 }
 
 impl Unit {
+    /// 0x491810: under a spell (defensive matrix, ensnare, lockdown, irradiate,
+    /// stasis, plague, maelstrom or acid spores).
+    pub fn under_spell(&self) -> bool {
+        self.defense_matrix_damage != 0
+            || self.lockdown_timer != 0
+            || self.irradiate_timer != 0
+            || self.stasis_timer != 0
+            || self.ensnare_timer != 0
+            || self.plague_timer != 0
+            || self.maelstrom_timer != 0
+            || self.acid_spore_count != 0
+    }
+
     /// Read/write a byte of the 0xC0 union by its x86 CUnit offset.
     pub fn u8_at(&self, off: usize) -> u8 {
         self.union_c0[off - 0xc0]

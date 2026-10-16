@@ -11,6 +11,15 @@ impl State {
         self.unit_from_handle(self.units[tr as usize].loaded_units[i] as u32)
     }
 
+    /// 0x4e7080: a passenger of `tr` carries (flag 8, +0xc0) a flag (0xd7).
+    pub(super) fn passenger_carries_flag(&self, d: &Data, tr: u32) -> bool {
+        (0..8).filter_map(|i| self.loaded_unit(tr, i)).any(|c| {
+            let cu = &self.units[c as usize];
+            let p = cu.ptr_at(0xc0);
+            d.dat.units.flags[cu.unit_type as usize] & 8 != 0 && p != NIL && self.units[p as usize].unit_type == 0xd7
+        })
+    }
+
     /// 0x4e6e00: transport `tr` can take `u` now (complete, not disabled, same owner,
     /// enough room; bunkers take Terran infantry only).
     pub fn can_load(&self, d: &Data, tr: u32, u: u32) -> bool {

@@ -618,6 +618,60 @@ impl State {
         }
     }
 
+    /// 0x48cf00 (and 0x48ccb0 behind the same check): stat_txt line `msg` (1-based) on
+    /// the error line when `player` is the local player and the command running is theirs
+    /// (0x51267c == 0x512688: never while a replay plays).
+    pub fn local_error_line(&mut self, player: u8, msg: u16) {
+        if player == self.local_player && !self.replay {
+            self.shown_error = msg;
+        }
+    }
+
+    /// Minerals then gas against `m` / `g`; short, `player` gets 0x48ee30's "Not enough
+    /// minerals." (0x352, advisor 0x93 + local race) or "...gas." (0x353, 0x96 + race).
+    pub fn afford_or_error(&mut self, player: u8, m: i32, g: i32) -> bool {
+        let race = self.player_races[self.local_player as usize] as u16;
+        if self.players.minerals[player as usize] < m {
+            self.local_error(player, 0x93 + race, 0x352);
+            return false;
+        }
+        if self.players.gas[player as usize] < g {
+            self.local_error(player, 0x96 + race, 0x353);
+            return false;
+        }
+        true
+    }
+
+    /// 0x48ef30: `player`'s refused action: stat_txt line `msg` (1-based, 0 for none)
+    /// and the race error beep (sfx 1 + race of unit `u`, or the local race for NIL),
+    /// for the local player outside a replay.
+    // ponytail: the beep's volume gate (0x68c449) is not ported (as in 0x48f230).
+    pub fn race_error(&mut self, d: &Data, player: u8, u: u32, msg: u16) {
+        if player != self.local_player || self.replay {
+            return;
+        }
+        if msg != 0 {
+            self.shown_error = msg;
+        }
+        let race = if u == NIL { self.player_races[player as usize] as u16 } else { Self::supply_race_of(d, self.units[u as usize].unit_type) };
+        self.ui_sounds.push(race + 1);
+    }
+
+    /// 0x48f6c0: unit `u`'s refused placement: its race's advisor line (0xa2 + race)
+    /// and stat_txt line `msg` for its owner, the local player.
+    // ponytail: the advisor's cooldown 0x48ed50 is not ported.
+    pub fn advisor_error(&mut self, d: &Data, u: u32, msg: u16) {
+        let race = Self::supply_race_of(d, self.units[u as usize].unit_type);
+        self.local_error(self.units[u as usize].player, 0xa2 + race, msg);
+    }
+
+    /// "Not enough energy." (stat_txt 0x360 + race of `u`, 0x4c36f0) on the error line
+    /// for `u`'s owner (0x48ccb0 behind the 0x48cf00 check).
+    pub fn energy_error(&mut self, d: &Data, u: u32) {
+        let race = Self::supply_race_of(d, self.units[u as usize].unit_type);
+        self.local_error_line(self.units[u as usize].player, 0x360 + race);
+    }
+
     /// 0x48f230: the local player's unit `u` was hit: it blinks red on the minimap and,
     /// unless an alert played lately (0x640870) or nearby, or the unit is on screen
     /// (0x4e5ad0), the advisor warns (building or forces sound by the local race).

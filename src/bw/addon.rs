@@ -119,7 +119,7 @@ impl State {
         let tx = tile(p.0 as i32) - half(aw);
         let ty = tile(p.1 as i32) - half(ah);
         if self.placement_check(d, u, player, tx, ty, at, 0, false, true, false) != 0 {
-            todo_port!("0x48f6c0", "addon placement error message 0x358");
+            self.advisor_error(d, u, 0x358);
             self.order_done_or_next(d, u);
             return;
         }

@@ -1043,7 +1043,7 @@ impl State {
                     }
                     return;
                 }
-                // 0x48ef30: error 0x365 for the local player (UI).
+                self.race_error(d, self.units[u as usize].player, u, 0x366);
                 self.order_done_or_next(d, u);
             }
             1 => {
@@ -1181,9 +1181,7 @@ impl State {
         let tx = ((x as i32 - pw / 2) / 32) as i16;
         let ty = ((y as i32 - ph / 2) / 32) as i16;
         if self.placement_check(d, u, player, tx, ty, 0x86, 0, false, true, false) != 0 {
-            // 0x48f6c0(0x358)
-            let race = Self::supply_race_of(d, self.units[u as usize].unit_type);
-            self.local_error(player, 0xa2 + race, 0x358);
+            self.advisor_error(d, u, 0x358);
             self.order_done_or_next(d, u);
             return;
         }
@@ -1603,7 +1601,7 @@ impl State {
         let cost = d.dat.techdata.energy_cost[4] as u8 as u16;
         let cheat = self.game_options & 0x800 != 0;
         if !cheat && self.units[u as usize].energy < cost << 8 {
-            // 0x48ccb0: "not enough energy" for the local player (UI).
+            self.energy_error(d, u);
             if self.units[u as usize].order_queue_head != NIL {
                 self.units[u as usize].order_flags |= 1;
                 self.order_nothing(d, u);

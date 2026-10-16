@@ -533,17 +533,8 @@ impl State {
         self.modify_unit_counters(d, u, 1);
         self.modify_completed_counters(d, u, 1, false);
         if self.replay || self.units[u as usize].player == self.local_player {
-            // 0x497dc0: the sprite's images switch to the hallucination draw function.
-            let mut i = self.sprites[self.units[u as usize].sprite as usize].images.head;
-            while i != NIL {
-                let img = &mut self.images[i as usize];
-                if img.modifier == 0 || img.modifier == 0x10 {
-                    img.modifier = 0x10;
-                    img.flags |= 1;
-                    img.coloring = 0;
-                }
-                i = img.link.next;
-            }
+            let s = self.units[u as usize].sprite;
+            self.sprite_hallucinate(s);
         }
         if d.dat.units.flags[t] & 0x10 != 0 {
             return;

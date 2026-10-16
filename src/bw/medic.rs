@@ -106,6 +106,18 @@ impl State {
         result
     }
 
+    /// 0x491480: `u` has less than `cost` energy (never with the energy cheat).
+    pub(super) fn energy_short(&self, u: u32, cost: u16) -> bool {
+        self.game_options & 0x800 == 0 && self.units[u as usize].energy < cost
+    }
+
+    /// 0x491460: `u` pays `cost` energy (not with the energy cheat).
+    pub(super) fn spend_energy(&mut self, u: u32, cost: u16) {
+        if self.game_options & 0x800 == 0 {
+            self.units[u as usize].energy -= cost;
+        }
+    }
+
     /// 0x463c40: heal `t` once if in range. 0 = can't heal, 1 = healed, 2 = out of
     /// energy, 3 = out of range. A target someone else is healing is swapped for a new one.
     fn heal_step(&mut self, d: &Data, u: u32, t: u32) -> u8 {
@@ -132,15 +144,10 @@ impl State {
         let amount = (d.dat.units.hit_points[tu.unit_type as usize] as i32).wrapping_sub(tu.hp) as u32;
         let amount = amount.min(200);
         let cost = (amount >> 1) as u16;
-        let cheat = self.game_options & 0x800 != 0;
-        // 0x491480
-        if !cheat && self.units[u as usize].energy < cost {
+        if self.energy_short(u, cost) {
             return 2;
         }
-        // 0x491460
-        if !cheat {
-            self.units[u as usize].energy -= cost;
-        }
+        self.spend_energy(u, cost);
         let hp = self.units[t as usize].hp + amount as i32;
         self.set_unit_hp(d, t, hp);
         self.units[t as usize].is_being_healed = 1;
