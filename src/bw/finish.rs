@@ -169,6 +169,8 @@ impl State {
     }
 
     /// 0x4e6490: make a hidden unit visible: finder, vision, movement reset, visible list.
+    /// 0x49de50: unlink from the hidden units (0x6283ec / 0x628428).
+    /// 0x49dca0: link after the head of the visible units (0x628430 / 0x59cc9c).
     pub fn show_unit(&mut self, d: &Data, u: u32) {
         let s = self.units[u as usize].sprite;
         if self.sprites[s as usize].flags & super::sprite::sflag::HIDDEN == 0 {
@@ -215,6 +217,8 @@ impl State {
 
     /// 0x4e6340: take a unit off the map: references, finder, tiles, visible list out,
     /// hidden list in.
+    /// 0x49dea0: unlink from the visible units.
+    /// 0x49dce0: link after the head of the hidden units.
     pub fn hide_unit(&mut self, d: &Data, u: u32) {
         let s = self.units[u as usize].sprite;
         if self.sprites[s as usize].flags & super::sprite::sflag::HIDDEN != 0 {

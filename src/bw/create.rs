@@ -101,6 +101,7 @@ impl State {
     }
 
     /// 0x4a06c0: take a unit from the free list and initialize it.
+    /// 0x49de00: unlink from the free units (0x628438 / 0x62843c).
     fn alloc_unit(&mut self, d: &Data, ut: u16, x: i16, y: i16, player: u8) -> Option<u32> {
         if self.unit_count == UNIT_LIMIT {
             self.last_error = 0x3d;
