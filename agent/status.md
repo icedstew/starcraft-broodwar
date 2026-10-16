@@ -10,6 +10,9 @@ Rules: [conventions.md](conventions.md). Tools: [tools.md](tools.md). Old log:
 
 Faithful Rust port of StarCraft: Brood War 1.16.1 (~all 4,644 functions, frame-exact; own
 networking; no editor). Assets come from the user's install (`SCBW_INSTALL`).
+Last step (after the port): optional StarCraft: Remastered assets read from the user's
+SC:R install (CASC reader, HD `.anim` sprites / tiles / UI skin / audio, an RGBA
+renderer at 2x/4x); the 8-bit 1.16.1 renderer stays the default and the test reference.
 
 ## Metric (the user watches this)
 
