@@ -1747,19 +1747,29 @@ impl State {
         self.search = search;
         let player = self.units[u as usize].player;
         for c in found {
-            // 0x4e4130; 0x4e3e90: the capture message and sound (UI).
-            let cu = &self.units[c as usize];
-            if cu.player == player {
-                let pw = cu.ptr_at(0xc0);
-                if d.dat.units.flags[cu.unit_type as usize] & 8 != 0 && pw != NIL && self.units[pw as usize].unit_type == 0xd7 {
-                    self.kill_carried_powerup(d, c);
-                }
-            } else if cu.unit_type == 0xd7 {
-                self.units[c as usize].order_flags |= 4;
-                self.kill_unit(d, c);
-            }
+            self.ctf_capture(d, c, player);
         }
         self.units[u as usize].order_process_timer = 0xf;
+    }
+
+    /// 0x4e4130: unit `c` at a flag beacon of `player`: their own unit bringing a flag
+    /// captures it (0x4f3c60), another player's flag lying there dies; either way the
+    /// flag's owner hears of it (0x4e3e90).
+    fn ctf_capture(&mut self, d: &Data, c: u32, player: u8) {
+        let cu = &self.units[c as usize];
+        if cu.player == player {
+            let pw = cu.ptr_at(0xc0);
+            if d.dat.units.flags[cu.unit_type as usize] & 8 != 0 && pw != NIL && self.units[pw as usize].unit_type == 0xd7 {
+                let owner = self.units[pw as usize].player;
+                self.ctf_event(owner, 0x80, true);
+                self.kill_carried_powerup(d, c);
+            }
+        } else if cu.unit_type == 0xd7 {
+            let owner = cu.player;
+            self.ctf_event(owner, 0x80, true);
+            self.units[c as usize].order_flags |= 4;
+            self.kill_unit(d, c);
+        }
     }
 
     /// 0x4a28b0: ComputerAI: every 15 frames the unit's AI (worker, building or

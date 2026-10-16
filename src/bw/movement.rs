@@ -176,7 +176,7 @@ impl State {
         self.sprite_images_set_direction(d, s, dir);
     }
 
-    pub(super) fn unit_sprite_pos(&self, u: u32) -> (i16, i16) {
+    pub fn unit_sprite_pos(&self, u: u32) -> (i16, i16) {
         let s = &self.sprites[self.units[u as usize].sprite as usize];
         (s.x, s.y)
     }

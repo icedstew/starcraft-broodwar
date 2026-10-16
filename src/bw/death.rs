@@ -141,20 +141,45 @@ impl State {
         self.free_unit_sprite(u);
     }
 
-    /// 0x4a0740: take a dying unit out of the game (lists, finder, counters).
-    pub fn remove_unit(&mut self, d: &Data, u: u32) {
+    /// 0x49fd00: a dying building's addon in progress, addon, research, upgrade and
+    /// training queue end; a zerg building's creep starts receding.
+    fn dying_building_cleanup(&mut self, d: &Data, u: u32) {
+        if self.units[u as usize].status & 2 == 0 {
+            return;
+        }
+        let un = &self.units[u as usize];
+        let c = un.current_build_unit;
+        if un.secondary_order == 0x25 && c != NIL && self.units[c as usize].status & 1 == 0 {
+            self.cancel_unit(d, c);
+        }
+        if self.units[u as usize].ptr_at(0xc0) != NIL {
+            self.detach_addon(d, u);
+        }
+        self.abort_research(d, u);
+        self.abort_upgrade(d, u);
+        let un = &self.units[u as usize];
+        if un.queue_slot_holds_unit(0) {
+            self.clear_build_queue(d, u);
+        }
+        // 0x48e6e0: minimap (UI).
+        if d.dat.units.staredit_group_flags[self.units[u as usize].unit_type as usize] & 1 != 0 {
+            // A dying lair / hive / ... morph counts as complete; while its creep cannot
+            // all be queued to recede it stays (0x4000) for the dead-unit step to retry.
+            if self.morphing_zerg_building(u) {
+                self.units[u as usize].status |= 1;
+            }
+            if !self.creep_recede_unit(d, u) {
+                self.units[u as usize].status |= 0x4000;
+            }
+        }
+    }
+
+    /// 0x4a0080: a subunit goes to the dead list and out of its owner's units; a
+    /// visible gas building turns back into a neutral geyser. True when either happened.
+    fn remove_subunit_or_geyser(&mut self, d: &Data, u: u32) -> bool {
         let t = self.units[u as usize].unit_type;
         let flags = d.dat.units.flags[t as usize];
-        if flags & 1 != 0 {
-            self.map_changed = true;
-        }
-        self.remove_unit_type_specific(d, u);
-        self.remove_loaded_units(d, u);
-        self.clear_references(d, u);
-        self.untarget_bullets(u);
-        self.ai_release_unit(d, u, true);
         if flags & 0x10 != 0 {
-            // 0x4a0080: a subunit goes to the dead list and out of its owner's units.
             let mut l = self.dead_units;
             list::insert_after_head(&mut self.units, u, &mut l);
             self.dead_units = l;
@@ -173,11 +198,11 @@ impl State {
             self.units[u as usize].player_next = NIL;
             self.modify_unit_counters(d, u, -1);
             self.units[u as usize].subunit = NIL;
-            return;
+            return true;
         }
         let s = self.units[u as usize].sprite;
         if matches!(t, 0x6e | 0x95 | 0x9d) && self.sprites[s as usize].flags & super::sprite::sflag::HIDDEN == 0 {
-            // 0x4a0080: a dying gas building turns back into a neutral geyser.
+            // A dying gas building turns back into a neutral geyser.
             if t == 0x95 {
                 let (x, y) = (self.sprites[s as usize].x as i32, self.sprites[s as usize].y as i32);
                 self.creep_clear_under(d, 0x95, x, y);
@@ -199,6 +224,24 @@ impl State {
             self.units[u as usize].status |= 1;
             self.modify_completed_counters(d, u, 1, true);
             // 0x48e1e0: minimap refresh (UI).
+            return true;
+        }
+        false
+    }
+
+    /// 0x4a0740: take a dying unit out of the game (lists, finder, counters).
+    pub fn remove_unit(&mut self, d: &Data, u: u32) {
+        let t = self.units[u as usize].unit_type;
+        let flags = d.dat.units.flags[t as usize];
+        if flags & 1 != 0 {
+            self.map_changed = true;
+        }
+        self.remove_unit_type_specific(d, u);
+        self.remove_loaded_units(d, u);
+        self.clear_references(d, u);
+        self.untarget_bullets(u);
+        self.ai_release_unit(d, u, true);
+        if self.remove_subunit_or_geyser(d, u) {
             return;
         }
         self.unit_halt(d, u);
@@ -221,35 +264,7 @@ impl State {
                 self.end_cloak(d, u);
             }
         }
-        if self.units[u as usize].status & 2 != 0 {
-            // 0x49fd00: a dying building's addon in progress, addon, research, upgrade
-            // and training queue.
-            let un = &self.units[u as usize];
-            let c = un.current_build_unit;
-            if un.secondary_order == 0x25 && c != NIL && self.units[c as usize].status & 1 == 0 {
-                self.cancel_unit(d, c);
-            }
-            if self.units[u as usize].ptr_at(0xc0) != NIL {
-                self.detach_addon(d, u);
-            }
-            self.abort_research(d, u);
-            self.abort_upgrade(d, u);
-            let un = &self.units[u as usize];
-            if un.queue_slot_holds_unit(0) {
-                self.clear_build_queue(d, u);
-            }
-            // 0x48e6e0: minimap (UI).
-            if d.dat.units.staredit_group_flags[self.units[u as usize].unit_type as usize] & 1 != 0 {
-                // A dying lair / hive / ... morph counts as complete; while its creep cannot
-                // all be queued to recede it stays (0x4000) for the dead-unit step to retry.
-                if self.morphing_zerg_building(u) {
-                    self.units[u as usize].status |= 1;
-                }
-                if !self.creep_recede_unit(d, u) {
-                    self.units[u as usize].status |= 0x4000;
-                }
-            }
-        }
+        self.dying_building_cleanup(d, u);
         if flags & 0x20 != 0 && self.units[u as usize].u8_at(0xcb) != 0 {
             // 0x469ec0: the landing spot it had reserved.
             let p = self.units[u as usize].order_target_pos;

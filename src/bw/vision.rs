@@ -396,6 +396,21 @@ impl State {
         was != 0 && self.sprites[s as usize].visibility & lm == 0
     }
 
+    /// 0x48ec10's gate: a sound at map point (x, y) plays only inside the map on a
+    /// tile the local player sees (a replay: any shown player, or everything revealed).
+    // ponytail: 0x48ec10's volume by distance (0x48e8d0) and pan (0x48e850) are not ported.
+    pub fn sound_audible(&self, x: i32, y: i32) -> bool {
+        if x < 0 || y < 0 || x >= self.map_px.0 as i32 || y >= self.map_px.1 as i32 {
+            return false;
+        }
+        let f = self.terrain.tile_flags.get(((y >> 5) * self.terrain.width as i32 + (x >> 5)) as usize).copied().unwrap_or(u32::MAX);
+        if self.replay {
+            !(f as u8) & self.local_vision_mask != 0 || self.reveal_all
+        } else {
+            f as u8 & self.local_vision_mask == 0
+        }
+    }
+
     /// 0x402500: OR of the inverted visibility byte over the tile rectangle (x, y, w, h).
     pub(super) fn tiles_unseen_mask(&self, x: i32, y: i32, w: i32, h: i32) -> u32 {
         let mw = self.terrain.width as i32;

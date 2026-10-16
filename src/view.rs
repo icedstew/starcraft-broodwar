@@ -220,6 +220,20 @@ impl<'a> Scene<'a> {
         bw::select::selection_units(&self.st.selections[me as usize]).to_vec()
     }
 
+    /// 0x4967e0: the screen position centered on the selected group: the units' mean
+    /// position less half the screen (0x140, 0xc8), on 8-pixel steps.
+    pub fn group_centre(&self) -> Option<(i32, i32)> {
+        let n = self.selected.len() as i32;
+        if n == 0 {
+            return None;
+        }
+        let (sx, sy) = self.selected.iter().fold((0i32, 0i32), |(ax, ay), &u| {
+            let (x, y) = self.st.unit_sprite_pos(u);
+            (ax + x as i32, ay + y as i32)
+        });
+        Some(((sx / n - 0x140) & !7, (sy / n - 0xc8) & !7))
+    }
+
     /// Hotkey group command 0x13 (`action` 0 set, 1 select, 2 add); the local selection
     /// follows the simulation's.
     pub fn hotkey(&mut self, action: u8, g: u8) {
@@ -647,7 +661,11 @@ impl<'a> Scene<'a> {
             CancelTargeting => self.targeting = Option::None,
             CancelPlacement => self.placing = Option::None,
             SelectLarvae(l) => self.selected = l,
-            Error => self.show_error(btn.disabled_str),
+            Error(Option::None) => self.show_error(btn.disabled_str),
+            Error(Some((sound, msg))) => {
+                self.st.ui_sounds.push(sound);
+                self.show_error(msg);
+            }
             ReplayPause => self.st.replay_paused = !self.st.replay_paused,
             ReplayFaster => {
                 let st = &mut self.st;
@@ -722,6 +740,11 @@ impl<'a> Scene<'a> {
         pkt.extend_from_slice(&(ty as u16).to_le_bytes());
         pkt.extend_from_slice(&t.to_le_bytes());
         let (sel, me) = (self.sim_selection(), self.local);
+        if self.place_ok {
+            // 0x48eff0: the building race's placement sound (sfx 4 + race).
+            let race = with_data(self.a, |d| bw::State::supply_race_of(d, t));
+            self.st.ui_sounds.push(4 + race);
+        }
         let st = &mut self.st;
         with_data(self.a, |d| st.execute_command(d, me, &sel, &pkt));
         self.card_menu = Option::None;
@@ -1233,7 +1256,12 @@ fn draw_hud(scene: &Scene, ui: &crate::ui::Ui, vx: i32, vy: i32, cursor: Option<
     rect(out, w, h, (rx, ry, rx + rw, ry + rh), scene.minimap.colors[0]);
     draw_resources(scene, ui, out);
     if let Some((l, t, r, b)) = ui.statport.screen_rect(1) {
+        // 0x45e650: the video, then conover.pcx over it (index 0 clear).
+        // ponytail: the static shown while a new portrait loads (0x45e570) is not ported.
         scene.portrait.borrow_mut().draw(scene.palette(), l, t, r - l + 1, b - t + 1, out, w, h);
+        if let Some(c) = &ui.conover {
+            crate::ui::blit(c, l, t, out, w, h);
+        }
     }
     if scene.st.replay {
         draw_replay_panel(scene, ui, out, w, h);
@@ -1403,14 +1431,23 @@ fn draw_hud(scene: &Scene, ui: &crate::ui::Ui, vx: i32, vy: i32, cursor: Option<
 /// upgrades (2), minerals, gas and energy for techs (3).
 #[allow(clippy::too_many_arguments)]
 fn draw_tooltip(scene: &Scene, ui: &crate::ui::Ui, b: &bw::buttons::Button, enabled: bool, bx: i32, by: i32, out: &mut [u8], w: i32, h: i32) {
-    let id = if enabled { b.enabled_str } else { b.disabled_str };
-    let Some(raw) = (id as usize).checked_sub(1).and_then(|i| ui.stat_txt.get(i)) else { return };
-    let raw = raw.split('\0').next().unwrap_or("");
+    let stat = |id: u16| (id as usize).checked_sub(1).and_then(|i| ui.stat_txt.get(i)).map(|s| s.split('\0').next().unwrap_or(""));
+    let Some(raw) = stat(b.enabled_str) else { return };
     let kind = raw.chars().nth(1).map_or(0, |c| c as u32);
-    let mut text: String = raw.chars().skip(2).collect();
     let me = scene.local_player();
     let dat = scene.a.dat();
     let v = b.act_var as usize;
+    if !enabled {
+        // The disabled string whole; an upgrade's is per level (0x4ce7a0).
+        let lvl = if kind == 2 && v < dat.upgrades.icon.len() { scene.st.players.upgrade_level(me, v) as u16 } else { 0 };
+        if b.disabled_str == 0 {
+            return;
+        }
+        let Some(t) = stat(b.disabled_str + lvl) else { return };
+        tooltip_with_costs(ui, t, &[0; 8], scene.local_race() as i32, bx, by, out, w, h);
+        return;
+    }
+    let mut text: String = raw.chars().skip(2).collect();
     // (minerals, gas, supply, energy)
     let mut cost = (0i32, 0i32, 0i32, 0i32);
     if enabled {
@@ -1434,33 +1471,74 @@ fn draw_tooltip(scene: &Scene, ui: &crate::ui::Ui, b: &bw::buttons::Button, enab
             _ => {}
         }
     }
-    let lines: Vec<&str> = text.split('\n').collect();
-    let lh = ui.font.height + 1;
-    let tw = lines.iter().map(|l| coded_width(ui, l)).max().unwrap_or(0);
-    let has_cost = cost != (0, 0, 0, 0);
-    let bw_ = (tw + 8).max(if has_cost { 150 } else { 0 });
-    let bh = lines.len() as i32 * lh + if has_cost { 14 } else { 0 } + 4;
-    let x0 = (bx + 40 - bw_).clamp(0, w - bw_);
-    let y0 = by - bh - 4;
-    for y in y0.max(0)..(y0 + bh).min(h) {
-        for x in x0..(x0 + bw_).min(w) {
-            out[(y * w + x) as usize] = 0;
+    // 0x458800: the cost slots shown with icons 0x515228 (minerals, gas, then energy
+    // and supply per race).
+    let race = scene.local_race() as i32;
+    let mut slots = [0i32; 8];
+    slots[0] = cost.0;
+    slots[1] = cost.1;
+    if cost.2 != 0 {
+        slots[[7, 6, 5][race as usize % 3]] = cost.2;
+    }
+    if cost.3 != 0 {
+        // The status unit's race (0x47b150): zerg 4, terran 3, protoss 2.
+        let r = scene.selected.first().map_or(4, |&u| with_data(scene.a, |d| bw::State::supply_race_of(d, scene.st.units[u as usize].unit_type)));
+        if let Some(k) = [4usize, 3, 2].get(r as usize) {
+            slots[*k] = cost.3;
         }
     }
-    for (k, l) in lines.iter().enumerate() {
-        draw_coded(ui, l, x0 + 4, y0 + 2 + k as i32 * lh, out, w, h);
+    tooltip_with_costs(ui, &text, &slots, race, bx, by, out, w, h);
+}
+
+/// 0x459030: tooltip text over interface color 0xf from (2, 0), then the cost line
+/// (0x458ef0: each slot's icon at the text's bottom and its number after it, in
+/// the color the text left), framed in color 0x10 at the buffer's origin (0x4e1c70)
+/// and put above the hovered button at (bx, by) (0x458850).
+// ponytail: the numbers use color 2, not the color the text's codes left.
+#[allow(clippy::too_many_arguments)]
+fn tooltip_with_costs(ui: &crate::ui::Ui, text: &str, slots: &[i32; 8], race: i32, bx: i32, by: i32, out: &mut [u8], w: i32, h: i32) {
+    const ICONS: [i32; 8] = [0, 1, 9, 8, 7, 6, 5, 4];
+    let colors = ui.skin.colors.get();
+    let mut buf = vec![colors[0xf]; (w * h) as usize];
+    let o = crate::ui::TextOpts { flags: 0x11, line_gap: 0, clip: (2, 0, w - 1, h - 1), ..crate::ui::TextOpts::new() };
+    let font = &ui.skin.fonts[0];
+    let mut e = font.draw_text(text, 2, 0, 2, &o, crate::ui::TextDst { rows: &ui.text_colors, out: &mut buf, w, h });
+    let mut x = 2;
+    let mut icon_h = 0;
+    let mut any = false;
+    for (k, &n) in slots.iter().enumerate() {
+        if n == 0 {
+            continue;
+        }
+        let mut f = ICONS[k];
+        if f == 1 {
+            f = race + 1;
+        }
+        let f = if (f as usize) < ui.icons.frame_count() { f as usize } else { 0 };
+        let (iw, ih) = ui.icons.frame_size(f);
+        icon_h = ih;
+        ui.draw_icon(f, x, e.b, &mut buf, w, h);
+        let t = font.draw_text(&n.to_string(), x + iw + 2, e.b, 2, &o, crate::ui::TextDst { rows: &ui.text_colors, out: &mut buf, w, h });
+        x = t.r;
+        any = true;
     }
-    if has_cost {
-        let race = scene.local_race();
-        let y = y0 + 2 + lines.len() as i32 * lh;
-        let mut x = x0 + 4;
-        for (icon, n, show) in [(0, cost.0, true), (1 + race, cost.1, true), (4 + race, cost.2, cost.2 != 0), (7, cost.3, cost.3 != 0)] {
-            if !show {
-                continue;
+    if any {
+        e.r = e.r.max(x);
+        e.b += icon_h + 1;
+    }
+    let (bw, bh) = (e.r - e.l + 1, e.b - e.t + 1);
+    let mut x0 = bx;
+    if x0 + bw - 1 > 0x27f {
+        x0 = 0x27f - (bw - 1);
+    }
+    let y0 = by - 1 - bh + 1;
+    for yy in 0..bh {
+        for xx in 0..bw {
+            let edge = xx == 0 || yy == 0 || xx == bw - 1 || yy == bh - 1;
+            let c = if edge { colors[0x10] } else { buf[(yy * w + xx) as usize] };
+            if (0..w).contains(&(x0 + xx)) && (0..h).contains(&(y0 + yy)) {
+                out[((y0 + yy) * w + x0 + xx) as usize] = c;
             }
-            ui.draw_icon(icon, x, y, out, w, h);
-            ui.font.draw(&n.to_string(), x + 16, y + 2, ui.text_color(2), out, w, h);
-            x += 36;
         }
     }
 }
@@ -1620,6 +1698,14 @@ pub fn frame_loop<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Option<Re
     let mut rmb_was_down = false;
     let mut lmb_was_down = false;
     let mut last_click = 0usize;
+    // 0x57f270: the saved screen positions (Shift+F2..F4 save, F2..F4 recall).
+    let mut camera_slots = [(0i32, 0i32); 3];
+    // 0x5999b4: the music volume Ctrl+M turned off; the same for Ctrl+S.
+    let (mut saved_music, mut saved_digital) = (0i16, 0i16);
+    // A press used for a targeted order is not also a minimap scroll until released.
+    let mut press_used = false;
+    // 0x597280 / 0x59727c: the hotkey group last selected and when (0x4c07b0).
+    let mut last_group: (u8, usize) = (0xff, 0);
     let mut settings = crate::menu::Settings::default();
     let mut menu: Option<crate::menu::Menu> = None;
     let mut menu_paused = false;
@@ -1636,17 +1722,17 @@ pub fn frame_loop<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Option<Re
         // The game menu (F10 or the console's MENU button) takes all input while open;
         // single player and replays pause under it (0x4f57a0 -> 0x488790).
         ctx.replay_speed = scene.st.replay_speed as i16;
-        let open_menu = |kind, depth, settings: &crate::menu::Settings| {
+        let open_menu = |scene: &Scene, kind, depth, settings: &crate::menu::Settings| {
             let u = ui.as_ref()?;
             let mut m = crate::menu::Menu::open(kind, depth, &a.files, &u.skin, ctx, settings)?;
             if kind == crate::menu::Kind::Objectives {
-                m.set_text(2, &objectives_text(&scene, u));
+                m.set_text(2, &objectives_text(scene, u));
             }
             Some(m)
         };
         // 0x47e480 when the tips open.
-        let open_menu = |kind, depth, settings: &mut crate::menu::Settings| {
-            let mut m = open_menu(kind, depth, settings)?;
+        let open_menu = |scene: &Scene, kind, depth, settings: &mut crate::menu::Settings| {
+            let mut m = open_menu(scene, kind, depth, settings)?;
             if let (crate::menu::Kind::Tips, Some(u)) = (kind, ui.as_ref()) {
                 m.show_tip(&u.skin, &u.tips, settings, 0);
             }
@@ -1676,7 +1762,7 @@ pub fn frame_loop<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Option<Re
             if let Some(id) = act.filter(|_| !tips_step) {
                 let m = menu.take().unwrap();
                 let (next, action) = m.on_activate(id, &mut settings, ctx);
-                menu = next.and_then(|(k, depth)| open_menu(k, depth, &mut settings));
+                menu = next.and_then(|(k, depth)| open_menu(&scene, k, depth, &mut settings));
                 match action {
                     crate::menu::Action::QuitMission | crate::menu::Action::ExitProgram => return Ok(false),
                     // ponytail: restarting rebuilds nothing yet; the menu just closes.
@@ -1704,7 +1790,7 @@ pub fn frame_loop<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Option<Re
         let menu_clicked = menu_btn_down && !mdown && on_menu_btn;
         menu_btn_down = mdown && (menu_btn_down || (on_menu_btn && !lmb_was_down));
         if menu_clicked || win.is_key_pressed(Key::F10, minifb::KeyRepeat::No) {
-            menu = open_menu(crate::menu::Kind::Game, 0, &mut settings);
+            menu = open_menu(&scene, crate::menu::Kind::Game, 0, &mut settings);
             menu_paused = true;
             if replay.is_some() && !scene.st.replay_paused {
                 scene.st.replay_paused = true;
@@ -1737,12 +1823,89 @@ pub fn frame_loop<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Option<Re
                 ((bx..=br).contains(&cx) && (by..=bb).contains(&cy)).then_some(*slot).flatten()
             }).and_then(|(b, enabled)| enabled.then_some(b));
         }
+        let ctrl = win.is_key_down(Key::LeftCtrl) || win.is_key_down(Key::RightCtrl);
+        let alt = win.is_key_down(Key::LeftAlt) || win.is_key_down(Key::RightAlt);
+        let mut want_menu = None;
         for k in win.get_keys_pressed(minifb::KeyRepeat::No) {
             use minifb::Key::*;
             if let Some(g) = [Key0, Key1, Key2, Key3, Key4, Key5, Key6, Key7, Key8, Key9].iter().position(|&n| n == k) {
-                // Hotkey groups (command 0x13): Ctrl sets, Shift adds, the key alone selects.
-                let ctrl = win.is_key_down(LeftCtrl) || win.is_key_down(RightCtrl);
-                scene.hotkey(if ctrl { 0 } else if shift { 2 } else { 1 }, g as u8);
+                // Local.dll accelerators (table 101) and WM_CHAR (0x4846b0): Ctrl sets,
+                // Shift adds (command 0x13), Alt centers on the group and selects it
+                // (0x4967e0, 0x496b40), the digit alone selects; selecting the same
+                // group again within 500 ms centers too (0x4c07b0).
+                let g = g as u8;
+                if ctrl || shift {
+                    scene.hotkey(if ctrl { 0 } else { 2 }, g);
+                    last_group.0 = 0xff;
+                    continue;
+                }
+                scene.hotkey(1, g);
+                let now = tick * 42;
+                let double = last_group.0 == g && now.saturating_sub(last_group.1) < 500;
+                if alt || double {
+                    if let Some(p) = scene.group_centre() {
+                        (vx, vy) = p;
+                    }
+                    last_group.0 = 0xff;
+                } else {
+                    last_group = (g, now);
+                }
+                continue;
+            }
+            let fkey = [F2, F3, F4].iter().position(|&n| n == k);
+            match (k, fkey) {
+                // 0x484360 / 0x484500: Shift+F2..F4 saves the screen, F2..F4 returns.
+                (_, Some(i)) if shift => {
+                    camera_slots[i] = (vx & !7, vy & !7);
+                    continue;
+                }
+                (_, Some(i)) => {
+                    (vx, vy) = camera_slots[i];
+                    continue;
+                }
+                // 0x4e6020: Ctrl / Alt+C centers on the status unit.
+                (C, _) if ctrl || alt => {
+                    if let Some(&u) = scene.selected.first() {
+                        let (x, y) = scene.st.unit_sprite_pos(u);
+                        (vx, vy) = ((((x as i32) >> 5) - 10) << 5, (((y as i32) >> 5) - 6) << 5);
+                    }
+                    continue;
+                }
+                _ => {}
+            }
+            if replay.is_none() {
+                let menu_kind = match k {
+                    F1 => Some(crate::menu::Kind::Help),
+                    H if alt => Some(crate::menu::Kind::Help),
+                    O if alt => Some(crate::menu::Kind::Options),
+                    Q if ctrl || alt => Some(crate::menu::Kind::QuitMission),
+                    X if ctrl || alt => Some(crate::menu::Kind::Quit),
+                    _ => None,
+                };
+                if menu_kind.is_some() {
+                    want_menu = menu_kind;
+                    continue;
+                }
+                // 0x4c0480: +/= and -/_ change the game speed outside multiplayer.
+                match k {
+                    Equal | NumPadPlus if settings.game_speed < 6 => {
+                        settings.game_speed += 1;
+                        continue;
+                    }
+                    Minus | NumPadMinus if settings.game_speed > 0 => {
+                        settings.game_speed -= 1;
+                        continue;
+                    }
+                    _ => {}
+                }
+            }
+            // Ctrl+M / Ctrl+S: music / sound off and back (0x4bc320, 0x4bc110).
+            if ctrl && k == M {
+                (settings.music, saved_music) = if settings.music == 0 { (saved_music, 0) } else { (0, settings.music) };
+                continue;
+            }
+            if ctrl && k == S {
+                (settings.digital, saved_digital) = if settings.digital == 0 { (saved_digital, 0) } else { (0, settings.digital) };
                 continue;
             }
             if let Some(rp) = replay.as_mut() {
@@ -1788,13 +1951,21 @@ pub fn frame_loop<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Option<Re
             }
         }
         let down = down && scene.placing.is_none();
+        let mut targeted = false;
         if scene.targeting.is_some() && clicked && pressed.is_none() && !on_card {
+            // A targeted order given on the minimap goes to that map point; the camera
+            // stays (the click does not also scroll it).
             let pt = if on_minimap_pt(cx, cy) { ((cx - ox) * scale, (cy - oy) * scale) } else { map_pt };
             scene.target_click(pt, shift);
             lmb_was_down = true; // the click is consumed; don't start a drag
             drag_start = None;
+            targeted = true;
+            press_used = true;
         }
-        let down = down && scene.targeting.is_none() && pressed.is_none() && !on_card;
+        if !down {
+            press_used = false;
+        }
+        let down = down && !targeted && !press_used && scene.targeting.is_none() && pressed.is_none() && !on_card;
         if down && on_minimap_pt(cx, cy) && drag_start.is_none() {
             vx = (cx - ox) * scale - vw / 2;
             vy = (cy - oy) * scale - (vh - 120) / 2;
@@ -1842,6 +2013,10 @@ pub fn frame_loop<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Option<Re
             scene.right_click(((cx - ox) * scale, (cy - oy) * scale), shift);
         }
         rmb_was_down = rdown;
+        if let Some(kind) = want_menu {
+            menu = open_menu(&scene, kind, 0, &mut settings);
+            menu_paused = menu.is_some();
+        }
         if win.is_key_down(Key::Left) { vx -= sp }
         if win.is_key_down(Key::Right) { vx += sp }
         if win.is_key_down(Key::Up) { vy -= sp }
@@ -1872,8 +2047,8 @@ pub fn frame_loop<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Option<Re
         };
         if let Some(rp) = replay.as_mut().filter(|_| steps > 0) {
             rp.commands(&mut scene);
-            // The followed player's view: their selection is shown.
-            scene.selected = bw::select::selection_units(&scene.st.selections[rp.follow.player as usize]).to_vec();
+            // The viewer's own selection stays (the replay's select commands only change
+            // the players' 0x6284e8 rows), so clicking selects any unit, minerals too.
             scene.local = rp.follow.player;
             if following {
                 (vx, vy) = rp.camera_step((vx, vy), vw, vh - 120);
@@ -1893,7 +2068,7 @@ pub fn frame_loop<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Option<Re
         for (id, x, y) in sounds {
             // ponytail: on-screen only, no distance falloff or per-frame voice limits yet.
             if let Some(au) = &audio {
-                if (vx..vx + vw).contains(&x) && (vy..vy + vh).contains(&y) {
+                if (vx..vx + vw).contains(&x) && (vy..vy + vh).contains(&y) && scene.st.sound_audible(x, y) {
                     au.play(&a.files, a.dat(), id, 1.0);
                 }
             }
@@ -2016,7 +2191,8 @@ fn tooltip(ui: &crate::ui::Ui, text: &str, x: i32, y: i32, out: &mut [u8], w: i3
     for yy in 0..bh {
         for xx in 0..bw {
             let edge = xx == 0 || yy == 0 || xx == bw - 1 || yy == bh - 1;
-            let c = if edge { colors[0x10] } else { buf[((e.t + yy) * w + e.l + xx) as usize] };
+            // 0x4e1c70 frames the buffer from its origin, not from the text's extent.
+            let c = if edge { colors[0x10] } else { buf[(yy * w + xx) as usize] };
             if (0..w).contains(&(x + xx)) && (0..h).contains(&(y + yy)) {
                 out[((y + yy) * w + x + xx) as usize] = c;
             }

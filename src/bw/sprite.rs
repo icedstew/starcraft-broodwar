@@ -321,6 +321,28 @@ impl State {
         i
     }
 
+    /// 0x4d58b0: image `i` draws with modifier `m` (BL); 0x11 also sets its coloring
+    /// bytes to 0x30, 2.
+    pub(crate) fn image_set_modifier(&mut self, i: u32, m: u8) {
+        let im = &mut self.images[i as usize];
+        im.modifier = m;
+        if m == 0x11 {
+            im.coloring = 0x230;
+        }
+        im.flags |= iflag::REDRAW;
+    }
+
+    /// 0x4d5e40: image `to` takes cloaked image `from`'s drawing (modifiers 2..7) and its
+    /// coloring bytes (+0x30 / +0x31).
+    fn image_copy_cloak_drawing(&mut self, from: u32, to: u32) {
+        let (m, c) = (self.images[from as usize].modifier, self.images[from as usize].coloring);
+        if (2..8).contains(&m) {
+            self.image_set_modifier(to, m);
+            let im = &mut self.images[to as usize];
+            im.coloring = (im.coloring & !0xffff) | (c & 0xffff);
+        }
+    }
+
     /// 0x497dc0: sprite `s`'s normally drawn images switch to the hallucination draw
     /// function (modifier 0x10, redrawn; coloring from BL, 0 at both callers).
     pub(crate) fn sprite_hallucinate(&mut self, s: u32) {
@@ -457,16 +479,7 @@ impl State {
                 if d.dat.images.draw_if_cloaked[image_id as usize] == 0 {
                     self.images[new as usize].flags |= iflag::HIDDEN;
                 } else if self.images[new as usize].modifier == 0 {
-                    let (mm, mc) = (self.images[main as usize].modifier, self.images[main as usize].coloring);
-                    if (2..8).contains(&mm) {
-                        let i = &mut self.images[new as usize];
-                        i.modifier = mm;
-                        if mm == 0x11 {
-                            i.coloring = 0x230;
-                        }
-                        i.flags |= iflag::REDRAW;
-                        i.coloring = (i.coloring & !0xffff) | (mc & 0xffff);
-                    }
+                    self.image_copy_cloak_drawing(main, new);
                 }
             }
         }

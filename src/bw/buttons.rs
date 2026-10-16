@@ -307,8 +307,9 @@ pub enum ButtonAction {
     CancelPlacement,
     /// Select these larvae (0x423930).
     SelectLarvae(Vec<u32>),
-    /// Refused with a stat_txt message (0x48ee30 / 0x48ef30).
-    Error,
+    /// Refused: the button's own message, or a given advisor sound and stat_txt line
+    /// (0x42cf70 / 0x48ee30).
+    Error(Option<(u16, u16)>),
     /// Replay controls.
     ReplayPause,
     ReplayFaster,
@@ -727,14 +728,14 @@ impl State {
             0x4234b0 => Send(vec![0x1f, v as u8, (v >> 8) as u8]),
             0x4234d0 => {
                 // Stim: some selected unit has more than 10 hp.
-                if self.any_sel(s, |u| self.units[u as usize].hp > 0xa00) { Send(vec![0x36]) } else { Error }
+                if self.any_sel(s, |u| self.units[u as usize].hp > 0xa00) { Send(vec![0x36]) } else { Error(Option::None) }
             }
-            0x423730 => if self.cloak_energy(d, s) { Send(vec![0x21, q]) } else { Error },
+            0x423730 => if self.cloak_energy(d, s) { Send(vec![0x21, q]) } else { Error(Option::None) },
             // 0x48f4d0 plays the acknowledgement sound.
             0x423760 => Send(vec![0x1e, q]),
             0x423790 | 0x423860 => {
-                if !self.affordable(d, a, v) {
-                    return Error;
+                if let Some(e) = self.afford_error(d, a, v) {
+                    return Error(Some(e));
                 }
                 Send(vec![if btn.act == 0x423790 { 0x23 } else { 0x35 }, v as u8, (v >> 8) as u8])
             }
@@ -749,8 +750,8 @@ impl State {
             0x423c30 => Place { order: 0x47, unit_type: v },
             0x423c40 => Place { order: 0x2e, unit_type: v },
             0x423c50 | 0x423d10 | 0x423dd0 | 0x423eb0 => {
-                if !self.affordable(d, a, v) {
-                    return Error;
+                if let Some(e) = self.afford_error(d, a, v) {
+                    return Error(Some(e));
                 }
                 let order = match btn.act {
                     0x423c50 => 0x19,
@@ -765,7 +766,7 @@ impl State {
                 // 0x423660: some selected unit has the tech's energy.
                 let cost = (d.dat.techdata.energy_cost.get(v as usize).copied().unwrap_or(0) as u32) << 8;
                 if self.game_options & 0x800 == 0 && !self.any_sel(s, |u| self.units[u as usize].energy as u32 >= cost) {
-                    return Error;
+                    return Error(Option::None);
                 }
                 let o = |x: u8| target(x, x, x);
                 match v {
@@ -829,14 +830,23 @@ impl State {
         }
     }
 
-    /// 0x42cf70 + costs (0x423790 and the build actions): `u`'s owner can afford `t`.
-    fn affordable(&self, d: &Data, u: u32, t: u16) -> bool {
+    /// 0x423790 and the build actions: 0x42cf70's supply error, else not enough
+    /// minerals (0x352) / gas (0x353) with the local race's advisor (0x48ee30), as
+    /// (sound, stat_txt line); None when `u`'s owner can afford `t`.
+    fn afford_error(&self, d: &Data, u: u32, t: u16) -> Option<(u16, u16)> {
         let p = self.units[u as usize].player as usize;
-        if !self.supply_ok(d, p, t) {
-            return false;
+        if let Some(e) = self.supply_error(d, p, t) {
+            return Some(e);
         }
         let (m, g) = (d.dat.units.mineral_cost[t as usize] as i32, d.dat.units.gas_cost[t as usize] as i32);
-        self.players.minerals[p] >= m && self.players.gas[p] >= g
+        let race = self.player_races[self.local_player as usize] as u16;
+        if self.players.minerals[p] < m {
+            return Some((0x93 + race, 0x352));
+        }
+        if self.players.gas[p] < g {
+            return Some((0x96 + race, 0x353));
+        }
+        None
     }
 
     /// 0x423540: some selected unit has energy for its cloak.

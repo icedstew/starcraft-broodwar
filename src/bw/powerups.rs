@@ -19,7 +19,8 @@ impl State {
         }
         let pt = self.units[p as usize].unit_type;
         if pt == FLAG {
-            // 0x4e3f30: the flag sound and, in capture the flag, the message (UI).
+            let owner = self.units[p as usize].player;
+            self.ctf_event(owner, 0x7c, true);
         }
         let image = match pt {
             0x80 => 0x3be,
@@ -120,6 +121,25 @@ impl State {
         }
     }
 
+    /// 0x4e3de0: "%s had his flag ..." (network.tbl `fmt`, 0-based) about `player`.
+    // ponytail: team games (0x57f0b4 / 0x596875: the team's name) are never set here.
+    fn ctf_notice(&mut self, player: u8, fmt: u16) {
+        self.notices.push((fmt, player));
+    }
+
+    /// 0x4e3f30 (taken, 0x7c) / 0x4e3e90 (captured, 0x80): in capture the flag, the
+    /// local race's flag sound (0x20 + race; 0x4f3ea0 has none) and the notice.
+    // ponytail: the sound's volume gate (0x68c468) is not ported (as in 0x48f230).
+    pub(super) fn ctf_event(&mut self, player: u8, fmt: u16, sound: bool) {
+        if self.template[8] != 4 {
+            return;
+        }
+        if sound {
+            self.ui_sounds.push(0x20 + self.player_races[self.local_player as usize] as u16);
+        }
+        self.ctf_notice(player, fmt);
+    }
+
     /// 0x4f3ea0: UnusedPowerup: a dropped flag waits 0x151 frames, then goes home.
     pub(super) fn order_unused_powerup(&mut self, d: &Data, p: u32) {
         self.order_powerup_idle(d, p);
@@ -135,7 +155,10 @@ impl State {
         }
         let home = (self.units[p as usize].u16_at(0xd0) as i16, self.units[p as usize].u16_at(0xd2) as i16);
         self.place_unit_at(d, p, home.0, home.1);
-        // 0x4e3de0: the capture the flag message (UI).
+        if self.template[8] == 4 {
+            let owner = self.units[p as usize].player;
+            self.ctf_notice(owner, 0x7e);
+        }
         self.order_now(d, p, 0x61);
     }
 }

@@ -70,7 +70,7 @@ impl State {
     }
 
     /// Race index of a unit type as 1.16.1's sounds use it (0 zerg, 1 terran, 2 protoss, else 4).
-    pub(super) fn supply_race_of(d: &Data, t: u16) -> u16 {
+    pub fn supply_race_of(d: &Data, t: u16) -> u16 {
         Self::supply_race(d, t).map_or(4, |r| r as u16)
     }
 

@@ -32,13 +32,24 @@ Read when working on the HUD, dialogs, menus or glue screens.
   except their transparent corners.
 - `SCBW_PANEL_CLICK=x,y[,shift|ctrl]`, `SCBW_CURSOR=x,y` (tooltips) on `scbw shot`.
 
+## Keys (1.16.1)
+
+- In-game keys are WM_COMMAND accelerators from Local.dll table 101 (102 multiplayer),
+  handled by 0x4846e0; digits alone come by WM_CHAR (0x4846b0 -> 0x496b40). Ctrl+digit
+  set, Shift+digit add (exe table 113), Alt+digit center + select (0x4967e0), digit
+  twice within 500 ms centers (0x4c07b0); F2..F4 recall / Shift+F2..F4 save the screen
+  (0x57f270); Ctrl/Alt+C center on the status unit (0x4e6020); +/= -/_ speed; F1 /
+  Alt+H help, Alt+O options, Ctrl/Alt+Q quit, Ctrl/Alt+X exit, Alt+M messages
+  (0x4ca500, not ported), Alt+S / Alt+L save / load (not ported), Ctrl+M music,
+  Ctrl+S sound (read from Local.dll's RT_ACCELERATOR resources).
+
 ## Left
 
 - Dialog translucency: flag 0x40000 -> 0x416f30 blends the key color (0x4c8e80) through
   table 0x6d0590[2] (0x4174a0, level 0x6d0aa8 = 4 from 60%). Native in-game menus show
   the map through.
 - Listbox (0x41b950 / 0x41af10, scrollbar 0x415760) for keystroke help (help.bin).
-- Save / load, network options, scroll speed tables, gamma, minimap button tooltips.
+- Save / load, network options, scroll speed tables (edge and arrow share one rate), gamma, minimap button tooltips.
 - Selection circles / health bars as images in their own pools (0x57d768 / 0x5244b8,
   0x4d6930; 0x4d7070, 0x4d4fa0, 0x4975d0, 0x497590): needs per-player selections
   (0x6284e8) and the local selection (0x6284b8) in State.

@@ -320,6 +320,22 @@ impl State {
         }
     }
 
+    /// 0x49e8a0: the units of the players in `mask` (0xfff) forget `u` (0x49e590).
+    fn players_forget_unit(&mut self, d: &Data, mask: u32, u: u32) {
+        let lost = mask & 0xfff;
+        for p in 0..12 {
+            if lost & (1 << p) == 0 {
+                continue;
+            }
+            let mut o = self.player_units[p];
+            while o != NIL {
+                let next = self.units[o as usize].player_next;
+                self.forget_unit_pub(d, o, u);
+                o = next;
+            }
+        }
+    }
+
     /// 0x443390: recompute which players detect cloaked `u`; players that lose it
     /// forget it, and its images switch between the detected and undetected looks.
     pub fn refresh_detection(&mut self, d: &Data, u: u32) {
@@ -331,19 +347,7 @@ impl State {
         let old = if old == 0x8000_0000 { !m & 0xff } else { old };
         let changed = old ^ m;
         self.units[u as usize].visibility = m;
-        let lost = !m & changed & 0xfff;
-        for p in 0..12 {
-            if lost & (1 << p) == 0 {
-                continue;
-            }
-            // 0x49e8a0: the units of players that lost sight of it forget it.
-            let mut o = self.player_units[p];
-            while o != NIL {
-                let next = self.units[o as usize].player_next;
-                self.forget_unit_pub(d, o, u);
-                o = next;
-            }
-        }
+        self.players_forget_unit(d, !m & changed, u);
         let lm = self.local_vision_mask as u32;
         if changed & lm != 0 {
             let s = self.units[u as usize].sprite;

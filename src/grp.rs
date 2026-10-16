@@ -69,6 +69,11 @@ impl Grp {
         self.frames.len()
     }
 
+    /// Frame `i`'s width and height (0 x 0 when out of range).
+    pub fn frame_size(&self, i: usize) -> (i32, i32) {
+        self.frames.get(i).map_or((0, 0), |f| (f.w, f.h))
+    }
+
     pub fn frame(&self, i: usize) -> Option<&Frame> {
         self.frames.get(i)
     }

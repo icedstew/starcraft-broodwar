@@ -97,6 +97,17 @@ pub fn color_row(code: u8) -> Option<usize> {
     })
 }
 
+/// 0x41f270: the top of a text block `end_y - y` tall moved to the bottom of the clip
+/// (`b`), or to its middle with flag 0x20.
+fn valign(y: i32, end_y: i32, b: i32, flags: u8) -> i32 {
+    let (mut th, mut room) = (end_y - y, b - y);
+    if flags & 0x20 != 0 {
+        room /= 2;
+        th /= 2;
+    }
+    y - th + room
+}
+
 /// Color codes 0x41fd70 switches on (1 restores the previous color).
 fn is_color_code(c: u8) -> bool {
     matches!(c, 1..=8 | 0xe..=0x11 | 0x15..=0x19 | 0x1b..=0x1f)
@@ -375,13 +386,7 @@ impl Font {
             let (n, end_y) = self.layout(s, x, y, &mut Color { cur: c.cur, prev: c.prev }, &o, &mut None, &mut ext);
             lines = n;
             if o.flags & 0x10 == 0 {
-                // 0x41f270
-                let (mut th, mut room) = (end_y - y, b - y);
-                if o.flags & 0x20 != 0 {
-                    room /= 2;
-                    th /= 2;
-                }
-                y = y - th + room;
+                y = valign(y, end_y, b, o.flags);
             }
         }
         if o.flags & 8 != 0 {
@@ -456,6 +461,8 @@ pub struct Ui {
     pub stat_f10: crate::dlg::Dialog,
     /// rez\statport.bin: the portrait (0x45f320) and arr\portdata.
     pub statport: crate::dlg::Dialog,
+    /// game\[tzpn]conover.pcx: the frame drawn over the portrait (0x45f0b0, 0x45e650).
+    pub conover: Option<Pcx>,
     pub portraits: Option<crate::portrait::Portraits>,
     /// rez\statres.bin: the resource bar (0x4e5a80).
     pub statres: crate::dlg::Dialog,
@@ -487,6 +494,7 @@ impl Ui {
         // game\[tpz]console.pcx by the local race.
         let c = if replay { "n" } else { &race[..1] };
         let console = pcx8(&files.read(&format!("game/{c}console.pcx"))?);
+        let conover = files.read(&format!("game/{c}conover.pcx")).ok().map(|d| pcx8(&d));
         let font = Font::parse(read_font(files, "font/font10.fnt")?);
         let font8 = Font::parse(read_font(files, "font/font8.fnt")?);
         let icons = Grp::parse(files.read("game/icons.grp")?);
@@ -548,7 +556,7 @@ impl Ui {
         if let Some(c) = minimap.get_mut(1) {
             c.flags &= !crate::dlg::flag::VISIBLE;
         }
-        Ok(Ui { console, font, font8, icons, cursors, wireframe, grpwire, tranwire, twire, cmdicons, ticon, stat_txt, tips, network, glu_all, statbtn, text_colors, statdata, cmdbtns, pbar_empty, pbar_full, skin, stat_f10, statport, portraits, statres, res_shown: std::cell::Cell::new((0, 0, 0xff)), minimap })
+        Ok(Ui { console, conover, font, font8, icons, cursors, wireframe, grpwire, tranwire, twire, cmdicons, ticon, stat_txt, tips, network, glu_all, statbtn, text_colors, statdata, cmdbtns, pbar_empty, pbar_full, skin, stat_f10, statport, portraits, statres, res_shown: std::cell::Cell::new((0, 0, 0xff)), minimap })
     }
 
     pub fn text_color(&self, c: usize) -> &[u8] {
