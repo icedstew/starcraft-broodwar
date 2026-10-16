@@ -796,7 +796,7 @@ impl State {
         if self.terrain_fits(d, ut, p.0, p.1) { None } else { Some(None) }
     }
 
-    /// Unit box (left, top, right, bottom) at its sprite position.
+    /// 0x402020: unit box (left, top, right, bottom) at its sprite position.
     pub fn unit_box(&self, d: &Data, u: u32) -> [i16; 4] {
         let s = self.units[u as usize].sprite as usize;
         self.unit_box_at(d, self.units[u as usize].unit_type, self.sprites[s].x, self.sprites[s].y)
