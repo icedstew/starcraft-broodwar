@@ -5,12 +5,14 @@ Start here. Detailed hand-off notes live in `agent/` (committed docs and scripts
 
 | File | Contents |
 |---|---|
-| [agent/status.md](agent/status.md) | **Read first.** Current task, uncommitted changes, the pending one-line fix, next steps. |
+| [agent/status.md](agent/status.md) | **Read first.** Short: goal, metric, in flight, next steps. |
+| [agent/areas/](agent/areas) | Durable facts per area (`sim.md`, `ui.md`, `ai.md`); read only the one you work in. |
+| [agent/agents.md](agent/agents.md) | Delegation to cheaper subagents (`.claude/agents/`: triage, porter, verifier). |
 | [agent/conventions.md](agent/conventions.md) | User rules: faithful ports, what never to commit, commit trailers, untrusted files. |
 | [agent/tools.md](agent/tools.md) | `agent/tools/*` (decompile/disassembly lookup, scenario and replay compares), `agent/local/` layout, scbw RE commands, emulator, headless native game. |
 | [agent/testing.md](agent/testing.md) | How ports are verified: oracles, 62-scenario suite, replay trace compare, screenshot tests. |
 | [agent/re-notes.md](agent/re-notes.md) | 1.16.1 facts learned (addresses, register conventions, replay/init flow, orders ported). |
-| [agent/history.md](agent/history.md) | What was done and why, newest first. |
+| [agent/history.md](agent/history.md) | What was done and why, newest first (don't read by default). |
 
 Quick start:
 

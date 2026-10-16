@@ -28,6 +28,9 @@ Collected from the user's instructions over the sessions. Follow all of them.
   Claude-Session: https://claude.ai/code/session_014UaZpAZEoC9VqPogYShy8r
   ```
   (the session line changes per session; use the one the harness gives).
+- Small work units: one function or cluster per commit, and rewrite `agent/status.md`
+  (short: in flight, next steps, metric) in the same commit. Durable facts go to
+  `agent/areas/<area>.md`, not status.md. Delegate per `agent/agents.md`.
 - Verify before committing: `cargo build --release` clean (no warnings), `cargo test`,
   the regression suite, and the replay compare for the area touched.
 

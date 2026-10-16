@@ -3,6 +3,19 @@
 Short log of what was done and decided, so a new agent knows why things are the way they
 are. Commit hashes refer to `git log`.
 
+## 2026-10-15 / 16 — UI, then planning for token use
+
+- User: "focus on UI and UX" (misaligned icons, borders, no settings menu). Ported the
+  text engine, dialog system, console buttons, in-game menus and option dialogs, resource
+  bar, tooltips, group selection buttons with shift / ctrl clicks, portraits (Smacker
+  decoder). Verified against native captures (re/native_menu.sh, re/native_game.sh) and
+  repshot HUD diffs. Details: areas/ui.md.
+- User: "focus on increasing the functions ported", then asked to cut token use: status.md
+  slimmed, durable facts moved to agent/areas/, subagents (triage / porter / verifier)
+  added, small commits with status updates.
+- Sim (2026-10-15): fog thingies, CTF orders, suicide orders, cloak carry-over on unit
+  type change (53cd1f6) fixed tl1330.
+
 ## 2026-10-14 (later) — the other 14 replays, rendering fixes
 
 - User reports from the tl1412_p0 screenshots: minerals at the fog edge full bright
