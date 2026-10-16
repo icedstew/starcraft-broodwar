@@ -369,6 +369,10 @@ impl State {
     /// subunit.
     fn unit_undetected_locally(&mut self, d: &Data, u: u32) {
         let s = self.units[u as usize].sprite;
+        if self.sprites[s as usize].flags & 8 != 0 {
+            self.selection_deselect(d, u);
+        }
+        self.sprite_deselect_circle(u);
         self.sprite_undetected(d, s);
         let sub = self.units[u as usize].subunit;
         if sub != NIL {

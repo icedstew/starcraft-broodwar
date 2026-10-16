@@ -290,7 +290,8 @@ impl State {
                 self.reset_path_state(u);
                 let ut = self.units[u as usize].unit_type;
                 self.set_button_set(d, u, ut);
-                // 0x68c1b0 etc.: button refresh (UI); 0x48f440: the "unit ready" sound.
+                // 0x68c1b0 etc.: button refresh (UI).
+                self.unit_ready_sound(d, u);
                 let idle = d.dat.units.ai_human_idle[ut as usize];
                 self.issue_order(d, u, idle, false, (0, 0), NIL, 0xe4);
                 self.order_next_or_idle(d, u);

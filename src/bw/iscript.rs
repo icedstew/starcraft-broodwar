@@ -100,16 +100,6 @@ impl State {
         i.flags = ((i.flags ^ mflags) & iflag::FLIPPED ^ i.flags) | iflag::REDRAW;
     }
 
-    fn sprite_set_direction32(&mut self, d: &Data, s: u32, dir: u8) {
-        // 0x14019a680
-        let mut cur = self.sprites[s as usize].images.head;
-        while cur != NIL {
-            let next = self.images[cur as usize].link.next;
-            self.image_set_direction32(d, cur, dir);
-            cur = next;
-        }
-    }
-
     /// Facing for sprites spawned by spruluselo/sprul/sproluselo: the image's 0..31 direction.
     fn image_dir32(&self, img: u32) -> u8 {
         let i = &self.images[img as usize];
@@ -582,15 +572,13 @@ pub fn run(st: &mut State, d: &Data, img: u32, nse: bool, mut distance: Option<&
                 }
             }
             0x32 => {
-                let i = &mut st.images[img as usize];
-                if !nse && i.flags & iflag::HIDDEN == 0 {
-                    i.flags |= iflag::HIDDEN;
+                if !nse {
+                    st.image_hide(img);
                 }
             }
             0x33 => {
-                let i = &mut st.images[img as usize];
-                if !nse && i.flags & iflag::HIDDEN != 0 {
-                    i.flags = (i.flags & !iflag::HIDDEN) | iflag::REDRAW;
+                if !nse {
+                    st.image_unhide(img);
                 }
             }
             0x34 => {
@@ -631,7 +619,7 @@ pub fn run(st: &mut State, d: &Data, img: u32, nse: bool, mut distance: Option<&
                             let mut l = st.sprites[s as usize].images;
                             super::list::insert_before(&mut st.images, img, new, &mut l);
                             st.sprites[s as usize].images = l;
-                            st.init_overlay_image(d, new, base.wrapping_add(n as u16), s, x, y);
+                            st.image_init(d, new, base.wrapping_add(n as u16), s, x, y);
                         }
                     }
                 }
@@ -730,12 +718,6 @@ pub fn run(st: &mut State, d: &Data, img: u32, nse: bool, mut distance: Option<&
 }
 
 impl State {
-    /// creategasoverlays' inline image setup (initialize_image + post-init, no direction).
-    fn init_overlay_image(&mut self, d: &Data, img: u32, image_id: u16, s: u32, x: i8, y: i8) {
-        self.initialize_image(d, img, image_id, s, x, y);
-        self.image_post_init(d, img);
-    }
-
     /// 0x4d74c0 op 0x0f: a bullet from a goliath (0x4011f0: types 3 / 0x11) with
     /// Charon Boosters (upgrade 0x36), or a hero one in Brood War, uses sprite 0x1f9.
     fn iscript_bullet_is_upgraded_goliath(&self, d: &Data) -> bool {

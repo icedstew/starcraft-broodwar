@@ -6,7 +6,6 @@
 
 use super::list::NIL;
 use super::{Data, State};
-use crate::todo_port;
 
 /// One cell of a sight shape (0x14 bytes in 1.16.1).
 #[derive(Clone, Copy, Debug, Default)]
@@ -260,7 +259,12 @@ impl State {
 
     /// 0x480880 (every 100 frames): hide everything again before units re-reveal.
     pub fn vision_reset(&mut self) {
-        todo_port!("0x480880", "game option flags 0x6d5a6c (0x4001 = no fog) / UI refresh 0x4bd350");
+        // ponytail: 0x57f0b4 (multiplayer) is never set here, so its clearing of option
+        // bits 0x4001 and the 0x6cefb5 bit 1 UI flag are skipped.
+        if self.game_options & 0x4001 != 0 {
+            return;
+        }
+        self.minimap_redraw();
         let (w, h) = (self.terrain.width as usize, self.terrain.height as usize);
         for f in &mut self.terrain.tile_flags[..w * h] {
             *f |= 0xff;
@@ -291,7 +295,7 @@ impl State {
     pub(super) fn morphing_zerg_building(&self, u: u32) -> bool {
         let un = &self.units[u as usize];
         let t = un.build_queue[un.build_queue_slot as usize % 5];
-        un.status & 1 == 0 && matches!(t, 0x85 | 0x84 | 0x89 | 0x90 | 0x92)
+        un.status & 1 == 0 && super::zerg::is_morph_building(t)
     }
 
     /// 0x4f3a80: the unit is seen by everyone (carrying, or transporting a carrier of,
@@ -398,7 +402,6 @@ impl State {
 
     /// 0x48ec10's gate: a sound at map point (x, y) plays only inside the map on a
     /// tile the local player sees (a replay: any shown player, or everything revealed).
-    // ponytail: 0x48ec10's volume by distance (0x48e8d0) and pan (0x48e850) are not ported.
     pub fn sound_audible(&self, x: i32, y: i32) -> bool {
         if x < 0 || y < 0 || x >= self.map_px.0 as i32 || y >= self.map_px.1 as i32 {
             return false;
@@ -453,6 +456,11 @@ impl State {
         if lost {
             // 0x4c3b40 / 0x4975d0 / 0x497590: deselect, selection circle and health bar
             // images (UI).
+            let s = self.units[u as usize].sprite;
+            if s != NIL && self.sprites[s as usize].flags & 8 != 0 {
+                self.selection_deselect(d, u);
+            }
+            self.sprite_deselect_circle(u);
             let un = &self.units[u as usize];
             let t = un.unit_type;
             let s = un.sprite;

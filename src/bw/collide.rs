@@ -1482,6 +1482,18 @@ impl State {
         }
     }
 
+    /// 0x42e170: path obstacles (0x6bee80 set) in the area.
+    fn path_obstacles_in(&mut self, area: [i16; 4], u: u32) -> Vec<u32> {
+        let mut search = std::mem::replace(&mut self.search, UnitSearch::empty());
+        let start = search.units_in_finder_box(self, area);
+        self.path_all_units = true;
+        let found: Vec<u32> = search.results(start).into_iter().filter(|&c| super::short_path::path_obstacle(self, c, Some(u))).collect();
+        self.path_all_units = false;
+        search.pop();
+        self.search = search;
+        found
+    }
+
     /// 0x4f22d1..0x4f2545: closest point of `b`'s touch box edges, inside `u`'s contour
     /// bounds and outside the touch boxes of other obstacles.
     fn unit_escape_edge(&mut self, d: &Data, u: u32, b: u32, pos: Pt) -> Option<Pt> {
@@ -1491,14 +1503,7 @@ impl State {
         let ut = self.units[u as usize].unit_type;
         let [nl, nt, ur, ub] = self.unit_box_at(d, ut, 0, 0);
         let area = [l.wrapping_add(nl), t.wrapping_add(nt), r.wrapping_add(ur), bt.wrapping_add(ub)];
-        // 0x42e170: path obstacles (0x6bee80 set) in the area.
-        let mut search = std::mem::replace(&mut self.search, UnitSearch::empty());
-        let start = search.units_in_finder_box(self, area);
-        self.path_all_units = true;
-        let found: Vec<u32> = search.results(start).into_iter().filter(|&c| super::short_path::path_obstacle(self, c, Some(u))).collect();
-        self.path_all_units = false;
-        search.pop();
-        self.search = search;
+        let found = self.path_obstacles_in(area, u);
         // 0x4f16c0 is called with 1 here too: segments are clipped to the inside of
         // each obstacle's touch box (the blocker's own box contains its edges).
         for c in found {

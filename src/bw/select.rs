@@ -640,3 +640,129 @@ impl State {
         out
     }
 }
+
+impl State {
+    /// 0x45ea30 (portrait 0x52 with a unit of `owner`): the advisor portrait in the owner's
+    /// color slot, 0x52 + slot, or 0x62 + the slot's override (0x62 + owner for 8 and up).
+    pub fn advisor_portrait(&self, owner: u8) -> u16 {
+        let mut b = owner as u32;
+        if b < 8 {
+            b = self.color_slot[b as usize];
+        }
+        let b = b as u8;
+        if b >= 8 {
+            return 0x62 + b as u16;
+        }
+        match self.color_override[b as usize] {
+            0 => 0x52 + b as u16,
+            o => 0x62 + o as u16,
+        }
+    }
+
+    /// 0x4e6290: the unit's sprite leaves the selected look (flag 8; the circle, flag 1).
+    /// The circle and health bar images are drawn by the front end from `selected`.
+    fn sprite_deselect(&mut self, d: &Data, u: u32) {
+        let s = self.units[u as usize].sprite as usize;
+        let f = &mut self.sprites[s].flags;
+        if d.dat.units.flags[self.units[u as usize].unit_type as usize] & 0x2000_0000 == 0 {
+            // 0x497620
+            if *f & 8 != 0 {
+                *f &= !9;
+            }
+        } else {
+            // 0x4975d0
+            *f &= !9;
+        }
+    }
+
+    /// 0x4975d0: the unit's sprite drops its selection circle (flag 1).
+    pub(super) fn sprite_deselect_circle(&mut self, u: u32) {
+        let s = self.units[u as usize].sprite as usize;
+        self.sprites[s].flags &= !1;
+    }
+
+    /// 0x4e6180 (EAX = unit, stack = slot): the unit's sprite takes the selected look
+    /// (flag 8) and the slot it holds in the selection.
+    fn sprite_select(&mut self, d: &Data, u: u32, slot: u8) {
+        let s = self.units[u as usize].sprite as usize;
+        let sp = &mut self.sprites[s];
+        if d.dat.units.flags[self.units[u as usize].unit_type as usize] & 0x2000_0000 != 0 || sp.flags & 8 == 0 {
+            sp.selection_index = slot;
+            sp.flags |= 8;
+        }
+    }
+
+    /// 0x49ae40 (EAX = array, stack = count): make the first `count` units of `units`
+    /// the selection (0x6284b8). A unit with a subunit (type flag 0x10) is selected by
+    /// that subunit, which replaces it in `units`.
+    pub fn selection_set(&mut self, d: &Data, units: &mut [u32], count: usize) {
+        for u in std::mem::take(&mut self.selected) {
+            let t = self.units[u as usize].unit_type;
+            let u = if d.dat.units.flags[t as usize] & 0x10 != 0 { self.units[u as usize].subunit } else { u };
+            self.sprite_deselect(d, u);
+        }
+        for i in 0..count.min(12) {
+            let u = units[i];
+            self.selected.push(u);
+            let t = self.units[u as usize].unit_type;
+            if d.dat.units.flags[t as usize] & 0x10 == 0 {
+                self.sprite_select(d, u, i as u8);
+            } else {
+                let sub = self.units[u as usize].subunit;
+                self.sprite_select(d, sub, i as u8);
+                self.selected[i] = sub;
+            }
+            units[i] = self.selected[i];
+        }
+    }
+
+    /// 0x49f7a0 (EAX = unit): a selected unit (sprite flag 8) leaves the selection, by
+    /// the slot its sprite holds; an emptied selection ends placement and targeting.
+    pub fn selection_remove_local(&mut self, d: &Data, u: u32) {
+        let s = self.units[u as usize].sprite as usize;
+        if self.sprites[s].flags & 8 == 0 {
+            return;
+        }
+        let slot = self.sprites[s].selection_index as usize;
+        let mut list = self.selected.clone();
+        if slot < list.len() {
+            list.remove(slot);
+        }
+        let n = list.len();
+        self.selection_set(d, &mut list, n);
+        // 0x59723c, 0x68c1b0, 0x68ac74, 0x68c1f8: redraw flags; 0x68c1e8 / 0x68c1ec = 0.
+        if n == 0 {
+            self.selection_emptied = true;
+        }
+    }
+
+    /// 0x4c3b40 (EDX = unit): deselect `u`, telling the other players (0x4c0860: the
+    /// select commands go out when the front end next sends a command, see
+    /// `selection_packets`).
+    pub fn selection_deselect(&mut self, d: &Data, u: u32) {
+        let mut list: Vec<u32> = self.selected.iter().copied().filter(|&x| x != u).collect();
+        let n = list.len();
+        self.selection_set(d, &mut list, n);
+    }
+
+    /// 0x45d040: `u` joins the selection in its first empty slot (when there is one);
+    /// the select commands as in 0x4c3b40.
+    pub fn selection_add_local(&mut self, d: &Data, u: u32) {
+        let mut list = self.selected.clone();
+        let i = list.len();
+        if i < 12 {
+            list.push(u);
+            self.selection_set(d, &mut list, i + 1);
+        }
+    }
+
+    /// 0x49a2c0: true when no selected unit is a plain, working one: every one is
+    /// flagged 0x400, locked down, stasised or under maelstrom (also for an empty
+    /// selection).
+    pub fn selection_all_disabled(&self) -> bool {
+        self.selected.iter().all(|&u| {
+            let un = &self.units[u as usize];
+            un.status & 0x400 != 0 || un.lockdown_timer != 0 || un.stasis_timer != 0 || un.maelstrom_timer != 0
+        })
+    }
+}

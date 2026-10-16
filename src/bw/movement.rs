@@ -252,8 +252,8 @@ impl State {
         if self.units[u as usize].fl.move_target == p {
             return true;
         }
-        if self.units[u as usize].ai != NIL {
-            todo_port!("0x4e7420", "AI move-target veto");
+        if self.units[u as usize].ai != NIL && self.ai_ride_instead_of_move(d, u, p) {
+            return false;
         }
         let path = self.units[u as usize].path;
         if path != NIL {

@@ -822,7 +822,11 @@ impl State {
             self.units[u as usize].order_target_unit = NIL;
         }
         self.order_start(d, u);
-        // 0x4c3b40: selection refresh (UI).
+        // 0x4c3b40: a disabled unit leaves a multiple selection.
+        let s = self.units[u as usize].sprite;
+        if self.sprites[s as usize].flags & 8 != 0 && self.selected.len() > 1 {
+            self.selection_deselect(d, u);
+        }
         self.units[u as usize].button_set = 0xe4;
     }
 
@@ -1421,12 +1425,7 @@ impl State {
         if self.units[h as usize].status & 0x1_0000 != 0 {
             let dir = self.rng.rand_between(0x1e, 0, 0x20) as u8;
             let s = self.units[h as usize].sprite;
-            let mut i = self.sprites[s as usize].images.head;
-            while i != NIL {
-                let next = self.images[i as usize].link.next;
-                self.image_set_direction32(d, i, dir);
-                i = next;
-            }
+            self.sprite_set_direction32(d, s, dir);
             self.set_heading_now(d, h, dir.wrapping_mul(8));
         }
         self.show_unit(d, h);

@@ -9,6 +9,11 @@ pub struct Portraits {
     /// arr\portdata.dat file ids (portdata.tbl strings, 1-based) and the names.
     files: Vec<u32>,
     names: Vec<String>,
+    /// portdata.dat sections 2..5 (0x68ac50..0x68ac5c): per portrait the percent weight of
+    /// idle variant 0..3.
+    weights: [Vec<u8>; 4],
+    /// 0x51acb0..0x51acb8 as StarCraft.exe starts them (read from the install's exe).
+    rng: [u32; 3],
 }
 
 impl Portraits {
@@ -16,7 +21,13 @@ impl Portraits {
         let d = files.read("arr/portdata.dat").ok()?;
         let ids = (0..220).map(|i| d.get(i * 4..i * 4 + 4).map_or(0, |b| u32::from_le_bytes(b.try_into().unwrap()))).collect();
         let names = crate::dat::parse_tbl(&files.read("arr/portdata.tbl").ok()?);
-        Some(Portraits { files: ids, names })
+        let weights = std::array::from_fn(|i| d.get(880 + i * 110..990 + i * 110).unwrap_or(&[0; 110]).to_vec());
+        let rng = std::fs::read(crate::install_dir().join("StarCraft.exe")).ok().and_then(|e| {
+            let b = e.get(0x11acb0..0x11acbc)?;
+            Some(std::array::from_fn(|i| u32::from_le_bytes(b[i * 4..i * 4 + 4].try_into().unwrap())))
+        });
+        // Without the exe: any nonzero state (only the variant choices differ).
+        Some(Portraits { files: ids, names, weights, rng: rng.unwrap_or([1, 2, 3]) })
     }
 
     /// "portrait\<name><variant>.smk" for portrait `p`, idle or talking.
@@ -32,47 +43,88 @@ impl Portraits {
 pub struct Player {
     pub portrait: Option<u16>,
     talking: bool,
-    variant: u32,
+    /// 0x515224 == 2: the portraits animate (set by the caller each tick); otherwise
+    /// only variant 0 is opened.
+    pub animate: bool,
+    /// 0x6d754c: the last talking pick minus one (the byte 0x45e8a0 leaves in BL).
+    last_talk: i8,
     video: Option<Smk>,
     elapsed: u32,
-    /// The idle / talking variant picks (0x45e450's generator stands in as an LCG).
-    seed: u32,
+    /// 0x51acb0..0x51acb8: 0x45e450's state (taken from `Portraits::rng` on first use).
+    rng: Option<[u32; 3]>,
     /// The palette the translation was made for, and the translation.
     remap: Option<([[u8; 3]; 256], [u8; 256])>,
 }
 
 impl Default for Player {
     fn default() -> Self {
-        Player { portrait: None, talking: false, variant: 0, video: None, elapsed: 0, seed: 1, remap: None }
+        Player { portrait: None, talking: false, animate: true, last_talk: 0, video: None, elapsed: 0, rng: None, remap: None }
     }
 }
 
 impl Player {
-    fn rand(&mut self, n: u32) -> u32 {
-        self.seed = self.seed.wrapping_mul(214013).wrapping_add(2531011);
-        (self.seed >> 16 & 0x7fff) % n.max(1)
+    /// 0x45e450: a random number min..=max from the portrait generator; `mask1` (ECX) is
+    /// the power of two above the range, it retries until the masked value fits.
+    fn rand(&mut self, ps: &Portraits, mask1: u32, max: u32, min: u32) -> u32 {
+        let st = self.rng.get_or_insert(ps.rng);
+        loop {
+            let u = st[2].wrapping_add(st[1]);
+            st[0] = st[0].wrapping_add(u);
+            st[1] = st[1].wrapping_add(0x71823402) ^ st[0];
+            st[2] = u >> 1;
+            let r = (st[1] ^ st[2]) & mask1.wrapping_sub(1);
+            if r < max.wrapping_sub(min).wrapping_add(1) {
+                return r + min;
+            }
+        }
     }
 
+    /// 0x45e7a0: the idle variant (a percent roll against portdata.dat's weights), or
+    /// 0x45e8a0: the talking variant (0..2, not the last one), then its video, and on
+    /// failure the lower variants down to 0. 0x45ea30 clears the screen and the static
+    /// counter before; only the opening is here.
     fn open(&mut self, ps: &Portraits, files: &Storage) {
         self.video = None;
         self.elapsed = 0;
         let Some(p) = self.portrait else { return };
-        // ponytail: 0x45e7a0 weights the idle variants by tables at 0x68ac50 and
-        // 0x45e8a0 avoids repeating the last talking one; both pick uniformly among the
-        // files that exist, falling back to variant 0.
-        let mut tries: Vec<u32> = (0..4).filter(|&v| files.read(&ps.path(p, self.talking, v).unwrap_or_default()).is_ok()).collect();
-        if tries.is_empty() {
-            return;
+        let mut c: i32 = 0;
+        if self.animate {
+            if self.talking {
+                c = self.rand(ps, 4, 2, 0) as i32;
+                if c == self.last_talk as i32 {
+                    c = (c + 2) % 3;
+                }
+            } else {
+                let r = self.rand(ps, 128, 100, 0) as u8;
+                let w = |i: usize| ps.weights[i].get(p as usize).copied().unwrap_or(0);
+                let mut sum = w(0);
+                c = 0;
+                // Index 4 would read through 0x68ac60 (the talking flag); the data's
+                // weights add to 100 so it is never reached.
+                while r > sum {
+                    c += 1;
+                    if c == 4 {
+                        c = 0;
+                        break;
+                    }
+                    sum = sum.wrapping_add(w(c as usize));
+                }
+            }
         }
-        if self.talking && tries.len() > 1 {
-            tries.retain(|&v| v != self.variant);
+        while c >= 0 {
+            if let Some(path) = ps.path(p, self.talking, c as u32) {
+                self.video = files.read(&path).ok().and_then(Smk::parse);
+                if let Some(s) = self.video.as_mut() {
+                    s.next_frame();
+                }
+            }
+            c -= 1;
+            if self.video.is_some() {
+                break;
+            }
         }
-        let v = tries[self.rand(tries.len() as u32) as usize];
-        self.variant = v;
-        let Some(path) = ps.path(p, self.talking, v) else { return };
-        self.video = files.read(&path).ok().and_then(Smk::parse);
-        if let Some(s) = self.video.as_mut() {
-            s.next_frame();
+        if self.talking {
+            self.last_talk = c as i8;
         }
     }
 
@@ -86,16 +138,16 @@ impl Player {
         }
     }
 
-    /// The unit speaks: its talking video plays once.
-    pub fn talk(&mut self, ps: &Portraits, files: &Storage) {
-        if self.portrait.is_some() {
-            self.talking = true;
-            self.open(ps, files);
-        }
+    /// 0x45ea30 (mode 2) -> 0x45e8a0: another unit's portrait `p` shown talking.
+    pub fn show_talking(&mut self, ps: &Portraits, files: &Storage, p: u16) {
+        self.portrait = Some(p);
+        self.talking = true;
+        self.open(ps, files);
     }
 
     /// Advance `ms`; `animate` false (still portraits) keeps the first frame. A video
-    /// that ends goes back to idling with a new pick.
+    /// that ends is replaced by a new pick, idle or talking as before (0x45ec40 timer 1
+    /// calls 0x45ea30 again for the same unit).
     pub fn tick(&mut self, ps: &Portraits, files: &Storage, ms: u32, animate: bool) {
         if !animate {
             return;
@@ -105,7 +157,6 @@ impl Player {
         while self.elapsed >= v.ms.max(1) {
             self.elapsed -= v.ms.max(1);
             if !v.next_frame() {
-                self.talking = false;
                 self.open(ps, files);
                 return;
             }

@@ -126,7 +126,7 @@ impl State {
                 let head = self.units[u as usize].order_queue_head;
                 let build_next = head != NIL && self.orders[head as usize].order == 0x1a;
                 if r == 2 {
-                    // 0x48f5a0: "can't build here" (UI).
+                    self.land_blocked_sound(d, u);
                     if build_next {
                         self.order_remove(d, u, head);
                     }
@@ -148,7 +148,7 @@ impl State {
 
     /// The failure exit of DroneLand state 1.
     fn drone_land_failed(&mut self, d: &Data, u: u32) {
-        // 0x48f5a0: "can't build here" (UI).
+        self.land_blocked_sound(d, u);
         let head = self.units[u as usize].order_queue_head;
         if head != NIL && self.orders[head as usize].order == 0x1a {
             self.order_remove(d, u, head);
@@ -186,7 +186,7 @@ impl State {
             return self.drone_build_failed(d, u);
         }
         self.spend(p, m, g);
-        let powerup = if d.dat.units.flags[self.units[u as usize].unit_type as usize] & 8 != 0 { self.units[u as usize].ptr_at(0xc0) } else { NIL };
+        let powerup = self.carried_powerup(d, u);
         if powerup != NIL {
             self.drop_powerup(d, u);
         }
@@ -256,7 +256,7 @@ impl State {
     /// the building completes (hatchery / lair / spire upgrades transform first).
     pub(super) fn order_incomplete_morphing(&mut self, d: &Data, u: u32) {
         let queued = self.building_queued(u);
-        let upgrade = matches!(queued, 0x85 | 0x84 | 0x89 | 0x90 | 0x92);
+        let upgrade = is_morph_building(queued);
         let t = if upgrade { queued } else { self.units[u as usize].unit_type };
         let total = d.dat.units.build_time[t as usize] as u32;
         let left = self.units[u as usize].remaining_build_time as u32;
@@ -282,7 +282,7 @@ impl State {
             5 => {
                 self.sprite_images_run_anim(d, s, 0xf);
                 self.units[u as usize].order_state = 6;
-                // 0x48f310: "morph complete" sound (UI).
+                self.construction_sound(d, u);
             }
             6 => {
                 let un = &mut self.units[u as usize];
@@ -413,7 +413,7 @@ impl State {
                 if (ut == 0x29 || ut == 0x2a) && self.player_type(self.units[u as usize].player) == 1 {
                     todo_port!("0x4a2830", "AI: hatched unit joins the computer's forces");
                 }
-                // 0x48f440: "unit ready" sound (UI).
+                self.unit_ready_sound(d, u);
                 let slot = self.units[u as usize].build_queue_slot as usize;
                 self.units[u as usize].build_queue[slot] = 0xe4;
                 if d.dat.units.construction_image[ut as usize] != 0 {
@@ -570,7 +570,16 @@ impl State {
         ) = copy;
         self.reapply_status_overlays(d, c);
         self.update_speed(d, c);
-        // 0x45d040: local selection (UI).
+        // 0x45d040: the twin joins the local selection (the egg's player is the local one).
+        if !self.replay && self.sprites[self.units[u as usize].sprite as usize].flags & 8 != 0 {
+            self.selection_add_local(d, c);
+        }
         c
     }
+}
+
+/// 0x45cc60: a building type zerg buildings morph into (lair, hive, greater spire,
+/// sunken and spore colony).
+pub(super) fn is_morph_building(t: u16) -> bool {
+    matches!(t, 0x84 | 0x85 | 0x89 | 0x90 | 0x92)
 }

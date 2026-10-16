@@ -287,6 +287,16 @@ pub struct State {
     pub alliances: [[u8; 12]; 12],
     /// 0x6284e8: each player's selection as the simulation sees it (NIL-terminated).
     pub selections: [[u32; 12]; 8],
+    /// 0x6284b8: the local (client) selection, at most 12 units (a unit with a subunit is
+    /// held by its subunit, 0x49ae40).
+    pub selected: Vec<u32>,
+    /// 0x57f21c: each player slot's color slot (identity unless the colors are shuffled).
+    pub color_slot: [u32; 8],
+    /// 0x58f442: color slot overrides for the advisor portrait (set by 0x4b2de0, 0 none).
+    pub color_override: [u8; 8],
+    /// 0x49f7a0 / 0x4ed000 emptied the selection: the front end ends placement
+    /// (0x48d9a0 / 0x48e310, 0x640880) and targeting (0x48ca10, 0x641694).
+    pub selection_emptied: bool,
     /// 0x57fe60: unit handle groups per [player * 18 + group]: 0..=9 hotkeys, 10..=17
     /// the recent selections.
     pub hotkeys: Vec<[u32; 12]>,
@@ -308,10 +318,23 @@ pub struct State {
     pub shown_error: u16,
     /// Trigger texts for the front end (0x4c5770): map string id and the action's
     /// "always display" flag (else shown only with subtitles on, 0x6cdfec 0x400).
-    pub shown_text: Vec<(u16, bool)>,
+    /// The third field is the least time in ms it stays (0 = the text's reading time).
+    pub shown_text: Vec<(u16, bool, u32)>,
+    /// 0x45edd0 for the front end: a transmission starts (unit type, length in ms): the
+    /// talking portrait shows for that long and the real-time timer then calls
+    /// `trigger_wait_end` (0x45e610).
+    pub transmissions: Vec<(u16, u32)>,
+    /// 0x47eb70 for the front end: the screen scrolls to this top-left (x, y) and then calls
+    /// `trigger_wait_end` (callback 0x4894a0).
+    pub center_view: Option<(i32, i32)>,
+    /// A front end drives the real-time timers above (set by `Scene::portrait_tick` with a
+    /// nonzero `ms`); headless runs have none.
+    pub ui_attached: bool,
     /// Notices for the front end's message lines (0x48d0c0): a network.tbl format
     /// (0-based) and the player its %s (name) or %d (number) names.
     pub notices: Vec<(u16, u8)>,
+    /// Chat packets (0x5c) received, (sender slot, text) for 0x48d1c0 in the front end.
+    pub chat: Vec<(u8, Vec<u8>)>,
     /// 0x66ff60: why the last requirement check failed (soft failures, Ok(-1), set it
     /// here; hard ones return it as the error).
     pub req_error: std::cell::Cell<u8>,
@@ -350,6 +373,17 @@ pub struct State {
     pub sounds: Vec<(u16, i16, i16)>,
     /// Interface sounds (sfx ids) for the local player, such as advisor errors.
     pub ui_sounds: Vec<u16>,
+    /// Trigger wavs for the local player (0x4c77d0): the map string id of the file's path
+    /// in the scenario archive.
+    pub trigger_wavs: Vec<u16>,
+    /// Advisor and unit speech (0x48ed50): sfx id and the sound option bit it needs
+    /// (0x6cdfec: 1 unit speech, 4 building sounds; 0 = always), the speaking unit (NIL for
+    /// none) and the base volume.
+    pub speech: Vec<(u16, u32, u32, i32)>,
+    /// 0x45efe0 calls this frame for the UI: (talking unit, sfx id).
+    pub talked: Vec<(u32, u16)>,
+    /// 0x4a34c0 calls this frame for the minimap: (sprite x, sprite y, type).
+    pub minimap_pings: Vec<(i32, i32, u8)>,
 }
 
 /// Free list built by inserting 1..n after element 0 with insert_after_head, as 1.16.1 does
@@ -449,7 +483,14 @@ impl State {
             last_error: 0,
             shown_error: 0,
             shown_text: Vec::new(),
+            transmissions: Vec::new(),
+            center_view: None,
+            ui_attached: false,
             notices: Vec::new(),
+            chat: Vec::new(),
+            speech: Vec::new(),
+            talked: Vec::new(),
+            minimap_pings: Vec::new(),
             req_error: std::cell::Cell::new(0),
             builder_override: NIL,
             areas: vec![ai_areas::ResourceArea::default(); ai_areas::AREA_SLOTS],
@@ -475,6 +516,10 @@ impl State {
             start_locations: [(0, 0); 8],
             alliances: [[0; 12]; 12],
             selections: [[NIL; 12]; 8],
+            selected: Vec::new(),
+            color_slot: [0, 1, 2, 3, 4, 5, 6, 7],
+            color_override: [0; 8],
+            selection_emptied: false,
             hotkeys: vec![[0; 12]; 12 * 18],
             recent_used: [[0; 8]; 12],
             path_avoid_unit: None,
@@ -486,6 +531,7 @@ impl State {
             mv: flingy::MoveScratch::default(),
             sounds: Vec::new(),
             ui_sounds: Vec::new(),
+            trigger_wavs: Vec::new(),
         };
         st.path_pool_init();
         st

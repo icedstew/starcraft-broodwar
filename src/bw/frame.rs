@@ -43,7 +43,10 @@ impl State {
     /// 0x4ed000 update_units.
     pub fn update_units(&mut self, d: &Data) {
         self.var_6957d0 = 0;
-        // 0x49a2c0 + 0x48d9a0/0x48e310/0x48ca10 refresh the selection UI only.
+        // 0x49a2c0; 0x48d9a0 / 0x48e310 / 0x48ca10 end placement and targeting (front end).
+        if self.selection_all_disabled() {
+            self.selection_emptied = true;
+        }
         self.stagger_150 = self.stagger_150.wrapping_sub(1);
         if self.stagger_150 == 0 {
             let mut c = 0u8;
@@ -182,13 +185,35 @@ impl State {
         }
     }
 
+    /// 0x4ebbd0 (esi = sprite): count the click flash timer (+0xf) down; the selection circle
+    /// (image 0x231, via 0x4d7070, color 0x581d6a[owner] given by the caller) is shown while
+    /// bit 3 of the timer is set, or when the sprite is selected (flags 8) and the timer is
+    /// out; otherwise removed (0x4975d0). The circle itself is not an image here: flag 1
+    /// marks it shown and the view draws it.
+    pub fn update_selection_flash(&mut self, s: u32) {
+        let sp = &mut self.sprites[s as usize];
+        if sp.selection_timer == 0 {
+            return;
+        }
+        sp.selection_timer -= 1;
+        if self.local_vision_mask & sp.visibility == 0 {
+            sp.selection_timer = 0;
+        }
+        let t = sp.selection_timer;
+        if t & 8 == 0 && (t != 0 || sp.flags & 8 == 0) {
+            // 0x4975d0
+            sp.flags &= !1;
+        } else {
+            sp.flags |= 1;
+        }
+    }
+
     /// 0x4ecf70 update_unit.
     pub fn update_unit(&mut self, d: &Data, u: u32) {
         let ut = self.units[u as usize].unit_type as usize;
         let s = self.units[u as usize].sprite;
         if d.dat.units.flags[ut] & 0x10 == 0 && self.sprites[s as usize].flags & super::sprite::sflag::HIDDEN == 0 && self.sprites[s as usize].selection_timer != 0 {
-            // 0x4ebbd0: only a local click (0x456490) starts the timer.
-            todo_port!("0x4ebbd0", "selection circle flash after a click");
+            self.update_selection_flash(s);
         }
         self.update_unit_timers(d, u);
         self.execute_main_order(d, u);
@@ -262,7 +287,7 @@ impl State {
                 un.order_process_timer = 8;
                 match order {
                     5 => self.order_bunker_guard(d, u),
-                    0x60 => todo_port!("0x4e7b70", "hidden order 0x60"),
+                    0x60 => self.pickup4(d, u),
                     0x9c if un.status & 0x20 != 0 => self.order_bunker_guard(d, u),
                     0xa1 => self.order_rescue_passive(d, u),
                     _ => {}
@@ -680,8 +705,7 @@ impl State {
     fn update_fog_thingy(&mut self, d: &Data, t: u32) {
         let s = self.fog_thingies[t as usize].sprite;
         if self.sprites[s as usize].selection_timer != 0 {
-            // 0x4ebbd0: only a local click (0x456490) starts the timer.
-            todo_port!("0x4ebbd0", "selection circle flash after a click");
+            self.update_selection_flash(s);
         }
         if self.fog_thingy_area_fogged(d, t) {
             return;

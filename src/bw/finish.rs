@@ -231,8 +231,9 @@ impl State {
             o = next;
         }
         self.untarget_bullets_pub(u);
-        // 0x49a7f0: out of every selection (0x49f7a0, the local UI selection, is the front end's).
+        // 0x49a7f0: out of every selection, 0x49f7a0: and the local one.
         self.selections_remove_unit(u);
+        self.selection_remove_local(d, u);
         self.finder_remove(u);
         if self.units[u as usize].status & status::GROUNDED_BUILDING != 0 {
             let p = (self.sprites[s as usize].x, self.sprites[s as usize].y);

@@ -24,7 +24,7 @@ pub(super) fn is_queen(t: u16) -> bool {
 
 impl State {
     /// 0x401d40: `u` is a turret (subunit).
-    fn is_turret(&self, d: &Data, u: u32) -> bool {
+    pub(super) fn is_turret(&self, d: &Data, u: u32) -> bool {
         u != NIL && d.dat.units.flags[self.units[u as usize].unit_type as usize] & 0x10 != 0
     }
 
@@ -197,7 +197,10 @@ impl State {
             }
         }
         if self.units[u as usize].ai != NIL && self.units[u as usize].order != 0x60 {
-            todo_port!("0x4e7420", "AI move-to-unit check");
+            let tp = self.unit_sprite_pos(target);
+            if self.ai_ride_instead_of_move(d, u, tp) {
+                return false;
+            }
         }
         let p = self.units[u as usize].path;
         if p != NIL {

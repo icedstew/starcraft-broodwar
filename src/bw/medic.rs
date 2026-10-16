@@ -39,7 +39,7 @@ impl State {
     /// 0x4422a0: the unit medic `u` should heal next. Human medics take the nearest
     /// within 0xa0; AI medics take the nearest of their player's units no other medic
     /// is already healing.
-    fn find_heal_target(&mut self, d: &Data, u: u32) -> u32 {
+    pub(super) fn find_heal_target(&mut self, d: &Data, u: u32) -> u32 {
         let player = self.units[u as usize].player;
         if self.can_use_tech(d, u, TECH_HEALING, player).is_err() {
             return NIL;

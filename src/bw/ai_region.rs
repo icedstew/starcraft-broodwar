@@ -19,7 +19,7 @@ fn is_minor_target(t: u16) -> bool {
 }
 
 impl State {
-    fn reg(&self, p: u8, r: u16) -> &AiRegion {
+    pub(super) fn reg(&self, p: u8, r: u16) -> &AiRegion {
         &self.ai.regions[p as usize][r as usize]
     }
 

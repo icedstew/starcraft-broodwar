@@ -130,6 +130,34 @@ pub fn reading_ms(s: &[u8]) -> u32 {
     (s.len() as u32 * 50).max(4000)
 }
 
+/// 0x48d1c0: the chat line for `text` (NUL-terminated) from slot `p` and its color code:
+/// "name:<color> text" (the sender's name keeps only characters >= 0x20 and \n \r \t,
+/// at most 0x50), "[tbl]name:<color> text" for a sender of player type 9 (`tbl` is
+/// network.tbl string 0x1b); color 7 for the local player else 2; slots >= 8 show the
+/// text as is. The line is cut to 0xff bytes (the 0x100-byte buffer).
+// ponytail: the 0x6cdfec & 0x1000 team-color choice (0x49b0e0, table 0x581dd6) and the
+// 0x484f50 team-name "[%s]" form (0x4850f0) are never set here; add with team games.
+pub fn chat_line(p: u8, text: &[u8], local: u8, ptype: u8, name: &str, tbl: &str) -> (Vec<u8>, u8) {
+    let text = &text[..text.iter().position(|&c| c == 0).unwrap_or(text.len())];
+    let mut o = Vec::new();
+    let mut color = 2;
+    if p < 8 {
+        let color_c = if p == local { 7 } else { 2 };
+        color = color_c;
+        let nm: Vec<u8> = name.bytes().take_while(|&c| c != 0).filter(|&c| c > 0x1f || matches!(c, 9 | 10 | 13)).take(0x50).collect();
+        if ptype == 9 {
+            o.extend_from_slice(b"[");
+            o.extend_from_slice(tbl.as_bytes());
+            o.extend_from_slice(b"]");
+        }
+        o.extend_from_slice(&nm);
+        o.extend_from_slice(&[b':', color_c, b' ']);
+    }
+    o.extend_from_slice(text);
+    o.truncate(0xff);
+    (o, color)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

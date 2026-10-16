@@ -31,7 +31,13 @@ impl State {
             }
             un.status &= !0x300;
         }
-        // 0x4c3b40 / 0x49f7a0: selection refresh (UI).
+        // 0x47b770, 0x4c3b40, 0x49f7a0: a unit that can no longer be one of several leaves
+        // a multiple selection.
+        let s = self.units[u as usize].sprite;
+        if self.sprites[s as usize].flags & 8 != 0 && !self.multi_selectable(d, u) && self.selected.len() > 1 && t != 0x24 {
+            self.selection_deselect(d, u);
+            self.selection_remove_local(d, u);
+        }
         let ut = self.units[u as usize].unit_type;
         let mut p = self.unit_sprite_pos(u);
         self.clamp_unit_pos(d, ut, &mut p);
@@ -345,8 +351,9 @@ impl State {
                 }
             }
         }
-        // 0x49a7f0 (0x49f7a0: the local UI selection).
+        // 0x49a7f0, 0x49f7a0: out of every selection, and the local one.
         self.selections_remove_unit(u);
+        self.selection_remove_local(d, u);
         if self.units[u as usize].status & 2 != 0 {
             let un = &self.units[u as usize];
             if un.queue_slot_holds_unit(0) {
@@ -486,7 +493,7 @@ impl State {
         let a = self.units[b as usize].ptr_at(0xc0);
         self.make_neutral(d, a);
         self.units[b as usize].set_ptr_at(0xc0, NIL);
-        // 0x48f8a0: the "addon detached" sound (UI).
+        self.addon_detached_sound(a);
         let saved = self.iscript_unit;
         self.iscript_unit = Some(a);
         let s = self.units[a as usize].sprite;

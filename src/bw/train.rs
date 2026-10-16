@@ -289,7 +289,7 @@ impl State {
         }
         self.finish_unit_post(d, c);
         if self.units[c as usize].status & 2 == 0 {
-            // 0x48f440: "unit ready" sound for the local player.
+            self.unit_ready_sound(d, c);
             return true;
         }
         let g = d.dat.units.staredit_group_flags[self.units[c as usize].unit_type as usize];

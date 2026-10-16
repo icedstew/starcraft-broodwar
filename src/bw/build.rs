@@ -10,6 +10,8 @@ use crate::todo_port;
 /// 0x6408f8: placement result grids, 8 rows of 6 tiles per slot.
 // ponytail: the original slot count is unknown; the game uses slots 0 and 1.
 pub const PLACEMENT_SLOTS: usize = 12;
+/// 0x513634: stat_txt line per placement check result.
+pub const PLACEMENT_ERRORS: [u16; 12] = [0, 853, 852, 854, 856, 860, 861, 862, 859, 858, 857, 855];
 
 /// Tile flag: occupied by a building (0x469f60).
 const TILE_BUILDING: u32 = 0x800_0000;
@@ -99,6 +101,20 @@ impl State {
         };
         self.placement[slot * 0x30..slot * 0x30 + 0x30].fill(r);
         r
+    }
+
+    /// 0x473ef0: the placement check of the addon-parent highlight (0x48e210): `t` at tile
+    /// (tx, ty) against the map bounds, terrain with the remembered creep / fog (0x473a10,
+    /// grid slot 0) and units in the way (0x473720); 3 outside the map, else the worse.
+    pub fn placement_check_highlight(&mut self, d: &Data, u: u32, player: u8, tx: i16, ty: i16, t: u16) -> u8 {
+        let (pw, ph) = placement(d, t);
+        let (w, h) = ((pw / 32) as i16, (ph / 32) as i16);
+        if tx < 0 || ty < 0 || w as i32 + tx as i32 > self.terrain.width as i32 || h as i32 + ty as i32 > self.terrain.height as i32 {
+            return 3;
+        }
+        let terrain = self.terrain_check(d, t, tx, ty, player, w, h, 0, true);
+        let units = self.units_check(d, u, tx, ty, player, t, w, h, 0, false, false, false);
+        terrain.max(units)
     }
 
     /// 0x42fa00: a ground unit can walk to `p` (same region group).
@@ -460,7 +476,6 @@ impl State {
 
     /// 0x48d930: placement result `r`'s error (table 0x513634) to the local player.
     pub(super) fn placement_error(&mut self, p: u8, r: u8) {
-        const PLACEMENT_ERRORS: [u16; 12] = [0, 853, 852, 854, 856, 860, 861, 862, 859, 858, 857, 855];
         let e = PLACEMENT_ERRORS.get(r as usize).copied().unwrap_or(0);
         if !self.replay && e != 0 && p == self.local_player {
             self.shown_error = e;
@@ -799,7 +814,7 @@ impl State {
         self.unit_anim(d, u, 0xc);
         if b != NIL {
             self.units[b as usize].connected_unit = NIL;
-            // 0x48f310: "construction complete" sound.
+            self.construction_sound(d, u);
             let bu = &self.units[b as usize];
             let own_gas = bu.status & 1 != 0 && is_gas_building(bu.unit_type) && bu.player == self.units[u as usize].player;
             if own_gas || (0xb0..=0xb2).contains(&bu.unit_type) {

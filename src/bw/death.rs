@@ -213,7 +213,7 @@ impl State {
             self.units[u as usize].status &= !1;
             self.transform_unit(d, u, 0xbc);
             let un = &mut self.units[u as usize];
-            un.order = d.dat.units.ai_human_idle[0xbc];
+            un.order = d.dat.units.ai_computer_idle[0xbc]; // 0x662268
             un.order_target_unit = NIL;
             un.order_target_pos = (0, 0);
             un.order_state = 0;
@@ -286,6 +286,7 @@ impl State {
         }
         // 0x49a7f0: out of every selection (selection circles are not ported).
         self.selections_remove_unit(u);
+        self.selection_remove_local(d, u);
         self.modify_unit_counters(d, u, -1);
         if self.units[u as usize].status & 1 != 0 {
             self.modify_completed_counters(d, u, -1, false);

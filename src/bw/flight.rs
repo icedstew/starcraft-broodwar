@@ -3,7 +3,6 @@
 
 use super::list::NIL;
 use super::{Data, State};
-use crate::todo_port;
 
 impl State {
     /// 0x4c1620: command 0x2f, lift the one selected building and fly it to (x, y).
@@ -180,7 +179,9 @@ impl State {
         }
         self.units[u as usize].order_signal &= !0x10;
         if d.dat.units.flags[t] & 1 == 0 {
-            self.update_speed(d, u);
+            let fid = d.dat.units.flingy[t] as usize;
+            let top = self.adjust_top_speed(u, d.dat.flingy.top_speed[fid]);
+            self.units[u as usize].fl.top_speed = top as i32;
         }
         let tail = self.sprites[s as usize].images.tail;
         if tail != NIL && self.images[tail as usize].modifier == 10 {
@@ -220,13 +221,7 @@ impl State {
                         self.sprites[ts as usize].elevation = elev.wrapping_add(1);
                         self.sprite_fog_visibility(ts);
                         if mirror {
-                            // 0x498b50(1): every image flipped.
-                            let mut i = self.sprites[ts as usize].images.head;
-                            while i != NIL {
-                                let im = &mut self.images[i as usize];
-                                im.flags |= super::sprite::iflag::FLIPPED | super::sprite::iflag::REDRAW;
-                                i = im.link.next;
-                            }
+                            self.sprite_set_flip(d, ts, true);
                         }
                     }
                 }
@@ -339,7 +334,7 @@ impl State {
                 let (tx, ty) = (tz(tgt.0 as i32 - pw / 2), tz(tgt.1 as i32 - ph / 2));
                 let p = self.units[u as usize].player;
                 if self.placement_check(d, u, p, tx, ty, t, 0, false, true, false) != 0 {
-                    todo_port!("0x48f5a0", "can't land here message");
+                    self.land_blocked_sound(d, u);
                     let head = self.units[u as usize].order_queue_head;
                     if head != NIL && self.orders[head as usize].order == 0x24 {
                         self.order_remove(d, u, head);
@@ -393,7 +388,10 @@ impl State {
         self.set_air(u, false);
         self.place_unit_at(d, u, tgt.0, tgt.1);
         self.unit_enter_map_grids(d, u);
-        // 0x4c3b40 (selection UI) skipped. 0x498150(0): the shadow back on the ground.
+        if self.sprites[s as usize].flags & 8 != 0 && self.selected.len() > 1 {
+            self.selection_deselect(d, u);
+        }
+        // 0x498150(0): the shadow back on the ground.
         let tail = self.sprites[s as usize].images.tail;
         if tail != NIL && self.images[tail as usize].modifier == 10 {
             let img = &mut self.images[tail as usize];
@@ -410,8 +408,8 @@ impl State {
         if head != NIL {
             let o = self.orders[head as usize].order;
             if o == 6 || o == 0x31 {
-                // 0x474760: lift off again to carry out the move.
-                self.order_insert_before(d, u, 0x48, 0xe4, (0, 0), NIL, head);
+                // Lift off again to carry out the move.
+                self.queue_order_before(d, u, 0x48, head);
             } else {
                 let keep = if o == 0x24 { head } else { NIL };
                 while self.units[u as usize].order_queue_tail != keep {

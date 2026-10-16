@@ -110,6 +110,7 @@ impl Default for Players {
 }
 
 impl Players {
+    /// 0x4ce7a0: level of `upgrade` for `player` (ids below 0x2e: 0x58d2b0, stride 46; others 0x58f2fe, stride 15).
     pub fn upgrade_level(&self, player: u8, upgrade: usize) -> u8 {
         let p = player as usize;
         if upgrade < 46 {
@@ -117,5 +118,10 @@ impl Players {
         } else {
             self.upgrade_bw[p][upgrade - 46]
         }
+    }
+
+    /// 0x4ce7f0: maximum level of `upgrade` for `player` (0x58d088 / 0x58f24a; Rust keeps one 61-entry array).
+    pub fn upgrade_max_level(&self, player: u8, upgrade: usize) -> u8 {
+        self.upgrade_max[player as usize][upgrade]
     }
 }

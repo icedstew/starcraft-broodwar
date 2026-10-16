@@ -83,8 +83,7 @@ impl State {
         self.order_now(d, u, 0xab);
         // 0x474d10 / 0x474d60: attack it, then hide again (0xaa).
         let o = d.dat.units.ai_attack_unit[ty as usize];
-        let p = self.unit_sprite_pos(t);
-        self.issue_order(d, u, o, true, p, t, 0xe4);
+        self.issue_order_on_unit(d, u, o, t);
         self.issue_order(d, u, 0xaa, false, (0, 0), NIL, 0xe4);
     }
 

@@ -17,7 +17,7 @@ renderer at 2x/4x); the 8-bit 1.16.1 renderer stays the default and the test ref
 ## Metric (the user watches this)
 
 `python3 -I re/coverage.py agent/local/scratch/dump/bw116n.c .` "reachable from both":
-2026-10-16: no AI 1021/1615 (63%), AI only 145/358 (40%), all 1166/1973 (59%).
+2026-10-16: no AI 1088/1615 (67%), AI only 147/358 (41%), all 1235/1973 (62%).
 Next targets: `--missing both` (frontier list, one line per function).
 
 ## Current direction (user, 2026-10-16)
@@ -46,6 +46,20 @@ Delegate per agents.md: Haiku triage, Sonnet porting, Opus review / hard RE / co
   overlay conover.pcx, placement sound, fog sound gate, button errors, replay selection,
   1.16.1 key map (areas/ui.md "Keys"). Open question to the user: save/load as
   native-compatible .snx (all pools in 1.16.1 layout, AI data included) or scbw-only.
+
+- Subagent loop (2026-10-16/17): porters + verifier per agents.md, several in parallel on
+  disjoint files. Done this round: advisor / unit sounds with 0x48ed50 gate, 0x48ec10
+  volume + pan, native mixer (0x4bc270 / 0x4bbfd0 / 0x4bb740, volume table read from the
+  user's exe at runtime), talking portrait (0x45efe0 / 0x45ea30), minimap pings
+  (0x4a34c0 / 0x4a3870 / 0x4a4f10), right-click flash (0x4ebbd0), replay chat (0x48d1c0),
+  chat box + cheats (0x4b23e0, hashes read from the exe), cheat command 0x12 (0x4b1fa0),
+  AtkMoveEP 0x478de0, HarassMove, GuardPost, AIPatrol, Pickup4, 0x4e7420, patrolling
+  medics heal, many extractions. Known gaps: GuardPost / Medic skip 0x4a13c0 (AI spell
+  casting, runs for every unit natively); 0x477160 AI target choice; transmission /
+  center-view waits now end by the front end (0x45e610 / 0x4894a0). Save / load mapped in
+  areas/saveload.md; deferred by the user (2026-10-17). Also done: placement box
+  (placebox.cpp), multi-select card sets 0x458bc0, portrait variants 0x45e7a0 / 0x45e8a0,
+  local selection list in State (0x49ae40 / 0x49f7a0 / 0x4c3b40 / 0x45d040).
 
 ## Next steps
 

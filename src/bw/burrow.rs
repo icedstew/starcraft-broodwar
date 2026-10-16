@@ -240,11 +240,9 @@ impl State {
         un.pathing_flags = (un.pathing_flags & !1) | low;
         un.status |= 0x810;
         let lurker = un.unit_type == 0x67;
-        let sp = &mut self.sprites[s as usize];
-        sp.flags |= 0x40;
-        // 0x499860: the sprite id (selection circle and health bar size).
-        sp.sprite_id = if lurker { 0x1f8 } else { 0x12c };
-        sp.elevation = 1;
+        self.sprites[s as usize].flags |= 0x40;
+        self.sprite_set_id(s, if lurker { 0x1f8 } else { 0x12c });
+        self.sprites[s as usize].elevation = 1;
     }
 
     /// 0x4e99d0: back on the surface: no path, not burrowed, the flingy's sprite id.
@@ -257,7 +255,7 @@ impl State {
         un.pathing_flags = (un.pathing_flags & !1) | low;
         un.status &= !0x810;
         let t = un.unit_type as usize;
-        self.sprites[s as usize].sprite_id = d.dat.flingy.sprite[d.dat.units.flingy[t] as usize];
+        self.sprite_set_id(s, d.dat.flingy.sprite[d.dat.units.flingy[t] as usize]);
     }
 
     /// 0x4f46f0: a burrowing unit loses the defense matrix, irradiate, ensnare and plague

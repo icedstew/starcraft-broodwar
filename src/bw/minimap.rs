@@ -4,6 +4,7 @@
 
 use super::list::NIL;
 use super::{Data, State};
+use crate::grp::{Blend, Grp};
 use crate::todo_port;
 
 /// 0x51a0f0: the 26 interface colors (0x00bbggrr), matched to the palette as 0x6ceb20.
@@ -75,6 +76,20 @@ pub struct Minimap {
     /// 0x59c1a8 / 0x59c2b8: visibility checksum and box count of the last unit pass.
     pub checksum: u32,
     pub boxes: u32,
+    /// 0x59c1b8: the 16 ping slots (game\blink.grp frames at 0x59c1ac, game\tblink.pcx at 0x59cac0).
+    pings: [Ping; 16],
+    blink_grp: Option<Grp>,
+    tblink: Vec<u8>,
+}
+
+/// One 0x10-byte ping slot at 0x59c1b8: +0 active, +4 x, +8 y, +0xc age, +0xe type.
+#[derive(Clone, Copy, Default)]
+struct Ping {
+    active: bool,
+    x: i32,
+    y: i32,
+    age: u16,
+    kind: u8,
 }
 
 impl Minimap {
@@ -112,6 +127,7 @@ impl Minimap {
         Minimap {
             w, h, shift, scale, tile_px, terrain: vec![0; n], pixels: vec![0; n], remap, fog, colors, player_colors, vx4, vr4,
             ally_colors: false, hide_terrain: false, blink_phase: false, blinking: false, checksum: 0, boxes: 0,
+            pings: [Ping::default(); 16], blink_grp: None, tblink: Vec::new(),
         }
     }
 
@@ -336,11 +352,52 @@ impl Minimap {
         }
     }
 
-    /// 0x4a5200 (each game frame): fog and units over the current terrain.
+    /// 0x4a5a80: game\blink.grp (0x59c1ac) and the 8 colors per ping type of game\tblink.pcx.
+    pub fn set_blink(&mut self, grp: Grp, tblink: Vec<u8>) {
+        self.blink_grp = Some(grp);
+        self.tblink = tblink;
+    }
+
+    /// 0x4a34c0: start a ping of `kind` at map pixel (x, y) in the first free slot (none free: nothing).
+    fn add_ping(&mut self, x: i32, y: i32, kind: u8) {
+        let Some(p) = self.pings.iter_mut().find(|p| !p.active) else { return };
+        let conv = |v: i32| ((((v as u32) >> 5) << self.shift) / self.scale).wrapping_sub(0x40) as i32;
+        *p = Ping { active: true, x: conv(x), y: conv(y), age: 0, kind };
+    }
+
+    /// 0x4a4f10 (timer every 100 ms): each ping ages a frame; after frame 0x13 it ends.
+    pub fn tick_pings(&mut self) {
+        for p in self.pings.iter_mut().filter(|p| p.active) {
+            if p.age == 0x13 {
+                p.active = false;
+            } else {
+                p.age += 1;
+            }
+        }
+    }
+
+    /// 0x4a3870: draw each active ping's blink.grp frame (its age) into the image, its
+    /// pixels 0..7 recolored by the tblink.pcx row of its type; clipped to the image.
+    fn draw_pings(&mut self) {
+        let Some(g) = &self.blink_grp else { return };
+        for p in self.pings.iter().filter(|p| p.active) {
+            let mut t: [u8; 256] = std::array::from_fn(|i| i as u8);
+            for i in 0..8 {
+                t[i] = self.tblink.get(p.kind as usize * 8 + i).copied().unwrap_or(i as u8);
+            }
+            let f = if (p.age as usize) < g.frame_count() { p.age as usize } else { 0 };
+            g.draw(f, false, p.x, p.y, &mut self.pixels, self.w as i32, self.h as i32, Blend::Colors(&t));
+        }
+    }
+
+    /// 0x4a5200 (each game frame): fog and units over the current terrain, then the pings.
     pub fn update(&mut self, d: &Data, st: &mut State) {
         self.draw_fog(st);
         self.draw_units(d, st);
-        // 0x4a3870: minimap pings, not ported.
+        for (x, y, kind) in std::mem::take(&mut st.minimap_pings) {
+            self.add_ping(x, y, kind);
+        }
+        self.draw_pings();
     }
 
     /// 0x4a4ce0: redraw terrain, fog and units.
@@ -349,4 +406,11 @@ impl Minimap {
         self.draw_fog(st);
         self.draw_units(d, st);
     }
+}
+
+impl State {
+    /// 0x4bd350: sets the minimap-dirty flag 0x6cefb5 bit 0 and invalidates the minimap's
+    /// screen rectangle (0x41e0d0). Pure redraw: `Minimap::update` redraws fog and units from
+    /// the tile flags every frame (terrain does not depend on them), so nothing is cached here.
+    pub fn minimap_redraw(&mut self) {}
 }

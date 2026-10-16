@@ -604,6 +604,11 @@ impl State {
         }
     }
 
+    /// 0x401170: unit `u` belongs to the local player (never during a replay).
+    pub fn is_local_unit(&self, u: u32) -> bool {
+        !self.replay && self.units[u as usize].player == self.local_player
+    }
+
     /// 0x48ee30: an error for `player`: advisor sound `sound` (sfxdata id) and stat_txt
     /// line `msg`, both for the local player only.
     pub fn local_error(&mut self, player: u8, sound: u16, msg: u16) {
@@ -659,10 +664,37 @@ impl State {
 
     /// 0x48f6c0: unit `u`'s refused placement: its race's advisor line (0xa2 + race)
     /// and stat_txt line `msg` for its owner, the local player.
-    // ponytail: the advisor's cooldown 0x48ed50 is not ported.
     pub fn advisor_error(&mut self, d: &Data, u: u32, msg: u16) {
         let race = Self::supply_race_of(d, self.units[u as usize].unit_type);
-        self.local_error(self.units[u as usize].player, 0xa2 + race, msg);
+        self.local_error(self.units[u as usize].player, 0, msg);
+        if self.is_local_unit(u) {
+            self.speech.push((0xa2 + race, 0, u, 0x63));
+            self.unit_talk(u, 0xa2 + race);
+        }
+    }
+
+    /// 0x48f5a0: the local player's unit `u` cannot land / build here: advisor line
+    /// (0x90 + race) and the unit speaks.
+    pub fn land_blocked_sound(&mut self, d: &Data, u: u32) {
+        let race = Self::supply_race_of(d, self.units[u as usize].unit_type);
+        if self.is_local_unit(u) {
+            self.speech.push((0x90 + race, 0, u, 0x63));
+            self.unit_talk(u, 0x90 + race);
+        }
+    }
+
+    /// 0x48f7b0: the local player's unit `u` cannot be placed: advisor line (0x9f + race),
+    /// the unit speaks, then stat_txt line `msg` (1-based) on the error line.
+    pub fn placement_blocked_sound(&mut self, d: &Data, u: u32, msg: u16) {
+        let race = Self::supply_race_of(d, self.units[u as usize].unit_type);
+        let local = self.is_local_unit(u);
+        if local {
+            self.speech.push((0x9f + race, 0, u, 0x63));
+            self.unit_talk(u, 0x9f + race);
+        }
+        if local && msg != 0 {
+            self.shown_error = msg;
+        }
     }
 
     /// "Not enough energy." (stat_txt 0x360 + race of `u`, 0x4c36f0) on the error line
@@ -672,11 +704,65 @@ impl State {
         self.local_error_line(self.units[u as usize].player, 0x360 + race);
     }
 
+    /// 0x45efe0's sim side: unit `u` speaks sound `sfx`; it blinks on the minimap (+0x8a /
+    /// +0x8b) and the UI (`talked`) shows its talking portrait for the sound's length.
+    /// 0x4a34c0: the ping at the unit's sprite (type 0x11) is queued for the minimap.
+    fn unit_talk(&mut self, u: u32, sfx: u16) {
+        self.talked.push((u, sfx));
+        let un = &mut self.units[u as usize];
+        un.last_event_timer = 8;
+        un.last_event_color = 0x11;
+        let sp = &self.sprites[un.sprite as usize];
+        self.minimap_pings.push((sp.x as i32, sp.y as i32, 0x11));
+    }
+
+    /// 0x48f310: the local player's construction or morph is complete: zerg 0x87,
+    /// terran 0x7e (0x88 when `u` is the SCV that built it), protoss silent.
+    pub fn construction_sound(&mut self, d: &Data, u: u32) {
+        if !self.is_local_unit(u) {
+            return;
+        }
+        let t = self.units[u as usize].unit_type;
+        let sfx = match Self::supply_race_of(d, t) {
+            0 => 0x87,
+            1 if t == 7 => 0x88,
+            1 => 0x7e,
+            _ => 0,
+        };
+        if sfx != 0 {
+            self.speech.push((sfx, 1, u, 0x63));
+        }
+        self.unit_talk(u, sfx);
+    }
+
+    /// 0x48f440: the local player's unit `u` is ready: its units.dat ready sound.
+    pub fn unit_ready_sound(&mut self, d: &Data, u: u32) {
+        let t = self.units[u as usize].unit_type;
+        if !self.is_local_unit(u) || t == 0x49 || t == 0x55 {
+            return;
+        }
+        // units.dat has ready sounds for the first 106 types only.
+        let s = d.dat.units.ready_sound.get(t as usize).copied().unwrap_or(0);
+        if s != 0 {
+            self.speech.push((s, 1, u, 0x63));
+        }
+        self.unit_talk(u, s);
+    }
+
+    /// 0x48f8a0: the local player's addon `u` came off its building (0x82).
+    pub fn addon_detached_sound(&mut self, u: u32) {
+        if !self.is_local_unit(u) {
+            return;
+        }
+        self.speech.push((0x82, 4, u, 0x63));
+        self.unit_talk(u, 0x82);
+    }
+
     /// 0x48f230: the local player's unit `u` was hit: it blinks red on the minimap and,
     /// unless an alert played lately (0x640870) or nearby, or the unit is on screen
     /// (0x4e5ad0), the advisor warns (building or forces sound by the local race).
     pub fn under_attack_alert(&mut self, u: u32) {
-        if self.replay || self.units[u as usize].player != self.local_player {
+        if !self.is_local_unit(u) {
             return;
         }
         let red = self.interface_colors[0x14];
@@ -706,8 +792,7 @@ impl State {
         self.alert_cooldown = 100;
         let race = self.player_races[self.local_player as usize] as u16;
         let building = self.units[u as usize].status & 2 != 0;
-        // ponytail: the sound gate 0x48ed50 and the alert's volume are not ported.
-        self.ui_sounds.push(if building { 0x75 } else { 0x78 } + race);
+        self.speech.push((if building { 0x75 } else { 0x78 } + race, 1, NIL, 0));
     }
 
     /// 0x48e980 (once per frame, front end): alert cooldowns, and every other frame the

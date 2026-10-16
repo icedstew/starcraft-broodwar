@@ -6,6 +6,63 @@ use super::{Data, State};
 use crate::todo_port;
 
 impl State {
+    /// 0x4e6ef0 (EBX = `u`): the closest of `u`'s player's completed, grounded transports that can
+    /// take `u` (or one that already has `u` as its order target). Returns whether one
+    /// was found (a hurt transport counts even when none can load `u`) and the unit.
+    pub(super) fn nearest_transport_for(&self, d: &Data, u: u32) -> (bool, u32) {
+        let mut found = NIL;
+        let mut result = false;
+        let mut best = 99999999u32;
+        let mut c = self.player_units[self.units[u as usize].player as usize];
+        while c != NIL {
+            let cu = &self.units[c as usize];
+            let next = cu.player_next;
+            let t = cu.unit_type as usize;
+            if cu.status & 0x4000_0000 == 0
+                && (cu.unit_type != 0x2a || self.players.upgrade_sc[cu.player as usize][0x18] != 0)
+                && d.dat.units.space_provided[t] != 0
+                && cu.status & 1 != 0
+                && cu.status & 0x2_0000 != 0
+            {
+                if cu.order_target_unit == u {
+                    return (true, c);
+                }
+                let hp = d.dat.units.hit_points[t] as i32;
+                let mut max = hp >> 8;
+                if max == 0 {
+                    max = (cu.hp + 0xff) >> 8;
+                    if max == 0 {
+                        max = 1;
+                    }
+                }
+                let m3 = max * 3;
+                if ((m3 + ((m3 >> 31) & 3)) >> 2) <= (cu.hp + 0xff) >> 8
+                    || (d.dat.units.shield_enable[t] != 0 && cu.shields >> 8 == d.dat.units.shields[t] as i32)
+                {
+                    result = true;
+                    if self.can_load(d, c, u) && !matches!(cu.order, 0x5e | 0x6f) {
+                        let ok = cu.order != 0x70 || {
+                            let (a, b) = (cu.order_target_pos, self.units[u as usize].order_target_pos);
+                            super::path::region_at(&self.sai, a.0 as i32, a.1 as i32) == super::path::region_at(&self.sai, b.0 as i32, b.1 as i32)
+                        };
+                        if ok {
+                            // 0x402140: distance from the unit's exact position (+0x2c/+0x30) to the transport's sprite.
+                            let (ex, ey) = self.units[u as usize].fl.exact;
+                            let sp = self.unit_sprite_pos(c);
+                            let dist = super::path::approx_distance(ex, sp.0 as i32, ey, sp.1 as i32);
+                            if dist < best {
+                                found = c;
+                                best = dist;
+                            }
+                        }
+                    }
+                }
+            }
+            c = next;
+        }
+        (result, found)
+    }
+
     /// 0x4e6c40: the passenger in slot `i`, if that handle is still a live unit.
     pub fn loaded_unit(&self, tr: u32, i: usize) -> Option<u32> {
         self.unit_from_handle(self.units[tr as usize].loaded_units[i] as u32)
@@ -101,6 +158,62 @@ impl State {
         }
         let o = if self.units[u as usize].ai != NIL { 0x9c } else { d.dat.units.ai_return_to_idle[self.units[u as usize].unit_type as usize] };
         self.start_order_now(d, u, o);
+    }
+
+    /// 0x4e7b70: Pickup4 (also the hidden order 0x60): `u` finds a transport (or uses its
+    /// order target), has it come to `u` (0x5e) and, once touching it, gets in and stops.
+    pub(super) fn pickup4(&mut self, d: &Data, u: u32) {
+        // +0x4c: a neutral (player 11) unit stops.
+        if self.units[u as usize].player == 0xb {
+            let o = if self.units[u as usize].status & 0x40 != 0 { 0x17 } else { d.dat.units.ai_return_to_idle[self.units[u as usize].unit_type as usize] };
+            self.units[u as usize].order_flags |= 1;
+            self.issue_order(d, u, o, true, (0, 0), NIL, 0xe4);
+            self.order_nothing(d, u);
+            return;
+        }
+        if self.units[u as usize].status & 0x40 != 0 {
+            return;
+        }
+        if self.units[u as usize].ai != NIL {
+            todo_port!("0x477160", "AI target choice (0x476180 gate) before Pickup4");
+        }
+        let mut tr = self.units[u as usize].order_target_unit;
+        if tr == NIL {
+            let (found, c) = self.nearest_transport_for(d, u);
+            self.units[u as usize].order_target_unit = c;
+            if !found {
+                self.order_done_or_next(d, u);
+                return;
+            }
+            tr = c;
+            if tr == NIL {
+                return;
+            }
+        } else if !self.can_carry(d, tr) || self.units[tr as usize].order_target_unit != u {
+            self.units[u as usize].order_target_unit = NIL;
+            return;
+        }
+        if !self.can_load(d, tr, u) {
+            self.units[u as usize].order_target_unit = NIL;
+            return;
+        }
+        if self.box_distance_within(d, u, 1, tr) {
+            self.load_unit(d, tr, u);
+            let p = self.units[u as usize].order_target_pos;
+            self.order_at(d, u, 0x70, p);
+            if self.units[tr as usize].ai != NIL {
+                let tp = self.unit_sprite_pos(tr);
+                self.queue_order_at(d, tr, 6, tp, false);
+            }
+        } else {
+            self.queue_front_target(d, u, 0x5e, tr);
+            self.order_nothing(d, tr);
+            let tp = self.unit_sprite_pos(tr);
+            if self.region_reachable(d, u, tp) {
+                self.set_target_waypoint(u, tp);
+                self.follow_move(d, u, tr);
+            }
+        }
     }
 
     /// 0x4e78e0: `u` gets into transport `tr`: it takes the first free slot, leaves the

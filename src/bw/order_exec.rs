@@ -3,6 +3,7 @@
 //! Generated from the decompiled switches (re: dispatch table), then hand-ported per handler.
 //! Unported handlers are `todo_port!` stubs that leave the unit's state unchanged.
 
+use super::ai_town::{ai_index, ai_kind, AI_GUARD, AI_MILITARY};
 use super::list::NIL;
 use super::{Data, State};
 use crate::todo_port;
@@ -606,7 +607,9 @@ impl State {
             }
             self.units[u as usize].button_set = 0xe4;
         }
-        // else 0x48f7b0: the placement error (0x513634) for the local player (UI).
+        if r != 0 {
+            self.placement_blocked_sound(d, u, super::build::PLACEMENT_ERRORS.get(r as usize).copied().unwrap_or(0));
+        }
         self.units[u as usize].order_flags |= 1;
         self.issue_order(d, u, 0x99, true, (0, 0), NIL, 0xe4);
         self.prepare_next_order(d, u);
@@ -867,8 +870,7 @@ impl State {
         self.queue_front(d, u, order, pos, target);
         let attack = d.dat.units.ai_attack_unit[self.units[u as usize].unit_type as usize];
         let head = self.units[u as usize].order_queue_head;
-        let tp = self.unit_sprite_pos(t);
-        self.order_insert_before(d, u, attack, 0xe4, tp, t, head);
+        self.queue_order_on_unit(d, u, attack, t, head);
         if clear_auto {
             self.units[u as usize].auto_target = NIL;
         }
@@ -1383,8 +1385,8 @@ impl State {
 
 
     /// 0x4e7b70: Pickup4.
-    fn order_pickup4(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x4e7b70", "Pickup4");
+    fn order_pickup4(&mut self, d: &Data, u: u32) {
+        self.pickup4(d, u);
     }
 
     /// 0x47bab0: WatchTarget.
@@ -1669,15 +1671,20 @@ impl State {
             && self.units[at as usize].status & 0x400_0000 == 0
             && !self.cloaked_from(at, u)
         {
-            self.patrol_attack(d, u, at, true);
+            self.patrol_attack(d, u, d.dat.units.ai_attack_unit[self.units[u as usize].unit_type as usize], at, true);
             return;
         }
         if self.units[u as usize].main_order_timer != 0 {
             return;
         }
         self.units[u as usize].main_order_timer = 0xf;
-        if self.units[u as usize].unit_type == 0x22 && self.units[u as usize].order_target_unit == NIL {
-            todo_port!("0x4422a0", "patrolling medics look for units to heal");
+        if self.units[u as usize].unit_type == 0x22 {
+            // 0x4422a0: a medic with no target takes a unit to heal (order 0xb0) before this leg.
+            let h = self.find_heal_target(d, u);
+            if h != NIL && self.units[u as usize].order_target_unit == NIL {
+                self.patrol_attack(d, u, 0xb0, h, true);
+                return;
+            }
         }
         if self.units[u as usize].fl.move_target == self.unit_sprite_pos(u) {
             // 0x4748e0: queue the way back, then the next leg.
@@ -1691,21 +1698,19 @@ impl State {
         }
         let t = self.find_auto_target(d, u);
         if t != NIL {
-            self.patrol_attack(d, u, t, false);
+            self.patrol_attack(d, u, d.dat.units.ai_attack_unit[self.units[u as usize].unit_type as usize], t, false);
         }
     }
 
     /// The common end of Patrol's attacks: this leg queued again and the unit's attack
-    /// order on `t` before it (0x474540, 0x4747e0), then the attack starts (0x475420) and
+    /// order `attack` on `t` before it (0x474540, 0x4747e0), then the attack starts (0x475420) and
     /// the unit is marked auto-targeting (0x4026a0).
-    fn patrol_attack(&mut self, d: &Data, u: u32, t: u32, clear_auto: bool) {
+    fn patrol_attack(&mut self, d: &Data, u: u32, attack: u8, t: u32, clear_auto: bool) {
         let (pos, target) = (self.units[u as usize].order_target_pos, self.units[u as usize].order_target_unit);
         let head = self.units[u as usize].order_queue_head;
         self.order_insert_before(d, u, 0x98, 0xe4, pos, target, head);
-        let attack = d.dat.units.ai_attack_unit[self.units[u as usize].unit_type as usize];
         let head = self.units[u as usize].order_queue_head;
-        let tp = self.unit_sprite_pos(t);
-        self.order_insert_before(d, u, attack, 0xe4, tp, t, head);
+        self.queue_order_on_unit(d, u, attack, t, head);
         if clear_auto {
             self.units[u as usize].auto_target = NIL;
         }
@@ -1826,23 +1831,253 @@ impl State {
     }
 
     /// 0x478de0: AtkMoveEP.
-    fn order_atk_move_ep(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x478de0", "AtkMoveEP");
+    fn order_atk_move_ep(&mut self, d: &Data, u: u32) {
+        let order = self.units[u as usize].order;
+        if !self.attack_move_step(d, u, order) || self.units[u as usize].main_order_timer != 0 {
+            return;
+        }
+        self.units[u as usize].main_order_timer = 0xf;
+        let here = self.unit_sprite_pos(u);
+        let p = self.units[u as usize].order_target_pos;
+        let (a, b) = (super::path::region_at(&self.sai, here.0 as i32, here.1 as i32), super::path::region_at(&self.sai, p.0 as i32, p.1 as i32));
+        if a == b {
+            self.unit_halt_facing(d, u);
+            self.order_done_or_next(d, u);
+            return;
+        }
+        if self.unit_at_move_target(u) == 0 || p == here || self.move_to_facing(d, u, p) {
+            self.attack_move_acquire(d, u, order);
+        } else if self.cant_reach_ground(d, u, p) {
+            self.unit_halt_facing(d, u);
+        }
     }
 
-    /// 0x478ec0: HarassMove.
-    fn order_harass_move(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x478ec0", "HarassMove");
+    /// 0x476610: a ground unit (pathing flag 1) whose target `p` is in another region
+    /// group or not reachable.
+    fn cant_reach_ground(&mut self, d: &Data, u: u32, p: (i16, i16)) -> bool {
+        if self.units[u as usize].pathing_flags & 1 == 0 {
+            return false;
+        }
+        !(self.same_group(u, p) && self.region_reachable(d, u, p))
     }
 
-    /// 0x4a1d80: AIPatrol.
-    fn order_aipatrol(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x4a1d80", "AIPatrol");
+    /// 0x438e70: `u`'s player can get from `u`'s region to the region at `p` (0x437e70).
+    pub(super) fn region_reachable(&mut self, d: &Data, u: u32, p: (i16, i16)) -> bool {
+        let here = self.unit_sprite_pos(u);
+        let a = super::path::region_at(&self.sai, here.0 as i32, here.1 as i32);
+        let b = super::path::region_at(&self.sai, p.0 as i32, p.1 as i32);
+        let player = self.units[u as usize].player;
+        self.ai_region_reachable(d, player, a, b)
     }
 
-    /// 0x4778e0: GuardPost.
-    fn order_guard_post(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x4778e0", "GuardPost");
+    /// 0x478ec0: HarassMove: attack-move (0x478370) that, every 15 frames, also keeps
+    /// the unit's AI group together (AI military units, todo) and returns to the order
+    /// target through the regions in between (0x4eb9c0) before looking for enemies.
+    fn order_harass_move(&mut self, d: &Data, u: u32) {
+        let order = self.units[u as usize].order;
+        if !self.attack_move_step(d, u, order) || self.units[u as usize].main_order_timer != 0 {
+            return;
+        }
+        self.units[u as usize].main_order_timer = 0xf;
+        let ai = self.units[u as usize].ai;
+        if ai != NIL
+            && ai_kind(ai) == AI_MILITARY
+            && self.ai.military.items[ai_index(ai) as usize].parent == u
+            && d.dat.units.flags[self.units[u as usize].unit_type as usize] & 1 == 0
+        {
+            todo_port!("0x43aa10", "HarassMove: AI military unit waits for / follows its slowest group member (0x43aa10, 0x439550, 0x438410, 0x43c170)");
+            return;
+        }
+        if self.unit_at_move_target(u) != 0 {
+            let (sx, sy) = self.unit_sprite_pos(u);
+            let (tx, ty) = self.units[u as usize].order_target_pos;
+            let same = super::path::region_at(&self.sai, sx as i32, sy as i32) == super::path::region_at(&self.sai, tx as i32, ty as i32);
+            if same && ((tx, ty) == (sx, sy) || super::path::approx_distance(tx as i32, sx as i32, ty as i32, sy as i32) > 0x60) {
+                self.order_done_or_next(d, u);
+                self.attack_move_acquire(d, u, order);
+                return;
+            }
+            if !self.move_to_facing(d, u, (tx, ty)) {
+                return;
+            }
+        }
+        self.attack_move_acquire(d, u, order);
+    }
+
+    /// 0x4a1d80: AIPatrol: a detector patrols the regions of its player's AI: it follows
+    /// its order target unit, else stays at / takes (0x43cb00, 0x43ca30) the region whose
+    /// detector it is, else wanders to a random neighbouring region (0x4384f0).
+    fn order_aipatrol(&mut self, d: &Data, u: u32) {
+        if self.units[u as usize].main_order_timer != 0 {
+            return;
+        }
+        let state = self.units[u as usize].order_state;
+        self.units[u as usize].main_order_timer = 0xf;
+        match state {
+            0 => {
+                let t = self.units[u as usize].order_target_unit;
+                if t != NIL {
+                    let p = self.unit_sprite_pos(t);
+                    self.units[u as usize].order_target_pos = p;
+                    self.move_to_facing(d, u, p);
+                    return;
+                }
+                if self.ai_detector_keep_region(d, u) || self.ai_detector_take_region(d, u) {
+                    self.units[u as usize].order_state = 1;
+                } else {
+                    self.units[u as usize].order_state = 2;
+                }
+            }
+            1 => {
+                if !self.ai_detector_keep_region(d, u) {
+                    self.units[u as usize].order_state = 0;
+                }
+            }
+            2 => {
+                if self.ai_detector_take_region(d, u) {
+                    self.units[u as usize].order_state = 1;
+                } else if self.unit_at_move_target(u) != 0 {
+                    let p = self.ai_patrol_region(d, u);
+                    self.move_to_facing(d, u, p);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// 0x43cb00: `u` is the detector of one of its player's AI regions: go to the region's
+    /// centre (stop when close). Regions in other states drop it. False when it has none.
+    fn ai_detector_keep_region(&mut self, d: &Data, u: u32) -> bool {
+        let p = self.units[u as usize].player as usize;
+        let Some(r) = (1..self.sai.region_count as usize).find(|&r| self.ai.regions[p].get(r).is_some_and(|a| a.detector == u)) else {
+            return false;
+        };
+        match self.ai.regions[p][r].state {
+            1 | 2 | 7 | 8 | 9 => {
+                let c = self.sai.regions[r].center;
+                let (cx, cy) = ((c.0 >> 8) as i16, (c.1 >> 8) as i16);
+                let e = self.units[u as usize].fl.exact;
+                let dist = super::path::approx_distance(e.0, (cx as i32) << 8, e.1, (cy as i32) << 8);
+                if dist & 0xffff_ff00 <= 0x16000 {
+                    self.unit_halt_facing(d, u);
+                } else {
+                    self.move_to_facing(d, u, (cx, cy));
+                }
+                true
+            }
+            _ => {
+                self.ai.regions[p][r].detector = NIL;
+                let pos = self.unit_sprite_pos(u);
+                self.move_to_facing(d, u, pos);
+                false
+            }
+        }
+    }
+
+    /// 0x43ca30: an AI player (flag 0x100) gives `u` the first region with military and
+    /// no detector (state 1, 2, 7, 8, 9) and sends it to the region's centre.
+    fn ai_detector_take_region(&mut self, d: &Data, u: u32) -> bool {
+        let p = self.units[u as usize].player as usize;
+        if self.ai.players[p].flags & 0x100 == 0 {
+            return false;
+        }
+        for r in 1..self.sai.region_count as usize {
+            let Some(a) = self.ai.regions[p].get(r) else { return false };
+            if a.military != NIL && matches!(a.state, 1 | 2 | 7 | 8 | 9) && a.detector == NIL {
+                self.ai.regions[p][r].detector = u;
+                let c = self.sai.regions[r].center;
+                self.move_to_facing(d, u, ((c.0 >> 8) as i16, (c.1 >> 8) as i16));
+                return true;
+            }
+        }
+        false
+    }
+
+    /// 0x4384f0: where `u`'s player's AI patrol goes next: the centre of a random
+    /// neighbouring region in state 4 / 5 (those without flag 1 first, then without flag
+    /// 4), else of the nearest such region. The chosen region gets flag 4.
+    fn ai_patrol_region(&mut self, _d: &Data, u: u32) -> (i16, i16) {
+        let p = self.units[u as usize].player as usize;
+        let (sx, sy) = self.unit_sprite_pos(u);
+        let mut chosen = super::path::region_at(&self.sai, sx as i32, sy as i32) as usize;
+        if self.ai.regions[p].is_empty() {
+            // (no AI regions for this player: all zero in the original, so the own region)
+            let c = self.sai.regions[chosen].center;
+            return ((c.0 >> 8) as i16, (c.1 >> 8) as i16);
+        }
+        let reg = &self.sai.regions[chosen];
+        let n = (reg.neighbor_count as i32 - reg.zero_neighbors as i8 as i32) as u32;
+        // Neighbours in states 4 / 5 by flags 1 and 4 (at most 0x10 of each).
+        let mut lists: [Vec<usize>; 4] = Default::default();
+        for i in 0..n as usize {
+            let r = self.sai.neighbor(chosen, i) as usize;
+            let a = &self.ai.regions[p][r];
+            if a.state == 5 || a.state == 4 {
+                let l = &mut lists[((a.flags & 1) << 1 | (a.flags >> 2) & 1) as usize];
+                if l.len() != 0x10 {
+                    l.push(r);
+                }
+            }
+        }
+        if n != 0 {
+            // flag 1 set (then flag 4 clear) first, else neither set, else flag 4 only.
+            for k in [2, 3, 0, 1] {
+                let len = lists[k].len();
+                if len != 0 {
+                    let i = (self.rng.rand(0x37) as usize) % len;
+                    chosen = lists[k][i];
+                    break;
+                }
+            }
+        }
+        let st = self.ai.regions[p][chosen].state;
+        if st != 5 && st != 4 {
+            let mut best = 99_999_999u32;
+            for r in 1..self.sai.region_count as usize {
+                if matches!(self.ai.regions[p][r].state, 4 | 5) {
+                    let c = self.sai.regions[r].center;
+                    let dist = super::path::approx_distance(c.0 >> 8, sx as i32, c.1 >> 8, sy as i32);
+                    if dist < best {
+                        best = dist;
+                        chosen = r;
+                    }
+                }
+            }
+        }
+        let c = self.sai.regions[chosen].center;
+        self.ai.regions[p][chosen].flags |= 4;
+        ((c.0 >> 8) as i16, (c.1 >> 8) as i16)
+    }
+
+    /// 0x4778e0: GuardPost: every 15 frames an AI guard unit with nothing better to do
+    /// (spells 0x4a13c0, target choice 0x477160: todo) walks back to its guard post
+    /// (sieged tanks unsiege first), else idles.
+    fn order_guard_post(&mut self, d: &Data, u: u32) {
+        if self.units[u as usize].main_order_timer != 0 {
+            return;
+        }
+        self.units[u as usize].main_order_timer = 0xf;
+        if self.units[u as usize].ai != NIL {
+            todo_port!("0x4a13c0", "GuardPost: AI spellcasting");
+            todo_port!("0x477160", "GuardPost: AI target choice");
+        }
+        let t = self.units[u as usize].unit_type;
+        if t == 0x54 {
+            return;
+        }
+        let ai = self.units[u as usize].ai;
+        if ai != NIL && ai_kind(ai) == AI_GUARD {
+            let home = self.ai.guards.items[ai_index(ai) as usize].home;
+            if self.unit_sprite_pos(u) != home {
+                if t == 0x1e {
+                    self.queue_order(d, u, 0x63, false);
+                }
+                self.queue_order_at(d, u, 0xa3, home, false);
+                self.order_done_or_next(d, u);
+                return;
+            }
+        }
+        self.order_now(d, u, 0x9c);
     }
 
     /// 0x478490: ComputerReturn.

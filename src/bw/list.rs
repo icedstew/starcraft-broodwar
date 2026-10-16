@@ -55,6 +55,7 @@ pub fn insert_after_head<T: Node>(v: &mut [T], n: u32, l: &mut List) {
 }
 
 /// 0x1401956e0: insert `n` before `at`; `head` updated if `at` was the head.
+/// 0x47a070 is the same insert in 1.16.1.
 pub fn insert_before<T: Node>(v: &mut [T], at: u32, n: u32, l: &mut List) {
     if l.head == at {
         l.head = n;

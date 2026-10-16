@@ -1,6 +1,7 @@
 #![allow(dead_code)] // dat fields are consumed incrementally as game systems land
 
 mod audio;
+mod chat;
 mod bw;
 mod storage;
 mod storm;
@@ -298,6 +299,7 @@ fn main() -> std::io::Result<()> {
             if args[1].to_ascii_lowercase().ends_with(".rep") {
                 view::run_replay(&mut a, replay::Replay::parse(&std::fs::read(&args[1])?)?)?;
             } else {
+                a.map_mpq = mpq::Mpq::open(args[1].as_ref()).ok();
                 view::run(&mut a, load_chk(&args[1])?)?;
             }
         }
@@ -636,7 +638,7 @@ fn main() -> std::io::Result<()> {
                 let me = scene.local_player();
                 let mut sel: Vec<u32> = scene.units_in_rect(x, y, x + 640, y + 360).into_iter().filter(|&u| scene.st.units[u as usize].player == me).collect();
                 sel.truncate(n.min(12));
-                scene.selected = sel;
+                scene.set_selected(sel);
             }
             // Debug: SCBW_MOVE=x,y right-clicks there with the selection before stepping.
             if let Some((mx, my)) = std::env::var("SCBW_MOVE").ok().and_then(|v| {
@@ -650,7 +652,8 @@ fn main() -> std::io::Result<()> {
                 let (a, b) = v.split_once(',')?;
                 Some((a.parse::<i32>().ok()?, b.parse::<i32>().ok()?))
             }) {
-                scene.selected = scene.unit_at(sx, sy).into_iter().collect();
+                let sel = scene.unit_at(sx, sy).into_iter().collect();
+                scene.set_selected(sel);
             }
             // Debug: SCBW_PANEL_CLICK="x,y[,shift|ctrl]" clicks the status panel there.
             if let Ok(v) = std::env::var("SCBW_PANEL_CLICK") {
@@ -658,7 +661,7 @@ fn main() -> std::io::Result<()> {
                 if let (Some(x), Some(y), Ok(ui)) = (p.first().and_then(|s| s.parse().ok()), p.get(1).and_then(|s| s.parse().ok()), ui::Ui::load(&a.files, ["zerg", "terran", "protoss"][scene.local_race()])) {
                     let m = p.get(2).copied().unwrap_or("");
                     scene.status_click(&ui, x, y, m == "shift", m == "ctrl");
-                    eprintln!("selected {:?}", scene.selected);
+                    eprintln!("selected {:?}", scene.st.selected);
                 }
             }
             // Debug: SCBW_KEYS="sm..." presses command card hotkeys with the selection.
@@ -690,14 +693,14 @@ fn main() -> std::io::Result<()> {
                 let (a, b) = v.split_once(',')?;
                 Some((a.parse::<i32>().ok()?, b.parse::<i32>().ok()?))
             }) {
-                scene.check_placement((px, py));
+                scene.check_placement_tile(((px / 32) as i16, (py / 32) as i16));
                 eprintln!("placing {:?} ok {}", scene.placing, scene.place_ok);
-                scene.build((px, py));
+                scene.build();
             }
             // Debug: SCBW_TRAIN=type trains with the first selected unit; SCBW_BUILD=type,x,y
             // builds with it.
             if let Some(t) = std::env::var("SCBW_TRAIN").ok().and_then(|v| v.parse::<u16>().ok()) {
-                scene.selected.retain(|&u| scene.st.units[u as usize].status & 2 != 0);
+                scene.st.selected.retain(|&u| scene.st.units[u as usize].status & 2 != 0);
                 scene.command(|st, d, me, sel| {
                     if let Some(&u) = sel.first() {
                         eprintln!("train check {:?}", st.can_make_unit(d, u, t, me));
@@ -709,21 +712,22 @@ fn main() -> std::io::Result<()> {
                 let n: Vec<i32> = v.split(',').filter_map(|x| x.parse().ok()).collect();
                 Some((*n.first()? as u16, *n.get(1)?, *n.get(2)?))
             }) {
-                scene.selected.retain(|&u| scene.st.units[u as usize].unit_type == 7);
-                scene.selected.truncate(1);
-                let (tx, ty) = scene.build_tile(t, (bx, by));
+                scene.st.selected.retain(|&u| scene.st.units[u as usize].unit_type == 7);
+                scene.st.selected.truncate(1);
+                let (tx, ty) = ((bx / 32) as i16, (by / 32) as i16);
                 scene.command(|st, d, me, sel| {
                     if let Some(&u) = sel.first() {
                         eprintln!("build {tx},{ty} make {:?} order {:?} place {}", st.can_make_unit(d, u, t, me), st.can_issue_order(d, u, 0x1e, me), st.placement_check(d, u, me, tx, ty, t, 1, false, false, false));
                     }
                 });
                 scene.placing = Some((0x1e, t));
-                scene.build((bx, by));
+                scene.check_placement_tile((tx, ty));
+                scene.build();
             }
             for f in 0..frames {
                 scene.step();
                 if std::env::var("SCBW_DEBUG").is_ok() && f % 50 == 0 {
-                    for &u in &scene.selected {
+                    for &u in &scene.st.selected {
                         let un = &scene.st.units[u as usize];
                         let s = &scene.st.sprites[un.sprite as usize];
                         eprintln!("f{f} u{u} order {:#x} st {} pos ({},{}) tgt {} res {}", un.order, un.order_state, s.x, s.y, un.order_target_unit as i32, un.resource_type);
@@ -752,7 +756,7 @@ fn main() -> std::io::Result<()> {
             }
             if let Some((t, sx, sy)) = hover {
                 scene.placing = Some((0x1e, t));
-                scene.check_placement((sx + x, sy + y));
+                scene.check_placement((sx, sy), (x, y));
             }
             // Debug: SCBW_CURSOR=sx,sy draws the cursor the game would show there.
             let at = std::env::var("SCBW_CURSOR").ok().and_then(|v| {
@@ -806,7 +810,7 @@ fn main() -> std::io::Result<()> {
                 m
             });
             if let Some(u) = ui.as_ref() {
-                scene.portrait_tick(u, 0, 2);
+                scene.portrait_tick(u, None, 0, 2);
                 scene.text_tick(u, 0, true);
             }
             view::compose_with_cursor(&scene, ui.as_ref(), x, y, cursor, menu.as_ref(), &mut idx, &mut rgb);

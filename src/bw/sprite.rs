@@ -249,6 +249,25 @@ impl State {
         // 0x14018e3f0 only refreshes the image's screen-space bounds (render cache).
     }
 
+    /// 0x4010e0: initialize_image (0x4d5a50) then image_post_init (0x4d66b0), no direction.
+    pub(crate) fn image_init(&mut self, d: &Data, img: u32, image_id: u16, s: u32, x: i8, y: i8) {
+        self.initialize_image(d, img, image_id, s, x, y);
+        self.image_post_init(d, img);
+    }
+
+    /// 0x401100 (iscript 0x32): set HIDDEN; the area redraw (0x4970a0) is render-only.
+    pub(crate) fn image_hide(&mut self, img: u32) {
+        self.images[img as usize].flags |= iflag::HIDDEN;
+    }
+
+    /// 0x401120 (iscript 0x33): if HIDDEN, clear it and set REDRAW.
+    pub(crate) fn image_unhide(&mut self, img: u32) {
+        let i = &mut self.images[img as usize];
+        if i.flags & iflag::HIDDEN != 0 {
+            i.flags = (i.flags & !iflag::HIDDEN) | iflag::REDRAW;
+        }
+    }
+
     fn set_frame_from_direction(&mut self, img: u32) {
         let i = &mut self.images[img as usize];
         let f = i.frameset.wrapping_add(i.direction as u16);
@@ -438,6 +457,46 @@ impl State {
             self.image_set_direction(d, cur, heading);
             cur = next;
         }
+    }
+
+    /// 0x498b20 (EAX = sprite, stack = direction 0..=31): every image takes the 32-step
+    /// direction (0x4d5ea0, image_set_direction32; same checks and effects).
+    pub fn sprite_set_direction32(&mut self, d: &Data, s: u32, dir: u8) {
+        let mut cur = self.sprites[s as usize].images.head;
+        while cur != NIL {
+            let next = self.images[cur as usize].link.next;
+            self.image_set_direction32(d, cur, dir);
+            cur = next;
+        }
+    }
+
+    /// 0x498b50 (EAX = sprite, stack = flip): every image whose FLIPPED bit differs takes
+    /// `flip`, redraws (0x4d58b0's work: draw-function pointers 0x34 / 0x38 are render-only,
+    /// coloring 0x230 for modifier 0x11, REDRAW) and follows the main image's LO offset
+    /// (0x4d5a00 inlined) when it uses the special offset.
+    pub fn sprite_set_flip(&mut self, d: &Data, s: u32, flip: bool) {
+        let mut cur = self.sprites[s as usize].images.head;
+        while cur != NIL {
+            let next = self.images[cur as usize].link.next;
+            let i = &mut self.images[cur as usize];
+            if (i.flags & iflag::FLIPPED != 0) != flip {
+                i.flags = (i.flags & !iflag::FLIPPED) | if flip { iflag::FLIPPED } else { 0 };
+                let m = i.modifier;
+                self.image_set_modifier(cur, m);
+                if self.images[cur as usize].flags & iflag::USES_SPECIAL_OFFSET != 0 {
+                    self.image_update_special_offset(d, cur);
+                }
+            }
+            cur = next;
+        }
+    }
+
+    /// 0x499860 (ECX = sprite, AX = id): the sprite takes `sprite_id`. The selection
+    /// circle (0x231 + size) and health bar are rebuilt (0x4975d0 / 0x497620 remove,
+    /// 0x4d6420 / 0x4d7070 create) and the 0x23b overlay re-created; they are UI images
+    /// drawn per frame by view.rs from this id, and flag bits 1 / 8 / 2..4 end as they were.
+    pub fn sprite_set_id(&mut self, s: u32, sprite_id: u16) {
+        self.sprites[s as usize].sprite_id = sprite_id;
     }
 
     /// 0x140190b40: overlay image above (in front of) or below `img` in its sprite.

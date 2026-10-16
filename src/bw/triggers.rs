@@ -413,6 +413,16 @@ impl State {
         }
     }
 
+    /// 0x45e610: a transmission's timer ran out (single player): the local player's trigger
+    /// wait ends and the next pass runs at once.
+    /// 0x4894a0: the same when the center view scroll arrived.
+    pub fn trigger_wait_end(&mut self) {
+        let p = self.local_player as usize;
+        self.trig.waiting[p] = 0;
+        self.trig.wait_ms[p] = 0;
+        self.trig.check_timer = 1;
+    }
+
     /// 0x489cc0: wait timers, the game clock and the countdown timer.
     fn trigger_timers(&mut self, ms: u32) {
         let tr = &mut self.trig;
@@ -954,6 +964,19 @@ impl State {
         }
     }
 
+    /// 0x4c77d0: the action's wav (map string, a path in the scenario archive) plays for the
+    /// local player (not in a replay) unless the trigger was skipped (0x10); the front end
+    /// does 0x4bc490. No wait is set here.
+    // ponytail: the campaign's path (0x57f244 set: "%s\\%s" of the campaign's directory)
+    // is not handled; maps play their own file.
+    fn action_play_wav(&mut self, p: usize, i: usize, a: &Action) {
+        if !self.replay && self.trig.player as usize == self.local_player as usize && a.wav != 0
+            && self.trig.lists[p][i].flags() & 0x10 == 0
+        {
+            self.trigger_wavs.push(a.wav as u16);
+        }
+    }
+
     /// 0x512800: action table. False when the trigger waits here.
     fn action(&mut self, _d: &Data, p: usize, i: usize, k: usize, a: &Action) -> bool {
         let cur = self.trig.player as usize;
@@ -999,14 +1022,24 @@ impl State {
             9 => {
                 let id = a.string as u16;
                 if cur == self.local_player as usize && self.trig.lists[p][i].flags() & 0x10 == 0 && id != 0 {
-                    self.shown_text.push((id, a.flags & 4 != 0));
+                    self.shown_text.push((id, a.flags & 4 != 0, 0));
                 }
                 true
             }
-            // 0x4c77d0 play wav, 0x4c54b0 minimap ping,
-            // 0x4c6990 / 0x4c6940 mute / unmute unit speech, 0x4c50e0 next scenario,
-            // 0x4c5000 / 0x4c5020 debug mode: UI only, or nothing in a replay.
-            8 | 0x1c | 0x1e | 0x1f | 0x29 => true,
+            // 0x4c77d0 play wav.
+            8 => {
+                self.action_play_wav(p, i, a);
+                true
+            }
+            // 0x4c54b0 minimap ping,
+            // 0x4c6990 / 0x4c6940 mute / unmute unit speech: UI only (local player's audio).
+            0x1c | 0x1e | 0x1f => true,
+            // 0x4c50e0: next scenario (campaign flow: copies the name from the map's
+            // string table into 0x57f246 for the front end; no simulation effect).
+            0x29 => {
+                todo_port!("0x4c50e0", "set next scenario name (campaign flow)");
+                true
+            }
             0x3a => {
                 let t = &mut self.trig.lists[p][i];
                 let f = t.flags();
@@ -1314,17 +1347,55 @@ impl State {
                 }
                 true
             }
-            // 0x4c6de0: center view; 0x4c7890: transmission. Single player: the trigger
-            // waits until the screen scroll (0x4894a0) / the transmission ends.
-            0xa | 7 => {
-                let ty = self.player_types[cur];
-                if a.id == 0xa && (a.location as u8 == 0 || self.trig.paused) {
+            // 0x4c6de0: center view (single player: the local player scrolls the screen to
+            // the location and the trigger waits for it, callback 0x4894a0).
+            0xa => {
+                if a.location as u8 == 0 || self.trig.paused || matches!(self.player_types[cur], 1 | 3 | 4 | 7) {
                     return true;
                 }
-                if a.id == 7 && a.location as u8 == 0 {
+                if self.trig.waiting[cur] != 0 {
+                    return false;
+                }
+                let fl = self.trig.lists[p][i].action_flags_mut(k);
+                if *fl & 1 != 0 {
+                    *fl &= !1;
+                    // 0x47eb30: puts the mouse back to the screen center (UI only).
                     return true;
                 }
-                if matches!(ty, 1 | 3 | 4 | 7) {
+                if self.trig.lists[p][i].flags() & 0x10 != 0 {
+                    return true;
+                }
+                if cur == self.local_player as usize {
+                    let l = self.trig.locations[a.location as u8 as usize - 1];
+                    let half = |a: u32, b: u32| {
+                        let v = a.wrapping_add(b) as i32;
+                        (v + (v < 0) as i32) >> 1
+                    };
+                    let (mut x, mut y) = (half(l.left, l.right) - 0x140, half(l.top, l.bottom) - 0xc8);
+                    let (mw, mh) = (self.map_px.0 as i32, self.map_px.1 as i32);
+                    if x < 0 {
+                        x = 0;
+                    } else if x + 0x280 >= mw {
+                        x = mw - 0x281;
+                    }
+                    if y < 0 {
+                        y = 0;
+                    } else if y + 0x190 >= mh {
+                        y = mh - 0x191;
+                    }
+                    // 0x47eb70: the front end scrolls to (x & !7, y & !7).
+                    self.center_view = Some((x & !7, y & !7));
+                }
+                *self.trig.lists[p][i].action_flags_mut(k) |= 1;
+                self.trig.waiting[cur] = 1;
+                // ponytail: without a front end (headless) there is no scroll to wait for:
+                // the wait ends at the next pass instead of when 0x4894a0 fires.
+                self.trig.wait_ms[cur] = if self.ui_attached { u32::MAX } else { 0 };
+                false
+            }
+            // 0x4c7890: transmission (single player).
+            7 => {
+                if a.location as u8 == 0 || matches!(self.player_types[cur], 1 | 3 | 4 | 7) {
                     return true;
                 }
                 if self.trig.waiting[cur] != 0 {
@@ -1338,13 +1409,41 @@ impl State {
                 if self.trig.lists[p][i].flags() & 0x10 != 0 {
                     return true;
                 }
+                let ms = match a.modifier {
+                    7 => a.number,
+                    8 => a.time.wrapping_add(a.number),
+                    9 => a.time.saturating_sub(a.number),
+                    _ => a.time,
+                };
                 *self.trig.lists[p][i].action_flags_mut(k) |= 1;
+                // Only the local player's transmission ever ends (0x45e610); the others
+                // wait for good. ponytail: without a front end (headless) the wait is the
+                // transmission's length in game ms instead of the real-time timer.
+                self.trig.wait_ms[cur] = if cur == self.local_player as usize && !self.ui_attached { ms } else { u32::MAX };
                 self.trig.waiting[cur] = 1;
-                // ponytail: without the screen and sound the local player's wait (-1)
-                // never ends; 0x4894a0 / the transmission end would clear it.
-                self.trig.wait_ms[cur] = u32::MAX;
-                if cur == self.local_player as usize {
-                    todo_port!("0x47eb70", "center view scroll / transmission for the local player (UI)");
+                if cur != self.local_player as usize {
+                    return false;
+                }
+                self.action_play_wav(p, i, a);
+                // 0x4c7380 (group 0x11): the unit flashes its selection circle and pings.
+                let mut at = None;
+                if let Some(u) = self.find_trigger_unit(_d, a.location as u8 - 1, a.unit_type, 0x11) {
+                    let sp = self.units[u as usize].sprite as usize;
+                    self.sprites[sp].selection_timer = 0x2d;
+                    let (x, y) = (self.sprites[sp].x as i32, self.sprites[sp].y as i32);
+                    self.minimap_pings.push((x, y, 0x11));
+                    at = Some((x, y));
+                }
+                // 0x45edd0: the talking portrait and the timer.
+                // ponytail: its (x, y) hint (0x57fd34 / 0x57fd38, `at` clamped at 0x140 / 200)
+                // and the campaign-only portrait swaps are not kept.
+                let _ = at;
+                self.transmissions.push((a.unit_type, ms));
+                // Subtitles (0x6cdfec & 0x400, decided by the front end) or the action's
+                // "always display" flag; stays for the longer of the length and the text's
+                // reading time (0x4c51d0).
+                if a.string != 0 {
+                    self.shown_text.push((a.string as u16, a.flags & 4 != 0, ms));
                 }
                 false
             }

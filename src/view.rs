@@ -3,6 +3,7 @@
 
 use crate::bw::{self, list::NIL};
 use crate::storage::Storage;
+use crate::todo_port;
 use crate::dat::{self, Dat};
 use crate::grp::{Blend, Grp};
 use crate::map::{self, Chk, Tileset};
@@ -34,6 +35,8 @@ pub struct Assets {
     pub files: Storage,
     /// Engine data (dat tables, iscript, GRP sizes, LO files).
     pub bw: bw::load::Loaded,
+    /// The scenario archive (.scm/.scx) of the map being played, if it came from one.
+    pub map_mpq: Option<crate::mpq::Mpq>,
     image_names: Vec<String>,
     grps: RefCell<Vec<Option<Option<std::rc::Rc<Grp>>>>>,
 }
@@ -42,7 +45,7 @@ impl Assets {
     pub fn load(files: Storage) -> io::Result<Assets> {
         let bw = bw::load::Loaded::load(&files)?;
         let image_names = dat::parse_tbl(&files.read("arr/images.tbl")?);
-        Ok(Assets { files, bw, image_names, grps: RefCell::new(vec![None; dat::Images::COUNT]) })
+        Ok(Assets { files, bw, map_mpq: None, image_names, grps: RefCell::new(vec![None; dat::Images::COUNT]) })
     }
 
     pub fn dat(&self) -> &Dat {
@@ -77,7 +80,9 @@ pub fn load_minimap(files: &Storage, chk: &Chk) -> std::io::Result<bw::minimap::
     let mut colors = [0u8; 12];
     colors.copy_from_slice(&tm[..12]);
     let (w, h) = chk.dims();
-    Ok(bw::minimap::Minimap::new(w as u16, h as u16, chk.tileset() as u16, &pal, &dark, vx4, vr4, colors))
+    let mut mm = bw::minimap::Minimap::new(w as u16, h as u16, chk.tileset() as u16, &pal, &dark, vx4, vr4, colors);
+    mm.set_blink(crate::grp::Grp::parse(rd("game/blink.grp".into())?), pcx(&rd("game/tblink.pcx".into())?).2);
+    Ok(mm)
 }
 
 /// Run `f` with the engine's `Data` view over `a`.
@@ -91,13 +96,14 @@ pub struct Scene<'a> {
     pub st: bw::State,
     /// 0x6d0c64: the tileset's creep edge pieces (`Tileset\<name>.grp`, 0x414100).
     creep_grp: Option<crate::grp::Grp>,
-    pub selected: Vec<u32>,
     /// Unit voices (selection and acknowledgement lines).
     pub voices: crate::voices::Voices,
     /// The console portrait's video (UI state).
     pub portrait: std::cell::RefCell<crate::portrait::Player>,
-    /// A voice line played for the status unit: its portrait talks.
-    pub talked: bool,
+    /// 0x68ac4c-ish: ms left of a unit's talk (0x45efe0) holding the console portrait.
+    talk_left: u32,
+    /// 0x45edd0: ms left on the real-time transmission timer (0x45e610).
+    trans_left: Option<u32>,
     /// 0x59724c: the selection last sent to the simulation as select commands.
     sent_selection: Vec<u32>,
     /// Command card submenu (button set index) opened by a Menu button, e.g. SCV "Build".
@@ -112,7 +118,13 @@ pub struct Scene<'a> {
     /// The message lines, timed by `clock_ms` (GetTickCount in the game).
     pub msgs: crate::msgs::Messages,
     pub clock_ms: u32,
+    /// The chat line (0x4f32d0).
+    pub chat: crate::chat::Chat,
     pub place_ok: bool,
+    /// 0x640890: the placement tile under the cursor (set by check_placement).
+    pub place_tile: (i16, i16),
+    /// 0x640958: the placement check result at `place_tile` (0 = free).
+    pub place_err: u8,
     /// Screen-space drag rectangle while box-selecting.
     pub drag_box: Option<(i32, i32, i32, i32)>,
     pub a: &'a Assets,
@@ -201,7 +213,7 @@ impl<'a> Scene<'a> {
             minimap.refresh(d, &mut st)
         });
         let creep_grp = a.files.read(&format!("tileset/{}.grp", map::TILESETS[chk.tileset()])).ok().map(crate::grp::Grp::parse);
-        Ok(Scene { st, creep_grp, minimap, selected: Vec::new(), voices: crate::voices::Voices::new(), portrait: Default::default(), talked: false, sent_selection: Vec::new(), card_menu: None, placing: None, targeting: None, error: 0, msgs: Default::default(), clock_ms: 0, place_ok: false, drag_box: None, a, chk, ts, terrain, player_colors, local, shadow, dark, fog: crate::fog::Fog::new(), tselect, thpbar, remaps })
+        Ok(Scene { st, creep_grp, minimap, voices: crate::voices::Voices::new(), portrait: Default::default(), talk_left: 0, trans_left: None, sent_selection: Vec::new(), card_menu: None, placing: None, targeting: None, error: 0, msgs: Default::default(), chat: Default::default(), clock_ms: 0, place_ok: false, place_tile: (0, 0), place_err: 0, drag_box: None, a, chk, ts, terrain, player_colors, local, shadow, dark, fog: crate::fog::Fog::new(), tselect, thpbar, remaps })
     }
 
     /// Send the local selection to the simulation (0x4c0860) and return the local
@@ -209,7 +221,7 @@ impl<'a> Scene<'a> {
     fn sim_selection(&mut self) -> Vec<u32> {
         let me = self.local;
         let mut sent = std::mem::take(&mut self.sent_selection);
-        let pkts = self.st.selection_packets(&mut sent, &self.selected);
+        let pkts = self.st.selection_packets(&mut sent, &self.st.selected);
         self.sent_selection = sent;
         let st = &mut self.st;
         with_data(self.a, |d| {
@@ -223,11 +235,11 @@ impl<'a> Scene<'a> {
     /// 0x4967e0: the screen position centered on the selected group: the units' mean
     /// position less half the screen (0x140, 0xc8), on 8-pixel steps.
     pub fn group_centre(&self) -> Option<(i32, i32)> {
-        let n = self.selected.len() as i32;
+        let n = self.st.selected.len() as i32;
         if n == 0 {
             return None;
         }
-        let (sx, sy) = self.selected.iter().fold((0i32, 0i32), |(ax, ay), &u| {
+        let (sx, sy) = self.st.selected.iter().fold((0i32, 0i32), |(ax, ay), &u| {
             let (x, y) = self.st.unit_sprite_pos(u);
             (ax + x as i32, ay + y as i32)
         });
@@ -242,12 +254,19 @@ impl<'a> Scene<'a> {
         let st = &mut self.st;
         with_data(self.a, |d| st.execute_command(d, me, &[], &[0x13, action, g]));
         let sel = bw::select::selection_units(&self.st.selections[me as usize]).to_vec();
-        if sel != self.selected {
+        if sel != self.st.selected {
             self.card_menu = None;
             self.placing = None;
         }
-        self.selected = sel.clone();
-        self.sent_selection = sel;
+        self.set_selected(sel);
+        self.sent_selection = self.st.selected.clone();
+    }
+
+    /// 0x49ae40: make `units` the local selection (0x6284b8).
+    pub fn set_selected(&mut self, mut units: Vec<u32>) {
+        let n = units.len();
+        let st = &mut self.st;
+        with_data(self.a, |d| st.selection_set(d, &mut units, n));
     }
 
     /// 0x48ccb0: put stat_txt line `id` (1-based) up for 7 seconds (at the next
@@ -266,9 +285,9 @@ impl<'a> Scene<'a> {
         if let Some(e) = ui.stat_txt.get((std::mem::take(&mut self.error) as usize).wrapping_sub(1)) {
             self.msgs.error(e.split('\0').next().unwrap_or("").as_bytes(), now);
         }
-        for (id, always) in std::mem::take(&mut self.st.shown_text) {
+        for (id, always, min_ms) in std::mem::take(&mut self.st.shown_text) {
             if let Some(t) = self.chk.string_bytes(id).filter(|_| always || subtitles) {
-                self.msgs.trigger_text(&ui.font, t, now, crate::msgs::reading_ms(t));
+                self.msgs.trigger_text(&ui.font, t, now, crate::msgs::reading_ms(t).max(min_ms));
             }
         }
         for (fmt, p) in std::mem::take(&mut self.st.notices) {
@@ -278,6 +297,13 @@ impl<'a> Scene<'a> {
             let name = self.st.player_names.get(p as usize).map_or("", String::as_str);
             let t = f.replacen("%s", name, 1).replacen("%d", &(p as u32 + 1).to_string(), 1);
             self.msgs.print(&ui.font, t.as_bytes(), now, 0);
+            self.st.ui_sounds.push(0x17);
+        }
+        for (p, text) in std::mem::take(&mut self.st.chat) {
+            let st = &self.st;
+            let tbl = ui.network.get(0x1a).map_or("", |s| s.split('\0').next().unwrap_or(""));
+            let (line, color) = crate::msgs::chat_line(p, &text, st.local_player, st.player_types.get(p as usize).copied().unwrap_or(0), st.player_names.get(p as usize).map_or("", String::as_str), tbl);
+            self.msgs.add(&ui.font, &line, color, now.wrapping_add(7000), 0);
             self.st.ui_sounds.push(0x17);
         }
         self.clock_ms = now.wrapping_add(ms);
@@ -340,11 +366,21 @@ impl<'a> Scene<'a> {
         if self.st.frame % 5 == 0 {
             self.minimap.blink_phase = !self.minimap.blink_phase;
         }
+        // 0x4a4f10 runs on a 100 ms timer: every 2nd or 3rd frame.
+        if self.st.frame % 5 == 0 || self.st.frame % 5 == 2 {
+            self.minimap.tick_pings();
+        }
         if self.st.shown_error != 0 {
             let e = std::mem::take(&mut self.st.shown_error);
             self.show_error(e);
         }
-        self.selected.retain(|&u| self.st.unit_alive(u));
+        // 0x49f7a0 / 0x4ed000 emptied the selection: placement and targeting end (0x48d9a0,
+        // 0x48e310, 0x48ca10: the button set goes back to 0xe4).
+        if std::mem::take(&mut self.st.selection_emptied) && (self.placing.is_some() || self.targeting.is_some()) {
+            self.placing = None;
+            self.targeting = None;
+            self.card_menu = None;
+        }
         self.st.sounds.drain(..).map(|(id, x, y)| (id, x as i32, y as i32)).collect()
     }
 
@@ -478,6 +514,7 @@ impl<'a> Scene<'a> {
         // below the sprite, colored from tselect.pcx by 0x581d6a (own 0, ally 1, enemy 2).
         let sp_dat = &self.a.dat().sprites;
         let circled: std::collections::HashMap<u32, (u8, u32)> = self
+            .st
             .selected
             .iter()
             .map(|&u| {
@@ -487,13 +524,22 @@ impl<'a> Scene<'a> {
                 (un.sprite, (c, u))
             })
             .collect();
+        // A clicked sprite's flash circle (0x4ebbd0, sprite flag 1) is drawn like a selected one.
+        let flashed: Vec<(u32, u8)> = order
+            .iter()
+            .filter(|&&s| self.st.sprites[s as usize].flags & 1 != 0 && self.st.sprites[s as usize].selection_timer != 0)
+            .map(|&s| {
+                let p = self.st.sprites[s as usize].owner as usize;
+                (s, if p == self.local as usize { 0 } else if p < 8 && self.st.alliances[self.local as usize][p] == 0 { 2 } else { 1 })
+            })
+            .collect();
         let total = order.len();
         for (k, s) in order.into_iter().enumerate() {
             if k == fogged {
                 self.fog.shade(&self.st, &self.dark, vx, vy, out, vw as usize, vh as usize);
             }
             let sp = &self.st.sprites[s as usize];
-            if let Some(&(c, _)) = circled.get(&s) {
+            if let Some(c) = circled.get(&s).map(|&(c, _)| c).or_else(|| flashed.iter().find(|f| f.0 == s).map(|f| f.1)) {
                 let id = sp.sprite_id as usize;
                 if let Some(g) = self.a.grp(0x231 + sp_dat.selection_circle[id] as u16) {
                     let mut table = [0u8; 256];
@@ -583,11 +629,11 @@ impl<'a> Scene<'a> {
 
     /// 0x4563a0 / 0x48f4d0: the status unit (first selected) acknowledges an order.
     pub fn voice_yes(&mut self) {
-        let Some(&u) = self.selected.first() else { return };
+        let Some(&u) = self.st.selected.first() else { return };
         let (st, v) = (&self.st, &mut self.voices);
         if let Some(id) = with_data(self.a, |d| v.yes(st, d, u)) {
             self.st.ui_sounds.push(id);
-            self.talked = true;
+            self.st.talked.push((u, id));
         }
     }
 
@@ -596,7 +642,7 @@ impl<'a> Scene<'a> {
     pub fn voice_what(&mut self) {
         let st = &self.st;
         let best = with_data(self.a, |d| {
-            self.selected.iter().copied().max_by_key(|&u| {
+            self.st.selected.iter().copied().max_by_key(|&u| {
                 let un = &st.units[u as usize];
                 d.dat.units.rank[un.unit_type as usize] as u32 + un.unknown_8e as u32
             })
@@ -605,16 +651,17 @@ impl<'a> Scene<'a> {
         let (st, v) = (&self.st, &mut self.voices);
         if let Some(id) = with_data(self.a, |d| v.what(st, d, u)) {
             self.st.ui_sounds.push(id);
-            self.talked = true;
+            self.st.talked.push((u, id));
         }
     }
 
     /// The status bar's selection (active unit, count).
     pub fn client_selection(&self) -> bw::buttons::Selection {
-        with_data(self.a, |d| self.st.client_selection(d, &self.selected))
+        with_data(self.a, |d| self.st.client_selection(d, &self.st.selected))
     }
 
-    /// The button set on the card: an open menu, the cancel sets while targeting
+    /// 0x4599a0
+    /// 0x458de0: the button set on the card: an open menu, the cancel sets while targeting
     /// (0xe5) or placing (0xe6), else the active unit's set (+0x94).
     pub fn card_set(&self, s: &bw::buttons::Selection) -> Option<usize> {
         // 0x458de0: a replay always shows its controls (0xf8 while paused).
@@ -630,7 +677,12 @@ impl<'a> Scene<'a> {
         if let Some(m) = self.card_menu {
             return Some(m as usize);
         }
-        (s.active != NIL).then(|| self.st.units[s.active as usize].button_set as usize)
+        // 0x4599a0: 0xe4 shows 0x458bc0's set for several units, else the active unit's.
+        if s.active == NIL {
+            return None;
+        }
+        let multi = if s.count > 1 { with_data(self.a, |d| self.st.multi_card_set(d, s)) } else { 0xe4 };
+        Some(if multi != 0xe4 { multi as usize } else { self.st.units[s.active as usize].button_set as usize })
     }
 
     /// The command card (0x4591d0).
@@ -660,7 +712,7 @@ impl<'a> Scene<'a> {
             Menu(m) => self.card_menu = (m != 0xe4).then_some(m),
             CancelTargeting => self.targeting = Option::None,
             CancelPlacement => self.placing = Option::None,
-            SelectLarvae(l) => self.selected = l,
+            SelectLarvae(l) => self.set_selected(l),
             Error(Option::None) => self.show_error(btn.disabled_str),
             Error(Some((sound, msg))) => {
                 self.st.ui_sounds.push(sound);
@@ -714,37 +766,92 @@ impl<'a> Scene<'a> {
         self.voice_yes();
     }
 
-    /// Placement tile for building `t` with the cursor at map point `p`.
-    pub fn build_tile(&self, t: u16, p: (i32, i32)) -> (i16, i16) {
-        let v = self.a.dat().units.placement_box[t as usize];
-        let (w, h) = (v as i16 as i32, (v >> 16) as i16 as i32);
-        (((p.0 - w / 2 + 16) / 32) as i16, ((p.1 - h / 2 + 16) / 32) as i16)
+    /// 0x48d660: the placement tile (0x640890) and its screen position for the cursor `c`
+    /// (screen px) with the screen at `v`: the screen cell under the cursor, counted from
+    /// the screen's first tile; a tile left of / above the screen moves on by one.
+    /// None outside the 640x400 map view.
+    pub fn placement_cursor(c: (i32, i32), v: (i32, i32)) -> Option<((i16, i16), (i32, i32))> {
+        if !(0..0x280).contains(&c.0) || !(0..400).contains(&c.1) {
+            return None;
+        }
+        let mut t = ((c.0 >> 5) + (v.0 >> 5), (c.1 >> 5) + (v.1 >> 5));
+        let mut p = (t.0 * 32 - v.0, t.1 * 32 - v.1);
+        if p.0 < 0 {
+            t.0 += 1;
+            p.0 += 32;
+        }
+        if p.1 < 0 {
+            t.1 += 1;
+            p.1 += 32;
+        }
+        Some(((t.0 as i16, t.1 as i16), p))
     }
 
-    /// Update `place_ok` for the building being placed at map point `p` (placement
-    /// grid slot 1, as the placement cursor does).
-    pub fn check_placement(&mut self, p: (i32, i32)) {
+    /// 0x48dce0: the placement check at the cursor tile (grid slot 1, remembered creep and
+    /// fog). An addon (units.dat flag 0x2) also needs its parent building's spot, the
+    /// addon offset (0x662538) back, free (slot 0); the addon's failure wins.
+    fn placement_result(&mut self, t: u16) -> u8 {
+        let (tx, ty) = self.place_tile;
+        let (u, me) = (self.client_selection().active, self.local);
+        let st = &mut self.st;
+        with_data(self.a, |d| {
+            let r = st.placement_check(d, u, me, tx, ty, t, 1, true, false, false);
+            if d.dat.units.flags[t as usize] & 2 == 0 || u == NIL {
+                return r;
+            }
+            let v = d.dat.units.addon_position[t as usize];
+            let tile = |p: i32| ((p + ((p >> 31) & 0x1f)) >> 5) as i16;
+            let r2 = st.placement_check(d, u, me, tx - tile(v as u16 as i16 as i32), ty - tile((v >> 16) as u16 as i16 as i32), st.units[u as usize].unit_type, 0, true, false, false);
+            if r == 0 { r2 } else { r }
+        })
+    }
+
+    /// 0x48ddc0: update the placement box for the cursor `c` (screen px) with the screen at
+    /// `v`: the tile under it (0x48d660) and the check result there (0x48dce0, kept in
+    /// `place_err`). With the cursor off the map view the boxes are hidden (0x48d7b0) and
+    /// nothing changes.
+    pub fn check_placement(&mut self, c: (i32, i32), v: (i32, i32)) {
+        let Some(_) = self.placing else { return };
+        let Some((tile, _)) = Self::placement_cursor(c, v) else { return };
+        self.check_placement_tile(tile);
+    }
+
+    /// 0x48dce0 for the placement tile `tile` itself (debug commands).
+    pub fn check_placement_tile(&mut self, tile: (i16, i16)) {
         let Some((_, t)) = self.placing else { return };
-        let (tx, ty) = self.build_tile(t, p);
-        let u = self.client_selection().active;
-        let (me, st) = (self.local, &mut self.st);
-        self.place_ok = with_data(self.a, |d| st.placement_check(d, u, me, tx, ty, t, 1, false, false, false) == 0);
+        self.place_tile = tile;
+        self.place_err = self.placement_result(t);
+        self.place_ok = self.place_err == 0;
     }
 
-    /// Place the building at map point `p`: the build command (0x0c).
-    pub fn build(&mut self, p: (i32, i32)) {
-        let Some((order, t)) = self.placing.take() else { return };
-        let (tx, ty) = self.build_tile(t, p);
+    /// 0x48e5d0: the click while placing: a refused spot (0x48e4e0 with the result in
+    /// 0x640958) gets the error voice and line (0x48f7b0) and placing goes on; a free one
+    /// the race's placement sound (0x48eff0) and the build command (0x0c) at the tile,
+    /// and placing ends (0x48e310).
+    pub fn build(&mut self) {
+        let Some((order, t)) = self.placing else { return };
+        let (tx, ty) = self.place_tile;
+        let (sel, me) = (self.sim_selection(), self.local);
+        if self.place_err != 0 {
+            if order == 0x47 {
+                todo_port!("0x48f630", "land refused: the race's advisor voice");
+            } else {
+                let (u, r) = (self.client_selection().active, self.place_err);
+                let st = &mut self.st;
+                if u != NIL {
+                    with_data(self.a, |d| st.placement_blocked_sound(d, u, bw::build::PLACEMENT_ERRORS.get(r as usize).copied().unwrap_or(0)));
+                }
+            }
+            return;
+        }
+        self.placing = Option::None;
         let mut pkt = vec![0x0c, order];
         pkt.extend_from_slice(&(tx as u16).to_le_bytes());
         pkt.extend_from_slice(&(ty as u16).to_le_bytes());
         pkt.extend_from_slice(&t.to_le_bytes());
-        let (sel, me) = (self.sim_selection(), self.local);
-        if self.place_ok {
-            // 0x48eff0: the building race's placement sound (sfx 4 + race).
-            let race = with_data(self.a, |d| bw::State::supply_race_of(d, t));
-            self.st.ui_sounds.push(4 + race);
-        }
+        // 0x48eff0: the building race's placement sound (sfx 4 + race).
+        let race = with_data(self.a, |d| bw::State::supply_race_of(d, t));
+        self.st.ui_sounds.push(4 + race);
         let st = &mut self.st;
         with_data(self.a, |d| st.execute_command(d, me, &sel, &pkt));
         self.card_menu = Option::None;
@@ -752,10 +859,10 @@ impl<'a> Scene<'a> {
 
     /// The selected building's statdata panel, if it shows one.
     pub fn status_panel(&self, ui: &crate::ui::Ui) -> Option<(crate::statdata::Panel, Vec<(i16, crate::statdata::Show)>)> {
-        if self.selected.len() > 1 {
-            return Some((crate::statdata::Panel::Group, crate::statdata::group_panel(&self.selected)));
+        if self.st.selected.len() > 1 {
+            return Some((crate::statdata::Panel::Group, crate::statdata::group_panel(&self.st.selected)));
         }
-        let [u] = self.selected[..] else { return None };
+        let [u] = self.st.selected[..] else { return None };
         let st = &self.st;
         with_data(self.a, |d| {
             if let Some(p) = crate::statdata::transport_panel(st, d, &ui.stat_txt, u) {
@@ -768,16 +875,70 @@ impl<'a> Scene<'a> {
         })
     }
 
-    /// The portrait follows the status unit (the first selected) and talks after its
-    /// voice lines; `mode` is the video option (0 none, 1 still, 2 animating).
-    pub fn portrait_tick(&mut self, ui: &crate::ui::Ui, ms: u32, mode: i16) {
+    /// The portrait follows the status unit (the first selected). 0x45efe0: a unit that
+    /// talks (`st.talked`) takes it over, talking, for its sound's length (at least 1000 ms,
+    /// 0x45ef50) unless a talk runs; then 0x45ec40 restores the selection's. `mode` is the
+    /// video option (0 none, 1 still, 2 animating).
+    pub fn portrait_tick(&mut self, ui: &crate::ui::Ui, audio: Option<&crate::audio::Audio>, ms: u32, mode: i16) {
+        let talked = std::mem::take(&mut self.st.talked);
+        // A front end with a clock drives the real-time timers of trigger waits (headless
+        // runs, and the screenshot mode with ms 0, have none).
+        self.st.ui_attached = ms != 0;
+        // 0x4c6de0: the run loop moves the camera; front ends without one end the scroll at
+        // once (0x4894a0).
+        if self.st.center_view.take().is_some() {
+            self.st.trigger_wait_end();
+        }
+        // 0x45edd0: a transmission replaces the running timer (id 4); the talking portrait
+        // (timer 3, 0x45ec40) and the trigger wait (0x45e610) end with it.
+        let started = std::mem::take(&mut self.st.transmissions);
+        if let Some(&(_, len)) = started.last() {
+            self.trans_left = Some(len);
+        }
+        if let Some(left) = self.trans_left {
+            if left <= ms {
+                self.trans_left = None;
+                self.talk_left = 0;
+                self.st.trigger_wait_end();
+            } else {
+                self.trans_left = Some(left - ms);
+            }
+        }
         let Some(ps) = ui.portraits.as_ref() else { return };
-        let p = self.selected.first().map(|&u| self.a.dat().units.portrait[self.st.units[u as usize].unit_type as usize]).filter(|&p| p < 110 && mode != 0);
+        self.portrait.borrow_mut().animate = mode == 2;
+        if let Some(&(t, len)) = started.last() {
+            if let Some(p) = Some(self.a.dat().units.portrait[t as usize]).filter(|&p| p < 110 && mode != 0) {
+                self.talk_left = len;
+                self.portrait.borrow_mut().show_talking(ps, &self.a.files, p);
+            }
+        }
+        // 0x45ea30: the generic advisor portrait (0x52) takes the unit owner's color.
+        let portrait = |s: &Self, u: u32| {
+            let p = s.a.dat().units.portrait[s.st.units[u as usize].unit_type as usize];
+            let p = if p == 0x52 { s.st.advisor_portrait(s.st.sprites[s.st.units[u as usize].sprite as usize].owner) } else { p };
+            Some(p).filter(|&p| p < 110 && mode != 0)
+        };
         let files = &self.a.files;
         let mut pl = self.portrait.borrow_mut();
-        pl.show(ps, files, p);
-        if std::mem::take(&mut self.talked) {
-            pl.talk(ps, files);
+        if self.talk_left == 0 {
+            if let Some(&(u, sfx)) = talked.first() {
+                if let Some(p) = portrait(self, u) {
+                    let len = audio.and_then(|au| au.duration_ms(files, self.a.dat(), sfx)).unwrap_or(0);
+                    // ponytail: the callers' duration (EDI) also adds a per-sfx extra
+                    // (0x68cd38) that is not read here.
+                    self.talk_left = (len / 1000 * 1000).max(1000);
+                    pl.show_talking(ps, files, p);
+                }
+            }
+        } else {
+            self.talk_left = self.talk_left.saturating_sub(ms);
+            if self.talk_left == 0 {
+                pl.portrait = None;
+            }
+        }
+        if self.talk_left == 0 {
+            let p = self.st.selected.first().and_then(|&u| portrait(self, u));
+            pl.show(ps, files, p);
         }
         pl.tick(ps, files, ms, mode == 2);
     }
@@ -797,15 +958,16 @@ impl<'a> Scene<'a> {
                     // 0x458220, a unit of a multiple selection: shift drops it, ctrl keeps
                     // the shown units of its type, else it alone stays selected.
                     crate::statdata::Show::GroupWire(unit) => {
-                        let shown: Vec<u32> = self.selected.iter().copied().take(12).collect();
+                        let shown: Vec<u32> = self.st.selected.iter().copied().take(12).collect();
                         let ty = self.st.units[unit as usize].unit_type;
-                        self.selected = if shift {
+                        let sel = if shift {
                             shown.into_iter().filter(|&u| u != unit).collect()
                         } else if ctrl {
                             shown.into_iter().filter(|&u| self.st.units[u as usize].unit_type == ty).collect()
                         } else {
                             vec![unit]
                         };
+                        self.set_selected(sel);
                         self.card_menu = None;
                         self.placing = None;
                         self.voice_what();
@@ -1283,7 +1445,7 @@ fn draw_hud(scene: &Scene, ui: &crate::ui::Ui, vx: i32, vy: i32, cursor: Option<
                     ui.skin.draw_ctl(&c, (l, t, r, b), &mut crate::dlg::Surf { px: out, w, h });
                 }
                 crate::statdata::Show::Wireframe => {
-                    let [u] = scene.selected[..] else { continue };
+                    let [u] = scene.st.selected[..] else { continue };
                     // 0x4568f0: the frame is the shown type's (0 past the grp's frames).
                     let wt = crate::ui::wire_type(&scene.st, u) as usize;
                     let frame = if wt < ui.wireframe.frame_count() { wt } else { 0 };
@@ -1354,44 +1516,20 @@ fn draw_hud(scene: &Scene, ui: &crate::ui::Ui, vx: i32, vy: i32, cursor: Option<
         }
     }
     scene.msgs.draw(&ui.font, crate::ui::TextDst { rows: &ui.text_colors, out, w, h });
+    scene.chat.draw(&ui.skin, scene.clock_ms, scene.st.replay, out, w, h);
     if let Some(b) = scene.drag_box {
         rect(out, w, h, b, scene.minimap.colors[0x12]);
     }
     if let (Some((_, kind)), Some((_, _, cx, cy))) = (scene.placing, cursor) {
-        // placebox.cpp (0x48daf0, 0x48d7f0): the building's first frame in the local
-        // player's color, each tile dithered (0x40c4d2) green when free, red when not.
-        let (tx, ty) = scene.build_tile(kind, (cx + vx, cy + vy));
-        let dat = scene.a.dat();
-        let v = dat.units.placement_box[kind as usize];
-        let (pw, ph) = (v as u16 as i32, (v >> 16) as u16 as i32);
-        let img = dat.sprites.image[dat.flingy.sprite[dat.units.flingy[kind as usize] as usize] as usize];
-        let (gw, gh, grp) = match scene.a.grp(img) {
-            Some(g) => (g.w, g.h, Some(g)),
-            None => (0, 0, None),
-        };
-        let (sw, sh) = ((gw.max(pw) + 31) & !31, (gh.max(ph) + 31) & !31);
-        let (cols, rows) = (pw / 32, ph / 32);
-        let (ox, oy) = ((sw - cols * 32) / 2, (sh - rows * 32) / 2);
-        let mut surf = vec![0u8; (sw * sh) as usize];
-        if let Some(g) = grp {
-            g.draw(0, false, 0, 0, &mut surf, sw, sh, Blend::Player(&scene.player_colors[scene.local_player() as usize]));
-        }
-        for r in 0..rows.min(8) {
-            for c in 0..cols.min(6) {
-                let blocked = scene.st.placement[(r as usize + 8) * 6 + c as usize] != 0;
-                let col = scene.minimap.colors[if blocked { 0x14 } else { 0x13 }];
-                for yy in 0..32 {
-                    for xx in (yy & 1..32).step_by(2) {
-                        surf[((oy + r * 32 + yy) * sw + ox + c * 32 + xx) as usize] = col;
-                    }
-                }
-            }
-        }
-        let (sx, sy) = (tx as i32 * 32 - vx - ox, ty as i32 * 32 - vy - oy);
-        for (i, &c) in surf.iter().enumerate() {
-            let (px, py) = (sx + i as i32 % sw, sy + i as i32 / sw);
-            if c != 0 && (0..w).contains(&px) && (0..h - 120).contains(&py) {
-                out[(py * w + px) as usize] = c;
+        // 0x48ddc0: the boxes at the tile under the cursor (0x48d660); an addon's parent
+        // building (the active unit's type, slot 0) sits the addon offset (0x662538) back.
+        if let Some((_, pos)) = Scene::placement_cursor((cx, cy), (vx, vy)) {
+            placebox(scene, 1, kind, pos, out, w, h);
+            let u = scene.client_selection().active;
+            let dat = scene.a.dat();
+            if dat.units.flags[kind as usize] & 2 != 0 && u != NIL {
+                let v = dat.units.addon_position[kind as usize];
+                placebox(scene, 0, scene.st.units[u as usize].unit_type, (pos.0 - v as u16 as i16 as i32, pos.1 - (v >> 16) as u16 as i16 as i32), out, w, h);
             }
         }
     }
@@ -1472,7 +1610,7 @@ fn draw_tooltip(scene: &Scene, ui: &crate::ui::Ui, b: &bw::buttons::Button, enab
         }
     }
     let race = scene.local_race() as i32;
-    let caster = scene.selected.first().map_or(4, |&u| with_data(scene.a, |d| bw::State::supply_race_of(d, scene.st.units[u as usize].unit_type)));
+    let caster = scene.st.selected.first().map_or(4, |&u| with_data(scene.a, |d| bw::State::supply_race_of(d, scene.st.units[u as usize].unit_type)));
     let supply_race = if kind == 1 && v < dat.units.mineral_cost.len() { with_data(scene.a, |d| bw::State::supply_race_of(d, v as u16)) } else { 4 };
     let slots = cost_slots(cost, supply_race, caster);
     tooltip_with_costs(ui, &text, &slots, race, bx, by, out, w, h);
@@ -1543,6 +1681,48 @@ fn tooltip_with_costs(ui: &crate::ui::Ui, text: &str, slots: &[i32; 8], race: i3
             if (0..w).contains(&(x0 + xx)) && (0..h).contains(&(y0 + yy)) {
                 out[((y0 + yy) * w + x0 + xx) as usize] = c;
             }
+        }
+    }
+}
+
+/// 0x48daf0: build the placement box `slot` for unit type `t`.
+/// 0x48d7f0: show it. 0x48d750 sizes the surface: the surface is
+/// the larger of the type's first image frame (0x48da30, in the local player's color)
+/// and its placement box, rounded up to whole tiles; the box shows with its tile
+/// area at screen position `pos` (the box centred on the surface), each tile of its
+/// result grid dithered (0x40c4d2) red (0x6ceb34) when not free, else green (0x6ceb33).
+fn placebox(scene: &Scene, slot: usize, t: u16, pos: (i32, i32), out: &mut [u8], w: i32, h: i32) {
+    let dat = scene.a.dat();
+    let v = dat.units.placement_box[t as usize];
+    let (pw, ph) = (v as u16 as i16 as i32, (v >> 16) as u16 as i16 as i32);
+    let img = dat.sprites.image[dat.flingy.sprite[dat.units.flingy[t as usize] as usize] as usize];
+    let (gw, gh, grp) = match scene.a.grp(img) {
+        Some(g) => (g.w, g.h, Some(g)),
+        None => (0, 0, None),
+    };
+    let (sw, sh) = ((gw.max(pw) + 31) & !31, (gh.max(ph) + 31) & !31);
+    let (cols, rows) = (pw / 32, ph / 32);
+    let (ox, oy) = ((sw - cols * 32) / 2, (sh - rows * 32) / 2);
+    let mut surf = vec![0u8; (sw * sh) as usize];
+    if let Some(g) = grp {
+        g.draw(0, false, 0, 0, &mut surf, sw, sh, Blend::Player(&scene.player_colors[scene.local_player() as usize]));
+    }
+    for r in 0..rows.min(8) {
+        for c in 0..cols.min(6) {
+            let blocked = scene.st.placement[(r as usize + slot * 8) * 6 + c as usize] != 0;
+            let col = scene.minimap.colors[if blocked { 0x14 } else { 0x13 }];
+            for yy in 0..32 {
+                for xx in (yy & 1..32).step_by(2) {
+                    surf[((oy + r * 32 + yy) * sw + ox + c * 32 + xx) as usize] = col;
+                }
+            }
+        }
+    }
+    let (sx, sy) = (pos.0 - ox, pos.1 - oy);
+    for (i, &c) in surf.iter().enumerate() {
+        let (px, py) = (sx + i as i32 % sw, sy + i as i32 / sw);
+        if c != 0 && (0..w).contains(&px) && (0..h - 120).contains(&py) {
+            out[(py * w + px) as usize] = c;
         }
     }
 }
@@ -1690,6 +1870,15 @@ pub fn frame_loop<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Option<Re
     let opts = WindowOptions { scale: Scale::X2, ..WindowOptions::default() };
     let mut win = Window::new("scbw", vw as usize, vh as usize, opts).map_err(|e| io::Error::other(e.to_string()))?;
     win.set_target_fps(24); // BW "fastest" = 42 ms/frame
+    // Typed characters for the chat line (WM_CHAR).
+    struct Typed(std::rc::Rc<std::cell::RefCell<Vec<u32>>>);
+    impl minifb::InputCallback for Typed {
+        fn add_char(&mut self, c: u32) {
+            self.0.borrow_mut().push(c);
+        }
+    }
+    let typed = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    win.set_input_callback(Box::new(Typed(typed.clone())));
     let (mw, mh) = (scene.terrain.0 as i32, scene.terrain.1 as i32);
     // Start with the view on the local player's start location.
     let start = scene.st.start_locations[scene.local_player() as usize];
@@ -1830,7 +2019,43 @@ pub fn frame_loop<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Option<Re
         let ctrl = win.is_key_down(Key::LeftCtrl) || win.is_key_down(Key::RightCtrl);
         let alt = win.is_key_down(Key::LeftAlt) || win.is_key_down(Key::RightAlt);
         let mut want_menu = None;
-        for k in win.get_keys_pressed(minifb::KeyRepeat::No) {
+        // Chat line: Enter opens it (0x4f32d0), then the edit control (0x416980) takes the
+        // keys; Enter submits and Esc cancels (0x4f36fa).
+        let typed_chars: Vec<u32> = typed.borrow_mut().drain(..).collect();
+        let mut chat_keys = Vec::new();
+        if scene.chat.open {
+            for c in typed_chars {
+                scene.chat.char(c as u8);
+            }
+            for k in win.get_keys_pressed(minifb::KeyRepeat::Yes) {
+                match k {
+                    Key::Enter | Key::NumPadEnter => {
+                        if let crate::chat::Done::Submit(t) = scene.chat.enter() {
+                            // 0x4f32d0: the cheat check (single player), then 0x4c0400
+                            // sends command 0x12 with the new options.
+                            let mut opt = scene.st.game_options;
+                            let on = scene.st.template[0x11] == 1;
+                            if replay.is_none() && crate::chat::cheat(&t, &mut opt, true, on) && opt != scene.st.game_options {
+                                let me = scene.local;
+                                let mut p = vec![0x12];
+                                p.extend_from_slice(&opt.to_le_bytes());
+                                with_data(a, |d| scene.st.execute_command(d, me, &[], &p));
+                            }
+                        }
+                    }
+                    Key::Escape => scene.chat.close(),
+                    k => scene.chat.key(k),
+                }
+            }
+        } else if win.is_key_pressed(Key::Enter, minifb::KeyRepeat::No) && menu.is_none() {
+            let c = ["z", "t", "p"][scene.local_race()];
+            if let Ok(d) = a.files.read(&format!("rez/{c}textbox.bin")) {
+                scene.chat.open(crate::dlg::Dialog::parse(&d), scene.clock_ms);
+            }
+            chat_keys.push(Key::Enter);
+        }
+        let keys = if scene.chat.open || !chat_keys.is_empty() { Vec::new() } else { win.get_keys_pressed(minifb::KeyRepeat::No) };
+        for k in keys {
             use minifb::Key::*;
             if let Some(g) = [Key0, Key1, Key2, Key3, Key4, Key5, Key6, Key7, Key8, Key9].iter().position(|&n| n == k) {
                 // Local.dll accelerators (table 101) and WM_CHAR (0x4846b0): Ctrl sets,
@@ -1869,7 +2094,7 @@ pub fn frame_loop<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Option<Re
                 }
                 // 0x4e6020: Ctrl / Alt+C centers on the status unit.
                 (C, _) if ctrl || alt => {
-                    if let Some(&u) = scene.selected.first() {
+                    if let Some(&u) = scene.st.selected.first() {
                         let (x, y) = scene.st.unit_sprite_pos(u);
                         (vx, vy) = ((((x as i32) >> 5) - 10) << 5, (((y as i32) >> 5) - 6) << 5);
                     }
@@ -1945,11 +2170,9 @@ pub fn frame_loop<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Option<Re
             scene.press(&btn, shift);
         }
         if scene.placing.is_some() {
-            scene.check_placement(map_pt);
+            scene.check_placement((cx, cy), (vx, vy));
             if clicked && cy < vh - 120 && pressed.is_none() {
-                if scene.place_ok {
-                    scene.build(map_pt);
-                }
+                scene.build();
                 lmb_was_down = true;
                 drag_start = None;
             }
@@ -1985,23 +2208,23 @@ pub fn frame_loop<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Option<Re
                     let double = tick.saturating_sub(last_click) < 8;
                     last_click = tick;
                     let screen = [vx as i16, vy as i16, (vx + 640) as i16, (vy + 400) as i16];
-                    let cur = scene.selected.clone();
+                    let cur = scene.st.selected.clone();
                     let st = &mut scene.st;
                     let p = (map_pt.0 as i16, map_pt.1 as i16);
                     with_data(scene.a, |d| st.click_select(d, p, shift, ctrl, double, screen, &cur)).unwrap_or(cur)
                 } else {
                     let r = [x0.min(x1) as i16, y0.min(y1) as i16, x0.max(x1) as i16, y0.max(y1) as i16];
-                    let cur = scene.selected.clone();
+                    let cur = scene.st.selected.clone();
                     let st = &mut scene.st;
                     with_data(scene.a, |d| st.box_select(d, r, shift, &cur)).unwrap_or(cur)
                 };
-                if scene.selected != hits {
+                if scene.st.selected != hits {
                     scene.card_menu = None;
                     scene.placing = None;
                 }
-                let changed = scene.selected != hits;
-                scene.selected = hits;
-                if changed || !scene.selected.is_empty() {
+                let changed = scene.st.selected != hits;
+                scene.set_selected(hits);
+                if changed || !scene.st.selected.is_empty() {
                     scene.voice_what();
                 }
             }
@@ -2070,10 +2293,27 @@ pub fn frame_loop<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Option<Re
             sounds.extend(scene.step());
         }
         for (id, x, y) in sounds {
-            // ponytail: on-screen only, no distance falloff or per-frame voice limits yet.
             if let Some(au) = &audio {
-                if (vx..vx + vw).contains(&x) && (vy..vy + vh).contains(&y) && scene.st.sound_audible(x, y) {
-                    au.play(&a.files, a.dat(), id, 1.0);
+                if let Some((v, pan)) = position_sound(&scene, a.dat(), settings.digital, id, x, y, vx, vy) {
+                    au.play_pan(&a.files, a.dat(), id, v as i32, pan, None);
+                }
+            }
+        }
+        // 0x48ed50: speech and building sounds only with their sound option on.
+        for (id, bit, u, base) in std::mem::take(&mut scene.st.speech) {
+            if let Some(au) = audio.as_ref().filter(|_| bit == 0 || settings.sound_flags & bit != 0) {
+                if let Some((v, pan)) = unit_sound(&scene, a.dat(), settings.digital, id, u, base, vx, vy) {
+                    au.play_pan(&a.files, a.dat(), id, v as i32, pan, (u != NIL).then_some(u));
+                }
+            }
+        }
+        // 0x4c77d0 -> 0x4bc490: the trigger's wav from the scenario archive (a replay embeds
+        // only the chk, so there is none then).
+        for id in std::mem::take(&mut scene.st.trigger_wavs) {
+            let name = scene.chk.string_bytes(id).map(|b| String::from_utf8_lossy(b).into_owned());
+            if let (Some(au), Some(m), Some(n)) = (&audio, a.map_mpq.as_ref(), name) {
+                if let Ok(d) = m.read(&n) {
+                    au.play_file(d);
                 }
             }
         }
@@ -2082,8 +2322,14 @@ pub fn frame_loop<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Option<Re
                 au.play(&a.files, a.dat(), id, 1.0);
             }
         }
+        // 0x4c6de0 -> 0x47eb70: the trigger's screen move, then its wait ends (0x4894a0).
+        // ponytail: 1.16.1 scrolls there over a few frames; this jumps.
+        if let Some((x, y)) = scene.st.center_view.take() {
+            (vx, vy) = (x, y);
+            scene.st.trigger_wait_end();
+        }
         if let Some(u) = ui.as_ref() {
-            scene.portrait_tick(u, 42, settings.portraits);
+            scene.portrait_tick(u, audio.as_ref(), 42, settings.portraits);
             scene.text_tick(u, 42, settings.sound_flags & 0x400 != 0);
         }
         let kind = scene.cursor_kind(cx, cy, vx, vy, drag_start.is_some());
@@ -2092,6 +2338,76 @@ pub fn frame_loop<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Option<Re
         present(&mut win, &rgb, vw as usize, vh as usize)?;
         Ok(true)
     })
+}
+
+/// 0x48e8d0: sound volume by distance of map point (x, y) from the 640x400 screen at
+/// (left, top): 99 on screen, falling 99 per 512 px (Manhattan overshoot), at least 0.
+fn sound_distance_volume(x: i32, y: i32, left: i32, top: i32) -> i32 {
+    let mut d = 0;
+    if x < left {
+        d = left - x;
+    } else if left + 0x280 < x {
+        d = x - left - 0x280;
+    }
+    if y < top {
+        d += top - y;
+    } else if top + 400 < y {
+        d += y - top - 400;
+    }
+    (99 - (d * 99 >> 9)).max(0)
+}
+
+/// 0x48e850: DirectSound pan for map x: tile distance from the screen's tile x + 10
+/// bucketed to hundredths of a dB, negative left of it.
+fn sound_pan(x: i32, left: i32) -> i32 {
+    let dx = (x >> 5) - (left >> 5) - 10;
+    let m = match dx.abs() {
+        0..=2 => 0,
+        3..=5 => 100,
+        6..=10 => 300,
+        11..=20 => 600,
+        21..=40 => 1000,
+        41..=80 => 5000,
+        _ => 10000,
+    };
+    if dx < 0 { -m } else { m }
+}
+
+/// 0x48ec10: a sound id at map point (x, y) with the screen at (left, top): the volume
+/// (base 0, distance volume, sfxdata.dat minimum; played above 10) and pan, or None
+/// when the sound is dropped (id 0, digital volume 0, outside the map or unseen).
+// ponytail: the 0x64086c flag (volume / 5) is not ported (its meaning is unknown).
+fn position_sound(scene: &Scene, dat: &Dat, digital: i16, id: u16, x: i32, y: i32, left: i32, top: i32) -> Option<(u32, i32)> {
+    if id == 0 || digital == 0 || !scene.st.sound_audible(x, y) {
+        return None;
+    }
+    let m = dat.sfxdata.volume.get(id as usize).copied().unwrap_or(0) as i32;
+    let v = sound_distance_volume(x, y, left, top).max(m);
+    (v > 10).then(|| (v as u32, sound_pan(x, left)))
+}
+
+/// 0x48ed50: a sound `id` spoken by unit `u` (NIL: none, full volume, no pan) with base
+/// volume `base`, the screen at left `left`: the volume and pan, or None when dropped (id 0,
+/// digital volume 0, the unit unseen by the local player, volume <= 10). The caller checks
+/// the option flag.
+// ponytail: the 0x64086c flag (volume / 5) is not ported (its meaning is unknown).
+fn unit_sound(scene: &Scene, dat: &Dat, digital: i16, id: u16, u: u32, base: i32, left: i32, top: i32) -> Option<(u32, i32)> {
+    if id == 0 || digital == 0 {
+        return None;
+    }
+    let st = &scene.st;
+    let m = dat.sfxdata.volume.get(id as usize).copied().unwrap_or(0) as i32;
+    let (mut v, mut pan) = (99, 0);
+    if u != NIL {
+        let sp = &st.sprites[st.units[u as usize].sprite as usize];
+        if (st.replay || !st.is_local_unit(u)) && sp.visibility & st.local_vision_mask == 0 {
+            return None;
+        }
+        v = sound_distance_volume(sp.x as i32, sp.y as i32, left, top);
+        pan = sound_pan(sp.x as i32, left);
+    }
+    v = base.max(v).max(m);
+    (v > 10).then(|| (v as u32, pan))
 }
 
 /// 0x4c9de0: the mission objectives: network.tbl lines for the built-in game types
@@ -2140,7 +2456,7 @@ fn draw_resources(scene: &Scene, ui: &crate::ui::Ui, out: &mut [u8]) {
     let st = &scene.st;
     let mut jump = false;
     let p = if st.replay {
-        let owner = scene.selected.first().map(|&u| st.units[u as usize].player).filter(|&p| p != 11);
+        let owner = scene.st.selected.first().map(|&u| st.units[u as usize].player).filter(|&p| p != 11);
         let Some(p) = owner else {
             ui.res_shown.set((ui.res_shown.get().0, ui.res_shown.get().1, 0xff));
             return;

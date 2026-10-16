@@ -8,6 +8,13 @@ use super::{Data, State};
 const FLAG: u16 = 0xd7;
 
 impl State {
+    /// 0x4014e0: the powerup (+0xc0) carried by unit `u` if its units.dat flags have
+    /// bit 8 (worker), else NIL.
+    pub(super) fn carried_powerup(&self, d: &Data, u: u32) -> u32 {
+        let un = &self.units[u as usize];
+        if d.dat.units.flags[un.unit_type as usize] & 8 != 0 { un.ptr_at(0xc0) } else { NIL }
+    }
+
     /// 0x4f3ca0: worker `c` picks up powerup `p` (dropping a mineral / gas chunk first).
     fn pick_up_powerup(&mut self, d: &Data, c: u32, p: u32) {
         if self.units[c as usize].resource_type != 0 {

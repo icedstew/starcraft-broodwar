@@ -161,7 +161,7 @@ impl State {
                 if self.units[a as usize].status & 1 == 0 {
                     return;
                 }
-                // 0x48f310: the advisor's "addon complete" (UI).
+                self.construction_sound(d, u);
                 self.attach_addon(d, u, a);
             }
         }

@@ -162,6 +162,24 @@ impl State {
         Some(n)
     }
 
+    /// 0x474760: queue `order` (no target) before `before`.
+    pub(super) fn queue_order_before(&mut self, d: &Data, u: u32, order: u8, before: u32) -> Option<u32> {
+        self.order_insert_before(d, u, order, 0xe4, (0, 0), NIL, before)
+    }
+
+    /// 0x4747e0: queue `order` on unit `t` (at its position) before `before`.
+    pub(super) fn queue_order_on_unit(&mut self, d: &Data, u: u32, order: u8, t: u32, before: u32) -> Option<u32> {
+        let p = self.unit_sprite_pos(t);
+        self.order_insert_before(d, u, order, 0xe4, p, t, before)
+    }
+
+    /// 0x474d10: issue `order` on unit `t` (at its position; NIL for none), clearing the
+    /// interruptible orders queued.
+    pub(super) fn issue_order_on_unit(&mut self, d: &Data, u: u32, order: u8, t: u32) {
+        let p = if t == NIL { (0, 0) } else { self.unit_sprite_pos(t) };
+        self.issue_order(d, u, order, true, p, t, 0xe4);
+    }
+
     /// 0x474810: queue an order. `clear_interruptible` removes interruptible orders (and
     /// repeats of `order`) from the end of the queue first. Dead units (order 0) ignore it.
     pub fn issue_order(&mut self, d: &Data, u: u32, order: u8, clear_interruptible: bool, pos: (i16, i16), target: u32, unit_type: u16) {
@@ -212,6 +230,75 @@ impl State {
             d.dat.units.ai_return_to_idle[self.units[u as usize].unit_type as usize]
         };
         self.order_now(d, u, order);
+    }
+
+    /// 0x4e7420: AI unit `u` is about to move to `p`: when a transport should carry it there,
+    /// put the current order back in the queue behind a move (0x60) to `p`, tell its turret
+    /// to stop (0x17) and return true (the caller then does not move). Returns false
+    /// when it should walk (or cannot move).
+    pub(super) fn ai_ride_instead_of_move(&mut self, d: &Data, u: u32, p: (i16, i16)) -> bool {
+        let un = &self.units[u as usize];
+        if un.order == 0x60 {
+            return true;
+        }
+        let uflags = d.dat.units.flags[un.unit_type as usize];
+        if un.status & 4 != 0 || uflags & 0x10 != 0 {
+            return false;
+        }
+        let sp = self.unit_sprite_pos(u);
+        if sp == p || un.status & 0x2_0000 == 0 {
+            return false;
+        }
+        if un.unit_type == 7 && un.order == 0x22 {
+            let t = un.order_target_unit;
+            if t != NIL && self.units[t as usize].status & 4 != 0 {
+                return false;
+            }
+        }
+        let r = super::path::region_at(&self.sai, p.0 as i32, p.1 as i32);
+        if self.sai.regions[r as usize].flags == 0x1ffd {
+            return false;
+        }
+        let ai = self.units[u as usize].ai;
+        if self.same_group(u, p) {
+            if ai != NIL && super::ai_town::ai_kind(ai) == super::ai_town::AI_MILITARY {
+                let (rp, rid) = self.ai.military.items[super::ai_town::ai_index(ai) as usize].region;
+                if matches!(self.reg(rp, rid).state, 1 | 2) {
+                    return false;
+                }
+            }
+            if self.region_reachable(d, u, p) {
+                if self.units[u as usize].unit_type != 0x53 {
+                    return false;
+                }
+                if (super::path::approx_distance(p.0 as i32, sp.0 as i32, p.1 as i32, sp.1 as i32) as i32) < 0x3c0 {
+                    return false;
+                }
+            }
+        }
+        if !self.nearest_transport_for(d, u).0 {
+            return false;
+        }
+        let order = self.units[u as usize].order;
+        let (tp, tu) = (self.units[u as usize].order_target_pos, self.units[u as usize].order_target_unit);
+        let head = self.units[u as usize].order_queue_head;
+        if head != NIL {
+            // 0x4747c0
+            self.order_insert_before(d, u, order, 0xe4, tp, tu, head);
+        } else {
+            // 0x474cf0
+            self.issue_order(d, u, order, false, tp, tu, 0xe4);
+        }
+        // 0x474790
+        let head = self.units[u as usize].order_queue_head;
+        self.order_insert_before(d, u, 0x60, 0xe4, p, NIL, head);
+        let sub = self.units[u as usize].subunit;
+        if self.is_turret(d, sub) {
+            self.order_now(d, sub, 0x17);
+        }
+        self.order_next_or_idle(d, u);
+        self.set_auto_targeting(u);
+        true
     }
 
     /// 0x475310: replace the queue with `order` (no target) and start it.

@@ -37,6 +37,13 @@ pub fn has_rally(t: u16) -> bool {
 }
 
 impl State {
+    /// 0x4020f0: clamp point `p` into the map.
+    pub(super) fn clamp_point_to_map(&self, p: &mut (i16, i16)) {
+        let (mw, mh) = (self.map_px.0 as i16, self.map_px.1 as i16);
+        p.0 = p.0.clamp(0, mw - 1);
+        p.1 = p.1.clamp(0, mh - 1);
+    }
+
     /// 0x466910: clear the rally unit and set the rally position.
     fn clear_rally(&mut self, u: u32, p: (i16, i16)) {
         let un = &mut self.units[u as usize];
@@ -226,10 +233,7 @@ impl State {
             } else {
                 self.fit_group_ground(d, radius as i32, centre, &mut t.ground);
             }
-            // 0x4020f0
-            let (mw, mh) = (self.map_px.0 as i16, self.map_px.1 as i16);
-            t.ground.0 = t.ground.0.clamp(0, mw - 1);
-            t.ground.1 = t.ground.1.clamp(0, mh - 1);
+            self.clamp_point_to_map(&mut t.ground);
         }
         if n < 2 {
             return;
@@ -1302,6 +1306,134 @@ impl State {
         self.rng.enabled = was;
     }
 
+    /// 0x4b1fa0: the cheat command's new game options `new` (0x6d5a6c). Returns at once in
+    /// a network game (0x57f0b4; not modelled). Changed fog bits clear the map's
+    /// explored / visible bytes; 0x10 (+10000 minerals and gas), 0x40000 (+500 minerals),
+    /// 0x80000 (+500 gas) and 0x8 (every upgrade up a level) are one-shot, clear
+    /// themselves, and apply to the human players (type 2). A change shows stat_txt 0x41
+    /// ("cheat enabled"), or 0x42 if the value dropped, on the error line.
+    // ponytail: the redraw flags at the end (0x68c1b0, 0x68ac74, ...) and the error
+    // line's redraw buffer fill are not ported.
+    fn command_cheat(&mut self, d: &Data, new: u32) {
+        let old = self.game_options;
+        let changed = new != old;
+        let diff = old ^ new;
+        self.game_options = new;
+        if diff & 0x4000 != 0 {
+            self.minimap_redraw();
+        }
+        if diff & 1 != 0 {
+            self.clear_fog_bits();
+            self.minimap_redraw();
+        }
+        let types = self.player_types;
+        if self.game_options & 0x10 != 0 {
+            self.game_options &= !0x10;
+            for p in (0..12).filter(|&p| types[p] == 2) {
+                self.players.minerals[p] += 10000;
+                self.players.gas[p] += 10000;
+            }
+        }
+        if self.game_options & 0x40000 != 0 {
+            self.game_options &= !0x40000;
+            for p in (0..12).filter(|&p| types[p] == 2) {
+                self.players.minerals[p] += 500;
+            }
+        }
+        if self.game_options & 0x80000 != 0 {
+            self.game_options &= !0x80000;
+            for p in (0..12).filter(|&p| types[p] == 2) {
+                self.players.gas[p] += 500;
+            }
+        }
+        if self.game_options & 8 != 0 {
+            self.game_options &= !8;
+            for p in (0..12).filter(|&p| types[p] == 2) {
+                for up in 0..0x3d_usize {
+                    if up == 0x3c || self.players.upgrade_level(p as u8, up) >= d.dat.upgrades.max_level[up] {
+                        continue;
+                    }
+                    if up < 0x2e {
+                        self.players.upgrade_sc[p][up] += 1;
+                    } else if self.is_expansion {
+                        self.players.upgrade_bw[p][up - 0x2e] += 1;
+                    }
+                    if self.player_units[p] != NIL {
+                        self.apply_upgrade(d, p as u8, up as u8);
+                    }
+                }
+            }
+        }
+        if changed {
+            self.shown_error = if self.game_options < old { 0x42 } else { 0x41 };
+        }
+    }
+
+    /// 0x4807f0: every map tile's explored / visible bytes cleared (all 16 bits with the
+    /// no-fog option 1, the low byte with 0x4000).
+    fn clear_fog_bits(&mut self) {
+        let mask = if self.game_options & 1 != 0 {
+            0xffff0000u32
+        } else if self.game_options & 0x4000 != 0 {
+            0xffffff00
+        } else {
+            return;
+        };
+        let n = self.terrain.width as usize * self.terrain.height as usize;
+        for f in &mut self.terrain.tile_flags[..n] {
+            *f &= mask;
+        }
+        self.minimap_redraw();
+    }
+
+    /// 0x4bfb10: command 0x08, when not multiplayer: clears 0x6d11ec, sets 0x51ce90 = 5 and
+    /// (not in a replay) copies the frame counter 0x57f23c to 0x6d0f31 (the replay's length).
+    /// Only UI / game-flow globals, none modelled here.
+    fn command_game_flow(&mut self) {}
+
+    /// 0x4c2ef0: command 0x18, cancel the construction of the one selected unit.
+    fn command_cancel_construction(&mut self, d: &Data, player: u8, sel: &[u32]) {
+        if let [u] = self.live_selection(sel)[..] {
+            if self.units[u as usize].player == player {
+                self.cancel_unit(d, u);
+            }
+        }
+    }
+
+    /// 0x4c2ec0: command 0x19, cancel the morphs of the selected units owned by the player.
+    fn command_cancel_morph(&mut self, d: &Data, player: u8, sel: &[u32]) {
+        for u in self.live_selection(sel) {
+            if self.units[u as usize].player == player {
+                self.cancel_unit(d, u);
+            }
+        }
+    }
+
+    /// 0x4c0100: command 0x20, cancel a training queue slot (0xfe = the last one, 0xff =
+    /// none). The 0x4c36c0 UI refresh is skipped.
+    fn command_cancel_train(&mut self, d: &Data, player: u8, sel: &[u32], slot: u16) {
+        if let [u] = self.live_selection(sel)[..] {
+            let un = &self.units[u as usize];
+            let t = un.unit_type;
+            if !matches!(t, 0x23 | 0x2b | 0x26 | 0x83 | 0x84 | 0x8d | 0x8f) && un.status & 1 != 0 && un.player == player {
+                match slot {
+                    0xfe => self.cancel_last_queued(d, u),
+                    0xff => {}
+                    i => self.cancel_queued(d, u, i as usize),
+                }
+            }
+        }
+    }
+
+    /// 0x4c2e90: command 0x57, leave game; only replays act on it (0x4c4d60): "%s has left
+    /// the game." (the reason byte is never 0x40000006, the dropped message), 0x48a1c0.
+    fn command_leave_game(&mut self, d: &Data, player: u8) {
+        if self.replay {
+            self.notices.push((0x4a, player));
+            self.leave_game(d, player);
+        }
+    }
+
     /// 0x4865d0: run one command packet from `player`, whose selection is `sel`.
     fn receive_command(&mut self, d: &Data, player: u8, sel: &[u32], p: &[u8]) {
         let u16_at = |o: usize| p.get(o..o + 2).map_or(0, |b| u16::from_le_bytes([b[0], b[1]]));
@@ -1344,36 +1476,12 @@ impl State {
                 }
             }
             0x13 => self.command_hotkey(d, player, byte(1), byte(2)),
-            0x18 => {
-                // 0x4c2ef0: cancel the construction of the one selected unit.
-                if let [u] = self.live_selection(sel)[..] {
-                    if self.units[u as usize].player == player {
-                        self.cancel_unit(d, u);
-                    }
-                }
-            }
-            0x19 => {
-                // 0x4c2ec0: cancel the morphs of the selected units.
-                for u in self.live_selection(sel) {
-                    if self.units[u as usize].player == player {
-                        self.cancel_unit(d, u);
-                    }
-                }
-            }
-            0x20 => {
-                // 0x4c0100: cancel training queue slot (0xfe = the last one).
-                if let [u] = self.live_selection(sel)[..] {
-                    let un = &self.units[u as usize];
-                    let t = un.unit_type;
-                    if !matches!(t, 0x23 | 0x2b | 0x26 | 0x83 | 0x84 | 0x8d | 0x8f) && un.status & 1 != 0 && un.player == player {
-                        match u16_at(1) {
-                            0xfe => self.cancel_last_queued(d, u),
-                            0xff => {}
-                            i => self.cancel_queued(d, u, i as usize),
-                        }
-                    }
-                }
-            }
+            // 0x4c0ad0: only with the template's cheats flag (0x596876 == template[0x11]).
+            0x12 if self.template[0x11] == 1 => self.command_cheat(d, u32::from_le_bytes([byte(1), byte(2), byte(3), byte(4)])),
+            0x08 => self.command_game_flow(),
+            0x18 => self.command_cancel_construction(d, player, sel),
+            0x19 => self.command_cancel_morph(d, player, sel),
+            0x20 => self.command_cancel_train(d, player, sel, u16_at(1)),
             0x1a => self.command_stop(d, player, sel, byte(1) != 0),
             0x1e => self.command_return_cargo(d, player, sel, byte(1) != 0),
             0x1f => self.command_train_sel(d, player, sel, u16_at(1)),
@@ -1384,14 +1492,7 @@ impl State {
             0x2c => self.command_burrow(d, player, sel, byte(1) != 0),
             0x2d => self.command_unburrow(d, player, sel),
             0x36 => self.command_stim(d, player, sel),
-            0x57 => {
-                // 0x4c2e90: only replays act on it (0x4c4d60): "%s has left the game."
-                // (the reason byte is never 0x40000006, the dropped message), 0x48a1c0.
-                if self.replay {
-                    self.notices.push((0x4a, player));
-                    self.leave_game(d, player);
-                }
-            }
+            0x57 => self.command_leave_game(d, player),
             0x21 => self.command_cloak(d, player, sel),
             0x22 => self.command_decloak(d, player, sel),
             0x23 => self.command_unit_morph(d, player, sel, u16_at(1)),
@@ -1411,6 +1512,12 @@ impl State {
             0x1d => self.command_order_now_sel(d, player, sel, 0x17),
             0x2e => self.command_cancel_nuke(sel),
             0x34 => self.command_cancel_addon(d, player, sel),
+            0x5c => {
+                // 0x4865d0 case 0x5c (0x52 bytes: command, sender slot, 80 text bytes) -> 0x48d1c0.
+                if let Some(t) = p.get(2..0x52) {
+                    self.chat.push((byte(1), t.to_vec()));
+                }
+            }
             _ => todo_port!("0x4865d0", "command receiver not ported yet"),
         }
     }
