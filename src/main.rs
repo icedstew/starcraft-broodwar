@@ -7,6 +7,7 @@ mod storm;
 mod dat;
 mod dlg;
 mod menu;
+mod msgs;
 mod smk;
 mod portrait;
 mod fog;
@@ -806,6 +807,7 @@ fn main() -> std::io::Result<()> {
             });
             if let Some(u) = ui.as_ref() {
                 scene.portrait_tick(u, 0, 2);
+                scene.text_tick(u, 0, true);
             }
             view::compose_with_cursor(&scene, ui.as_ref(), x, y, cursor, menu.as_ref(), &mut idx, &mut rgb);
             write_png_rgb(&args[2], w, h, &rgb)?;

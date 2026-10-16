@@ -17,7 +17,7 @@ renderer at 2x/4x); the 8-bit 1.16.1 renderer stays the default and the test ref
 ## Metric (the user watches this)
 
 `python3 -I re/coverage.py agent/local/scratch/dump/bw116n.c .` "reachable from both":
-2026-10-16: no AI 987/1615 (61%), AI only 145/358 (40%), all 1132/1973 (57%).
+2026-10-16: no AI 990/1615 (61%), AI only 145/358 (40%), all 1135/1973 (58%).
 Next targets: `--missing both` (frontier list, one line per function).
 
 ## Current direction (user, 2026-10-16)
@@ -27,6 +27,11 @@ Work in small units: one function or cluster per commit, status updated with it.
 Delegate per agents.md: Haiku triage, Sonnet porting, Opus review / hard RE / commits.
 
 ## In flight
+
+- Message / chat UI pass (user picked it, 2026-10-16). Done: message ring src/msgs.rs
+  (0x48cd30 & co.), error line, trigger display text 0x4c5770. Next: player names in
+  State (player struct +0xb) for network.tbl notices (left 0x4c4d60, defeated 0x489e80,
+  CTF 0x4e3de0), 0x48cf00 gate, chat entry / receive 0x48d1c0.
 
 - Porting loop: triaged through 0x48d560 (non-AI). The remaining non-AI frontier is
   mostly save/load (pool pointer <-> index fixups, section writers via 0x4c3450) and UI

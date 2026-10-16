@@ -106,10 +106,12 @@ pub struct Scene<'a> {
     pub placing: Option<(u8, u16)>,
     /// Targeting mode: orders for a ground / unit / fog click (0x641691..3).
     pub targeting: Option<(u8, u8, u8)>,
-    /// Last refused button or click (stat_txt message id, 0 for none).
+    /// Last refused button or click (stat_txt message id, 0 for none), put on the
+    /// error line by text_tick.
     pub error: u16,
-    /// Frames the error line stays up (0x48ccb0: 7000 ms).
-    pub error_frames: u32,
+    /// The message lines, timed by `clock_ms` (GetTickCount in the game).
+    pub msgs: crate::msgs::Messages,
+    pub clock_ms: u32,
     pub place_ok: bool,
     /// Screen-space drag rectangle while box-selecting.
     pub drag_box: Option<(i32, i32, i32, i32)>,
@@ -199,7 +201,7 @@ impl<'a> Scene<'a> {
             minimap.refresh(d, &mut st)
         });
         let creep_grp = a.files.read(&format!("tileset/{}.grp", map::TILESETS[chk.tileset()])).ok().map(crate::grp::Grp::parse);
-        Ok(Scene { st, creep_grp, minimap, selected: Vec::new(), voices: crate::voices::Voices::new(), portrait: Default::default(), talked: false, sent_selection: Vec::new(), card_menu: None, placing: None, targeting: None, error: 0, error_frames: 0, place_ok: false, drag_box: None, a, chk, ts, terrain, player_colors, local, shadow, dark, fog: crate::fog::Fog::new(), tselect, thpbar, remaps })
+        Ok(Scene { st, creep_grp, minimap, selected: Vec::new(), voices: crate::voices::Voices::new(), portrait: Default::default(), talked: false, sent_selection: Vec::new(), card_menu: None, placing: None, targeting: None, error: 0, msgs: Default::default(), clock_ms: 0, place_ok: false, drag_box: None, a, chk, ts, terrain, player_colors, local, shadow, dark, fog: crate::fog::Fog::new(), tselect, thpbar, remaps })
     }
 
     /// Send the local selection to the simulation (0x4c0860) and return the local
@@ -234,10 +236,29 @@ impl<'a> Scene<'a> {
         self.sent_selection = sel;
     }
 
-    /// 0x48ccb0: put stat_txt line `id` (1-based) up for 7 seconds.
+    /// 0x48ccb0: put stat_txt line `id` (1-based) up for 7 seconds (at the next
+    /// text_tick).
     pub fn show_error(&mut self, id: u16) {
         self.error = id;
-        self.error_frames = 7000 / 42;
+    }
+
+    /// Advance the message clock `ms`: pending errors and trigger texts go up
+    /// (`subtitles`: 0x6cdfec 0x400), expired lines go blank (0x48cc70).
+    pub fn text_tick(&mut self, ui: &crate::ui::Ui, ms: u32, subtitles: bool) {
+        if !self.msgs.ready() {
+            self.msgs.reset(&ui.font);
+        }
+        let now = self.clock_ms;
+        if let Some(e) = ui.stat_txt.get((std::mem::take(&mut self.error) as usize).wrapping_sub(1)) {
+            self.msgs.error(e.split('\0').next().unwrap_or("").as_bytes(), now);
+        }
+        for (id, always) in std::mem::take(&mut self.st.shown_text) {
+            if let Some(t) = self.chk.string_bytes(id).filter(|_| always || subtitles) {
+                self.msgs.trigger_text(&ui.font, t, now, crate::msgs::reading_ms(t));
+            }
+        }
+        self.clock_ms = now.wrapping_add(ms);
+        self.msgs.expire(self.clock_ms);
     }
 
     /// 0x4d14d0: which cursor shows with the mouse at screen (x, y): scrolling at the
@@ -300,7 +321,6 @@ impl<'a> Scene<'a> {
             let e = std::mem::take(&mut self.st.shown_error);
             self.show_error(e);
         }
-        self.error_frames = self.error_frames.saturating_sub(1);
         self.selected.retain(|&u| self.st.unit_alive(u));
         self.st.sounds.drain(..).map(|(id, x, y)| (id, x as i32, y as i32)).collect()
     }
@@ -1295,13 +1315,7 @@ fn draw_hud(scene: &Scene, ui: &crate::ui::Ui, vx: i32, vy: i32, cursor: Option<
             }
         }
     }
-    if scene.error != 0 && scene.error_frames > 0 {
-        let msg = ui.stat_txt.get(scene.error as usize - 1).map_or("", |s| s.split('\0').next().unwrap_or(""));
-        let msg: String = msg.chars().filter(|c| *c >= ' ').collect();
-        let tw = msg.chars().count() as i32 * 6;
-        // Color code 4 (0x641680); tfontgam rows start at code 2.
-        ui.font.draw(&msg, (w - tw) / 2, h - 160, ui.text_color(4 - 2), out, w, h);
-    }
+    scene.msgs.draw(&ui.font, crate::ui::TextDst { rows: &ui.text_colors, out, w, h });
     if let Some(b) = scene.drag_box {
         rect(out, w, h, b, scene.minimap.colors[0x12]);
     }
@@ -1881,6 +1895,7 @@ pub fn frame_loop<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Option<Re
         }
         if let Some(u) = ui.as_ref() {
             scene.portrait_tick(u, 42, settings.portraits);
+            scene.text_tick(u, 42, settings.sound_flags & 0x400 != 0);
         }
         let kind = scene.cursor_kind(cx, cy, vx, vy, drag_start.is_some());
         let counter = tick * 42 / 100;

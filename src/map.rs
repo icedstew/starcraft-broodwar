@@ -88,12 +88,17 @@ impl Chk {
 
     /// STR string table (1-based ids, as referenced by other sections).
     pub fn string(&self, id: u16) -> Option<String> {
+        Some(String::from_utf8_lossy(self.string_bytes(id)?).into_owned())
+    }
+
+    /// The STR string as stored (bytes 0x80.. are the fonts' own glyphs).
+    pub fn string_bytes(&self, id: u16) -> Option<&[u8]> {
         let s = self.section(b"STR ")?;
         let n = u16::from_le_bytes([s[0], s[1]]) as usize;
         let i = (id as usize).checked_sub(1).filter(|&i| i < n)?;
         let o = u16::from_le_bytes([*s.get(2 + i * 2)?, *s.get(3 + i * 2)?]) as usize;
-        let end = s[o..].iter().position(|&b| b == 0).map_or(s.len(), |e| o + e);
-        Some(String::from_utf8_lossy(&s[o..end]).into_owned())
+        let t = s.get(o..)?;
+        Some(&t[..t.iter().position(|&b| b == 0).unwrap_or(t.len())])
     }
 
     /// Megatile ids, row-major, padded to width*height.

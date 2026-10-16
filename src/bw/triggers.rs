@@ -978,10 +978,19 @@ impl State {
                 self.action_unpause_game(p, i);
                 true
             }
-            // 0x4c77d0 play wav, 0x4c5770 display text, 0x4c54b0 minimap ping,
+            // 0x4c5770: display text, for the local player unless the trigger was
+            // skipped (0x489da0 sets 0x10); the front end shows it (0x48cf20).
+            9 => {
+                let id = a.string as u16;
+                if cur == self.local_player as usize && self.trig.lists[p][i].flags() & 0x10 == 0 && id != 0 {
+                    self.shown_text.push((id, a.flags & 4 != 0));
+                }
+                true
+            }
+            // 0x4c77d0 play wav, 0x4c54b0 minimap ping,
             // 0x4c6990 / 0x4c6940 mute / unmute unit speech, 0x4c50e0 next scenario,
             // 0x4c5000 / 0x4c5020 debug mode: UI only, or nothing in a replay.
-            8 | 9 | 0x1c | 0x1e | 0x1f | 0x29 => true,
+            8 | 0x1c | 0x1e | 0x1f | 0x29 => true,
             0x3a => {
                 let t = &mut self.trig.lists[p][i];
                 let f = t.flags();

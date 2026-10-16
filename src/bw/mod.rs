@@ -304,6 +304,9 @@ pub struct State {
     pub last_error: u16,
     /// Error the front end should show the local player (stat_txt id + 1), set by 0x49e530.
     pub shown_error: u16,
+    /// Trigger texts for the front end (0x4c5770): map string id and the action's
+    /// "always display" flag (else shown only with subtitles on, 0x6cdfec 0x400).
+    pub shown_text: Vec<(u16, bool)>,
     /// 0x66ff60: why the last requirement check failed (soft failures, Ok(-1), set it
     /// here; hard ones return it as the error).
     pub req_error: std::cell::Cell<u8>,
@@ -439,6 +442,7 @@ impl State {
             repulse: vec![0; 0xab * 0xab],
             last_error: 0,
             shown_error: 0,
+            shown_text: Vec::new(),
             req_error: std::cell::Cell::new(0),
             builder_override: NIL,
             areas: vec![ai_areas::ResourceArea::default(); ai_areas::AREA_SLOTS],

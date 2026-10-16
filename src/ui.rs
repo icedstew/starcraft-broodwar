@@ -208,6 +208,34 @@ impl Font {
         }
     }
 
+    /// 0x41f920 from pen x `x0`: the end of the line starting at `i`, at word breaks
+    /// (0x51a0e8 = 1) or else at the first character past the clip's right edge.
+    pub fn wrap(&self, s: &[u8], i: usize, x0: i32, o: &TextOpts, words: bool) -> usize {
+        if words {
+            return self.line_end(s, i, x0, o).0;
+        }
+        // ponytail: 0x4161c0's Korean double-byte step back is left out (LANGID 0x412).
+        let left = o.clip.0;
+        let mut pen = x0;
+        let mut i = i;
+        while let Some(&c) = s.get(i).filter(|&&c| c != 0) {
+            match c {
+                b' ' => pen += self.max_w >> 1,
+                b'\t' => pen += self.max_w * 2 - (pen - left) % (self.max_w * 2),
+                b'\n' | 0x0c => return i + 1,
+                0x1a | 0x12 | 0x13 => {}
+                _ => {
+                    pen += self.advance(c, o.spacing);
+                    if pen > o.clip.2 {
+                        break;
+                    }
+                }
+            }
+            i += 1;
+        }
+        i
+    }
+
     /// 0x41fd70: draw s[i..end] at (x, y); returns where it stopped (end, a NUL / form
     /// feed, or a character the font lacks). `pen` is 0x6ce108, the logical x.
     #[allow(clippy::too_many_arguments)]
@@ -323,8 +351,12 @@ impl Font {
 
     /// 0x4202b0: draw `s` at (x, y) in color code `color` (0x41f610) with `o`. Returns
     /// the text's extent grown by 2 within the clip (0x6ce0d8..0x6ce0de).
-    pub fn draw_text(&self, s: &str, x: i32, mut y: i32, color: u8, o: &TextOpts, dst: TextDst) -> Ext {
-        let s = s.as_bytes();
+    pub fn draw_text(&self, s: &str, x: i32, y: i32, color: u8, o: &TextOpts, dst: TextDst) -> Ext {
+        self.draw_bytes(s.as_bytes(), x, y, color, o, dst)
+    }
+
+    /// draw_text for game strings as stored (bytes 0x80.. are the font's own glyphs).
+    pub fn draw_bytes(&self, s: &[u8], x: i32, mut y: i32, color: u8, o: &TextOpts, dst: TextDst) -> Ext {
         let mut o = *o;
         o.clip.0 = o.clip.0.max(0);
         o.clip.1 = o.clip.1.max(0);
