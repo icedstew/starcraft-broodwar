@@ -94,7 +94,7 @@ impl State {
         self.units[n as usize].connected_unit = u;
         // 0x401140(0): the missile's images face up.
         let s = self.units[n as usize].sprite;
-        self.sprite_images_set_direction(d, s, 0);
+        self.sprite_images_set_direction32(d, s, 0);
         self.show_unit(d, n);
         self.units[u as usize].connected_unit = n;
         let gp = self.unit_sprite_pos(u);

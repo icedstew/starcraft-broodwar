@@ -79,19 +79,8 @@ impl State {
             }
         }
         let bs = self.units[base as usize].sprite;
-        let mi = self.sprites[bs as usize].main_image;
-        let im = &self.images[mi as usize];
-        let (mut ox, oy) = d.lo_offset(2, im.image_id, im.frame, 0).unwrap_or((0, 0));
-        if im.flags & super::sprite::iflag::FLIPPED != 0 {
-            ox = ox.wrapping_neg();
-        }
-        let smi = self.sprites[ss as usize].main_image;
-        let si = &mut self.images[smi as usize];
-        if si.x != ox || si.y != oy {
-            si.flags |= super::sprite::iflag::REDRAW;
-            si.x = ox;
-            si.y = oy;
-        }
+        let (ox, oy) = self.image_lo_offset(d, bs, 2, 0);
+        self.sprite_set_main_offset(ss, ox, oy);
         let vis = self.sprites[bs as usize].visibility;
         self.sprite_set_visibility(ss, vis);
     }

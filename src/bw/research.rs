@@ -214,6 +214,11 @@ impl State {
         self.building_order_done(d, u, 0xc8, NO_TECH);
     }
 
+    /// 0x4033d0: `p`'s level of upgrade `up` is below its maximum.
+    pub fn upgrade_below_max(&self, p: u8, up: u8) -> bool {
+        self.players.upgrade_level(p, up as usize) < self.players.upgrade_max[p as usize][up as usize]
+    }
+
     /// 0x4546a0: Upgrade. Counts the time down; when it runs out the level is raised
     /// (0x4ce770) and its effects applied (0x454540).
     pub fn order_upgrade(&mut self, d: &Data, u: u32) {
@@ -228,8 +233,7 @@ impl State {
             }
             self.advisor_done(d, u, 0x83);
             let lvl = self.players.upgrade_level(p, up as usize);
-            // 0x4033d0: below the player's maximum.
-            if lvl < target && lvl < self.players.upgrade_max[p as usize][up as usize] {
+            if lvl < target && self.upgrade_below_max(p, up) {
                 // 0x4ce770
                 if up < 0x2e {
                     self.players.upgrade_sc[p as usize][up as usize] = target;

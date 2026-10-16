@@ -810,16 +810,11 @@ impl State {
         let mask = if all {
             0xff
         } else {
-            let mut m = 0u8;
-            for y in y0..y0 + rows {
-                for x in x0..x0 + cols {
-                    // ponytail: rows past the map bottom (1.16.1 reads beyond the tile
-                    // flags there) count as seen by nobody.
-                    let f = self.terrain.tile_flags.get((y * mw + x) as usize).copied().unwrap_or(u32::MAX);
-                    m |= !(if explored { f >> 8 } else { f }) as u8;
-                }
-            }
-            m
+            (if explored {
+                self.tiles_unexplored_mask(x0, y0, cols, rows)
+            } else {
+                self.tiles_unseen_mask(x0, y0, cols, rows)
+            }) as u8
         };
         if self.sprites[s as usize].visibility != mask {
             self.sprite_set_visibility(s, mask);

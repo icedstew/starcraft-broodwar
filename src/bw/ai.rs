@@ -248,6 +248,8 @@ impl<T: AiNode> AiPool<T> {
     }
 
     /// Unlink `n` from the list `head` and put it first in the free list.
+    /// 0x404470: the worker pool's (free head at +24000).
+    /// 0x404500: the building pool's (free head at +44000).
     pub fn release(&mut self, head: &mut u32, n: u32) {
         let AiLink { next, prev } = *self.items[n as usize].ai_link();
         if prev != NIL {

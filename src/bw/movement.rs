@@ -100,12 +100,7 @@ impl State {
         self.subunit_turn_with_parent(d, sub, delta);
         // 0x401df0(2): special overlay (LO kind 2) offset of the parent's main image.
         let ps = self.units[u as usize].sprite;
-        let mi = self.sprites[ps as usize].main_image;
-        let im = &self.images[mi as usize];
-        let (mut ox, oy) = d.lo_offset(2, im.image_id, im.frame, 0).unwrap_or((0, 0));
-        if im.flags & super::sprite::iflag::FLIPPED != 0 {
-            ox = ox.wrapping_neg();
-        }
+        let (ox, oy) = self.image_lo_offset(d, ps, 2, 0);
         let ex = self.units[u as usize].fl.exact;
         let p = ((ex.0 >> 8) as i16, (ex.1 >> 8) as i16);
         let sf = &mut self.units[sub as usize].fl;
@@ -113,13 +108,7 @@ impl State {
         sf.pos = p;
         let ss = self.units[sub as usize].sprite;
         self.move_sprite(ss, p.0, p.1);
-        let smi = self.sprites[ss as usize].main_image;
-        let si = &mut self.images[smi as usize];
-        if si.x != ox || si.y != oy {
-            si.y = oy;
-            si.flags |= super::sprite::iflag::REDRAW;
-            si.x = ox;
-        }
+        self.sprite_set_main_offset(ss, ox, oy);
         self.iscript_unit = Some(sub);
         let moving = self.units[u as usize].fl.flags & mflags::MOVING != 0;
         let sub_walking = self.units[sub as usize].status & status::PASSIVE_REVEAL != 0;
@@ -1057,14 +1046,8 @@ impl State {
             let me = self.predict_positions(d, u, 1, 0x1e)[0];
             let others: Vec<_> = self.search.results(start);
             let ahead: Vec<_> = others.iter().map(|&c| self.predict_positions(d, c, 1, 0x1e)[0]).collect();
-            let ut = self.units[u as usize].unit_type;
             for (&c, &(x, y)) in others.iter().zip(&ahead) {
-                // 0x402b10: c's box at its predicted spot, grown by u's box.
-                let ct = self.units[c as usize].unit_type;
-                let [cl, cu, cr, cd] = self.unit_box_at(d, ct, x, y);
-                // Own box at (0, 0) is [-left, -up, right, down].
-                let [nl, nu, r, dn] = self.unit_box_at(d, ut, 0, 0);
-                let b = [cl.wrapping_sub(1).wrapping_sub(r), cu.wrapping_sub(1).wrapping_sub(dn), cr.wrapping_sub(nl).wrapping_add(1), cd.wrapping_sub(nu).wrapping_add(1)];
+                let b = self.blocking_box(d, c, u, x, y);
                 if b[0] <= me.0 && me.0 <= b[2] && b[1] <= me.1 && me.1 <= b[3] {
                     blockers += 1;
                 }

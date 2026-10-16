@@ -333,6 +333,16 @@ impl State {
         }
     }
 
+    /// 0x401140: 0x4d5ea0 (32-step direction) on every image of sprite `s`.
+    pub fn sprite_images_set_direction32(&mut self, d: &Data, s: u32, dir: u8) {
+        let mut i = self.sprites[s as usize].images.head;
+        while i != NIL {
+            let next = self.images[i as usize].link.next;
+            self.image_set_direction32(d, i, dir);
+            i = next;
+        }
+    }
+
     /// 0x496030: apply a predicted unit step. Returns whether the position changed.
     pub fn unit_apply_move(&mut self, d: &Data, u: u32) -> bool {
         let m = self.mv;

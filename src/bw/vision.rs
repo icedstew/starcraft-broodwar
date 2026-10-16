@@ -397,14 +397,7 @@ impl State {
                 return vis != 0;
             }
         }
-        // 0x402500
-        let mut v = 0u32;
-        for yy in ty..ty + th {
-            for xx in tx..tx + tw {
-                v |= !(self.terrain.tile_flags[(yy * mw + xx) as usize] & 0xff);
-            }
-        }
-        let v = v as u8;
+        let v = self.tiles_unseen_mask(tx, ty, tw, th) as u8;
         if vis == v {
             return false;
         }
@@ -412,6 +405,34 @@ impl State {
         let was = vis & lm;
         self.sprite_set_visibility(s, v);
         was != 0 && self.sprites[s as usize].visibility & lm == 0
+    }
+
+    /// 0x402500: OR of the inverted visibility byte over the tile rectangle (x, y, w, h).
+    pub(super) fn tiles_unseen_mask(&self, x: i32, y: i32, w: i32, h: i32) -> u32 {
+        let mw = self.terrain.width as i32;
+        let mut v = 0u32;
+        for yy in y..y + h {
+            for xx in x..x + w {
+                // ponytail: tiles past the map bottom (1.16.1 reads beyond the tile flags
+                // there) count as seen by nobody.
+                let f = self.terrain.tile_flags.get((yy * mw + xx) as usize).copied().unwrap_or(u32::MAX);
+                v |= !(f & 0xff);
+            }
+        }
+        v
+    }
+
+    /// 0x402570: the same walk on the explored byte (bits 8..16).
+    pub(super) fn tiles_unexplored_mask(&self, x: i32, y: i32, w: i32, h: i32) -> u32 {
+        let mw = self.terrain.width as i32;
+        let mut v = 0u32;
+        for yy in y..y + h {
+            for xx in x..x + w {
+                let f = self.terrain.tile_flags.get((yy * mw + xx) as usize).copied().unwrap_or(u32::MAX);
+                v |= !((f >> 8) & 0xff);
+            }
+        }
+        v
     }
 
     /// 0x4ebe10: per-frame visibility of a unit's sprite (and its subunit's).

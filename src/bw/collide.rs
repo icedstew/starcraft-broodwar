@@ -155,6 +155,27 @@ impl State {
         [x.wrapping_sub(l), y.wrapping_sub(u), r.wrapping_add(x), dn.wrapping_add(y)]
     }
 
+    /// 0x402b10: unit `c`'s box at (x, y), grown by unit `u`'s box.
+    pub fn blocking_box(&self, d: &Data, c: u32, u: u32, x: i16, y: i16) -> [i16; 4] {
+        let [cl, cu, cr, cd] = self.unit_box_at(d, self.units[c as usize].unit_type, x, y);
+        // Own box at (0, 0) is [-left, -up, right, down].
+        let [nl, nu, r, dn] = self.unit_box_at(d, self.units[u as usize].unit_type, 0, 0);
+        [cl.wrapping_sub(1).wrapping_sub(r), cu.wrapping_sub(1).wrapping_sub(dn), cr.wrapping_sub(nl).wrapping_add(1), cd.wrapping_sub(nu).wrapping_add(1)]
+    }
+
+    /// 0x402ba0: `u` blocks (pathing flag, not status 0x200000) and, given `other`, is
+    /// not `other` and collides with it (0x42dee0). `other` None = no unit: true.
+    pub fn collision_gate(&self, u: u32, other: Option<u32>) -> bool {
+        let un = &self.units[u as usize];
+        if un.pathing_flags & 1 == 0 || un.status & 0x20_0000 != 0 {
+            return false;
+        }
+        match other {
+            None => true,
+            Some(o) => u != o && self.units_collide(u, o),
+        }
+    }
+
     /// 0x4308a0: units whose finder boxes overlap `b`. Returns the result start; close
     /// with `self.search.pop()`.
     pub fn units_in_box(&mut self, d: &Data, b: [i16; 4]) -> usize {
@@ -768,10 +789,10 @@ impl State {
         let mut best_area = 0i32;
         for o in self.search.results(start) {
             // 0x42e0e0
-            let ou = &self.units[o as usize];
-            if ou.pathing_flags & 1 == 0 || ou.status & 0x20_0000 != 0 || o == u || !self.units_collide(o, u) {
+            if !self.collision_gate(o, Some(u)) {
                 continue;
             }
+            let ou = &self.units[o as usize];
             let fi = ou.finder_index;
             let f = &self.finder;
             if !((b[0] as i32) <= f.x[fi[1] as usize].1

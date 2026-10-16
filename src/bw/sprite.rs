@@ -286,6 +286,25 @@ impl State {
         self.set_frame_from_direction(img);
     }
 
+    /// 0x401df0: LO offset of kind `kind` (entry `idx`) of sprite `s`'s main image, x
+    /// negated when the image is flipped.
+    pub fn image_lo_offset(&self, d: &Data, s: u32, kind: usize, idx: i8) -> (i8, i8) {
+        let im = &self.images[self.sprites[s as usize].main_image as usize];
+        let (ox, oy) = d.lo_offset(kind, im.image_id, im.frame, idx).unwrap_or((0, 0));
+        (if im.flags & iflag::FLIPPED != 0 { ox.wrapping_neg() } else { ox }, oy)
+    }
+
+    /// 0x401e40: set the offset of sprite `s`'s main image; redraw only if it changed.
+    pub fn sprite_set_main_offset(&mut self, s: u32, x: i8, y: i8) {
+        let mi = self.sprites[s as usize].main_image;
+        let si = &mut self.images[mi as usize];
+        if si.x != x || si.y != y {
+            si.flags |= iflag::REDRAW;
+            si.x = x;
+            si.y = y;
+        }
+    }
+
     /// 0x4d5a00 / SC:R 0x140190e00: follow the main image's special-overlay (LO) offset.
     pub fn image_update_special_offset(&mut self, d: &Data, img: u32) {
         let s = self.images[img as usize].sprite;
