@@ -1471,23 +1471,27 @@ fn draw_tooltip(scene: &Scene, ui: &crate::ui::Ui, b: &bw::buttons::Button, enab
             _ => {}
         }
     }
-    // 0x458800: the cost slots shown with icons 0x515228 (minerals, gas, then energy
-    // and supply per race).
     let race = scene.local_race() as i32;
+    let caster = scene.selected.first().map_or(4, |&u| with_data(scene.a, |d| bw::State::supply_race_of(d, scene.st.units[u as usize].unit_type)));
+    let supply_race = if kind == 1 && v < dat.units.mineral_cost.len() { with_data(scene.a, |d| bw::State::supply_race_of(d, v as u16)) } else { 4 };
+    let slots = cost_slots(cost, supply_race, caster);
+    tooltip_with_costs(ui, &text, &slots, race, bx, by, out, w, h);
+}
+
+/// 0x458800: the eight cost slots (icons 0x515228): minerals, gas, energy by the
+/// casting unit's race (0x47b150: zerg 4, terran 3, protoss 2) and supply by the
+/// unit's race (zerg 7, terran 6, protoss 5).
+fn cost_slots(cost: (i32, i32, i32, i32), supply_race: u16, caster: u16) -> [i32; 8] {
     let mut slots = [0i32; 8];
     slots[0] = cost.0;
     slots[1] = cost.1;
-    if cost.2 != 0 {
-        slots[[7, 6, 5][race as usize % 3]] = cost.2;
+    if let Some(&k) = [7usize, 6, 5].get(supply_race as usize).filter(|_| cost.2 != 0) {
+        slots[k] = cost.2;
     }
-    if cost.3 != 0 {
-        // The status unit's race (0x47b150): zerg 4, terran 3, protoss 2.
-        let r = scene.selected.first().map_or(4, |&u| with_data(scene.a, |d| bw::State::supply_race_of(d, scene.st.units[u as usize].unit_type)));
-        if let Some(k) = [4usize, 3, 2].get(r as usize) {
-            slots[*k] = cost.3;
-        }
+    if let Some(&k) = [4usize, 3, 2].get(caster as usize).filter(|_| cost.3 != 0) {
+        slots[k] = cost.3;
     }
-    tooltip_with_costs(ui, &text, &slots, race, bx, by, out, w, h);
+    slots
 }
 
 /// 0x459030: tooltip text over interface color 0xf from (2, 0), then the cost line
