@@ -17,7 +17,7 @@ renderer at 2x/4x); the 8-bit 1.16.1 renderer stays the default and the test ref
 ## Metric (the user watches this)
 
 `python3 -I re/coverage.py agent/local/scratch/dump/bw116n.c .` "reachable from both":
-2026-10-16: no AI 965/1615 (59%), AI only 145/358 (40%), all 1110/1973 (56%).
+2026-10-16: no AI 974/1615 (60%), AI only 145/358 (40%), all 1119/1973 (56%).
 Next targets: `--missing both` (frontier list, one line per function).
 
 ## Current direction (user, 2026-10-16)
@@ -30,7 +30,12 @@ Delegate per agents.md: Haiku triage, Sonnet porting, Opus review / hard RE / co
 
 - Porting loop running: triaged 0x4010e0..0x4046d0 and 0x4258b0..0x437290. Skipped for
   now: save/load pointer fixups (0x402d10..0x4046d0, Rust uses indices; port with
-  save/load), CRT 0x404e00..0x410000. Triaging 0x448b20..0x458850 and 0x463310..0x4688b0 next.
+  save/load), CRT 0x404e00..0x410000. Triaged up to 0x47da80. Next porter batch: triage F extractions
+  (0x463310, 0x463470, 0x4634e0, 0x465200, 0x465270, 0x466910, 0x466a30 (check order
+  0x1e/0x21/0x22 branch: possible bug in spells.rs), 0x466b40, 0x466ee0, 0x4688b0,
+  0x468a60), H (0x4756e0, 0x475ec0, 0x47b8f0/0x47b5f0), and G suspects: doodads.rs
+  cites 0x474d10 (looks like 0x474d60), order_exec.rs 0x475350 branches mismatch,
+  battery.rs 0x4749d0 always queues front (native: front only if queue non-empty).
 
 ## Next steps
 

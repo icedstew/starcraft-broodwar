@@ -658,13 +658,20 @@ impl State {
         hit.unwrap_or(NIL)
     }
 
-    /// Right-click command (0x4c2370 -> 0x4560d0) at `pos` on unit `target` (or NIL;
-    /// `unit_type` != 0xe4 for a remembered fog unit).
+    /// 0x4c2370: right-click command at `pos` on unit `target` (or NIL; `unit_type` != 0xe4
+    /// for a remembered fog unit); ignored outside the map, else 0x4560d0.
     #[allow(clippy::too_many_arguments)]
-    pub fn command_right_click(&mut self, d: &Data, player: u8, sel: &[u32], pos: (i16, i16), mut target: u32, mut unit_type: u16, queued: bool) {
+    pub fn command_right_click(&mut self, d: &Data, player: u8, sel: &[u32], pos: (i16, i16), target: u32, unit_type: u16, queued: bool) {
         if pos.0 as u16 >= self.map_px.0 || pos.1 as u16 >= self.map_px.1 {
             return;
         }
+        self.right_click_selection(d, player, sel, pos, target, unit_type, queued);
+    }
+
+    /// 0x4560d0: right-click at `pos` for every unit of the selection: resolve a fog unit,
+    /// pick each unit's right-click order and issue it (or set its rally point).
+    #[allow(clippy::too_many_arguments)]
+    fn right_click_selection(&mut self, d: &Data, player: u8, sel: &[u32], pos: (i16, i16), mut target: u32, mut unit_type: u16, queued: bool) {
         let mut gt = GroupTarget { target: pos, ..Default::default() };
         self.group_target(d, sel, &mut gt, true);
         if target != NIL {

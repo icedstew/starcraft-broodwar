@@ -344,11 +344,7 @@ impl State {
             *v == 0
         };
         if dec(&mut self.units[u as usize].stasis_timer) {
-            // 0x4f62d0 (0x4e5d60: the button refresh is UI)
-            if d.dat.units.flags[self.units[u as usize].unit_type as usize] & 0x2000_0000 == 0 {
-                self.units[u as usize].status &= !0x400_0000;
-            }
-            self.spell_overlay_ends(d, u, 0x16d, 0x16f);
+            self.stasis_ends(d, u);
         }
         if dec(&mut self.units[u as usize].stim_timer) {
             self.update_speed(d, u);
@@ -374,12 +370,10 @@ impl State {
             }
         }
         if dec(&mut self.units[u as usize].lockdown_timer) {
-            // 0x454d90
-            self.spell_overlay_ends(d, u, 0x169, 0x16b);
+            self.lockdown_ends(d, u);
         }
         if dec(&mut self.units[u as usize].maelstrom_timer) {
-            // 0x454d20
-            self.spell_overlay_ends(d, u, 0x3d6, 0x3d8);
+            self.maelstrom_ends(d, u);
         }
         if self.units[u as usize].plague_timer != 0 {
             self.units[u as usize].plague_timer -= 1;
@@ -406,6 +400,46 @@ impl State {
             }
         }
         self.acid_overlay_update(d, u, before);
+    }
+
+    /// 0x454d20: maelstrom ends on `u`.
+    pub(super) fn maelstrom_ends(&mut self, d: &Data, u: u32) {
+        let un = &mut self.units[u as usize];
+        un.maelstrom_timer = 0;
+        if un.status & 0x400 == 0 && un.lockdown_timer == 0 && un.stasis_timer == 0 {
+            // 0x68c1b0 / 0x68ac74 / 0x68c1f8 / 0x68c1e8 / 0x68c1ec: UI refresh flags.
+            let t = un.unit_type;
+            self.set_button_set(d, u, t);
+        }
+        self.spell_overlay_ends(d, u, 0x3d6, 0x3d8);
+    }
+
+    /// 0x4f62d0: stasis ends on `u`: the button set comes back (0x4e5d60) unless still
+    /// disabled, the unit is no longer invincible (status 0x4000000) unless its type is.
+    pub(super) fn stasis_ends(&mut self, d: &Data, u: u32) {
+        let un = &mut self.units[u as usize];
+        un.stasis_timer = 0;
+        if un.status & 0x400 == 0 && un.lockdown_timer == 0 && un.maelstrom_timer == 0 {
+            // 0x68c1b0 / 0x68ac74 / 0x68c1f8 / 0x68c1e8 / 0x68c1ec: UI refresh flags.
+            let t = un.unit_type;
+            self.set_button_set(d, u, t);
+        }
+        if d.dat.units.flags[self.units[u as usize].unit_type as usize] & 0x2000_0000 == 0 {
+            self.units[u as usize].status &= !0x400_0000;
+        }
+        self.spell_overlay_ends(d, u, 0x16d, 0x16f);
+    }
+
+    /// 0x454d90: lockdown ends on `u`.
+    pub(super) fn lockdown_ends(&mut self, d: &Data, u: u32) {
+        let un = &mut self.units[u as usize];
+        un.lockdown_timer = 0;
+        if un.status & 0x400 == 0 && un.stasis_timer == 0 && un.maelstrom_timer == 0 {
+            // 0x68c1b0 / 0x68ac74 / 0x68c1f8 / 0x68c1e8 / 0x68c1ec: UI refresh flags.
+            let t = un.unit_type;
+            self.set_button_set(d, u, t);
+        }
+        self.spell_overlay_ends(d, u, 0x169, 0x16b);
     }
 
     /// 0x492370: a disabling spell wears off: its overlay (image ids lo..=hi, on the unit

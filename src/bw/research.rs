@@ -90,15 +90,27 @@ impl State {
         true
     }
 
-    /// 0x42d190 / 0x453f70 (minerals, gas, time) of the next level of `up` for `player`.
-    pub fn upgrade_cost(&self, d: &Data, player: u8, up: u8) -> (i32, i32, u16) {
-        let lvl = self.players.upgrade_level(player, up as usize) as u16;
+    /// 0x453ed0: gas cost of the next level of upgrade `up` for `player`.
+    pub fn upgrade_gas_cost(&self, d: &Data, player: u8, up: u8) -> u32 {
         let ud = &d.dat.upgrades;
         let i = up as usize;
-        let m = lvl.wrapping_mul(ud.mineral_factor[i]).wrapping_add(ud.mineral_base[i]);
-        let g = lvl.wrapping_mul(ud.gas_factor[i]).wrapping_add(ud.gas_base[i]);
-        let t = (ud.time_factor[i] as u32 * lvl as u32 + ud.time_base[i] as u32) as u16;
-        (m as i32, g as i32, t)
+        ud.gas_factor[i] as u32 * self.players.upgrade_level(player, i) as u32 + ud.gas_base[i] as u32
+    }
+
+    /// 0x453f20: mineral cost of the next level of upgrade `up` for `player`.
+    pub fn upgrade_mineral_cost(&self, d: &Data, player: u8, up: u8) -> u32 {
+        let ud = &d.dat.upgrades;
+        let i = up as usize;
+        ud.mineral_factor[i] as u32 * self.players.upgrade_level(player, i) as u32 + ud.mineral_base[i] as u32
+    }
+
+    /// 0x42d190 / 0x453f70 (minerals, gas, time) of the next level of `up` for `player`.
+    pub fn upgrade_cost(&self, d: &Data, player: u8, up: u8) -> (i32, i32, u16) {
+        let lvl = self.players.upgrade_level(player, up as usize) as u32;
+        let ud = &d.dat.upgrades;
+        let i = up as usize;
+        let t = (ud.time_factor[i] as u32 * lvl + ud.time_base[i] as u32) as u16;
+        (self.upgrade_mineral_cost(d, player, up) as i32, self.upgrade_gas_cost(d, player, up) as i32, t)
     }
 
     /// 0x454a80: pay for and start upgrade `up` in `u`.
@@ -124,6 +136,13 @@ impl State {
         true
     }
 
+    /// 0x453d30: refund 3/4 of the mineral and gas cost of `tech` to `player`.
+    fn refund_tech(&mut self, d: &Data, player: u8, tech: u8) {
+        let t = tech as usize;
+        self.players.minerals[player as usize] += (d.dat.techdata.mineral_cost[t] as i32 * 3) >> 2;
+        self.players.gas[player as usize] += (d.dat.techdata.gas_cost[t] as i32 * 3) >> 2;
+    }
+
     /// 0x453dd0: a dying building drops its research, refunding 3/4 (0x453d30).
     pub(super) fn abort_research(&mut self, d: &Data, u: u32) {
         let tech = self.units[u as usize].u8_at(0xc8);
@@ -132,12 +151,27 @@ impl State {
         }
         let t = tech as usize;
         let p = self.units[u as usize].player as usize;
-        self.players.minerals[p] += (d.dat.techdata.mineral_cost[t] as i32 * 3) >> 2;
-        self.players.gas[p] += (d.dat.techdata.gas_cost[t] as i32 * 3) >> 2;
+        self.refund_tech(d, p as u8, tech);
         self.players.research_in_progress[p][t >> 3] &= !(1 << (t & 7));
         let un = &mut self.units[u as usize];
         un.set_u8_at(0xc8, NO_TECH);
         un.set_u16_at(0xc6, 0);
+    }
+
+    /// 0x4540b0: refund 3/4 of the next-level cost of upgrade `up` to `player` (16-bit costs).
+    fn refund_upgrade_partial(&mut self, d: &Data, player: u8, up: u8) {
+        let m = self.upgrade_mineral_cost(d, player, up) as u16 as i32;
+        let g = self.upgrade_gas_cost(d, player, up) as u16 as i32;
+        self.players.minerals[player as usize] += (m * 3) >> 2;
+        self.players.gas[player as usize] += (g * 3) >> 2;
+    }
+
+    /// 0x454170: refund the full next-level cost of upgrade `up` to `player` (16-bit costs).
+    fn refund_upgrade_full(&mut self, d: &Data, player: u8, up: u8) {
+        let m = self.upgrade_mineral_cost(d, player, up) as u16 as i32;
+        let g = self.upgrade_gas_cost(d, player, up) as u16 as i32;
+        self.players.minerals[player as usize] += m;
+        self.players.gas[player as usize] += g;
     }
 
     /// 0x454220: a dying building drops its upgrade, refunding 3/4 (0x4540b0).
@@ -147,9 +181,7 @@ impl State {
             return;
         }
         let p = self.units[u as usize].player;
-        let (m, g, _) = self.upgrade_cost(d, p, up);
-        self.players.minerals[p as usize] += (m as u16 as i32 * 3) >> 2;
-        self.players.gas[p as usize] += (g as u16 as i32 * 3) >> 2;
+        self.refund_upgrade_partial(d, p, up);
         self.players.upgrade_in_progress[p as usize][(up >> 3) as usize] &= !(1 << (up & 7));
         let un = &mut self.units[u as usize];
         un.set_u8_at(0xc9, NO_UPGRADE);
@@ -183,9 +215,7 @@ impl State {
             return;
         }
         let p = un.player;
-        let (m, g, _) = self.upgrade_cost(d, p, up);
-        self.players.minerals[p as usize] += m as u16 as i32;
-        self.players.gas[p as usize] += g as u16 as i32;
+        self.refund_upgrade_full(d, p, up);
         self.players.upgrade_in_progress[p as usize][(up >> 3) as usize] &= !(1 << (up & 7));
         let un = &mut self.units[u as usize];
         un.set_u8_at(0xc9, NO_UPGRADE);

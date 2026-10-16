@@ -985,14 +985,10 @@ impl State {
             tu.irradiate_player = 8;
         }
         if self.units[t as usize].lockdown_timer != 0 {
-            // 0x454d90
-            self.units[t as usize].lockdown_timer = 0;
-            self.spell_overlay_ends(d, t, 0x169, 0x16b);
+            self.lockdown_ends(d, t);
         }
         if self.units[t as usize].maelstrom_timer != 0 {
-            // 0x454d20
-            self.units[t as usize].maelstrom_timer = 0;
-            self.spell_overlay_ends(d, t, 0x3d6, 0x3d8);
+            self.maelstrom_ends(d, t);
         }
         if self.units[t as usize].acid_spore_count != 0 {
             self.clear_acid_spores(t);
