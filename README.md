@@ -21,8 +21,31 @@ and add to hotkey groups, the command card and hotkeys M/A/S/H/P/G/C issue Move,
 Attack, Stop, Hold, Patrol, Gather and Return Cargo, and the Build menu places
 buildings; arrows or the screen edge scroll, Esc quits.
 
+Start a game on The Hunters as each race:
+
+    SCBW_RACE=terran  cargo run --release -- view "$HOME/Downloads/StarCraft-BroodWar_1.16.1/maps/(8)The Hunters.scm"
+    SCBW_RACE=protoss cargo run --release -- view "$HOME/Downloads/StarCraft-BroodWar_1.16.1/maps/(8)The Hunters.scm"
+    SCBW_RACE=zerg    cargo run --release -- view "$HOME/Downloads/StarCraft-BroodWar_1.16.1/maps/(8)The Hunters.scm"
+
 Set `SCBW_INSTALL` to the 1.16.1 install directory (the one with `StarDat.mpq`;
 defaults to `~/Downloads/StarCraft-BroodWar_1.16.1`).
+
+### In the browser (WebAssembly)
+
+One-time setup (the wasm-bindgen CLI version must match `wasm-bindgen` in `Cargo.lock`):
+
+    rustup target add wasm32-unknown-unknown
+    cargo install wasm-bindgen-cli --version 0.2.129 --locked
+
+Build and serve:
+
+    web/build.sh                          # writes web/pkg/ (scbw.js, scbw_bg.wasm)
+    python3 -m http.server -d web 8000    # then open http://localhost:8000
+
+On the page pick the 1.16.1 install folder (it reads `storm.dll`, `Patch_rt.mpq`,
+`BrooDat.mpq`, `StarDat.mpq`; the CD archives and so the music are left out) and a map
+or replay (`.scm`, `.scx`, `.chk`, `.rep`), then Start. If keys do nothing, click the
+game once so it has keyboard focus.
 
 ## Layout
 

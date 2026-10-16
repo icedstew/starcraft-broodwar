@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>scbw</title>
+<style>
+  body { margin: 0; background: #000; color: #ccc; font: 14px sans-serif; }
+  #setup { padding: 16px; display: grid; gap: 8px; max-width: 640px; }
+  #scbw canvas { width: 1280px; height: 960px; image-rendering: pixelated; outline: none; cursor: none; }
+  #status { color: #e88; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<div id="setup">
+  <label>StarCraft 1.16.1 install folder: <input id="install" type="file" webkitdirectory></label>
+  <label>Map or replay (.scm, .scx, .chk, .rep): <input id="map" type="file" accept=".scm,.scx,.chk,.rep"></label>
+  <button id="start">Start</button>
+  <div id="status"></div>
+</div>
+<div id="scbw"></div>
+<script type="module">
+import init, { start } from "./pkg/scbw.js";
+
+// storage.rs ARCHIVES order; the CD archives (BroodWar.mpq, Starcraft.mpq: music,
+// ~600 MB each) are left out to keep memory down.
+const ARCHIVES = ["patch_rt.mpq", "broodat.mpq", "stardat.mpq"];
+const status = document.getElementById("status");
+document.getElementById("scbw").addEventListener("contextmenu", e => e.preventDefault());
+
+document.getElementById("start").onclick = async () => {
+  try {
+    // Top-level files of the picked folder, by lowercase name.
+    const top = new Map();
+    for (const f of document.getElementById("install").files) {
+      if (f.webkitRelativePath.split("/").length === 2) top.set(f.name.toLowerCase(), f);
+    }
+    const map = document.getElementById("map").files[0];
+    if (!top.has("storm.dll")) throw new Error("pick the install folder (it has storm.dll)");
+    if (!map) throw new Error("pick a map or replay");
+    status.textContent = "loading...";
+    const bytes = async f => new Uint8Array(await f.arrayBuffer());
+    const archives = [];
+    for (const name of ARCHIVES) if (top.has(name)) archives.push(await bytes(top.get(name)));
+    await init();
+    start(await bytes(top.get("storm.dll")), archives, map.name, await bytes(map));
+    document.getElementById("setup").remove();
+    document.querySelector("#scbw canvas").focus();
+  } catch (e) {
+    status.textContent = String(e.message ?? e);
+  }
+};
+</script>
+</body>
+</html>

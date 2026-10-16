@@ -928,11 +928,16 @@ dependencies = [
 name = "scbw"
 version = "0.1.0"
 dependencies = [
+ "console_error_panic_hook",
+ "cpal",
  "explode",
  "flate2",
+ "js-sys",
  "minifb",
  "png",
  "rodio",
+ "wasm-bindgen",
+ "web-sys",
 ]
 
 [[package]]

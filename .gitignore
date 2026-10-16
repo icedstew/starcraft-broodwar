@@ -2,3 +2,4 @@
 *.png
 __pycache__/
 /agent/local
+/web/pkg
