@@ -17,7 +17,7 @@ renderer at 2x/4x); the 8-bit 1.16.1 renderer stays the default and the test ref
 ## Metric (the user watches this)
 
 `python3 -I re/coverage.py agent/local/scratch/dump/bw116n.c .` "reachable from both":
-2026-10-16: no AI 1088/1615 (67%), AI only 147/358 (41%), all 1235/1973 (62%).
+2026-10-16: no AI 1129/1615 (69%), AI only 147/358 (41%), all 1276/1973 (64%).
 Next targets: `--missing both` (frontier list, one line per function).
 
 ## Current direction (user, 2026-10-16)
@@ -37,10 +37,9 @@ Delegate per agents.md: Haiku triage, Sonnet porting, Opus review / hard RE / co
   `--missing both` through 0x4f5c50 (non-AI); easy equivalents extracted. What is left
   without AI: save/load (pointer <-> index fixups, section writers via 0x4c3450), UI
   overlay pools (selection circles / hp bars as image records, 0x4d4e80..0x4d7070),
-  chat 0x48d1c0, placebox, dialogs, Win32 / Storm / CRT. Sim leads: pause / unpause
-  0x488800 / 0x488790 (tick record, replay branch); 0x48a180 (player result slot vs
-  leave_game 0x48a1c0); ported callers pass (0,0) where 0x4756e0 passes globals
-  0x6d5c20 / 0x6d5c24 (identify them).
+  chat 0x48d1c0, placebox, dialogs, Win32 / Storm / CRT. Resolved: pause / unpause
+  (0x488800 / 0x488790, Scene), 0x48a180 (player_dropped), 0x6d5c20 / 0x6d5c24 are never
+  written (always 0), so callers passing (0, 0) are right.
 
 - UI / UX fixes from user play (2026-10-16): tooltips (0x481510 / 0x459030), portrait
   overlay conover.pcx, placement sound, fog sound gate, button errors, replay selection,

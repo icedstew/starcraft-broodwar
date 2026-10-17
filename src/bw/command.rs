@@ -90,6 +90,17 @@ impl State {
         self.command_order_now(d, u, kind, order, target, unit_type, pos);
     }
 
+    /// 0x4756e0: `command_order` kind 1 with the unit target `target` (the position globals
+    /// 0x6d5c20 / 0x6d5c24 it passes are never written, and kind 1 ignores them).
+    pub fn command_order_target(&mut self, d: &Data, u: u32, queued: bool, order: u8, target: u32) {
+        self.command_order(d, u, 1, queued, order, target, 0xe4, (0, 0));
+    }
+
+    /// 0x4756b0: `command_order` kind 2 at `pos` with `unit_type`.
+    pub fn command_order_pos(&mut self, d: &Data, u: u32, queued: bool, order: u8, unit_type: u16, pos: (i16, i16)) {
+        self.command_order(d, u, 2, queued, order, NIL, unit_type, pos);
+    }
+
     /// 0x474b90: queue a command's order (`kind` as in 0x4754f0).
     #[allow(clippy::too_many_arguments)]
     fn command_queue_order(&mut self, d: &Data, u: u32, kind: u8, order: u8, target: u32, unit_type: u16, pos: (i16, i16)) {
@@ -710,7 +721,7 @@ impl State {
                 let sub = self.units[u as usize].subunit;
                 if sub != NIL {
                     let so = d.dat.units.ai_attack_unit[self.units[sub as usize].unit_type as usize];
-                    self.command_order(d, sub, 1, queued, so, target, 0xe4, (0, 0));
+                    self.command_order_target(d, sub, queued, so, target);
                 }
                 ord = d.dat.units.ai_attack_unit[self.units[u as usize].unit_type as usize];
             }
@@ -718,10 +729,10 @@ impl State {
                 continue;
             }
             if target != NIL {
-                self.command_order(d, u, 1, queued, ord, target, 0xe4, (0, 0));
+                self.command_order_target(d, u, queued, ord, target);
             } else {
                 let p = if unit_type == 0xe4 { self.unit_group_destination(d, u, &gt) } else { pos };
-                self.command_order(d, u, 2, queued, ord, NIL, unit_type, p);
+                self.command_order_pos(d, u, queued, ord, unit_type, p);
             }
             self.units[u as usize].order_flags |= 2;
         }
@@ -808,15 +819,15 @@ impl State {
             } else {
                 let sub = self.units[u as usize].subunit;
                 if target != NIL {
-                    self.command_order(d, u, 1, queued, ord, target, 0xe4, (0, 0));
+                    self.command_order_target(d, u, queued, ord, target);
                     if sub_ord != 0x17 {
-                        self.command_order(d, sub, 1, queued, sub_ord, target, 0xe4, (0, 0));
+                        self.command_order_target(d, sub, queued, sub_ord, target);
                     }
                 } else {
                     let p = if unit_type == 0xe4 { self.unit_group_destination(d, u, &gt) } else { pos };
-                    self.command_order(d, u, 2, queued, ord, NIL, unit_type, p);
+                    self.command_order_pos(d, u, queued, ord, unit_type, p);
                     if sub_ord != 0x17 {
-                        self.command_order(d, sub, 2, queued, sub_ord, NIL, unit_type, p);
+                        self.command_order_pos(d, sub, queued, sub_ord, unit_type, p);
                     }
                 }
             }
@@ -955,15 +966,9 @@ impl State {
         }
     }
 
-    /// Build command (0x4c23c0): one selected worker builds `t` at tile (tx, ty).
-    #[allow(clippy::too_many_arguments)]
-    pub fn command_build_sel(&mut self, d: &Data, player: u8, sel: &[u32], order: u8, tx: i16, ty: i16, t: u16) {
-        let units = self.live_selection(sel);
-        let [u] = units[..] else { return };
-        if tx as u16 >= self.terrain.width || ty as u16 >= self.terrain.height {
-            return;
-        }
-        // 0x48dbd0
+    /// 0x48dbd0: the selected builder `u` may be given placement `order` for type `t`
+    /// (0x48dda0 is a thin wrapper).
+    fn placement_ok(&self, d: &Data, u: u32, order: u8, t: u16, player: u8) -> bool {
         let ok = match order {
             0x19 | 0x1e | 0x1f | 0x20 | 0x24 => self.can_make_unit(d, u, t, player) == Ok(1),
             // Landing, a nydus exit, and (in the first 600 seconds) PlaceCOP: the unit's
@@ -972,13 +977,30 @@ impl State {
             0x9b => self.trig.elapsed <= 600 && self.units[u as usize].unit_type == t,
             _ => false,
         };
-        if ok && self.can_issue_order(d, u, order, player).is_ok() {
-            // 0x48e190: addons place by the building's spot.
-            if d.dat.units.flags[t as usize] & 2 != 0 {
-                self.command_build_addon(d, u, order, tx, ty, t);
-            } else {
-                self.command_build(d, u, order, tx, ty, t);
-            }
+        ok && self.can_issue_order(d, u, order, player).is_ok()
+    }
+
+    /// 0x48e190: give the placement order; addons (flag 2) place by the building's spot
+    /// (0x48e0a0), the rest by 0x48e010.
+    fn place_building(&mut self, d: &Data, u: u32, order: u8, tx: i16, ty: i16, t: u16) {
+        if d.dat.units.flags[t as usize] & 2 != 0 {
+            self.command_build_addon(d, u, order, tx, ty, t);
+        } else {
+            self.command_build(d, u, order, tx, ty, t);
+        }
+        // 0x68c1b0 / 0x68ac74 / 0x68c1f8 = 1, 0x68c1e8 / 0x68c1ec = 0: UI redraw flags.
+    }
+
+    /// Build command (0x4c23c0): one selected worker builds `t` at tile (tx, ty).
+    #[allow(clippy::too_many_arguments)]
+    pub fn command_build_sel(&mut self, d: &Data, player: u8, sel: &[u32], order: u8, tx: i16, ty: i16, t: u16) {
+        let units = self.live_selection(sel);
+        let [u] = units[..] else { return };
+        if tx as u16 >= self.terrain.width || ty as u16 >= self.terrain.height {
+            return;
+        }
+        if self.placement_ok(d, u, order, t, player) {
+            self.place_building(d, u, order, tx, ty, t);
         }
     }
 }
@@ -1296,6 +1318,7 @@ impl State {
             }
             u = self.units[u as usize].player_next;
         }
+        self.selection_circle_colors(d);
         // 0x48fdb0: the local player's alliance dialog (UI).
     }
 
@@ -1391,6 +1414,37 @@ impl State {
     /// Only UI / game-flow globals, none modelled here.
     fn command_game_flow(&mut self) {}
 
+    /// 0x4bf7a0: command 0x58, a minimap ping at map point (x, y) from `player`, shown when
+    /// `player` is allied with the local player: type 0x11 for the local player's own,
+    /// 0x12 for others (0x4a34c0).
+    fn command_minimap_ping(&mut self, player: u8, x: u16, y: u16) {
+        if (x as u32) < self.map_px.0 as u32 && (y as u32) < self.map_px.1 as u32 && self.alliances[player as usize][self.local_player as usize] != 0 {
+            let t = if player != self.local_player { 0x12 } else { 0x11 };
+            self.minimap_pings.push((x as i16 as i32, y as i16 as i32, t));
+        }
+    }
+
+    /// 0x4c0bc0: command 0x10, pause. Allowed when not paused and not multiplayer (the
+    /// multiplayer limit 0x58d718 is not modelled); 0x488800 sets 0x6509c4, then the
+    /// palette greys (0x41e930, UI) and network.tbl line 0x38 shows (0x41f1b0, 0x48d0c0).
+    // ponytail: its %d is the timeouts left (0x58d718, multiplayer); the notice fills player + 1.
+    fn command_pause(&mut self, player: u8) {
+        if !self.trig.paused {
+            self.trig.paused = true;
+            self.notices.push((0x38, player));
+        }
+    }
+
+    /// 0x4c0b00: command 0x11, resume. When paused: 0x488790(1) clears 0x6509c4 (the
+    /// real-time timer adjust is the view's), the palette is restored (0x5994e0 ->
+    /// 0x6ceb40, UI) and network.tbl line 0x39 shows.
+    fn command_resume(&mut self, player: u8) {
+        if self.trig.paused {
+            self.trig.paused = false;
+            self.notices.push((0x39, player));
+        }
+    }
+
     /// 0x4c2ef0: command 0x18, cancel the construction of the one selected unit.
     fn command_cancel_construction(&mut self, d: &Data, player: u8, sel: &[u32]) {
         if let [u] = self.live_selection(sel)[..] {
@@ -1425,13 +1479,39 @@ impl State {
         }
     }
 
-    /// 0x4c2e90: command 0x57, leave game; only replays act on it (0x4c4d60): "%s has left
-    /// the game." (the reason byte is never 0x40000006, the dropped message), 0x48a1c0.
-    fn command_leave_game(&mut self, d: &Data, player: u8) {
+    /// 0x4c2e90: command 0x57, leave game; only replays act on it (0x4c4d60 with -1).
+    fn command_leave_game(&mut self, d: &Data, player: u8, reason: u8) {
         if self.replay {
-            self.notices.push((0x4a, player));
+            self.leave_notice(d, None, player, reason as u32);
+        }
+    }
+
+    /// 0x4c4d60: a player left or dropped. `slot` is the net slot (None: -1, the command
+    /// path of a replay), `player` the leaving player; `reason` 0x40000006 is "dropped".
+    /// Shows "%s has left the game." / "... dropped.", settles the player (0x48a1c0 /
+    /// 0x48a180) and clears their selection.
+    pub fn leave_notice(&mut self, d: &Data, slot: Option<u8>, player: u8, reason: u32) {
+        let dropped = reason == 0x4000_0006;
+        if !self.replay {
+            todo_port!("0x4c4d60", "net game: slot lookup 0x57eec0, name via 0x4cde70, 0x581d62, team branches");
+            return;
+        }
+        if slot.is_some() {
+            todo_port!("0x4c4d60", "replay slot >= 0: name from 0x64097b, notice only");
+            return;
+        }
+        // 0x57f0b4 / 0x596875 team branches: ponytail, never set.
+        self.notices.push((0x4a + dropped as u16, player));
+        if dropped {
+            self.player_dropped(d, player);
+        } else {
             self.leave_game(d, player);
         }
+        // 0x49a740: clear the player's selection.
+        if let Some(sel) = self.selections.get_mut(player as usize) {
+            *sel = [NIL; 12];
+        }
+        todo_port!("0x4c40f0", "storm net status check");
     }
 
     /// 0x4865d0: run one command packet from `player`, whose selection is `sel`.
@@ -1479,6 +1559,10 @@ impl State {
             // 0x4c0ad0: only with the template's cheats flag (0x596876 == template[0x11]).
             0x12 if self.template[0x11] == 1 => self.command_cheat(d, u32::from_le_bytes([byte(1), byte(2), byte(3), byte(4)])),
             0x08 => self.command_game_flow(),
+            0x10 => self.command_pause(player),
+            0x11 => self.command_resume(player),
+            // 0x4bf820: net-slot table 0x66fe20 only (flag bit 2 set / cleared for '9'); not sim state.
+            0x38 | 0x39 => {}
             0x18 => self.command_cancel_construction(d, player, sel),
             0x19 => self.command_cancel_morph(d, player, sel),
             0x20 => self.command_cancel_train(d, player, sel, u16_at(1)),
@@ -1492,7 +1576,11 @@ impl State {
             0x2c => self.command_burrow(d, player, sel, byte(1) != 0),
             0x2d => self.command_unburrow(d, player, sel),
             0x36 => self.command_stim(d, player, sel),
-            0x57 => self.command_leave_game(d, player),
+            0x57 => self.command_leave_game(d, player, byte(1)),
+            0x58 => self.command_minimap_ping(player, u16_at(1), u16_at(3)),
+            // 0x485e60: "Player %s set network for low / high / extra high latency."
+            // (network.tbl 0x44 + the level, at most 2; 0x6556e4 keeps the level, UI only).
+            0x55 => self.notices.push((0x44 + byte(1).min(2) as u16, player)),
             0x21 => self.command_cloak(d, player, sel),
             0x22 => self.command_decloak(d, player, sel),
             0x23 => self.command_unit_morph(d, player, sel, u16_at(1)),

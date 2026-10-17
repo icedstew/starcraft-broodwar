@@ -65,6 +65,12 @@ impl Audio {
             epoch: std::time::Instant::now() })
     }
 
+    /// Decoded-on-demand wav cache, kept forever. Stands in for the native sound cache:
+    /// 0x4bbeb0 queues an unloaded sound for the loader thread, which starts it once loaded
+    /// (here it is read and started at once); 0x4bb8e0 frees one cached sound and 0x4bbc00
+    /// frees round-robin down to the 0x5129b8 memory budget; 0x4bbe50 waits for loads and
+    /// 0x4bbf50 clears the flag-8 'pending' marks and frees finished buffers (alloc_slot
+    /// does the latter). Memory management only, inaudible.
     fn wav(&self, files: &Storage, dat: &Dat, id: u16) -> Option<Arc<[u8]>> {
         self.cache
             .borrow_mut()

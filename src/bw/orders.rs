@@ -167,6 +167,16 @@ impl State {
         self.order_insert_before(d, u, order, 0xe4, (0, 0), NIL, before)
     }
 
+    /// 0x474790: queue `order` at `pos` (no target) before `before`.
+    pub(super) fn queue_order_at_before(&mut self, d: &Data, u: u32, order: u8, pos: (i16, i16), before: u32) -> Option<u32> {
+        self.order_insert_before(d, u, order, 0xe4, pos, NIL, before)
+    }
+
+    /// 0x4747c0: queue `order` at `pos` on `target` before `before`.
+    pub(super) fn queue_order_target_before(&mut self, d: &Data, u: u32, order: u8, pos: (i16, i16), target: u32, before: u32) -> Option<u32> {
+        self.order_insert_before(d, u, order, 0xe4, pos, target, before)
+    }
+
     /// 0x4747e0: queue `order` on unit `t` (at its position) before `before`.
     pub(super) fn queue_order_on_unit(&mut self, d: &Data, u: u32, order: u8, t: u32, before: u32) -> Option<u32> {
         let p = self.unit_sprite_pos(t);
@@ -334,6 +344,24 @@ impl State {
         self.issue_order(d, u, order, clear, pos, NIL, 0xe4);
     }
 
+    /// 0x474cf0: queue `order` at `pos` on `target` (`clear`: drop the interruptible orders first).
+    pub fn queue_order_target(&mut self, d: &Data, u: u32, order: u8, pos: (i16, i16), target: u32, clear: bool) {
+        self.issue_order(d, u, order, clear, pos, target, 0xe4);
+    }
+
+    /// 0x475350: the current order is over at `pos`: start the next queued one, else the AI
+    /// idle order (0x9c), else the unit's idle order at `pos`.
+    pub fn order_done_at(&mut self, d: &Data, u: u32, pos: (i16, i16)) {
+        if self.units[u as usize].order_queue_head != NIL {
+            self.prepare_next_order(d, u);
+        } else if self.units[u as usize].ai != NIL {
+            self.order_now(d, u, 0x9c);
+        } else {
+            let o = d.dat.units.ai_return_to_idle[self.units[u as usize].unit_type as usize];
+            self.order_at(d, u, o, pos);
+        }
+    }
+
     /// 0x474d60: queue `order` without a target.
     pub fn queue_order(&mut self, d: &Data, u: u32, order: u8, clear: bool) {
         self.issue_order(d, u, order, clear, (0, 0), NIL, 0xe4);
@@ -381,7 +409,7 @@ impl State {
                 // Burrowed AI unit: unburrow (0x76) first.
                 let s = un.sprite;
                 let p = (self.sprites[s as usize].x, self.sprites[s as usize].y);
-                self.order_insert_before(d, u, 0x76, 0xe4, p, NIL, head);
+                self.queue_order_at_before(d, u, 0x76, p, head);
                 self.units[u as usize].status &= !super::unit::status::CAN_NOT_RECEIVE_ORDERS;
                 self.order_done_or_next(d, u);
                 return;

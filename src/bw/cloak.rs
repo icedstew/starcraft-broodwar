@@ -424,6 +424,8 @@ impl State {
 
     /// 0x441130: players that see cloaked `u`: its owner, players sharing the owner's
     /// vision, parasite owners, and owners of detectors within range (0x4408a0).
+    /// 0x440270: the scan of the 0x6283f4 list with the same callback (0x4408a0, always
+    /// returns 0, so it visits every node) is the `scanner_units` chain below.
     fn detected_by(&mut self, d: &Data, u: u32) -> u32 {
         // 0x4f3a80: carrying a flag.
         if self.units[u as usize].under_spell() || self.carries_flag(d, u) {

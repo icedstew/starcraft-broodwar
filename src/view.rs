@@ -118,6 +118,10 @@ pub struct Scene<'a> {
     /// The message lines, timed by `clock_ms` (GetTickCount in the game).
     pub msgs: crate::msgs::Messages,
     pub clock_ms: u32,
+    /// 0x6509c8: `clock_ms` when the game was paused; 0x6d5be8: the replay's pause flag
+    /// (0x6d11b0) then.
+    pub pause_tick: u32,
+    pub pause_replay_saved: bool,
     /// The chat line (0x4f32d0).
     pub chat: crate::chat::Chat,
     pub place_ok: bool,
@@ -213,7 +217,7 @@ impl<'a> Scene<'a> {
             minimap.refresh(d, &mut st)
         });
         let creep_grp = a.files.read(&format!("tileset/{}.grp", map::TILESETS[chk.tileset()])).ok().map(crate::grp::Grp::parse);
-        Ok(Scene { st, creep_grp, minimap, voices: crate::voices::Voices::new(), portrait: Default::default(), talk_left: 0, trans_left: None, sent_selection: Vec::new(), card_menu: None, placing: None, targeting: None, error: 0, msgs: Default::default(), chat: Default::default(), clock_ms: 0, place_ok: false, place_tile: (0, 0), place_err: 0, drag_box: None, a, chk, ts, terrain, player_colors, local, shadow, dark, fog: crate::fog::Fog::new(), tselect, thpbar, remaps })
+        Ok(Scene { st, creep_grp, minimap, voices: crate::voices::Voices::new(), portrait: Default::default(), talk_left: 0, trans_left: None, sent_selection: Vec::new(), card_menu: None, placing: None, targeting: None, error: 0, msgs: Default::default(), chat: Default::default(), clock_ms: 0, pause_tick: 0, pause_replay_saved: false, place_ok: false, place_tile: (0, 0), place_err: 0, drag_box: None, a, chk, ts, terrain, player_colors, local, shadow, dark, fog: crate::fog::Fog::new(), tselect, thpbar, remaps })
     }
 
     /// Send the local selection to the simulation (0x4c0860) and return the local
@@ -273,6 +277,32 @@ impl<'a> Scene<'a> {
     /// text_tick).
     pub fn show_error(&mut self, id: u16) {
         self.error = id;
+    }
+
+    /// 0x488800: pause the game (0x6509c4) when it is not.
+    pub fn pause_game(&mut self) {
+        if self.st.trig.paused {
+            return;
+        }
+        self.st.trig.paused = true;
+        todo_port!("0x484cc0", "release the cursor clip (0x66ff5c) and reset the input handlers on pause");
+        self.pause_tick = self.clock_ms;
+        if self.st.replay {
+            self.pause_replay_saved = self.st.replay_paused;
+            // 0x4deb90: the replay panel refreshes (drawn every frame here).
+        }
+    }
+
+    /// 0x488790: unpause; `adjust` takes the paused real time off the game-time counter.
+    pub fn unpause_game(&mut self, adjust: bool) {
+        if !self.st.trig.paused {
+            return;
+        }
+        if adjust {
+            todo_port!("0x488790", "subtract the paused seconds from the real-time game timer 0x6d5bcc (0x57f240)");
+        }
+        self.st.trig.paused = false;
+        // 0x4deb90 (replay panel refresh when 0x6d5be8 == 0) is drawn every frame here.
     }
 
     /// Advance the message clock `ms`: pending errors and trigger texts go up
@@ -511,7 +541,7 @@ impl<'a> Scene<'a> {
             }
         }
         // Selection circles (0x4d7070 / 0x4d6810): image 0x231 + the sprite's circle size,
-        // below the sprite, colored from tselect.pcx by 0x581d6a (own 0, ally 1, enemy 2).
+        // below the sprite, colored from tselect.pcx by 0x581d6a (State::circle_color; own 0, ally 1, enemy 2).
         let sp_dat = &self.a.dat().sprites;
         let circled: std::collections::HashMap<u32, (u8, u32)> = self
             .st
@@ -519,9 +549,7 @@ impl<'a> Scene<'a> {
             .iter()
             .map(|&u| {
                 let un = &self.st.units[u as usize];
-                let p = un.player as usize;
-                let c = if p == self.local as usize { 0 } else if self.st.alliances[self.local as usize][p] == 0 { 2 } else { 1 };
-                (un.sprite, (c, u))
+                (un.sprite, (self.st.circle_color[un.player as usize], u))
             })
             .collect();
         // A clicked sprite's flash circle (0x4ebbd0, sprite flag 1) is drawn like a selected one.
@@ -530,7 +558,7 @@ impl<'a> Scene<'a> {
             .filter(|&&s| self.st.sprites[s as usize].flags & 1 != 0 && self.st.sprites[s as usize].selection_timer != 0)
             .map(|&s| {
                 let p = self.st.sprites[s as usize].owner as usize;
-                (s, if p == self.local as usize { 0 } else if p < 8 && self.st.alliances[self.local as usize][p] == 0 { 2 } else { 1 })
+                (s, self.st.circle_color[p])
             })
             .collect();
         let total = order.len();
@@ -660,6 +688,16 @@ impl<'a> Scene<'a> {
         with_data(self.a, |d| self.st.client_selection(d, &self.st.selected))
     }
 
+    /// 0x48ca10: end targeting: the card goes back to the unit's own set (0xe4). Whether it was on.
+    /// (The cancel button's state, cursor and dirty rects are drawn from the state each frame.)
+    pub fn end_targeting(&mut self) -> bool {
+        let was = self.targeting.take().is_some();
+        if was {
+            self.card_menu = None;
+        }
+        was
+    }
+
     /// 0x4599a0
     /// 0x458de0: the button set on the card: an open menu, the cancel sets while targeting
     /// (0xe5) or placing (0xe6), else the active unit's set (+0x94).
@@ -710,7 +748,9 @@ impl<'a> Scene<'a> {
             Place { order, unit_type } => self.placing = Some((order, unit_type)),
             // 0x459af0 / 0x4599a0: set 0xe4 means the selected unit's own button set.
             Menu(m) => self.card_menu = (m != 0xe4).then_some(m),
-            CancelTargeting => self.targeting = Option::None,
+            CancelTargeting => {
+                self.end_targeting();
+            }
             CancelPlacement => self.placing = Option::None,
             SelectLarvae(l) => self.set_selected(l),
             Error(Option::None) => self.show_error(btn.disabled_str),
@@ -1074,6 +1114,8 @@ fn new_game(a: &Assets, chk: &Chk, rep: Option<&crate::replay::Header>) -> io::R
             None => 1 << st.local_player,
         };
         st.init_alliances(modes);
+        // 0x4eed10 -> 0x49b870: the selection circle colors.
+        st.selection_circle_colors(d);
         // 0x4eee00: the AI's player data (0x447680) before the scenario loads.
         st.init_player_ai();
         // 0x4eec30 -> 0x489b30: trigger state for a new game (0x489790: who is in it).
@@ -1967,6 +2009,9 @@ pub fn frame_loop<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Option<Re
             }
             scene.voices.sound_flags = settings.sound_flags;
             scene.voices.muted = settings.digital == 0;
+            if menu.is_none() {
+                scene.unpause_game(true);
+            }
             if menu.is_none() && menu_paused {
                 menu_paused = false;
                 if replay.is_some() {
@@ -1985,6 +2030,7 @@ pub fn frame_loop<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Option<Re
         if menu_clicked || win.is_key_pressed(Key::F10, minifb::KeyRepeat::No) {
             menu = open_menu(&scene, crate::menu::Kind::Game, 0, &mut settings);
             menu_paused = true;
+            scene.pause_game();
             if replay.is_some() && !scene.st.replay_paused {
                 scene.st.replay_paused = true;
             } else if replay.is_some() {
@@ -2151,7 +2197,7 @@ pub fn frame_loop<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Option<Re
             }
             // Esc leaves targeting / placement, else it is the hotkey of the card's
             // cancel buttons (stat_txt hotkey byte 0x1b).
-            if k == Escape && (scene.targeting.take().is_some() || scene.placing.take().is_some()) {
+            if k == Escape && (scene.end_targeting() || scene.placing.take().is_some()) {
                 continue;
             }
             let Some(c) = (if k == Escape { Some('\x1b') } else { key_char(k) }) else { continue };
@@ -2230,7 +2276,7 @@ pub fn frame_loop<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Option<Re
             }
         }
         let rdown = win.get_mouse_down(minifb::MouseButton::Right);
-        if rdown && !rmb_was_down && (scene.targeting.take().is_some() || scene.placing.take().is_some()) {
+        if rdown && !rmb_was_down && (scene.end_targeting() || scene.placing.take().is_some()) {
             // Right-click cancels targeting / placement.
         } else if replay.is_some() {
             // Watching a replay: no commands.
@@ -2243,6 +2289,9 @@ pub fn frame_loop<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Option<Re
         if let Some(kind) = want_menu {
             menu = open_menu(&scene, kind, 0, &mut settings);
             menu_paused = menu.is_some();
+            if menu_paused {
+                scene.pause_game();
+            }
         }
         if win.is_key_down(Key::Left) { vx -= sp }
         if win.is_key_down(Key::Right) { vx += sp }
@@ -2258,8 +2307,9 @@ pub fn frame_loop<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Option<Re
             if scene.st.replay_paused {
                 0
             } else {
-                replay_acc += 42 * scene.st.replay_mult as u32;
-                let ms = [167u32, 111, 83, 67, 56, 48, 42][scene.st.replay_speed.min(6) as usize];
+                // 0x4deb90 (replay): the frame time is the table entry divided by the multiplier.
+                replay_acc += 42;
+                let ms = (bw::triggers::FRAME_MS[scene.st.replay_speed.min(6) as usize] / scene.st.replay_mult.max(1) as u32).max(1);
                 let n = replay_acc / ms;
                 replay_acc %= ms;
                 n
@@ -2541,7 +2591,7 @@ fn draw_replay_panel(scene: &Scene, ui: &crate::ui::Ui, out: &mut [u8], w: i32, 
         crate::ui::blit(&ui.pbar_empty, l, t, s.px, w, h);
         crate::ui::blit_w(&ui.pbar_full, l, t, (r - l + 1) * pct / 100, s.px, w, h);
     }
-    let ms = [167u64, 111, 83, 67, 56, 48, 42][st.replay_speed.min(6) as usize];
+    let ms = bw::triggers::FRAME_MS[st.replay_speed.min(6) as usize] as u64;
     let secs = ms * st.frame as u64 / 1000;
     let time = if secs / 3600 == 0 { format!("{:02}:{:02}", secs / 60 % 60, secs % 60) } else { format!("{}:{:02}:{:02}", secs / 3600, secs / 60 % 60, secs % 60) };
     label(-46, &glu(0x10).replace("%s", &time), &mut s);

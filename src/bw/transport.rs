@@ -68,6 +68,28 @@ impl State {
         self.unit_from_handle(self.units[tr as usize].loaded_units[i] as u32)
     }
 
+    /// 0x4e6d00 (EAX = transport): call `f` on each live passenger, in slot order over the
+    /// transport type's passenger capacity; true as soon as one call returns true.
+    pub(super) fn any_passenger(&mut self, d: &Data, tr: u32, mut f: impl FnMut(&mut Self, u32) -> bool) -> bool {
+        let n = d.dat.units.space_provided[self.units[tr as usize].unit_type as usize] as usize;
+        for i in 0..n.min(8) {
+            if let Some(c) = self.unit_from_handle(self.units[tr as usize].loaded_units[i] as u32) {
+                if f(self, c) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// 0x4e6d90 (EAX = transport): one of its 8 slots holds a live unit whose type has
+    /// flag 8 in units.dat.
+    pub(super) fn has_passenger_with_flag8(&self, d: &Data, tr: u32) -> bool {
+        (0..8).any(|i| {
+            self.loaded_unit(tr, i).is_some_and(|c| d.dat.units.flags[self.units[c as usize].unit_type as usize] & 8 != 0)
+        })
+    }
+
     /// 0x4e7080: a passenger of `tr` carries (flag 8, +0xc0) a flag (0xd7).
     pub(super) fn passenger_carries_flag(&self, d: &Data, tr: u32) -> bool {
         (0..8).filter_map(|i| self.loaded_unit(tr, i)).any(|c| {

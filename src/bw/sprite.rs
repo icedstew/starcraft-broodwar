@@ -268,11 +268,47 @@ impl State {
         }
     }
 
-    fn set_frame_from_direction(&mut self, img: u32) {
+    /// 0x4d5940: the image's frame is its frameset plus its direction (redrawn if changed).
+    pub(crate) fn set_frame_from_direction(&mut self, img: u32) {
         let i = &mut self.images[img as usize];
         let f = i.frameset.wrapping_add(i.direction as u16);
         if i.frame != f {
+            i.flags |= iflag::REDRAW;
             i.frame = f;
+        }
+    }
+
+    /// 0x4d5e70 (EAX = image, EDX = frameset): set the frameset and recompute the frame.
+    pub(crate) fn image_set_frameset(&mut self, img: u32, frameset: u16) {
+        if self.images[img as usize].frameset != frameset {
+            self.images[img as usize].frameset = frameset;
+            self.set_frame_from_direction(img);
+        }
+    }
+
+    /// 0x4d5900 (EAX = image, EDX = x, ECX = y): set the image's offset; redraw if changed.
+    pub(crate) fn image_set_offset(&mut self, img: u32, x: i8, y: i8) {
+        let i = &mut self.images[img as usize];
+        if i.x != x || i.y != y {
+            i.flags |= iflag::REDRAW;
+            i.x = x;
+            i.y = y;
+        }
+    }
+
+    /// 0x4d5f30 (EAX = image): set the FLIPPED bit to `flip`; on a change the draw function
+    /// is re-applied (0x4d58b0 with the image's own modifier) and a special-offset image
+    /// follows the main image (0x4d5a00).
+    /// `flip` is compared whole (a value above 1 never matches) and only its bit 0 stored.
+    pub(crate) fn image_set_flip(&mut self, d: &Data, img: u32, flip: u8) {
+        let i = &mut self.images[img as usize];
+        if ((i.flags >> 1) & 1) as u8 != flip {
+            i.flags = (i.flags & !iflag::FLIPPED) | ((flip as u16 & 1) << 1);
+            let m = i.modifier;
+            self.image_set_modifier(img, m);
+            if self.images[img as usize].flags & iflag::USES_SPECIAL_OFFSET != 0 {
+                self.image_update_special_offset(d, img);
+            }
         }
     }
 
@@ -323,12 +359,24 @@ impl State {
         self.set_frame_from_direction(img);
     }
 
+    /// 0x4d5770 (ECX = kind, EDX = image, EDI = entry): LO offset of kind `kind` (entry
+    /// `idx`) of image `img`, x negated when the image is flipped.
+    pub fn image_lo_offset_of(&self, d: &Data, img: u32, kind: usize, idx: i8) -> (i8, i8) {
+        let im = &self.images[img as usize];
+        let (ox, oy) = d.lo_offset(kind, im.image_id, im.frame, idx).unwrap_or((0, 0));
+        (if im.flags & iflag::FLIPPED != 0 { ox.wrapping_neg() } else { ox }, oy)
+    }
+
     /// 0x401df0: LO offset of kind `kind` (entry `idx`) of sprite `s`'s main image, x
     /// negated when the image is flipped.
     pub fn image_lo_offset(&self, d: &Data, s: u32, kind: usize, idx: i8) -> (i8, i8) {
-        let im = &self.images[self.sprites[s as usize].main_image as usize];
-        let (ox, oy) = d.lo_offset(kind, im.image_id, im.frame, idx).unwrap_or((0, 0));
-        (if im.flags & iflag::FLIPPED != 0 { ox.wrapping_neg() } else { ox }, oy)
+        self.image_lo_offset_of(d, self.sprites[s as usize].main_image, kind, idx)
+    }
+
+    /// 0x498260 (EDI = sprite): the LO (x, y) pairs 0 and 1 of kind 3 (table 0x52217c) of
+    /// sprite `s`'s main image, x negated when it is flipped.
+    pub fn image_lo_offset_pair(&self, d: &Data, s: u32) -> ((i8, i8), (i8, i8)) {
+        (self.image_lo_offset(d, s, 3, 0), self.image_lo_offset(d, s, 3, 1))
     }
 
     /// 0x497460: sprite `s`'s first image with an id in `lo..=hi`, or NIL.
@@ -400,12 +448,7 @@ impl State {
         if mflip {
             x = -x;
         }
-        let i = &mut self.images[img as usize];
-        if i.x != x || i.y != y {
-            i.flags |= iflag::REDRAW;
-            i.x = x;
-            i.y = y;
-        }
+        self.image_set_offset(img, x, y);
     }
 
     /// 0x4d8470 / SC:R 0x1401928e0: start animation `anim` (with BW's attack-repeat fallbacks and no-restart rules).
@@ -473,20 +516,12 @@ impl State {
     /// 0x498b50 (EAX = sprite, stack = flip): every image whose FLIPPED bit differs takes
     /// `flip`, redraws (0x4d58b0's work: draw-function pointers 0x34 / 0x38 are render-only,
     /// coloring 0x230 for modifier 0x11, REDRAW) and follows the main image's LO offset
-    /// (0x4d5a00 inlined) when it uses the special offset.
+    /// (0x4d5f30) when it uses the special offset.
     pub fn sprite_set_flip(&mut self, d: &Data, s: u32, flip: bool) {
         let mut cur = self.sprites[s as usize].images.head;
         while cur != NIL {
             let next = self.images[cur as usize].link.next;
-            let i = &mut self.images[cur as usize];
-            if (i.flags & iflag::FLIPPED != 0) != flip {
-                i.flags = (i.flags & !iflag::FLIPPED) | if flip { iflag::FLIPPED } else { 0 };
-                let m = i.modifier;
-                self.image_set_modifier(cur, m);
-                if self.images[cur as usize].flags & iflag::USES_SPECIAL_OFFSET != 0 {
-                    self.image_update_special_offset(d, cur);
-                }
-            }
+            self.image_set_flip(d, cur, flip as u8);
             cur = next;
         }
     }
@@ -499,7 +534,7 @@ impl State {
         self.sprites[s as usize].sprite_id = sprite_id;
     }
 
-    /// 0x140190b40: overlay image above (in front of) or below `img` in its sprite.
+    /// 0x4d6d90 / 0x140190b40: overlay image above (in front of) or below `img` in its sprite.
     pub fn create_overlay(&mut self, d: &Data, img: u32, image_id: u16, x: i8, y: i8, above: bool) -> Option<u32> {
         let new = pop(&mut self.images, &mut self.free_images)?;
         let s = self.images[img as usize].sprite;
@@ -642,7 +677,7 @@ impl State {
         }
     }
 
-    /// 0x140190d70: spawn a thingy sprite at an image's position (sprol/lowsprul/...).
+    /// 0x4d7120 / 0x140190d70: spawn a thingy sprite at an image's position (sprol/lowsprul/...).
     pub fn create_sprite_at_image(&mut self, d: &Data, img: u32, sprite_id: u16, dx: i32, dy: i32, elevation: u8) -> Option<u32> {
         let i = &self.images[img as usize];
         let s = &self.sprites[i.sprite as usize];

@@ -9,7 +9,7 @@ use crate::todo_port;
 impl State {
     /// 0x4d94b0 game_step.
     pub fn game_step(&mut self, d: &Data) {
-        self.rng.enabled = true; // 0x4dc540(1)
+        self.rng.set_enabled(true); // 0x4dc540(1)
         self.random_event_tick(d);
         self.ai_update(d);
         if self.counter_100 == 0 {
@@ -25,7 +25,7 @@ impl State {
         self.update_bullets(d);
         self.update_free_flingies(d);
         self.update_thingies(d);
-        self.rng.enabled = false; // 0x4dc540(0)
+        self.rng.set_enabled(false); // 0x4dc540(0)
     }
 
     /// 0x47e410: random event timer (draws from the RNG inside 0x47e130).

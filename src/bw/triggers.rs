@@ -1239,7 +1239,7 @@ impl State {
                         u = self.units[u as usize].player_next;
                     }
                 }
-                // 0x49b870: UI refresh for the local player.
+                self.selection_circle_colors(_d);
                 true
             }
             // 0x4c7460: center location `number` on a unit in location (or that location).

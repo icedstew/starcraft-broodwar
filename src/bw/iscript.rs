@@ -73,20 +73,11 @@ impl State {
         }
     }
 
-    /// 0x14018ecd0: play a sound at the image's sprite position.
+    /// 0x4d6610 (EBX = sound) / 0x14018ecd0: play a sound at the image's sprite position.
     fn play_image_sound(&mut self, img: u32, id: u16) {
         let s = self.images[img as usize].sprite;
         let sp = &self.sprites[s as usize];
         self.sounds.push((id, sp.x, sp.y));
-    }
-
-    fn frame_update(&mut self, img: u32) {
-        let i = &mut self.images[img as usize];
-        let f = i.frameset.wrapping_add(i.direction as u16);
-        if i.frame != f {
-            i.flags |= iflag::REDRAW;
-            i.frame = f;
-        }
     }
 
     /// Copy direction/flip from the sprite's main image (followmaingraphic/engframe/engset).
@@ -134,9 +125,8 @@ pub fn run(st: &mut State, d: &Data, img: u32, nse: bool, mut distance: Option<&
             0x00 => {
                 p = a + 2;
                 let v = u16_(a);
-                if !nse && st.images[img as usize].frameset != v {
-                    st.images[img as usize].frameset = v;
-                    st.frame_update(img);
+                if !nse {
+                    st.image_set_frameset(img, v);
                 }
             }
             0x01 => {
@@ -144,9 +134,8 @@ pub fn run(st: &mut State, d: &Data, img: u32, nse: bool, mut distance: Option<&
                 if !nse {
                     let v = st.tileset.wrapping_add(u16_(a));
                     let frames = d.grp_frames(st.images[img as usize].image_id) & 0x7fff;
-                    if v < frames && st.images[img as usize].frameset != v {
-                        st.images[img as usize].frameset = v;
-                        st.frame_update(img);
+                    if v < frames {
+                        st.image_set_frameset(img, v);
                     }
                 }
             }
@@ -311,15 +300,8 @@ pub fn run(st: &mut State, d: &Data, img: u32, nse: bool, mut distance: Option<&
             0x17 => {
                 p = a + 1;
                 let b = u8_(a);
-                let i = &mut st.images[img as usize];
-                if !nse && ((i.flags >> 1) & 1) as u8 != b {
-                    if i.modifier == 0x11 {
-                        i.coloring = 0x230;
-                    }
-                    i.flags = (i.flags & !iflag::FLIPPED) | ((b as u16 & 1) << 1) | iflag::REDRAW;
-                    if i.flags & iflag::USES_SPECIAL_OFFSET != 0 {
-                        st.image_update_special_offset(d, img);
-                    }
+                if !nse {
+                    st.image_set_flip(d, img, b);
                 }
             }
             0x18 => {

@@ -20,6 +20,11 @@ impl Default for Rng {
 }
 
 impl Rng {
+    /// 0x4dc540 set_rng_enabled: set the flag, return the old one.
+    pub fn set_enabled(&mut self, on: bool) -> bool {
+        std::mem::replace(&mut self.enabled, on)
+    }
+
     /// 0x4dc4a0 sync_rand: returns 0 without advancing when disabled; otherwise the next
     /// 15-bit value.
     pub fn rand(&mut self, site: u32) -> u32 {

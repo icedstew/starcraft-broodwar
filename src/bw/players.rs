@@ -125,3 +125,25 @@ impl Players {
         self.upgrade_max[player as usize][upgrade]
     }
 }
+
+/// 0x57f0b4: a network game; scbw never runs one.
+pub const MULTIPLAYER: bool = false;
+
+/// 0x484f50: a team game (multiplayer and the template's teams byte 0x596875 set).
+pub fn is_team_game(template: &[u8; 0x20]) -> bool {
+    MULTIPLAYER && template[0x10] != 0
+}
+
+/// 0x484e90: human players (type 2) of the 8 slots whose force is `team` and whose storm id
+/// (`storm`, player entry +4) is below 8 with a connected net slot (0x66fe20, stride 0x22;
+/// `connected`). Walks the slots from 7 down to 0.
+pub fn humans_in_team(types: &[u8; 12], force: &[u8; 12], storm: impl Fn(usize) -> u32, connected: impl Fn(usize) -> bool, team: u8) -> u8 {
+    let mut n = 0u8;
+    for i in (0..8).rev() {
+        let s = storm(i);
+        if force[i] == team && types[i] == 2 && s < 8 && connected(s as usize) {
+            n = n.wrapping_add(1);
+        }
+    }
+    n
+}

@@ -1389,7 +1389,7 @@ impl State {
         self.pickup4(d, u);
     }
 
-    /// 0x47bab0: WatchTarget.
+    /// 0x47bab0: WatchTarget (ends in 0x475350).
     fn order_watch_target(&mut self, d: &Data, u: u32) {
         let t = self.units[u as usize].order_target_unit;
         if t != NIL && self.can_attack(d, u, t, true) {
@@ -1397,16 +1397,8 @@ impl State {
                 return;
             }
         }
-        // 0x475350 (args: the order target position).
-        if self.units[u as usize].order_queue_head != NIL {
-            self.order_nothing(d, u);
-        } else if self.units[u as usize].ai != NIL {
-            self.order_now(d, u, 0x9c);
-        } else {
-            let p = self.units[u as usize].order_target_pos;
-            let o = d.dat.units.ai_return_to_idle[self.units[u as usize].unit_type as usize];
-            self.order_at(d, u, o, p);
-        }
+        let p = self.units[u as usize].order_target_pos;
+        self.order_done_at(d, u, p);
     }
 
     /// inline: InitCreepGrowth.

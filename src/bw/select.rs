@@ -642,6 +642,54 @@ impl State {
 }
 
 impl State {
+    /// 0x49b0e0 (AL = player; `mode` = 0x6d5bbe): the color slot a player's units are drawn
+    /// in. With mode 2 (ally / enemy colors) it is 2 for the local player, 7 for an ally and
+    /// 0 for an enemy, mapped to the slot (0x57f21c index) that holds that color; otherwise
+    /// the player itself.
+    pub fn team_color_slot(&self, mode: u8, player: u8) -> u8 {
+        if mode != 2 {
+            return player;
+        }
+        let v = if self.local_player == player { 2 } else { ((self.alliances[self.local_player as usize][player as usize] == 0) as u8).wrapping_sub(1) & 7 };
+        match self.color_slot.iter().position(|&c| c == v as u32) {
+            Some(i) => i as u8,
+            None => v,
+        }
+    }
+
+    /// 0x49b870: rebuild the selection circle colors (0x581d6a) from the alliances of the
+    /// local player (all 0 but neutral player 11 -> 1 while watching a replay), then redo
+    /// the local selection's sprites so their circles take the new color.
+    pub fn selection_circle_colors(&mut self, d: &Data) {
+        let local = self.local_player as usize;
+        for p in 0..12 {
+            self.circle_color[p] = if !self.replay {
+                if p == local { 0 } else { (self.alliances[local][p] == 0) as u8 + 1 }
+            } else if p == 11 {
+                1
+            } else {
+                0
+            };
+        }
+        for i in 0..self.selected.len().min(12) {
+            let u = self.selected[i];
+            if self.replay || self.units[u as usize].player != self.local_player {
+                // 0x4e6290, 0x4e6180: the 0x9c (flag 0xdc & 1) calls need !replay and an
+                // own unit, never both here.
+                self.sprite_deselect(d, u);
+                self.sprite_select(d, u, i as u8);
+                if d.dat.units.flags[self.units[u as usize].unit_type as usize] & 0x10 != 0 {
+                    self.selected[i] = self.units[u as usize].subunit;
+                }
+            }
+        }
+        if super::players::MULTIPLAYER && self.template[0x10] != 0 {
+            crate::todo_port!("0x49b870", "team games: the other team members' selections (0x6284e8) get their ally-selection images (0x23a..0x244)");
+        }
+    }
+}
+
+impl State {
     /// 0x45ea30 (portrait 0x52 with a unit of `owner`): the advisor portrait in the owner's
     /// color slot, 0x52 + slot, or 0x62 + the slot's override (0x62 + owner for 8 and up).
     pub fn advisor_portrait(&self, owner: u8) -> u16 {

@@ -383,23 +383,15 @@ impl State {
             }
             return;
         }
-        // In a transport: the other passengers (0x4e6d00).
+        // In a transport: the other passengers.
         let tr = self.units[u as usize].connected_unit;
         if tr == NIL {
             return;
         }
-        let n = d.dat.units.space_provided[self.units[tr as usize].unit_type as usize] as usize;
-        for i in 0..n.min(8) {
-            let h = self.units[tr as usize].loaded_units[i] as u32;
-            if h == 0 {
-                continue;
-            }
-            let c = (h & 0x7ff) - 1;
-            let cu = &self.units[c as usize];
-            if cu.sprite != NIL && (cu.order != 0 || cu.order_state != 1) && cu.unique_id as u32 == h >> 11 {
-                self.irradiate_hit(d, c, u);
-            }
-        }
+        self.any_passenger(d, tr, |this, c| {
+            this.irradiate_hit(d, c, u);
+            false
+        });
     }
 
     /// 0x454f90: defensive matrix on `t`.
@@ -1386,32 +1378,43 @@ impl State {
             hu.remove_timer = timer;
         }
         if matches!(self.units[h as usize].unit_type, 0x53 | 0x51) {
-            // 0x4f65b0: copies of the first docked scarab, one per scarab the reaver has.
-            let template = self.units[t as usize].ptr_at(0xc0);
-            let n = self.units[t as usize].u8_at(0xc8) as u32 + self.units[t as usize].u8_at(0xc9) as u32;
-            for _ in 0..n {
-                let s = self.create_hallucination(d, template, player);
-                if s == NIL {
-                    continue;
-                }
-                self.units[s as usize].set_ptr_at(0xc0, h);
-                self.hide_unit(d, s);
-                let head = self.units[h as usize].ptr_at(0xc0);
-                self.units[s as usize].set_ptr_at(0xc4, head);
-                self.units[s as usize].set_ptr_at(0xc8, NIL);
-                if head != NIL {
-                    self.units[head as usize].set_ptr_at(0xc8, s);
-                }
-                self.units[h as usize].set_ptr_at(0xc0, s);
-                let c = self.units[h as usize].u8_at(0xc8);
-                self.units[h as usize].set_u8_at(0xc8, c.wrapping_add(1));
-                self.units[s as usize].set_u8_at(0xcc, 0);
-            }
+            self.hallucinate_scarabs(d, h, t, player);
         }
         if self.player_type(player) == 1 {
             todo_port!("0x4a2830", "AI: a hallucination joins the computer's forces");
         }
         h
+    }
+
+    /// 0x4f65b0 (ESI = hallucinated reaver `h`, arg = the real reaver `t`): `h` gets a
+    /// hallucinated copy (0x4f6b90) of each of `t`'s scarabs, walking its two scarab chains
+    /// (+0xc0 for the +0xc8 count, +0xc4 for the +0xc9 count) through +0xc4; the copy is
+    /// hidden (0x4e6340) and pushed on the head of `h`'s chain.
+    fn hallucinate_scarabs(&mut self, d: &Data, h: u32, t: u32, player: u8) {
+        for (head, count) in [(0xc0, 0xc8), (0xc4, 0xc9)] {
+            let mut template = self.units[t as usize].ptr_at(head);
+            for _ in 0..self.units[t as usize].u8_at(count) {
+                if template == NIL {
+                    break;
+                }
+                let s = self.create_hallucination(d, template, player);
+                if s != NIL {
+                    self.units[s as usize].set_ptr_at(0xc0, h);
+                    self.hide_unit(d, s);
+                    let first = self.units[h as usize].ptr_at(0xc0);
+                    self.units[s as usize].set_ptr_at(0xc4, first);
+                    self.units[s as usize].set_ptr_at(0xc8, NIL);
+                    if first != NIL {
+                        self.units[first as usize].set_ptr_at(0xc8, s);
+                    }
+                    self.units[h as usize].set_ptr_at(0xc0, s);
+                    let c = self.units[h as usize].u8_at(0xc8);
+                    self.units[h as usize].set_u8_at(0xc8, c.wrapping_add(1));
+                    self.units[s as usize].set_u8_at(0xcc, 0);
+                }
+                template = self.units[template as usize].ptr_at(0xc4);
+            }
+        }
     }
 
     /// 0x4f66d0: put a new hallucination on the map next to where it was made (some

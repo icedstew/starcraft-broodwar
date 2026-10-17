@@ -292,6 +292,9 @@ pub struct State {
     pub selected: Vec<u32>,
     /// 0x57f21c: each player slot's color slot (identity unless the colors are shuffled).
     pub color_slot: [u32; 8],
+    /// 0x581d6a: each player's selection circle color row in tselect.pcx (own 0, ally 1, enemy 2),
+    /// rebuilt by 0x49b870.
+    pub circle_color: [u8; 12],
     /// 0x58f442: color slot overrides for the advisor portrait (set by 0x4b2de0, 0 none).
     pub color_override: [u8; 8],
     /// 0x49f7a0 / 0x4ed000 emptied the selection: the front end ends placement
@@ -518,6 +521,7 @@ impl State {
             selections: [[NIL; 12]; 8],
             selected: Vec::new(),
             color_slot: [0, 1, 2, 3, 4, 5, 6, 7],
+            circle_color: [0; 12],
             color_override: [0; 8],
             selection_emptied: false,
             hotkeys: vec![[0; 12]; 12 * 18],

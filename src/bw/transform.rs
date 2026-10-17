@@ -418,6 +418,16 @@ impl State {
     /// 0x48a1c0: `player` leaves the game: their triggers go, and unless already
     /// settled they are defeated (0x489fc0).
     pub fn leave_game(&mut self, d: &Data, player: u8) {
+        self.settle_player(d, player, 2);
+    }
+
+    /// 0x48a180: `player` dropped: as 0x48a1c0, with result 1.
+    pub fn player_dropped(&mut self, d: &Data, player: u8) {
+        self.settle_player(d, player, 1);
+    }
+
+    /// Common body of 0x48a180 / 0x48a1c0.
+    fn settle_player(&mut self, d: &Data, player: u8, result: u8) {
         let p = player as usize;
         // 0x402330: free the player's trigger list.
         if let Some(l) = self.trig.lists.get_mut(p) {
@@ -426,7 +436,7 @@ impl State {
         if self.player_left[p] != 0 {
             return;
         }
-        self.player_left[p] = 2;
+        self.player_left[p] = result;
         self.player_defeated(d, player);
     }
 

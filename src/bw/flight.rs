@@ -254,6 +254,7 @@ impl State {
 
     /// 0x4eb9f0: put `u` at (x, y) (clamped to the map by its box, 0x401fa0), keeping
     /// its order's movement there and the unit finder in step.
+    /// 0x4ebae0 is an identical copy in 1.16.1.
     pub(super) fn place_unit_at(&mut self, d: &Data, u: u32, x: i16, y: i16) {
         let t = self.units[u as usize].unit_type as usize;
         let dim = d.dat.units.dimensions[t];
