@@ -1,0 +1,167 @@
+# Unported 1.16.1 functions that are not planned as ports, by reason (read by coverage.py).
+# Format: <bucket> <0xADDR | 0xADDR-0xADDR>   # comment
+# Buckets: replaced (the Rust port has its own equivalent, so nothing to port),
+#          deferred (planned later: save / load, networking).
+# Functions whose Ghidra name is not FUN_* (Storm ordinals, Win32 / CRT imports) count
+# as replaced automatically.
+
+# C runtime (sprintf, malloc, file I/O, exception handling, math helpers).
+replaced 0x404e00-0x415fff   # CRT
+replaced 0x4f7000-0x4fffff   # CRT tail
+
+# UI engine plumbing: dialog dirty rects, DirectDraw blits, palette fades, error logs,
+# window placement. scbw redraws the whole frame with its own renderer.
+replaced 0x416000-0x421fff
+
+# Win32 shell: message pump, accelerator / window helpers, fatal-error exits, Storm
+# resource and file helpers, the game-speed timer setup.
+replaced 0x4d1650   # GetMessage / PeekMessage
+replaced 0x4d1ae0   # shell step
+replaced 0x4d1bf0   # per-frame message pump
+replaced 0x4d27a0   # Storm resource helper
+replaced 0x4d2880   # fatal error string
+replaced 0x4d28d0   # pending fatal error
+replaced 0x4d2d10   # read whole file (Storm)
+replaced 0x4d2ff0   # input handler table reset
+replaced 0x4dcc50   # find game window
+replaced 0x448b20   # Win32
+replaced 0x448ec0   # Win32
+replaced 0x4f6100   # handle set (APPADDEX)
+replaced 0x4d92a0   # Storm timer setup
+replaced 0x4cdb70   # network.tbl accessor (Vec lookup)
+replaced 0x4015a0   # Storm list unlink
+replaced 0x4015f0   # Storm list free
+replaced 0x401650   # Storm list pop
+replaced 0x402330   # trigger list free (Vec clear)
+
+# Sound loader thread / cache memory management (audio.rs decodes on demand).
+replaced 0x4bb8e0
+replaced 0x4bbc00
+replaced 0x4bbe50
+replaced 0x4bbf50
+replaced 0x4bc180
+
+# Selection circles / health bars / overlays as image records in UI pools: view.rs draws
+# them each frame from the selection.
+replaced 0x4d4e80
+replaced 0x4d4f10
+replaced 0x4d4fa0
+replaced 0x4d5030
+replaced 0x4d5b60
+replaced 0x4d5bb0
+replaced 0x4d6740
+replaced 0x4d6810
+replaced 0x4d6f00
+replaced 0x4d6f90
+replaced 0x4d7070
+replaced 0x497430
+replaced 0x497530
+replaced 0x497590
+replaced 0x497620
+replaced 0x4983a0
+replaced 0x4e65c0
+replaced 0x497c30
+replaced 0x4982d0
+replaced 0x4bd3a0
+replaced 0x42d280
+replaced 0x493640
+replaced 0x494100
+replaced 0x499a10
+
+# Redraw / widget-state plumbing for the HUD (the frame is rebuilt each draw).
+replaced 0x481480   # tooltip hide
+replaced 0x4813d0   # tooltip show
+replaced 0x459360   # tooltip + cost slots clear
+replaced 0x458d50   # active card panel
+replaced 0x459770   # hovered control
+replaced 0x48e1e0   # placebox redraw
+replaced 0x48e210
+replaced 0x48e430
+replaced 0x48e490
+replaced 0x48e6e0
+replaced 0x48d560   # placebox buffer free
+replaced 0x457200   # widget param + redraw
+replaced 0x4258b0   # status text widget setter
+replaced 0x45e3a0   # talk camera globals (never read)
+
+# Save / load (see agent/areas/saveload.md).
+deferred 0x402d10-0x404700
+deferred 0x4cdd30-0x4cf9ff
+deferred 0x46e920
+deferred 0x46e990
+deferred 0x46ec40
+deferred 0x479e60
+deferred 0x479ec0
+deferred 0x47d460
+deferred 0x47da80
+deferred 0x487540
+deferred 0x4875f0
+deferred 0x487ec0
+deferred 0x48a8d0
+deferred 0x48a9a0
+deferred 0x48aeb0
+deferred 0x48c770
+deferred 0x48c7d0
+deferred 0x48c910
+deferred 0x4899d0
+deferred 0x4915c0
+deferred 0x494ce0
+deferred 0x495b50
+deferred 0x497310
+deferred 0x497380
+deferred 0x498740
+deferred 0x4c2910
+deferred 0x4c3450
+deferred 0x4c30d0
+deferred 0x4c3200
+deferred 0x4d4b20
+deferred 0x4d5600
+deferred 0x4d6330
+deferred 0x4d64c0
+deferred 0x4e2cb0
+deferred 0x4e2d30
+deferred 0x4e2e20
+deferred 0x4e3410
+deferred 0x4ea970
+deferred 0x4ea9d0
+deferred 0x4eaaf0
+deferred 0x4f3f20
+deferred 0x4f5c50
+deferred 0x4bf390
+deferred 0x4a10f0
+deferred 0x462bf0
+deferred 0x45b3a0
+deferred 0x4452d0
+deferred 0x447ed0
+deferred 0x4392f0
+deferred 0x432da0
+deferred 0x4989a0
+deferred 0x499a60
+deferred 0x4935f0
+deferred 0x494030
+deferred 0x42f600
+deferred 0x496170
+deferred 0x485980   # save / replay name validation
+
+# Networking / multiplayer (own networking later): packet checksums, quit / drop,
+# team games, net slots, net error dialogs.
+deferred 0x47cc50
+deferred 0x47ccd0
+deferred 0x47cdd0
+deferred 0x485a40
+deferred 0x4c3d20
+deferred 0x4c40f0
+deferred 0x485710
+deferred 0x484e90
+deferred 0x484f50
+deferred 0x4850f0
+deferred 0x49a110
+deferred 0x48fc70
+deferred 0x48fdb0
+deferred 0x4bf8c0
+deferred 0x4bb0b0
+deferred 0x4bb1a0
+deferred 0x4bb300
+deferred 0x4bb430
+deferred 0x4e4a10
+deferred 0x4f5930

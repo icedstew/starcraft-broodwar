@@ -1,6 +1,10 @@
 """Port coverage of 1.16.1 StarCraft.exe, per original source file.
 
-usage: python -I re/coverage.py <decomp.c> [src_dir] [--html out.html] [--missing game_step|command|both|ai]
+usage: python -I re/coverage.py <decomp.c> [src_dir] [--html out.html] [--missing game_step|command|both|ai] [--all]
+
+Unported functions are split by re/buckets.txt into "replaced" (the Rust port has its own
+equivalent: CRT, Storm / Win32, UI redraw plumbing), "deferred" (save / load, networking)
+and "left" (still to port). `--missing` lists only the left ones unless `--all` is given.
 
 <decomp.c> is the Ghidra export (`// ==== 00ADDR NAME` headers; not part of the repo).
 Functions are tagged with a source file when their body mentions an assert path like
@@ -48,6 +52,28 @@ AI_ROOTS = {
     0x438410, 0x439550, 0x43aa10, 0x43c170, 0x43b970, 0x43df30, 0x43ffd0, 0x442460,
     0x462830, 0x462ea0, 0x463040, 0x4a13c0, 0x432430,
 }
+
+def load_buckets(path=os.path.join(os.path.dirname(__file__), "buckets.txt")):
+    """re/buckets.txt: [(lo, hi, bucket)]."""
+    out = []
+    for line in open(path):
+        line = line.split("#")[0].split()
+        if len(line) != 2:
+            continue
+        lo, _, hi = line[1].partition("-")
+        out.append((int(lo, 16), int(hi or lo, 16), line[0]))
+    return out
+
+
+def bucket_of(addr, name, buckets):
+    """Why an unported function is not to be ported: replaced / deferred, else left."""
+    if not name.startswith("FUN_"):
+        return "replaced"  # Storm ordinals, Win32 / CRT imports
+    for lo, hi, b in buckets:
+        if lo <= addr <= hi:
+            return b
+    return "left"
+
 
 # Out of scope: networking is rewritten from scratch (and Storm's SNet lives outside the exe).
 EXCLUDE = re.compile(r"^(net_|gluBN|gluChat|gluJoin|gluCreate|gluConn|snp|bnet|battle)", re.I)
@@ -111,6 +137,9 @@ def main():
         i = args.index("--missing")
         missing = args[i + 1]
         del args[i:i + 2]
+    show_all = "--all" in args
+    if show_all:
+        args.remove("--all")
     if "--html" in args:
         i = args.index("--html")
         out_html = args[i + 1]
@@ -162,10 +191,15 @@ def main():
                 stack.extend(calls[a])
         return seen
 
+    buckets = load_buckets()
+    name_of = {f[0]: f[1] for f in funcs}
+
     def line(label, seen):
         p = len(seen & ported)
+        why = Counter(bucket_of(a, name_of[a], buckets) for a in seen - ported)
         print(f"reachable from {label}: {len(seen)} functions, {p} ported ({100 * p // max(len(seen), 1)}%), "
-              f"{len(seen & todo)} named by todo_port!")
+              f"{len(seen & todo)} named by todo_port!; unported: {why['replaced']} replaced by Rust, "
+              f"{why['deferred']} deferred, {why['left']} left")
 
     for label, roots in SIM_ROOTS:
         full = reach(roots)
@@ -187,13 +221,15 @@ def main():
                     callers[c].add(a)
             rows_m = []
             for a in seen - ported:
+                if not show_all and bucket_of(a, info[a][1], buckets) != "left":
+                    continue
                 pc = len(callers[a] & ported)
                 rows_m.append((-(pc > 0), -len(callers[a]), a, pc, len(callers[a]), info[a][4]))
             rows_m.sort()
             print(f"\nunported, reachable from {label}: {len(rows_m)}")
             print(f"{'addr':10} {'name':24} {'ported callers':>14} {'callers':>8} {'lines':>6}  file")
             for _, _, a, pc, nc, ln in rows_m:
-                st = " todo" if a in todo else ""
+                st = (" todo" if a in todo else "") + ("" if not show_all else " " + bucket_of(a, info[a][1], buckets))
                 print(f"0x{a:06x}   {info[a][1][:24]:24} {pc:14} {nc:8} {ln:6}  {file_of[a]}{st}")
     if out_html:
         with open(out_html, "w") as o:
