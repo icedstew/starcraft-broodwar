@@ -39,7 +39,7 @@ impl State {
     }
 
     /// 0x491b30: pay the cloak's energy and switch to the Cloak secondary order.
-    fn start_cloak_order(&mut self, d: &Data, u: u32) {
+    pub(super) fn start_cloak_order(&mut self, d: &Data, u: u32) {
         if self.units[u as usize].status & 0x100 != 0 {
             return;
         }
@@ -123,7 +123,10 @@ impl State {
 
     /// 0x49b5b0: start cloaking: images fade out, nobody detects the unit yet.
     pub(super) fn begin_cloak(&mut self, d: &Data, u: u32) {
-        // 0x48ed50: the cloak sound (UI).
+        if self.units[u as usize].status & 0x10 == 0 {
+            // 0x48ed50 (EBX = 0x111 from every caller, ESI = the unit): the cloak sound.
+            self.unit_sound(0x111, u, 0);
+        }
         if self.units[u as usize].status & 0x10 != 0 {
             self.burrowed_cloak(d, u);
             self.refresh_detection(d, u);
@@ -149,7 +152,10 @@ impl State {
 
     /// 0x49b440: stop cloaking: images fade back in.
     pub(super) fn end_cloak(&mut self, d: &Data, u: u32) {
-        // 0x48ed50: the decloak sound (UI).
+        if self.units[u as usize].status & 0x10 == 0 {
+            // 0x48ed50 (EBX = 0x112 from every caller, ESI = the unit): the decloak sound.
+            self.unit_sound(0x112, u, 0);
+        }
         if self.units[u as usize].status & 0x10 != 0 {
             let s = self.units[u as usize].sprite;
             self.sprite_uncloak_images(s);

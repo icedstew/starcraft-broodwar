@@ -179,8 +179,7 @@ impl State {
         }
         self.units[u as usize].order_signal &= !0x10;
         if d.dat.units.flags[t] & 1 == 0 {
-            let fid = d.dat.units.flingy[t] as usize;
-            let top = self.adjust_top_speed(u, d.dat.flingy.top_speed[fid]);
+            let top = self.unit_top_speed(d, u);
             self.units[u as usize].fl.top_speed = top as i32;
         }
         let tail = self.sprites[s as usize].images.tail;

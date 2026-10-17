@@ -5,7 +5,6 @@
 use super::list::NIL;
 use super::train::NONE;
 use super::{Data, State};
-use crate::todo_port;
 
 /// 0x6408f8: placement result grids, 8 rows of 6 tiles per slot.
 // ponytail: the original slot count is unknown; the game uses slots 0 and 1.
@@ -642,7 +641,7 @@ impl State {
         // 0x48dda0 / 0x48d9a0 / 0x48e310 / 0x4c36c0: UI refresh.
         self.order_now(d, b, 0x2c);
         if self.player_type(self.units[b as usize].player) == 1 {
-            todo_port!("0x435770", "AI: new building joins its town");
+            self.ai_building_joins_town(d, u, b);
         }
     }
 

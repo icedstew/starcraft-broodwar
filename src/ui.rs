@@ -437,6 +437,8 @@ pub struct Ui {
     /// ticon.pcx: 6 states x 16 colors for command icons.
     pub ticon: Vec<u8>,
     pub stat_txt: Vec<String>,
+    /// rez\stat_txt.tbl as read (button strings, `dat::tbl_button`).
+    pub stat_raw: Vec<u8>,
     /// rez\tips.tbl (0x658adc).
     pub tips: Vec<String>,
     /// rez\network.tbl (0x6d1220, 0x4cdbd0).
@@ -474,7 +476,7 @@ pub struct Ui {
 }
 
 /// 0x4dab00: fonts are encrypted with the key in `font\font.gid` (grid.cpp).
-fn read_font(files: &Storage, name: &str) -> io::Result<Vec<u8>> {
+pub(crate) fn read_font(files: &Storage, name: &str) -> io::Result<Vec<u8>> {
     let bad = || io::Error::new(io::ErrorKind::InvalidData, format!("{name}: decryption failed"));
     let key = crate::grid::font_key(&files.read("font/font.gid")?).ok_or_else(bad)?;
     let mut d = files.read(name)?;
@@ -505,7 +507,8 @@ impl Ui {
         let tranwire = Grp::parse(files.read("unit/wirefram/tranwire.grp")?);
         let cmdicons = Grp::parse(files.read("unit/cmdbtns/cmdicons.grp")?);
         let ticon = crate::view::pcx(&files.read("unit/cmdbtns/ticon.pcx")?).2;
-        let stat_txt = crate::dat::parse_tbl(&files.read("rez/stat_txt.tbl")?);
+        let stat_raw = files.read("rez/stat_txt.tbl")?;
+        let stat_txt = crate::dat::parse_tbl(&stat_raw);
         let tips = files.read("rez/tips.tbl").map(|d| crate::dat::parse_tbl(&d)).unwrap_or_default();
         let network = files.read("rez/network.tbl").map(|d| crate::dat::parse_tbl(&d)).unwrap_or_default();
         let glu_all = files.read("rez/gluAll.tbl").map(|d| crate::dat::parse_tbl(&d)).unwrap_or_default();
@@ -528,6 +531,7 @@ impl Ui {
             colors: std::cell::Cell::new([0; 26]),
             fonts,
             text_rows: text_colors.clone(),
+            fx: None,
         };
         let mut stat_f10 = crate::dlg::Dialog::parse(&files.read("rez/stat_f10.bin")?);
         // 0x4f5180 (init): graphic 0x51276c, draw 0x4f4fb0.
@@ -556,7 +560,7 @@ impl Ui {
         if let Some(c) = minimap.get_mut(1) {
             c.flags &= !crate::dlg::flag::VISIBLE;
         }
-        Ok(Ui { console, conover, font, font8, icons, cursors, wireframe, grpwire, tranwire, twire, cmdicons, ticon, stat_txt, tips, network, glu_all, statbtn, text_colors, statdata, cmdbtns, pbar_empty, pbar_full, skin, stat_f10, statport, portraits, statres, res_shown: std::cell::Cell::new((0, 0, 0xff)), minimap })
+        Ok(Ui { console, conover, font, font8, icons, cursors, wireframe, grpwire, tranwire, twire, cmdicons, ticon, stat_txt, stat_raw, tips, network, glu_all, statbtn, text_colors, statdata, cmdbtns, pbar_empty, pbar_full, skin, stat_f10, statport, portraits, statres, res_shown: std::cell::Cell::new((0, 0, 0xff)), minimap })
     }
 
     pub fn text_color(&self, c: usize) -> &[u8] {
@@ -577,6 +581,21 @@ impl Ui {
             *v = self.ticon.get(state * 16 + (i & 15)).copied().unwrap_or(i as u8);
         }
         self.cmdicons.draw(frame, false, x, y, dst, dw, dh, Blend::Colors(&t));
+    }
+
+    /// 0x4d1140: is screen point (x, y) over the console, so that a press there does not
+    /// start a map selection: rows above the console's first non-empty row are the map,
+    /// rows from its first fully opaque row are the console; between them the point is
+    /// the console where the console bitmap has a pixel (the region test, 0x4d11a0 /
+    /// 0x41d470).
+    pub fn hud_hit(&self, x: i32, y: i32) -> bool {
+        let c = &self.console;
+        let y0 = crate::view::SCREEN_H - c.h as i32;
+        let (sx, sy) = (x, y - y0);
+        if sy < 0 || sy >= c.h as i32 || sx < 0 || sx >= c.w as i32 {
+            return sy >= c.h as i32;
+        }
+        c.px[sy as usize * c.w + sx as usize] != 0
     }
 
     /// Cursor `kind` (index into CURSORS) at (x, y): frame `counter` (0x597390, one step

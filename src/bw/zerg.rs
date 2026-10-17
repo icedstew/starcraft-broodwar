@@ -216,7 +216,7 @@ impl State {
             return self.order_next_or_idle(d, u);
         };
         if self.player_type(self.units[g as usize].player) == 1 {
-            todo_port!("0x435770", "AI: new building joins its town");
+            self.ai_building_joins_town(d, u, g);
         }
         self.units[u as usize].order_flags |= 4;
         self.kill_unit(d, u);
@@ -411,7 +411,7 @@ impl State {
                 self.transform_unit(d, u, t);
                 let ut = self.units[u as usize].unit_type;
                 if (ut == 0x29 || ut == 0x2a) && self.player_type(self.units[u as usize].player) == 1 {
-                    todo_port!("0x4a2830", "AI: hatched unit joins the computer's forces");
+                    self.ai_unit_joins(d, u, u);
                 }
                 self.unit_ready_sound(d, u);
                 let slot = self.units[u as usize].build_queue_slot as usize;
@@ -458,10 +458,10 @@ impl State {
         let ai = self.player_type(self.units[u as usize].player) == 1;
         let twin = if pair { self.hatch_twin(d, u) } else { NIL };
         if twin != NIL && ai {
-            todo_port!("0x4a2830", "AI: twin joins the computer's forces");
+            self.ai_unit_joins(d, u, twin);
         }
         if t != 0x29 && t != 0x2a && ai {
-            todo_port!("0x4a2830", "AI: hatched unit joins the computer's forces");
+            self.ai_unit_joins(d, u, u);
         }
         self.reset_unit_image(d, u, false);
         self.finish_unit_pre(d, u);

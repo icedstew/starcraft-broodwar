@@ -244,6 +244,21 @@ impl Dat {
 }
 
 /// .tbl string table: u16 count, u16 offsets[count], NUL-terminated strings. Index is 0-based here.
+/// A command button's stat_txt entry as 0x4593a0 reads it: the hotkey byte, the kind byte
+/// (0 plain, 1 unit, 2 upgrade, 3 tech; 0 also ends a C string, so `parse_tbl` loses
+/// the text) and the text from the third byte.
+pub fn tbl_button(d: &[u8], id: u16) -> Option<(u8, String)> {
+    let i = (id as usize).checked_sub(1)?;
+    let n = u16::from_le_bytes([*d.first()?, *d.get(1)?]) as usize;
+    if i >= n {
+        return None;
+    }
+    let o = u16::from_le_bytes([d[2 + i * 2], d[3 + i * 2]]) as usize + 2;
+    let t = d.get(o..)?;
+    let end = t.iter().position(|&b| b == 0).unwrap_or(t.len());
+    Some((d[o - 1], String::from_utf8_lossy(&t[..end]).into_owned()))
+}
+
 pub fn parse_tbl(d: &[u8]) -> Vec<String> {
     let n = u16::from_le_bytes([d[0], d[1]]) as usize;
     (0..n)

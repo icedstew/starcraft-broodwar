@@ -7,7 +7,7 @@
 
 # C runtime (sprintf, malloc, file I/O, exception handling, math helpers).
 replaced 0x404e00-0x415fff   # CRT
-replaced 0x4f7000-0x4fffff   # CRT tail
+replaced 0x4f7b17-0x4fffff   # CRT tail (0x4f7000..0x4f7ae0 are glue ready rooms)
 
 # UI engine plumbing: dialog dirty rects, DirectDraw blits, palette fades, error logs,
 # window placement. scbw redraws the whole frame with its own renderer.
@@ -165,3 +165,94 @@ deferred 0x4bb300
 deferred 0x4bb430
 deferred 0x4e4a10
 deferred 0x4f5930
+
+# Front-end networking screens (Battle.net, IPX / modem / direct connect, join / create
+# multiplayer games, chat); own networking later.
+deferred 0x4baf30   # gluConn
+deferred 0x4b9e70   # gluChat
+deferred 0x4ad330   # Battle.net results
+deferred 0x4ad140
+deferred 0x4b86c0   # gluJoin
+deferred 0x4b19c0   # gluModem
+deferred 0x4b0c60
+deferred 0x4b0dc0
+deferred 0x4b1060
+deferred 0x4b13a0
+deferred 0x4ed940
+deferred 0x4ed840
+deferred 0x4ac250   # glubnicon
+deferred 0x4acf80   # glubn
+deferred 0x44e8d0   # Battle.net profile record
+deferred 0x4dc5b0   # provider id -> glue screen
+deferred 0x4490e0   # gluBNChat list
+deferred 0x449390
+deferred 0x44cdf0   # BN profile backgrounds
+deferred 0x472770   # Storm game / version descriptor
+deferred 0x4abfe0   # gluBN bitmap loader
+deferred 0x4acf20   # BN teardown
+deferred 0x4491e0
+deferred 0x44cda0
+deferred 0x4ad190   # BN callback table
+deferred 0x4d3cc0   # Storm provider init
+deferred 0x4d3fc0   # net_glue game create / start (single player start goes through it too)
+deferred 0x452a30   # BNET connect path
+deferred 0x472260-0x472570   # BN text record parser
+deferred 0x4a68d0   # join: player slot
+deferred 0x4a8590   # join from game info
+deferred 0x4aaf50
+deferred 0x4aaff0
+deferred 0x4ad230   # provider connect
+deferred 0x4afa30   # Storm game create
+deferred 0x4b0fb0   # modem / AppleTalk provider step
+deferred 0x4c4680   # session teardown
+deferred 0x4d34a0
+deferred 0x4d3510
+
+# Front end OS / Storm / DirectSound / Miles helpers (scbw: audio.rs, mpq.rs, storm.rs,
+# Rust ownership instead of Storm lists).
+replaced 0x401020   # Storm list free helpers
+replaced 0x401090
+replaced 0x401970
+replaced 0x401a10
+replaced 0x4025e0
+replaced 0x404b20
+replaced 0x404b70
+replaced 0x452900   # Storm registry: multiplayer name / race
+replaced 0x453b20-0x453c60   # 'SIGN' signature check (SHA-1, CryptoAPI)
+replaced 0x4a5e40-0x4a5ef0   # Miles music stream close / CD probe / volume
+replaced 0x4a6140   # Miles music track start
+replaced 0x4a6250   # music end check
+replaced 0x4a6310   # DirectSound music start
+replaced 0x4a8790   # GetModuleFileName dir
+replaced 0x4bb890   # DirectSound buffer position
+replaced 0x4bb9b0   # RIFF chunk walker
+replaced 0x4bbd80   # WAV parser
+replaced 0x4bc8c0   # DirectSound buffer create
+replaced 0x4bca30   # sound file play
+replaced 0x4bca80   # sound cache load
+replaced 0x4bccf0   # sound preload list
+replaced 0x4beed0   # bounded string copy
+replaced 0x4bef80   # archive signature check
+replaced 0x4c3190   # PKWare explode streaming wrapper (explode crate)
+replaced 0x4c3280   # compress.cpp file explode / implode
+replaced 0x4d2930   # asset path resolver ("\lowm")
+replaced 0x4d2b30   # DLL load-and-call
+replaced 0x4ddbe0   # DLL load-and-call
+replaced 0x4d9b50   # zero + SMemFree
+replaced 0x4d9bf0   # font.gid SMemAlloc copy (grid.rs)
+replaced 0x4aad40   # crash log list search
+
+# AI save / load: AI pool pointers <-> indices (scbw's AI uses indices already).
+deferred 0x432180   # pointer -> index (0x69f468 pool)
+deferred 0x4321b0   # pointer -> index (0x6b5448 pool)
+deferred 0x436a20   # pointer -> index (0x6957e0 pool)
+deferred 0x432810   # AI record: indices -> pointers (load)
+deferred 0x4328e0   # AI record: pointers -> indices (save)
+deferred 0x437290   # index -> region pointer (load)
+deferred 0x438240   # unit AI record: pointers -> indices (save)
+
+# Input handler tables (0x5968a0.. event procs, 0x6556ec / 0x6556f0 cursor procs): scbw's
+# view.rs frame_loop dispatches input itself (placement 0x640880 / targeting 0x641694
+# modes are its own state).
+replaced 0x484cc0   # install the game screen's handlers
+deferred 0x4513f0   # gluChat lobby chat init (multiplayer)

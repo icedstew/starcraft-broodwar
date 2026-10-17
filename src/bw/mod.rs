@@ -7,9 +7,11 @@
 pub mod addon;
 pub mod ai;
 pub mod ai_areas;
+pub mod ai_military;
 pub mod ai_place;
 pub mod ai_region;
 pub mod ai_script;
+pub mod ai_spells;
 pub mod ai_town;
 pub mod attack;
 pub mod battery;
@@ -341,6 +343,9 @@ pub struct State {
     /// 0x66ff60: why the last requirement check failed (soft failures, Ok(-1), set it
     /// here; hard ones return it as the error).
     pub req_error: std::cell::Cell<u8>,
+    /// 0x6957a0: the "any target will do" flag the AI spell target wrappers (0x442660 ...) leave
+    /// for their predicates (read stale by some).
+    pub ai_spell_flag: u32,
     /// 0x6d5dcc: builder 0x473fb0 checks units against instead of its own (set by the
     /// AI's spot search 0x4465c0).
     pub builder_override: u32,
@@ -383,6 +388,9 @@ pub struct State {
     /// (0x6cdfec: 1 unit speech, 4 building sounds; 0 = always), the speaking unit (NIL for
     /// none) and the base volume.
     pub speech: Vec<(u16, u32, u32, i32)>,
+    /// 0x48ed50 calls from the sim that passed its vision gate (State::unit_sound): sfx id,
+    /// the sounding unit, the minimum volume and its sprite position (x, y).
+    pub unit_sounds: Vec<(u16, u32, i32, i16, i16)>,
     /// 0x45efe0 calls this frame for the UI: (talking unit, sfx id).
     pub talked: Vec<(u32, u16)>,
     /// 0x4a34c0 calls this frame for the minimap: (sprite x, sprite y, type).
@@ -492,9 +500,11 @@ impl State {
             notices: Vec::new(),
             chat: Vec::new(),
             speech: Vec::new(),
+            unit_sounds: Vec::new(),
             talked: Vec::new(),
             minimap_pings: Vec::new(),
             req_error: std::cell::Cell::new(0),
+            ai_spell_flag: 0,
             builder_override: NIL,
             areas: vec![ai_areas::ResourceArea::default(); ai_areas::AREA_SLOTS],
             area_count: 0,

@@ -616,7 +616,8 @@ impl State {
                         self.kill_unit(d, u);
                         return;
                     }
-                    // 0x48ed50: the launch sound.
+                    // 0x48ed50 (EBX = 0x268, ESI = the interceptor): the launch sound.
+                    self.unit_sound(0x268, u, 0);
                     self.fighter_wander(d, u, 3, tp);
                     self.units[u as usize].main_order_timer = 0xf;
                     self.units[u as usize].order_state = 1;

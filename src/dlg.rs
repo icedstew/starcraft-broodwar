@@ -2,7 +2,12 @@
 //! the default drawing of their controls (table 0x501504, by control type).
 
 use crate::grp::{Blend, Grp};
+use crate::smk::Smk;
+use crate::storage::Storage;
+use crate::todo_port;
 use crate::ui::{Font, TextDst, TextOpts};
+use std::cell::RefCell;
+use std::rc::Rc;
 
 /// Control flags (+0x18).
 pub mod flag {
@@ -49,6 +54,53 @@ pub struct Ctl {
     pub step: u8,
     /// +0x2e when a dialog's init replaced the type's default draw.
     pub update: Update,
+    /// Image controls (type 5): +0xc..+0x14, the pcx named by the text (0x4d27a0).
+    pub image: Option<Rc<Image>>,
+    /// Light-up buttons (type 14): the animation list at +0x42.
+    pub anims: Vec<Anim>,
+    /// Light-up buttons: +0x36..+0x3c, the rect the mouse lights the button in (relative
+    /// to the control until 0x4e14a0 adds its position).
+    pub hot: (i32, i32, i32, i32),
+    /// Light-up buttons: +0x3e, the light level 0..=100 (0x4e0e40 moves it 15 per tick).
+    pub hover: i16,
+    /// Light-up buttons: +0x46..+0x4c, the text rect (made absolute by 0x4e14a0).
+    pub trect: (i32, i32, i32, i32),
+    /// Light-up buttons: +0x4e, the text flags (the control flags >> 0x14).
+    pub align: u8,
+}
+
+/// An 8-bit image (0x4d27a0's out record: width, height, pixels).
+#[derive(Debug)]
+pub struct Image {
+    pub w: i32,
+    pub h: i32,
+    pub px: Vec<u8>,
+}
+
+/// One entry of a light-up button's list (0x4e0be0 / 0x4e1260): a Smacker video drawn
+/// at an offset in the control.
+#[derive(Clone)]
+pub struct Anim {
+    /// +4: 1 fades with the light, 2 dims when unlit, 4 loops, 8 only while lit, 0x10
+    /// transparent.
+    pub flags: u32,
+    /// +8: the fade level 0..=100.
+    pub alpha: i16,
+    /// +0xa: the .smk path.
+    pub path: Vec<u8>,
+    /// +0x12 / +0x14: offset in the control.
+    pub x: i32,
+    pub y: i32,
+    /// +0xe / +0x1a: the open video and its milliseconds into the frame; None when
+    /// finished (0x4e0f50 frees it).
+    pub video: Option<Rc<RefCell<Smk>>>,
+    pub elapsed: u32,
+}
+
+impl std::fmt::Debug for Anim {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "Anim({:?}, flags {:#x})", String::from_utf8_lossy(&self.path), self.flags)
+    }
 }
 
 /// Draw functions dialogs install over the defaults (+0x2e).
@@ -70,12 +122,25 @@ pub struct Dialog {
     pub active: Option<usize>,
     /// +0xc / +0x10: the background bitmap (0x4c9cc0) and its size.
     pub bg: Option<(i32, i32, Vec<u8>)>,
+    /// 0x6cddc4 / 0x6cddc8: the mouse (screen), for the light-up buttons.
+    pub mouse: (i32, i32),
+    /// Milliseconds since the 30 ms timer 0x4e0f50 last ran.
+    timer: u32,
 }
 
 impl Dialog {
     pub fn parse(d: &[u8]) -> Dialog {
         let i16_at = |o: usize| d.get(o..o + 2).map_or(0, |b| i16::from_le_bytes([b[0], b[1]]));
         let u32_at = |o: usize| d.get(o..o + 4).map_or(0, |b| u32::from_le_bytes(b.try_into().unwrap()));
+        let cstr = |t: usize| if t != 0 && t < d.len() { d[t..].split(|&c| c == 0).next().unwrap_or(&[]).to_vec() } else { Vec::new() };
+        let anims = |mut p: usize| {
+            let mut v = Vec::new();
+            while p != 0 && p + 0x1e <= d.len() && v.len() < 16 {
+                v.push(Anim { flags: u32_at(p + 4), alpha: i16_at(p + 8), path: cstr(u32_at(p + 10) as usize), x: i16_at(p + 0x12) as i32, y: i16_at(p + 0x14) as i32, video: None, elapsed: 0 });
+                p = u32_at(p) as usize;
+            }
+            v
+        };
         let ctl = |o: usize| {
             let t = u32_at(o + 0x14) as usize;
             let text = if t != 0 && t < d.len() { d[t..].split(|&c| c == 0).next().unwrap_or(&[]).to_vec() } else { Vec::new() };
@@ -91,6 +156,12 @@ impl Dialog {
                 thumb: 0,
                 step: 0,
                 update: Update::Default,
+                image: None,
+                anims: if i16_at(o + 0x22) == 14 { anims(u32_at(o + 0x42) as usize) } else { Vec::new() },
+                hot: (i16_at(o + 0x36) as i32, i16_at(o + 0x38) as i32, i16_at(o + 0x3a) as i32, i16_at(o + 0x3c) as i32),
+                hover: i16_at(o + 0x3e),
+                trect: (i16_at(o + 0x46) as i32, i16_at(o + 0x48) as i32, i16_at(o + 0x4a) as i32, i16_at(o + 0x4c) as i32),
+                align: 0,
             }
         };
         let mut this = ctl(0);
@@ -107,7 +178,7 @@ impl Dialog {
             }
             o = next;
         }
-        Dialog { this, controls, active: None, bg: None }
+        Dialog { this, controls, active: None, bg: None, mouse: (0, 0), timer: 0 }
     }
 
     /// The dialog's screen origin.
@@ -133,12 +204,122 @@ impl Dialog {
         (x + c.rect.0, y + c.rect.1, x + c.rect.2, y + c.rect.3)
     }
 
-    /// The topmost visible, enabled control under screen point (x, y).
+    /// The topmost visible, enabled control under screen point (x, y). Light-up buttons
+    /// answer for their hot rect (0x4e0b30: visible, enabled, flag 0x10).
     pub fn hit(&self, x: i32, y: i32) -> Option<usize> {
+        let (ox, oy) = self.origin();
         self.controls.iter().rposition(|c| {
+            if c.ty == 14 {
+                let (l, t, r, b) = c.hot;
+                return c.flags & flag::VISIBLE != 0
+                    && c.flags & flag::DISABLED == 0
+                    && c.flags & 0x10 != 0
+                    && (l..=r).contains(&(x - ox))
+                    && (t..=b).contains(&(y - oy));
+            }
             let (l, t, r, b) = self.abs(c);
             c.flags & flag::VISIBLE != 0 && c.ty != 9 && c.ty != 10 && c.ty != 11 && (l..=r).contains(&x) && (t..=b).contains(&y)
         })
+    }
+
+    /// 0x4194e0 (after the controls are placed): an image control loads the pcx its text
+    /// names through 0x4d27a0; a light-up button's text rect moves to its position.
+    pub fn bind(&mut self, files: &Storage) {
+        for c in &mut self.controls {
+            if c.ty == 14 {
+                c.trect = (c.trect.0 + c.rect.0, c.trect.1 + c.rect.1, c.trect.2 + c.rect.0, c.trect.3 + c.rect.1);
+            }
+            if c.ty == 5 && !c.text.is_empty() {
+                let path = String::from_utf8_lossy(&c.text).into_owned();
+                let Ok(d) = files.read(&path) else { crate::bw::fatal_error(&path) };
+                let (w, h, px) = crate::view::pcx(&d);
+                c.image = Some(Rc::new(Image { w: w as i32, h: h as i32, px }));
+            }
+        }
+    }
+
+    /// Event 10 to the light-up buttons (0x4e14a0): the hot rect moves to the dialog,
+    /// each list entry opens its video (0x4e1260) and shows its first frame.
+    pub fn init_lightups(&mut self, files: &Storage) {
+        for c in &mut self.controls {
+            if c.ty != 14 {
+                continue;
+            }
+            let (l, t) = (c.rect.0, c.rect.1);
+            c.hot = (c.hot.0 + l, c.hot.1 + t, c.hot.2 + l, c.hot.3 + t);
+            let mut extra = c.flags >> 9 & 0x10;
+            for (i, a) in c.anims.iter_mut().enumerate() {
+                if i > 0 && a.flags & 2 != 0 {
+                    a.alpha = 0x1e;
+                }
+                a.flags |= extra;
+                extra = 0x10;
+                if a.path.is_empty() {
+                    continue;
+                }
+                let path = String::from_utf8_lossy(&a.path).into_owned();
+                let Some(mut smk) = files.read(&path).ok().and_then(Smk::parse) else { crate::bw::fatal_error(&path) };
+                smk.next_frame();
+                a.video = Some(Rc::new(RefCell::new(smk)));
+            }
+            c.align = (c.flags >> 0x14) as u8;
+        }
+    }
+
+    /// The 30 ms timer 0x4e0f50 of the light-up buttons, for `ms` elapsed: plays their
+    /// videos (a finished one is dropped), then 0x4e0e40 moves the light levels.
+    pub fn tick(&mut self, ms: u32) {
+        self.timer += ms;
+        let (ox, oy) = self.origin();
+        let (mx, my) = (self.mouse.0 - ox, self.mouse.1 - oy);
+        while self.timer >= 30 {
+            self.timer -= 30;
+            for c in self.controls.iter_mut().filter(|c| c.ty == 14 && c.flags & flag::VISIBLE != 0) {
+                c.anims.retain_mut(|a| {
+                    let Some(v) = a.video.as_ref() else { return false };
+                    let mut v = v.borrow_mut();
+                    a.elapsed += 30;
+                    while a.elapsed >= v.ms.max(1) {
+                        a.elapsed -= v.ms.max(1);
+                        if !v.next_frame() {
+                            if a.flags & 4 == 0 {
+                                return false;
+                            }
+                            v.rewind();
+                            v.next_frame();
+                        }
+                    }
+                    true
+                });
+                // 0x4e0e40.
+                let (hl, ht, hr, hb) = c.hot;
+                let lit = c.flags & 0x80 != 0 && (hl..=hr).contains(&mx) && (ht..=hb).contains(&my);
+                if lit {
+                    c.hover = (c.hover + 15).min(100);
+                } else if c.hover > 0 {
+                    c.hover = (c.hover - 15).max(0);
+                }
+                for a in c.anims.iter_mut().filter(|a| a.flags & 1 != 0) {
+                    let target = if lit {
+                        100
+                    } else if a.flags & 2 != 0 {
+                        30
+                    } else {
+                        100
+                    };
+                    let al = a.alpha;
+                    if lit {
+                        if al < 100 {
+                            a.alpha = (al + 15).min(100);
+                        }
+                    } else if al < target {
+                        a.alpha = if al + 15 < target { al + 15 } else { target };
+                    } else if al > target {
+                        a.alpha = if target < al - 15 { al - 15 } else { target };
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -155,6 +336,117 @@ pub struct Skin {
     pub fonts: [Font; 4],
     /// tfontgam.pcx rows.
     pub text_rows: Vec<u8>,
+    /// The translucency tables of the glue palette (0x4178b0); None in game.
+    pub fx: Option<Effects>,
+}
+
+/// 0x417c20: the light level (0..=7) of a percentage (0x6d09b8).
+pub fn level(percent: i32) -> u8 {
+    (percent.clamp(0, 100) * 7 / 100) as u8
+}
+
+/// The three blend tables 0x6d0590 (0x4178b0 with no excluded colors) and the shade
+/// color 0x51a18c the glue's translucent images darken toward.
+pub struct Effects {
+    /// 0x6d0590[p - 1]: `t[i * 256 + j]` is the palette color nearest to
+    /// (j * p + i * (8 - p)) / 8 for p = 1..=3.
+    pub tables: [Vec<u8>; 3],
+    pub shade: u8,
+    /// 0x6d5e24: the light percentage translucent image controls (type 5) use.
+    pub image_pct: i32,
+}
+
+/// 0x51b2f0: the 26 neighbor cells 0x4174a0 searches.
+const NEIGHBORS: [[i32; 3]; 26] = [
+    [-1, 0, 0], [0, -1, 0], [0, 0, -1], [1, 0, 0], [0, 1, 0], [0, 0, 1], [-1, 1, 0], [-1, 0, 1], [1, -1, 0], [0, -1, 1], [1, 0, -1],
+    [0, 1, -1], [-1, -1, 0], [-1, 0, -1], [0, -1, -1], [1, 1, 0], [1, 0, 1], [0, 1, 1], [-1, -1, 1], [-1, 1, -1], [1, -1, -1], [1, 1, -1],
+    [1, -1, 1], [-1, 1, 1], [-1, -1, -1], [1, 1, 1],
+];
+
+impl Effects {
+    /// 0x4178b0 (no excluded colors): the three tables by 0x4174a0 for p = 1..=3.
+    pub fn new(pal: &[[u8; 3]; 256], shade: u8, image_pct: i32) -> Effects {
+        Effects { tables: [1, 2, 3].map(|p| Self::table(pal, p)), shade, image_pct }
+    }
+
+    /// 0x4174a0: the nearest-color table for the blend fraction p / 8. The palette is
+    /// bucketed in 18 x 18 x 18 cells of 16 levels (the lists newest first); a color is
+    /// the nearest in its cell, or in the first neighbor cell with a match within 0x400.
+    fn table(pal: &[[u8; 3]; 256], p: u32) -> Vec<u8> {
+        let cell = |c: [u32; 3]| ((c[0] >> 4) + 1, (c[1] >> 4) + 1, (c[2] >> 4) + 1);
+        let key = |x: i32, y: i32, z: i32| ((x * 18 + y) * 18 + z) as usize;
+        let mut grid: Vec<Vec<u8>> = vec![Vec::new(); 18 * 18 * 18];
+        for i in 0..256usize {
+            if i == 0 || pal[i] != pal[i - 1] {
+                let (x, y, z) = cell(pal[i].map(|c| c as u32));
+                grid[key(x as i32, y as i32, z as i32)].push(i as u8);
+            }
+        }
+        let mut t = vec![0u8; 0x10000];
+        for j in 0..256 {
+            t[j] = j as u8;
+            t[j * 256] = j as u8;
+        }
+        for i in 1..256usize {
+            for j in 1..256usize {
+                let b: [u32; 3] = std::array::from_fn(|k| (pal[j][k] as u32 * p + pal[i][k] as u32 * (8 - p)) >> 3);
+                let dist = |c: u8| -> u32 { (0..3).map(|k| (pal[c as usize][k] as i32 - b[k] as i32).pow(2) as u32).sum() };
+                let (cx, cy, cz) = cell(b);
+                let (cx, cy, cz) = (cx as i32, cy as i32, cz as i32);
+                let mut best = u32::MAX;
+                let mut out = i as u8;
+                let head = &grid[key(cx, cy, cz)];
+                if head.len() == 1 {
+                    out = head[0];
+                } else if !head.is_empty() {
+                    for &c in head.iter().rev() {
+                        let d = dist(c);
+                        if d < best {
+                            best = d;
+                            out = c;
+                        }
+                    }
+                } else {
+                    for n in NEIGHBORS {
+                        if best < 0x401 {
+                            break;
+                        }
+                        for &c in grid[key(cx + n[0], cy + n[1], cz + n[2])].iter().rev() {
+                            let d = dist(c);
+                            if d < best {
+                                best = d;
+                                out = c;
+                            }
+                        }
+                    }
+                }
+                t[i * 256 + j] = out;
+            }
+        }
+        t
+    }
+
+    /// 0x417a10's per-color step: `base` lit toward `target` at light `level`.
+    pub fn mix(&self, level: u8, base: u8, target: u8) -> u8 {
+        match level {
+            0 => base,
+            7.. => target,
+            1 | 2 => self.tables[level as usize - 1][base as usize * 256 + target as usize],
+            _ => self.tables[if level < 4 { level as usize - 1 } else { 6 - level as usize }][target as usize * 256 + base as usize],
+        }
+    }
+
+    /// 0x416f30: the remap a translucent blit at `level` applies to the pixels it covers
+    /// (the shade color blended over each).
+    pub fn shade_remap(&self, level: u8) -> [u8; 256] {
+        let sh = self.shade as usize;
+        std::array::from_fn(|k| match level {
+            0 => 0,
+            1 | 2 => self.tables[level as usize - 1][k * 256 + sh],
+            7.. => k as u8,
+            _ => self.tables[if level < 4 { level as usize - 1 } else { 6 - level as usize }][sh * 256 + k],
+        })
+    }
 }
 
 /// An 8-bit surface.
@@ -284,6 +576,10 @@ impl Skin {
             if c.flags & flag::VISIBLE == 0 {
                 continue;
             }
+            if c.ty == 14 {
+                self.lightup(dlg, c, dlg.abs(c), s);
+                continue;
+            }
             let mut c = c.clone();
             if Self::focus(dlg, i, &c) {
                 c.flags |= flag::FOCUS;
@@ -376,12 +672,103 @@ impl Skin {
                 }
                 self.box_text(c, r, size, s);
             }
+            5 => self.image_ctl(c, r, s),
             6 => self.hscroll(c, r, s),
             9..=11 if !c.text.is_empty() => {
                 self.ctl_text(c, &c.text, r, 0, 0, [0x11, 0x12, 0x14][c.ty as usize - 9], s);
             }
             _ => {}
         }
+    }
+
+    /// 0x4ef560 -> 0x4ef440: an image control's picture at the control's corner, clipped
+    /// to the control: flag 0x40000 darkens what it covers (mode 4, the shade color
+    /// blended over the pixels under the picture), else flag 0x2000 skips color 0.
+    fn image_ctl(&self, c: &Ctl, r: (i32, i32, i32, i32), s: &mut Surf) {
+        let Some(img) = c.image.as_ref() else { return };
+        if c.flags & 0x40000 == 0 {
+            return self.blit(&img.px, img.w, img.h, r.0, r.1, r, None, c.flags & 0x2000 != 0, s);
+        }
+        if c.flags & 0x2000000 != 0 {
+            todo_port!("0x416f30", "mode 5: the second shade 0x51a194 / level 0x6d0c50");
+        }
+        let Some(fx) = self.fx.as_ref() else { return };
+        let remap = fx.shade_remap(level(fx.image_pct));
+        self.blit(&img.px, img.w, img.h, r.0, r.1, r, Some(&remap), true, s);
+    }
+
+    /// 0x4172f0 (modes 0, 1 and 4): `px` (w x h) at (x, y) clipped to `clip` (inclusive).
+    /// With `remap` the covered pixels (source not 0) are replaced by their remap; else
+    /// the source is copied, skipping color 0 when `keyed`.
+    #[allow(clippy::too_many_arguments)]
+    fn blit(&self, px: &[u8], w: i32, h: i32, x: i32, y: i32, clip: (i32, i32, i32, i32), remap: Option<&[u8; 256]>, keyed: bool, s: &mut Surf) {
+        for sy in 0..h {
+            let dy = y + sy;
+            if dy < clip.1 || dy > clip.3 || dy < 0 || dy >= s.h {
+                continue;
+            }
+            for sx in 0..w {
+                let dx = x + sx;
+                if dx < clip.0 || dx > clip.2 || dx < 0 || dx >= s.w {
+                    continue;
+                }
+                let Some(&c) = px.get((sy * w + sx) as usize) else { continue };
+                let d = &mut s.px[(dy * s.w + dx) as usize];
+                match remap {
+                    Some(m) if c != 0 => *d = m[*d as usize],
+                    Some(_) => {}
+                    None if c != 0 || !keyed => *d = c,
+                    None => {}
+                }
+            }
+        }
+    }
+
+    /// 0x4e1180: a light-up button: its videos (the ones flagged 8 only while lit), then
+    /// its text (0x4e1020), lit toward the highlight color by the light level (0x417a10).
+    fn lightup(&self, dlg: &Dialog, c: &Ctl, r: (i32, i32, i32, i32), s: &mut Surf) {
+        let (ox, oy) = dlg.origin();
+        let (mx, my) = (dlg.mouse.0 - ox, dlg.mouse.1 - oy);
+        let (hl, ht, hr, hb) = c.hot;
+        let lit = c.flags & 0x80 != 0 && (hl..=hr).contains(&mx) && (ht..=hb).contains(&my);
+        for a in &c.anims {
+            if !lit && a.flags & 8 != 0 {
+                continue;
+            }
+            let Some(v) = a.video.as_ref() else { continue };
+            if a.flags & 3 != 0 {
+                todo_port!("0x417130", "translucent video blit by the fade level");
+                continue;
+            }
+            let v = v.borrow();
+            self.blit(&v.pixels, v.w as i32, v.h as i32, r.0 + a.x, r.1 + a.y, r, None, a.flags & 0x10 != 0, s);
+        }
+        if c.text.is_empty() {
+            return;
+        }
+        let f = c.flags;
+        let font = &self.fonts[match f & 0x4c00 {
+            0x400 => 0,
+            0x800 => 2,
+            0x4000 => 3,
+            _ => 1,
+        }];
+        let text = String::from_utf8_lossy(if f & flag::HOTKEY != 0 { &c.text[1..] } else { &c.text }).into_owned();
+        let t = (c.trect.0 + ox, c.trect.1 + oy, c.trect.2 + ox, c.trect.3 + oy);
+        let o = TextOpts { flags: c.align, spacing: if f & flag::NO_SPACING != 0 { 0 } else { 1 }, line_gap: 3, clip: t };
+        let mut rows = self.text_rows.clone();
+        let color = if f & flag::DISABLED != 0 {
+            5
+        } else {
+            if let (Some(fx), true) = (self.fx.as_ref(), rows.len() >= 24) {
+                let l = level(c.hover as i32);
+                for k in 0..8 {
+                    rows[8 + k] = fx.mix(l, self.text_rows[8 + k], self.text_rows[16 + k]);
+                }
+            }
+            3
+        };
+        font.draw_text(&text, t.0, t.1, color, &o, TextDst { rows: &rows, out: s.px, w: s.w, h: s.h });
     }
 
     /// The text beside a check / option box (0x21 left, or 0x24 right of a right box).

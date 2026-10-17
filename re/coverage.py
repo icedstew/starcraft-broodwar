@@ -1,6 +1,6 @@
 """Port coverage of 1.16.1 StarCraft.exe, per original source file.
 
-usage: python -I re/coverage.py <decomp.c> [src_dir] [--html out.html] [--missing game_step|command|both|ai] [--all]
+usage: python -I re/coverage.py <decomp.c> [src_dir] [--html out.html] [--missing game_step|command|both|front|ai|ai-front] [--all]
 
 Unported functions are split by re/buckets.txt into "replaced" (the Rust port has its own
 equivalent: CRT, Storm / Win32, UI redraw plumbing), "deferred" (save / load, networking)
@@ -33,6 +33,7 @@ SIM_ROOTS = [
     ("game_step 0x4d94b0", [0x4d94b0]),
     ("command dispatch 0x4865d0", [0x4865d0]),
     ("both", [0x4d94b0, 0x4865d0]),
+    ("front end 0x4de200", [0x4de200]),
 ]
 
 # Entry points into the computer players' AI. Functions only reachable through these
@@ -209,8 +210,9 @@ def main():
         line(label + " (no AI)", sim)
         line(label + " (AI only)", ai)
         line(label, full)
-        if missing and (label.startswith(missing) or missing == "ai" and label == "both"):
-            seen = ai if missing == "ai" else sim
+        ai_mode = missing and missing.startswith("ai")
+        if missing and (label.startswith(missing) or ai_mode and label.startswith(missing[3:] or "both")):
+            seen = ai if ai_mode else sim
             # Unported reachable functions, those called by ported code first (the frontier),
             # then by how many reachable functions call them.
             info = {f[0]: f for f in funcs}

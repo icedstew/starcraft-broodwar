@@ -842,8 +842,10 @@ impl State {
             if self.can_use_tech(d, u, 0, player) != Ok(1) || self.units[u as usize].hp <= 0xa00 {
                 continue;
             }
-            // An unused synced random number (call site 0x1f), then the stim sound (UI).
-            self.rng.rand(0x1f);
+            // 0x4dc550 (call site 0x1f): the stim sound 0x116 or 0x117 (0x48ed50, ESI = the
+            // unit).
+            let id = self.rng.rand_between(0x1f, 0x116, 0x117);
+            self.unit_sound(id as u16, u, 0);
             self.apply_damage_pub(d, u, 0xa00, NIL, 0xff, true);
             if self.units[u as usize].stim_timer < 0x25 {
                 self.units[u as usize].stim_timer = 0x25;
@@ -1337,6 +1339,8 @@ impl State {
     /// ("cheat enabled"), or 0x42 if the value dropped, on the error line.
     // ponytail: the redraw flags at the end (0x68c1b0, 0x68ac74, ...) and the error
     // line's redraw buffer fill are not ported.
+    /// 0x4c0ad0 (command 0x12) runs this when the game template allows cheats
+    /// (0x596876 == 1, checked at the dispatch).
     fn command_cheat(&mut self, d: &Data, new: u32) {
         let old = self.game_options;
         let changed = new != old;
@@ -1423,6 +1427,16 @@ impl State {
             self.minimap_pings.push((x as i16 as i32, y as i16 as i32, t));
         }
     }
+
+    /// 0x485e60: command 0x55, "Player %s set network for low / high / extra high
+    /// latency." (network.tbl 0x44 + the level, at most 2; 0x6556e4 keeps the level, UI).
+    fn command_latency(&mut self, player: u8, level: u8) {
+        self.notices.push((0x44 + level.min(2) as u16, player));
+    }
+
+    /// 0x4bf820: commands 0x38 / 0x39 toggle a net-slot flag (bit 2 of 0x66fe22); no
+    /// simulation state.
+    fn command_net_slot_flag(&self) {}
 
     /// 0x4c0bc0: command 0x10, pause. Allowed when not paused and not multiplayer (the
     /// multiplayer limit 0x58d718 is not modelled); 0x488800 sets 0x6509c4, then the
@@ -1562,7 +1576,7 @@ impl State {
             0x10 => self.command_pause(player),
             0x11 => self.command_resume(player),
             // 0x4bf820: net-slot table 0x66fe20 only (flag bit 2 set / cleared for '9'); not sim state.
-            0x38 | 0x39 => {}
+            0x38 | 0x39 => self.command_net_slot_flag(),
             0x18 => self.command_cancel_construction(d, player, sel),
             0x19 => self.command_cancel_morph(d, player, sel),
             0x20 => self.command_cancel_train(d, player, sel, u16_at(1)),
@@ -1578,9 +1592,7 @@ impl State {
             0x36 => self.command_stim(d, player, sel),
             0x57 => self.command_leave_game(d, player, byte(1)),
             0x58 => self.command_minimap_ping(player, u16_at(1), u16_at(3)),
-            // 0x485e60: "Player %s set network for low / high / extra high latency."
-            // (network.tbl 0x44 + the level, at most 2; 0x6556e4 keeps the level, UI only).
-            0x55 => self.notices.push((0x44 + byte(1).min(2) as u16, player)),
+            0x55 => self.command_latency(player, byte(1)),
             0x21 => self.command_cloak(d, player, sel),
             0x22 => self.command_decloak(d, player, sel),
             0x23 => self.command_unit_morph(d, player, sel, u16_at(1)),

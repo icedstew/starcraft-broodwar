@@ -31,6 +31,9 @@ pub enum Blend<'a> {
     Colors(&'a [u8; 256]),
     /// Translucent remap (ofire, bexpl, ...): out = table[(src - 1) * 256 + dst].
     Table(&'a [u8]),
+    /// Draw function 12 (0x4d5cd0 / 0x4d5c90): the image's shape filled with another GRP
+    /// frame's pixels (tex, width, height; see `Grp::pixels`), through the player's colors.
+    Texture(&'a [u8], i32, i32, &'a [u8; 8]),
 }
 
 impl Grp {
@@ -78,6 +81,15 @@ impl Grp {
         self.frames.get(i)
     }
 
+    /// Frame `i` decoded to w*h indexed pixels (0 = transparent), as 0x40abbe draws it into
+    /// the 0x5254c0 buffer; also (w, h).
+    pub fn pixels(&self, i: usize) -> Option<(Vec<u8>, i32, i32)> {
+        let f = self.frames.get(i)?;
+        let mut buf = vec![0u8; (f.w * f.h).max(0) as usize];
+        self.draw(i, false, -f.x, -f.y, &mut buf, f.w, f.h, Blend::Normal);
+        Some((buf, f.w, f.h))
+    }
+
     /// Draw frame `i` with its grp-box top-left at (x, y) in `dst` (w*h indexed pixels).
     pub fn draw(&self, i: usize, flip: bool, x: i32, y: i32, dst: &mut [u8], dw: i32, dh: i32, blend: Blend) {
         let Some(f) = self.frames.get(i) else { return };
@@ -116,6 +128,14 @@ impl Grp {
                         Blend::Remap(t) => t[*d as usize],
                         Blend::Colors(t) => t[c as usize],
                         Blend::Table(t) => t.get((c as usize).wrapping_sub(1) * 256 + *d as usize).copied().unwrap_or(c),
+                        Blend::Texture(t, tw, th, pc) => {
+                            let (r, k) = (py - fy, col);
+                            match if k < tw && r < th { t[(r * tw + k) as usize] } else { 0 } {
+                                0 => *d,
+                                c if (8..16).contains(&c) => pc[c as usize - 8],
+                                c => c,
+                            }
+                        }
                     };
                 }
             };

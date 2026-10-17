@@ -180,7 +180,8 @@ impl State {
             self.order_next_or_idle(d, u);
             return;
         }
-        // 0x48ed50: the trap sound.
+        // 0x48ed50 (EBX = units.dat what_sound_end, ESI = the trap): the trap sound.
+        self.unit_sound(d.dat.units.what_sound_end[t as usize], u, 0);
         self.order_queue_front(d, u, 0xa9, (0, 0));
         self.order_next_or_idle(d, u);
     }
@@ -204,7 +205,8 @@ impl State {
             self.sprites[s as usize].elevation = 1;
         }
         if State::is_trap_doodad(t) {
-            // 0x48ed50: the trap sound.
+            // 0x48ed50 (EBX = units.dat what_sound_start, ESI = the trap): the trap sound.
+            self.unit_sound(d.dat.units.what_sound_start[t as usize], u, 0);
             self.order_queue_front(d, u, 0xa8, (0, 0));
             self.order_next_or_idle(d, u);
             return;
@@ -394,6 +396,11 @@ impl State {
             st.units[c as usize].order_flags |= 1;
             st.issue_order(d, c, o, true, (0, 0), NIL, 0xe4);
             st.prepare_next_order(d, c);
+            // 0x48ed50 (EBX = 0x20 + the local race 0x57f1e2, ESI = the unit): the rescue
+            // sound for the local player's own units.
+            if st.is_local_unit(c) {
+                st.unit_sound(0x20 + st.player_races[st.local_player as usize] as u16, c, 0);
+            }
         };
         if whole_player {
             let mut c = self.player_units[self.units[u as usize].player as usize];
@@ -407,6 +414,5 @@ impl State {
         } else {
             rescue(self, u);
         }
-        // 0x48ed50: the rescue sound for the local player (UI).
     }
 }

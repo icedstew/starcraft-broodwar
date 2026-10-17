@@ -531,6 +531,8 @@ pub struct Ai {
     pub update_player: u32,
     /// 0x692628
     pub unk_692628: u8,
+    /// 0x69262c (count 0x69265c): area candidates.
+    pub area_candidates: Vec<u16>,
     /// 0x69a604: regions per player.
     pub regions: Vec<Vec<AiRegion>>,
     /// 0x6957e0: military AIs of every region.
@@ -572,6 +574,7 @@ impl Default for Ai {
             players: vec![PlayerAi::default(); 8],
             update_player: 0,
             unk_692628: 0,
+            area_candidates: Vec::new(),
             regions: vec![Vec::new(); 8],
             military: AiPool::new(1000),
             guards: AiPool::new(1000),
@@ -876,7 +879,9 @@ impl State {
         if expand {
             let first = self.ai.town_lists[p];
             if first != NIL && self.ai.players[p].panic_script_pos != 0 {
-                crate::todo_port!("0x45b590", "AI expansion script (0x45b530, 0x4453e0, 0x45b440)");
+                // 0x45b590: the first town stands in for a script thread.
+                let v = self.ai.players[p].panic_script_pos;
+                self.expand_from(d, p as u8, first, false, v, 2);
             }
         }
     }

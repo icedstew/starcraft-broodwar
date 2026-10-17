@@ -494,6 +494,12 @@ impl State {
         f.turn_rate = turn as u8;
     }
 
+    /// 0x47b8f0: `u`'s flingy top speed with its speed modifiers (0x47b5f0).
+    pub fn unit_top_speed(&self, d: &Data, u: u32) -> u32 {
+        let fid = d.dat.units.flingy[self.units[u as usize].unit_type as usize] as usize;
+        self.adjust_top_speed(u, d.dat.flingy.top_speed[fid])
+    }
+
     /// 0x47b5f0: `base` top speed with the unit's speed modifiers.
     pub fn adjust_top_speed(&self, u: u32, base: u32) -> u32 {
         let m = self.speed_mod(u);
@@ -607,6 +613,30 @@ impl State {
     /// 0x401170: unit `u` belongs to the local player (never during a replay).
     pub fn is_local_unit(&self, u: u32) -> bool {
         !self.replay && self.units[u as usize].player == self.local_player
+    }
+
+    /// 0x48ed50 (EBX = sound `id`, ESI = unit `u`, stack: enable 1, minimum volume `min_vol`):
+    /// the sim's part of the gate. Id 0 plays nothing; a unit that is not the local
+    /// player's (always in a replay) must be visible to the local vision mask (0x57f0b0, in
+    /// a replay 0x6d0f18). The digital volume check, distance volume and pan, the sfxdata
+    /// minimum and 0x4bc270 are the front end's (view.rs); this never changes sim state.
+    pub fn unit_sound(&mut self, id: u16, u: u32, min_vol: i32) {
+        if u == NIL {
+            // No unit: full volume, no pan (the view).
+            if id != 0 {
+                self.unit_sounds.push((id, NIL, min_vol, 0, 0));
+            }
+            return;
+        }
+        let s = self.units[u as usize].sprite;
+        if id == 0 || s == NIL {
+            return;
+        }
+        let sp = &self.sprites[s as usize];
+        if (self.replay || !self.is_local_unit(u)) && sp.visibility & self.local_vision_mask == 0 {
+            return;
+        }
+        self.unit_sounds.push((id, u, min_vol, sp.x, sp.y));
     }
 
     /// 0x48ee30: an error for `player`: advisor sound `sound` (sfxdata id) and stat_txt
@@ -779,7 +809,17 @@ impl State {
         if on_screen || self.units[u as usize].attack_notify_timer != 0 {
             return;
         }
-        // 0x48eae0: units within 0x160 are quiet for a while (0x48e9f0).
+        self.alert_nearby_units(u);
+        self.alert_cooldown = 100;
+        let race = self.player_races[self.local_player as usize] as u16;
+        let building = self.units[u as usize].status & 2 != 0;
+        self.speech.push((if building { 0x75 } else { 0x78 } + race, 1, NIL, 0));
+    }
+
+    /// 0x48eae0 (EAX = `u`): every unit within 0x160 of `u`'s sprite (finder 0x4e8280, callback
+    /// 0x48e9f0) is quiet for 100 ticks.
+    fn alert_nearby_units(&mut self, u: u32) {
+        let (x, y) = self.unit_sprite_pos(u);
         let b = [x.wrapping_sub(0x160), y.wrapping_sub(0x160), x.wrapping_add(0x160), y.wrapping_add(0x160)];
         let mut search = std::mem::replace(&mut self.search, super::collide::UnitSearch::empty());
         let start = search.units_in_finder_box(self, b);
@@ -789,10 +829,6 @@ impl State {
         for n in found {
             self.units[n as usize].attack_notify_timer = 100;
         }
-        self.alert_cooldown = 100;
-        let race = self.player_races[self.local_player as usize] as u16;
-        let building = self.units[u as usize].status & 2 != 0;
-        self.speech.push((if building { 0x75 } else { 0x78 } + race, 1, NIL, 0));
     }
 
     /// 0x48e980 (once per frame, front end): alert cooldowns, and every other frame the

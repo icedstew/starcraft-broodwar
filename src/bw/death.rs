@@ -117,13 +117,12 @@ impl State {
                 self.remove_unit(d, u);
                 return;
             }
-            // 0x48ed50: hallucination death sound 0x26b at the unit (ponytail: its
-            // volume/vision gate is not ported; positional like iscript sounds).
+            // 0x48ed50 (EBX = 0x26b, ESI = the unit): the hallucination death sound.
+            self.unit_sound(0x26b, u, 0);
             let (x, y, elevation, vis) = {
                 let sp = &self.sprites[s as usize];
                 (sp.x, sp.y, sp.elevation, sp.visibility)
             };
-            self.sounds.push((0x26b, x, y));
             // 0x488210: the hallucination death sprite, one layer above.
             if let Some(t) = self.create_thingy(d, 0x176, x, y, 0) {
                 let ts = self.thingies[t as usize].sprite;
@@ -223,7 +222,8 @@ impl State {
             self.set_unit_colors(d, u, 0xb);
             self.units[u as usize].status |= 1;
             self.modify_completed_counters(d, u, 1, true);
-            // 0x48e1e0: minimap refresh (UI).
+            // 0x48e1e0: UI only (the placement highlight: footprint_sprite 0x463a10 when the
+            // active placement type 0x64088a is 0x6e / 0x9d / 0x95, then flag 0x6d5be4).
             return true;
         }
         false

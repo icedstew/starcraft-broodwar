@@ -5,7 +5,6 @@
 
 use super::list::NIL;
 use super::{Data, State};
-use crate::todo_port;
 
 const LARVA: u16 = 0x23;
 /// Hatchery side weights by side: left, up, right, down.
@@ -97,7 +96,7 @@ impl State {
         self.units[l as usize].connected_unit = h;
         self.set_larva_side(d, l);
         if self.units[h as usize].ai != NIL {
-            todo_port!("0x435770", "AI: larva joins its town");
+            self.ai_building_joins_town(d, h, l);
         }
     }
 
@@ -162,7 +161,7 @@ impl State {
         self.units[l as usize].connected_unit = h;
         self.set_larva_side(d, l);
         if self.units[h as usize].ai != NIL {
-            todo_port!("0x435770", "AI: larva joins its town");
+            self.ai_building_joins_town(d, h, l);
         }
     }
 

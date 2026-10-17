@@ -14,6 +14,9 @@ pub enum Show {
     /// A button: background frame `bg` of the race's cmdbtns.grp and an icon:
     /// a cmdicons.grp frame (set 3, enabled) or a cmdbtns.grp frame (set 6, disabled).
     Button { bg: u16, icon: u16, cmdicon: bool },
+    /// A training queue slot (0x4268d0): like `Button`, `num` is the slot number drawn over
+    /// a queued unit (0 for an empty slot, shown disabled).
+    Slot { bg: u16, icon: u16, cmdicon: bool, num: u8 },
     /// An info button (ids 9..12, 0x425600 and kin): a cmdicons.grp icon and the
     /// upgrade level / count shown with it ("%d ").
     Info { icon: u16, level: u8, tip: String },
@@ -160,9 +163,9 @@ fn training_panel(st: &State, d: &Data, strings: &[String], u: u32) -> Vec<(i16,
         let t = un.build_queue[(un.build_queue_slot as usize + i) % 5];
         let bg = if i == 0 || i > 3 { 2 } else { 4 };
         if t == 0xe4 {
-            out.push((2 + i as i16, Show::Button { bg, icon: 6 + i as u16, cmdicon: false }));
+            out.push((2 + i as i16, Show::Slot { bg, icon: 6 + i as u16, cmdicon: false, num: 0 }));
         } else {
-            out.push((2 + i as i16, Show::Button { bg, icon: t, cmdicon: true }));
+            out.push((2 + i as i16, Show::Slot { bg, icon: t, cmdicon: true, num: i as u8 + 1 }));
         }
     }
     out.push((7, Show::Progress(progress)));
@@ -176,6 +179,9 @@ fn training_panel(st: &State, d: &Data, strings: &[String], u: u32) -> Vec<(i16,
         if ty == 0xa0 || ty == 0xa7 { 0x303 } else { 0x306 }
     };
     out.push((-15, Show::Text(stat(strings, s + race_index(d, un.unit_type)))));
+    // 0x427890 then draws the building's wireframe (1), hit points (-7), energy (-8),
+    // status line (-20; 0x425b50) and name (-5) as for any unit (0x4263e0, 0x425a30).
+    out.extend(unit_panel(st, d, strings, u).into_iter().filter(|(id, _)| matches!(id, 1 | -7 | -8 | -20 | -5)));
     out
 }
 

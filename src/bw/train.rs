@@ -3,7 +3,6 @@
 
 use super::list::NIL;
 use super::{Data, State};
-use crate::todo_port;
 
 /// Build queue "empty" marker.
 pub const NONE: u16 = 0xe4;
@@ -208,7 +207,7 @@ impl State {
                     return;
                 }
                 if self.player_type(self.units[u as usize].player) == 1 {
-                    todo_port!("0x4a2830", "AI: trained unit joins the computer's forces");
+                    self.ai_unit_joins(d, u, c);
                 }
                 if self.units[c as usize].unit_type == 0xe {
                     // 0x4e6340: the nuke goes into the silo.
@@ -333,7 +332,8 @@ impl State {
         self.finish_unit_pre(d, c);
         self.finish_unit_post(d, c);
         self.set_unit_hp(d, c, hp);
-        // 0x48ed50: the cancel sound (UI).
+        // 0x48ed50 (EBX = 4, ESI = the building): the cancel sound.
+        self.unit_sound(4, c, 0);
         let s = self.units[c as usize].sprite;
         let mut i = self.sprites[s as usize].images.head;
         while i != NIL {
@@ -375,11 +375,10 @@ impl State {
             self.sprites[ts as usize].elevation = self.sprites[s as usize].elevation.wrapping_add(1);
             self.sprite_fog_visibility(ts);
         }
-        // 0x48ed50: the cancel sound (UI).
+        // 0x48ed50 (EBX = 4, ESI = the building): the cancel sound.
+        self.unit_sound(4, c, 0);
         self.transform_unit(d, c, 0x29);
-        if self.units[c as usize].ai != NIL {
-            todo_port!("0x433fe0", "AI: a computer's cancelled building");
-        }
+        self.ai_cancelled_building(d, c);
         self.finish_unit_pre(d, c);
         self.finish_unit_post(d, c);
         // The shadow (last image, draw function 10) sits 7 pixels down.

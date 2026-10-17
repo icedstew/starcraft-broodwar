@@ -285,7 +285,9 @@ impl<'a> Scene<'a> {
             return;
         }
         self.st.trig.paused = true;
-        todo_port!("0x484cc0", "release the cursor clip (0x66ff5c) and reset the input handlers on pause");
+        // 0x484cc0 (-> 0x4d2ff0): clears the 0x5968a0 handler table, ClipCursor(0x6cddb0) when
+        // 0x6d5dd0, and installs the in-game handlers (0x4846e0 hotkeys, 0x46ff70 / 0x4564e0
+        // mouse). scbw reads input directly (no handler tables, no Win32 cursor), so nothing to reset.
         self.pause_tick = self.clock_ms;
         if self.st.replay {
             self.pause_replay_saved = self.st.replay_paused;
@@ -589,7 +591,14 @@ impl<'a> Scene<'a> {
                 let Some(g) = self.a.grp(img.image_id) else { continue };
                 let x = sp.x as i32 + img.x as i32 - g.w / 2 - vx;
                 let y = sp.y as i32 + img.y as i32 - g.h / 2 - vy;
+                // 0x4d5cd0 (0x4d5c90 flipped): draw function 12 fills the image's shape with
+                // frame `coloring` of image 0xd2's GRP (DAT_0051d218).
+                let warp = (img.modifier == 12).then(|| self.a.grp(0xd2).and_then(|t| t.pixels(img.coloring as u32 as usize))).flatten();
                 let blend = match img.modifier {
+                    12 => match &warp {
+                        Some((px, w, h)) => Blend::Texture(px, *w, *h, &self.player_colors[(sp.owner as usize).min(11)]),
+                        None => Blend::Normal,
+                    },
                     10 => Blend::Remap(&self.shadow),
                     9 => match self.a.dat().images.remapping[img.image_id as usize] {
                         r @ 1..=7 => Blend::Table(&self.remaps[r as usize - 1]),
@@ -1539,6 +1548,19 @@ fn draw_hud(scene: &Scene, ui: &crate::ui::Ui, vx: i32, vy: i32, cursor: Option<
                     let _ = ch;
                     crate::ui::blit_w(&ui.pbar_full, l, t, cw * *v as i32 / 100, out, w, h);
                 }
+                crate::statdata::Show::Slot { bg, icon, cmdicon, num } => {
+                    // 0x456c30: ticon row 3 for an enabled slot, 4 for a disabled one (all
+                    // five are type 2); 0x4268d0 enables queued slots (0x418e00) and
+                    // disables empty ones (0x418640). 0x4268d0 gives a queued unit its number
+                    // ("1 " for the first slot, else "\x03N\x01 "), drawn as for 0x4574e0.
+                    let g = if *cmdicon { &ui.cmdicons } else { &ui.cmdbtns };
+                    stat_button(ui, *bg, g, *icon, if *num != 0 { 3 } else { 4 }, false, (l, t, r, b), out);
+                    if *num != 0 {
+                        let s = if *num == 1 { "1 ".to_string() } else { format!("\x03{num}\x01 ") };
+                        let o = crate::ui::TextOpts { flags: 0x44, clip: (l, t, r, b), ..crate::ui::TextOpts::new() };
+                        ui.skin.fonts[0].draw_text(&s, l, t, 2, &o, crate::ui::TextDst { rows: &ui.text_colors, out, w, h });
+                    }
+                }
                 crate::statdata::Show::Button { bg, icon, cmdicon } => {
                     // 0x457480: an enabled button (ticon row 3).
                     let g = if *cmdicon { &ui.cmdicons } else { &ui.cmdbtns };
@@ -1590,6 +1612,14 @@ fn draw_hud(scene: &Scene, ui: &crate::ui::Ui, vx: i32, vy: i32, cursor: Option<
             }
         }
     }
+    // 0x4a4c40: the terrain button's tooltip (stat_txt 0x32a shown, 0x329 hidden).
+    if let (Some((_, _, cx, cy)), Some((l, t, r, b))) = (cursor, ui.minimap.get(2).filter(|c| c.flags & crate::dlg::flag::VISIBLE != 0).and(ui.minimap.screen_rect(2))) {
+        if (l..=r).contains(&cx) && (t..=b).contains(&cy) {
+            let i = if scene.minimap.hide_terrain { 0x329 } else { 0x32a };
+            let s = ui.stat_txt.get(i).map_or("", |s| s.split('\0').next().unwrap_or(""));
+            tooltip(ui, s, r, t, out, w, h);
+        }
+    }
     // 0x4f4f70: the MENU button's tooltip (stat_txt 0x32d) right of it.
     if let (Some((_, _, cx, cy)), Some((l, t, r, b))) = (cursor, ui.stat_f10.screen_rect(1)) {
         if (l..=r).contains(&cx) && (t..=b).contains(&cy) {
@@ -1612,8 +1642,7 @@ fn draw_hud(scene: &Scene, ui: &crate::ui::Ui, vx: i32, vy: i32, cursor: Option<
 #[allow(clippy::too_many_arguments)]
 fn draw_tooltip(scene: &Scene, ui: &crate::ui::Ui, b: &bw::buttons::Button, enabled: bool, bx: i32, by: i32, out: &mut [u8], w: i32, h: i32) {
     let stat = |id: u16| (id as usize).checked_sub(1).and_then(|i| ui.stat_txt.get(i)).map(|s| s.split('\0').next().unwrap_or(""));
-    let Some(raw) = stat(b.enabled_str) else { return };
-    let kind = raw.chars().nth(1).map_or(0, |c| c as u32);
+    let Some((kind, btext)) = crate::dat::tbl_button(&ui.stat_raw, b.enabled_str) else { return };
     let me = scene.local_player();
     let dat = scene.a.dat();
     let v = b.act_var as usize;
@@ -1627,7 +1656,7 @@ fn draw_tooltip(scene: &Scene, ui: &crate::ui::Ui, b: &bw::buttons::Button, enab
         tooltip_with_costs(ui, t, &[0; 8], scene.local_race() as i32, bx, by, out, w, h);
         return;
     }
-    let mut text: String = raw.chars().skip(2).collect();
+    let mut text = btext;
     // (minerals, gas, supply, energy)
     let mut cost = (0i32, 0i32, 0i32, 0i32);
     if enabled {
@@ -1906,12 +1935,15 @@ pub fn frame_loop<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Option<Re
     let ui = crate::ui::Ui::load_with(&a.files, race, scene.st.replay).ok();
     let mut audio = crate::audio::Audio::open(&a.files);
     if let Some(au) = audio.as_mut() {
+        au.fade_out(); // 0x4ef100 -> 0x4a5f50: the front-end music ends as the game starts
         au.play_music(&a.files, &format!("music/{race}1.wav"));
     }
     let (vw, vh) = (SCREEN_W, SCREEN_H);
     let opts = WindowOptions { scale: Scale::X2, ..WindowOptions::default() };
     let mut win = Window::new("scbw", vw as usize, vh as usize, opts).map_err(|e| io::Error::other(e.to_string()))?;
-    win.set_target_fps(24); // BW "fastest" = 42 ms/frame
+    // The window loop runs at the display rate: the software cursor is redrawn on every
+    // pass (as 1.16.1's main loop does), the game clock below ticks every 42 ms.
+    win.set_target_fps(60);
     // Typed characters for the chat line (WM_CHAR).
     struct Typed(std::rc::Rc<std::cell::RefCell<Vec<u32>>>);
     impl minifb::InputCallback for Typed {
@@ -1939,6 +1971,7 @@ pub fn frame_loop<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Option<Re
     let (mut saved_music, mut saved_digital) = (0i16, 0i16);
     // A press used for a targeted order is not also a minimap scroll until released.
     let mut press_used = false;
+    let mut hud_press: Option<bool> = None;
     // 0x597280 / 0x59727c: the hotkey group last selected and when (0x4c07b0).
     let mut last_group: (u8, usize) = (0xff, 0);
     let mut settings = crate::menu::Settings::default();
@@ -1947,13 +1980,29 @@ pub fn frame_loop<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Option<Re
     let mut game_acc = 0u32;
     let mut ctx = crate::menu::Ctx { replay: replay.is_some(), multiplayer: false, replay_speed: 0 };
     let mut menu_btn_down = false;
+    let mut terrain_btn_down = false;
+    // The next 42 ms tick of input and game logic (the browser build ticks per call).
+    #[cfg(not(target_arch = "wasm32"))]
+    let mut next_tick = std::time::Instant::now();
     Ok(move || {
         if !win.is_open() {
             return Ok(false);
         }
+        let (cx, cy) = win.get_mouse_pos(minifb::MouseMode::Clamp).map_or((vw / 2, vh / 2), |(x, y)| (x as i32, y as i32));
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let (now, dt) = (std::time::Instant::now(), std::time::Duration::from_millis(42));
+            if now < next_tick {
+                // Between ticks: only the cursor moves.
+                let kind = if menu.is_some() { 0 } else { scene.cursor_kind(cx, cy, vx, vy, drag_start.is_some()) };
+                compose_with_cursor(&scene, ui.as_ref(), vx, vy, Some((kind, tick * 42 / 100, cx, cy)), menu.as_ref(), &mut idx, &mut rgb);
+                present(&mut win, &rgb, vw as usize, vh as usize)?;
+                return Ok(true);
+            }
+            next_tick = if now > next_tick + dt { now + dt } else { next_tick + dt };
+        }
         tick += 1;
         let shift = win.is_key_down(Key::LeftShift) || win.is_key_down(Key::RightShift);
-        let (cx, cy) = win.get_mouse_pos(minifb::MouseMode::Clamp).map_or((vw / 2, vh / 2), |(x, y)| (x as i32, y as i32));
         // The game menu (F10 or the console's MENU button) takes all input while open;
         // single player and replays pause under it (0x4f57a0 -> 0x488790).
         ctx.replay_speed = scene.st.replay_speed as i16;
@@ -2040,6 +2089,16 @@ pub fn frame_loop<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Option<Re
             return Ok(true);
         }
         if menu_btn_down {
+            lmb_was_down = mdown;
+        }
+        // rez\minimap.bin button 2 (0x4a54f0): terrain on / off, on release over it.
+        let on_terrain_btn = ui.as_ref().and_then(|u| u.minimap.get(2).filter(|c| c.flags & crate::dlg::flag::VISIBLE != 0).and(u.minimap.screen_rect(2))).is_some_and(|(l, t, r, b)| (l..=r).contains(&cx) && (t..=b).contains(&cy));
+        if terrain_btn_down && !mdown && on_terrain_btn {
+            let Scene { a, st, minimap, .. } = &mut scene;
+            with_data(a, |d| minimap.toggle_terrain(d, st));
+        }
+        terrain_btn_down = mdown && (terrain_btn_down || (on_terrain_btn && !lmb_was_down));
+        if terrain_btn_down {
             lmb_was_down = mdown;
         }
         // ponytail: scroll speed 0x6cdfd8 / 0x6cdfdc picks among 7 rates; 8 + 4 per step.
@@ -2239,10 +2298,18 @@ pub fn frame_loop<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Option<Re
             press_used = false;
         }
         let down = down && !targeted && !press_used && scene.targeting.is_none() && pressed.is_none() && !on_card;
+        // 0x46ff70 (left button down on the map screen): 0x4d1140 says whether the press is
+        // over the console (an opaque pixel of the console bitmap); only a press elsewhere
+        // starts the selection box. The press decides until the button is released.
+        if !down {
+            hud_press = None;
+        } else if hud_press.is_none() {
+            hud_press = Some(ui.as_ref().is_some_and(|u| u.hud_hit(cx, cy)));
+        }
         if down && on_minimap_pt(cx, cy) && drag_start.is_none() {
             vx = (cx - ox) * scale - vw / 2;
             vy = (cy - oy) * scale - (vh - 120) / 2;
-        } else if down && cy < vh - 120 {
+        } else if down && cy < vh - 120 && (drag_start.is_some() || hud_press == Some(false)) {
             let (sx, sy) = *drag_start.get_or_insert((cx, cy));
             scene.drag_box = Some((sx, sy, cx, cy));
         } else if !down {
@@ -2309,7 +2376,7 @@ pub fn frame_loop<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Option<Re
             } else {
                 // 0x4deb90 (replay): the frame time is the table entry divided by the multiplier.
                 replay_acc += 42;
-                let ms = (bw::triggers::FRAME_MS[scene.st.replay_speed.min(6) as usize] / scene.st.replay_mult.max(1) as u32).max(1);
+                let ms = bw::triggers::replay_frame_ms(scene.st.replay_speed as usize, scene.st.replay_mult as u32);
                 let n = replay_acc / ms;
                 replay_acc %= ms;
                 n
@@ -2354,6 +2421,18 @@ pub fn frame_loop<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Option<Re
             if let Some(au) = audio.as_ref().filter(|_| bit == 0 || settings.sound_flags & bit != 0) {
                 if let Some((v, pan)) = unit_sound(&scene, a.dat(), settings.digital, id, u, base, vx, vy) {
                     au.play_pan(&a.files, a.dat(), id, v as i32, pan, (u != NIL).then_some(u));
+                }
+            }
+        }
+        // 0x48ed50 from the sim (vision gate passed in State::unit_sound): distance volume
+        // and pan at the unit's sprite, at least the call's minimum and the sfxdata one.
+        for (id, u, min, x, y) in std::mem::take(&mut scene.st.unit_sounds) {
+            if let (Some(au), true) = (&audio, settings.digital != 0) {
+                let m = a.dat().sfxdata.volume.get(id as usize).copied().unwrap_or(0) as i32;
+                let (d, pan) = if u == NIL { (99, 0) } else { (sound_distance_volume(x as i32, y as i32, vx, vy), sound_pan(x as i32, vx)) };
+                let v = min.max(d).max(m);
+                if v > 10 {
+                    au.play_pan(&a.files, a.dat(), id, v, pan, (u != NIL).then_some(u));
                 }
             }
         }

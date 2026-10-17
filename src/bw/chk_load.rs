@@ -387,7 +387,7 @@ impl State {
         if self.place_unit(d, u) {
             self.finish_unit_post(d, u);
             if self.player_type(self.units[u as usize].player) == 1 {
-                todo_port!("0x462960", "register map unit with the computer player's town");
+                self.ai_guard_register(d, u);
             }
             return Some(u);
         }

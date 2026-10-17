@@ -147,3 +147,12 @@ pub fn humans_in_team(types: &[u8; 12], force: &[u8; 12], storm: impl Fn(usize) 
     }
     n
 }
+
+/// 0x4c3db0: the host's slot: `local_slot` (0x51268c) outside multiplayer (0x57f0b4), else the
+/// lowest of the 8 net slots (0x66fe20, stride 0x22) that is connected, or 8.
+pub fn host_slot(multiplayer: bool, local_slot: u32, connected: impl Fn(usize) -> bool) -> u32 {
+    if !multiplayer {
+        return local_slot;
+    }
+    (0..8).find(|&i| connected(i)).unwrap_or(8) as u32
+}

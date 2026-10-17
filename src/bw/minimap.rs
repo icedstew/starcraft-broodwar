@@ -8,14 +8,14 @@ use crate::grp::{Blend, Grp};
 use crate::todo_port;
 
 /// 0x51a0f0: the 26 interface colors (0x00bbggrr), matched to the palette as 0x6ceb20.
-const UI_RGB: [u32; 26] = [
+pub const UI_RGB: [u32; 26] = [
     0xffffff, 0xe0e0e0, 0xd0d0d0, 0xc0c0c0, 0xb0b0b0, 0xa0a0a0, 0x909090, 0x808080, 0x707070, 0x606060, 0x505050,
     0x404040, 0x303030, 0x202020, 0x101010, 0x000000, 0xe34b00, 0x4fffff, 0x2be300, 0x157100, 0x0000cf, 0x1892ff,
     0xba185a, 0x243c5c, 0xae54dc, 0xffff00,
 ];
 
 /// 0x5127dc: palette ranges each tileset color-cycles (inclusive).
-fn cycling(tileset: u16) -> &'static [(u8, u8)] {
+pub fn cycling(tileset: u16) -> &'static [(u8, u8)] {
     match tileset {
         0 | 4 => &[(1, 6), (7, 13), (248, 254)],
         3 => &[(1, 4), (5, 8), (9, 12)],
@@ -26,7 +26,7 @@ fn cycling(tileset: u16) -> &'static [(u8, u8)] {
 
 /// 0x4bdb30: nearest palette index to an 0x00bbggrr color, skipping cycling entries
 /// (0x6d125c, filled by 0x4bdd60) and index 0.
-fn nearest(palette: &[[u8; 3]; 256], excluded: &[bool; 256], rgb: u32) -> u8 {
+pub fn nearest(palette: &[[u8; 3]; 256], excluded: &[bool; 256], rgb: u32) -> u8 {
     let (r, g, b) = ((rgb & 0xff) as i32, (rgb >> 8 & 0xff) as i32, (rgb >> 16 & 0xff) as i32);
     let mut best = (u32::MAX, 0u8);
     for i in 1..256 {
@@ -397,6 +397,16 @@ impl Minimap {
         for (x, y, kind) in std::mem::take(&mut st.minimap_pings) {
             self.add_ping(x, y, kind);
         }
+        self.draw_pings();
+    }
+
+    /// 0x4a54f0 (button 2): terrain hidden / shown (0x6d5bbf), then fog (0x4a4150),
+    /// units (0x4a4ac0) and pings (0x4a3870) redrawn. Its clearing of the hovered control
+    /// 0x59c1a4 and tooltip refresh 0x4a4c40 are the per-frame tooltip in view.rs.
+    pub fn toggle_terrain(&mut self, d: &Data, st: &mut State) {
+        self.hide_terrain = !self.hide_terrain;
+        self.draw_fog(st);
+        self.draw_units(d, st);
         self.draw_pings();
     }
 

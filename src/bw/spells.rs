@@ -507,7 +507,8 @@ impl State {
             // Irradiate.
             9 => {
                 if alive(self, t) {
-                    // 0x48ed50: the irradiate sound.
+                    // 0x48ed50 (EBX = 0x3e6, ESI = the target): the irradiate sound.
+                    self.unit_sound(0x3e6, t, 0);
                     self.apply_irradiate(d, t, src, player);
                 }
             }
@@ -532,7 +533,8 @@ impl State {
             // Restoration.
             0x10 => {
                 if alive(self, t) {
-                    // 0x48ed50: the restoration sound.
+                    // 0x48ed50 (EBX = 0x15f, ESI = the target): the restoration sound.
+                    self.unit_sound(0x15f, t, 0);
                     self.restoration(d, t);
                 }
             }
@@ -545,14 +547,14 @@ impl State {
             // Parasite.
             6 => {
                 if alive(self, t) {
-                    self.parasite(t, src, player);
+                    self.parasite(d, t, src, player);
                 }
             }
             // Spawn Broodlings.
             7 => {
                 if src != NIL && alive(self, t) {
                     if self.player_type(self.units[t as usize].player) == 1 {
-                        todo_port!("0x43f320", "AI reacts to broodlings");
+                        self.ai_react_to_target(d, t, src, true, false);
                     }
                     self.spawn_broodlings(d, src, t);
                 }
@@ -709,7 +711,8 @@ impl State {
         }
         let t = self.units[u as usize].order_target_unit;
         self.apply_defense_matrix(d, t);
-        // 0x48ed50: the matrix sound.
+        // 0x48ed50 (EBX = 0x15d, ESI = the caster): the matrix sound.
+        self.unit_sound(0x15d, u, 0);
         let s = self.units[u as usize].sprite;
         let main = self.sprites[s as usize].main_image;
         self.create_image(d, s, main, 0x21b, 0, 0, 0);
@@ -998,7 +1001,8 @@ impl State {
             return;
         }
         self.units[t as usize].is_blind |= 1 << (player & 0x1f);
-        // 0x48ed50: the flare sound.
+        // 0x48ed50 (EBX = 0x3fb, ESI = the target): the flare sound.
+        self.unit_sound(0x3fb, t, 0);
         self.add_spell_overlay(d, t, 0x3d0);
     }
 
@@ -1097,7 +1101,8 @@ impl State {
     /// hallucinations die.
     fn maelstrom_area(&mut self, d: &Data, x: i16, y: i16, src: u32) {
         self.spell_sprite(d, 0x202, x, y, 0x11);
-        // 0x48ed50: the maelstrom sound.
+        // 0x48ed50 (EBX = 0x428, ESI = the source unit): the maelstrom sound.
+        self.unit_sound(0x428, src, 0);
         for c in self.units_around(x, y, 0x30) {
             let cu = &self.units[c as usize];
             if cu.status & 0x4000_0000 != 0 {
@@ -1215,7 +1220,7 @@ impl State {
                                 bu.remove_timer = timer;
                             }
                             if self.units[src as usize].ai != NIL {
-                                todo_port!("0x4a2830", "AI: broodlings join the caster's AI");
+                                self.ai_unit_joins(d, src, b);
                             }
                         }
                     }
@@ -1231,11 +1236,13 @@ impl State {
     }
 
     /// 0x48b770 types 6 / 7: parasite `t` for `player`; spawn broodlings from `t`.
-    fn parasite(&mut self, t: u32, src: u32, player: u8) {
-        // 0x48ed50: the parasite sound; 0x4c36c0: status panel refresh (UI).
+    fn parasite(&mut self, d: &Data, t: u32, src: u32, player: u8) {
+        // 0x48ed50 (EBX = 0x399, ESI = the target): the parasite sound; 0x4c36c0: status
+        // panel refresh (UI).
+        self.unit_sound(0x399, t, 0);
         self.units[t as usize].parasite_flags |= 1 << (player & 0x1f);
         if src != NIL && self.player_type(self.units[t as usize].player) == 1 {
-            todo_port!("0x43f320", "AI reacts to a parasite");
+            self.ai_react_to_target(d, t, src, false, false);
         }
     }
 }
@@ -1314,7 +1321,8 @@ impl State {
             self.damage_unit(d, t, e, 0x6a, 1, 1, u, player);
             self.units[t as usize].energy = 0;
             self.spend_energy(u, cost);
-            // 0x48ed50: the feedback sound.
+            // 0x48ed50 (EBX = 0x425, ESI = the target): the feedback sound.
+            self.unit_sound(0x425, t, 0);
             let tu = &self.units[t as usize];
             if tu.sprite != NIL && tu.order != 0 {
                 self.add_spell_overlay(d, t, 0x3d3);
@@ -1381,7 +1389,7 @@ impl State {
             self.hallucinate_scarabs(d, h, t, player);
         }
         if self.player_type(player) == 1 {
-            todo_port!("0x4a2830", "AI: a hallucination joins the computer's forces");
+            self.ai_unit_joins(d, h, h);
         }
         h
     }
@@ -1457,8 +1465,9 @@ impl State {
         if self.game_options & 0x800 == 0 {
             self.units[u as usize].energy -= cost;
         }
-        // 0x48ed50: the hallucination sound.
+        // 0x48ed50 (EBX = 0x26a, ESI = the target): the hallucination sound.
         let t = self.units[u as usize].order_target_unit;
+        self.unit_sound(0x26a, t, 0);
         let sub = self.units[t as usize].subunit;
         let host = if sub != NIL { sub } else { t };
         let s = self.units[host as usize].sprite;
@@ -1623,7 +1632,8 @@ impl State {
         if self.game_options & 0x800 == 0 {
             self.units[u as usize].energy -= cost;
         }
-        // 0x48ed50: the mind control sound.
+        // 0x48ed50 (EBX = 0x426, ESI = the caster): the mind control sound.
+        self.unit_sound(0x426, u, 0);
         self.order_done_or_next(d, u);
     }
 }
@@ -1761,8 +1771,9 @@ impl State {
                 any |= self.recall_unit(d, c, u);
             }
             if any {
-                // 0x48ed50: one of the two recall sounds (0x228 + rand & 1).
-                self.rng.rand(0x12);
+                // 0x48ed50 (EBX = 0x228 + (rand & 1), ESI = the caster): a recall sound.
+                let r = self.rng.rand(0x12);
+                self.unit_sound(0x228 + (r & 1) as u16, u, 0);
             }
             self.order_done_or_next(d, u);
             return;

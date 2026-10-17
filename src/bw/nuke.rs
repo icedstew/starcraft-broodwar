@@ -7,7 +7,6 @@
 
 use super::list::NIL;
 use super::{Data, State};
-use crate::todo_port;
 
 const NUKE: u16 = 0xe;
 const SILO: u16 = 0x6c;
@@ -44,6 +43,71 @@ impl State {
         }
     }
 
+    /// 0x43b970: a cloak-capable unit (ghosts, wraiths and their heroes) cloaks if its
+    /// tech is available (Cloaking Field 9 for wraiths, Personal Cloaking 10 otherwise).
+    /// The tail call 0x491b30 (pay the energy, secondary order 0x6d) is repeated here:
+    /// the original is private to cloak.rs.
+    pub(super) fn ai_cloak_before_nuke(&mut self, d: &Data, u: u32) {
+        if self.units[u as usize].status & 0x100 != 0 {
+            return;
+        }
+        let tech = match self.units[u as usize].unit_type {
+            1 | 0x10 | 0x64 | 0x63 | 0x68 | 0x33 => 10,
+            8 | 0x15 => 9,
+            _ => return,
+        };
+        let player = self.units[u as usize].player;
+        if self.can_use_tech(d, u, tech, player) != Ok(1) {
+            return;
+        }
+        self.start_cloak_order(d, u);
+    }
+
+    /// 0x43db50: an AI unit not standing in an own base region walks (order 6, 0xb1 for
+    /// medics, 0x70 if it was already moving there) to the center of the nearest region
+    /// holding an own base unit; it joins that region's military. Returns whether it did.
+    pub(super) fn ai_ghost_to_enemy_region(&mut self, d: &Data, u: u32) -> bool {
+        use super::ai_town::{ai_kind, AI_MILITARY};
+        let ai = self.units[u as usize].ai;
+        if ai == NIL {
+            return false;
+        }
+        let p = self.units[u as usize].player;
+        let (ux, uy) = self.unit_sprite_pos(u);
+        let r = super::path::region_at(&self.sai, ux as i32, uy as i32);
+        let st = self.ai.regions[p as usize][r as usize].state;
+        if (st == 5 || st == 4) && self.player_has_base_unit_in(d, r, p) {
+            return false;
+        }
+        let mut best: Option<(i32, i32)> = None;
+        let mut best_dist = 9999999u32;
+        for i in 1..self.sai.region_count as i16 as u32 {
+            let rs = self.ai.regions[p as usize][i as usize].state;
+            if (rs == 5 || rs == 4) && self.player_has_base_unit_in(d, i as u16, p) {
+                let c = self.sai.regions[i as usize].center;
+                let (cx, cy) = (c.0 >> 8, c.1 >> 8);
+                let dist = super::path::approx_distance(cx, ux as i32, cy, uy as i32);
+                if dist < best_dist {
+                    best_dist = dist;
+                    best = Some((cx, cy));
+                }
+            }
+        }
+        let Some((cx, cy)) = best else { return false };
+        if ai_kind(ai) == AI_MILITARY {
+            self.ai_release_unit(d, u, false);
+            let tr = super::path::region_at(&self.sai, cx, cy);
+            self.region_add_military(d, p, tr, u, true);
+        }
+        let un = &self.units[u as usize];
+        let mut order = if un.unit_type != 0x22 { 6 } else { 0xb1 };
+        if un.order == 0x6f || un.order == 0x70 {
+            order = 0x70;
+        }
+        self.order_at(d, u, order, (cx as i16, cy as i16));
+        true
+    }
+
     /// 0x479200: CastNuclearStrike: get within sight range, face the spot and launch
     /// a ready nuke from one of the player's silos.
     pub(super) fn order_cast_nuclear_strike(&mut self, d: &Data, u: u32) {
@@ -56,7 +120,7 @@ impl State {
         let f = &self.units[u as usize].fl;
         let dist = super::path::approx_distance(f.exact.0, (p.0 as i32) << 8, f.exact.1, (p.1 as i32) << 8) >> 8;
         if self.units[u as usize].ai != NIL && dist <= sight * 0x60 {
-            todo_port!("0x43b970", "AI: nuke about to drop");
+            self.ai_cloak_before_nuke(d, u);
         }
         if dist > sight * 0x20 {
             if self.units[u as usize].recent_order_timer == 0 {
@@ -89,7 +153,8 @@ impl State {
         let n = self.units[silo as usize].ptr_at(0xd0);
         self.units[silo as usize].set_ptr_at(0xd0, NIL);
         self.units[silo as usize].set_u32_at(0xd4, 0);
-        // 0x48ed50: the launch sound.
+        // 0x48ed50 (EBX = 0xef, ESI = the ghost): the launch sound.
+        self.unit_sound(0xef, u, 0);
         self.order_issue_now(d, n, 0x7d, p, NIL, 0xe4);
         self.units[n as usize].connected_unit = u;
         // 0x401140(0): the missile's images face up.
@@ -152,7 +217,7 @@ impl State {
                     self.units[u as usize].set_ptr_at(0xd0, NIL);
                 }
                 if self.units[u as usize].ai != NIL {
-                    todo_port!("0x43db50", "AI: ghost done nuking");
+                    self.ai_ghost_to_enemy_region(d, u);
                 }
             }
             _ => {}
@@ -210,7 +275,8 @@ impl State {
         let (left, up) = (dim as i16, (dim >> 16) as i16);
         match self.units[u as usize].order_state {
             0 => {
-                // 0x48ed50: the launch sound.
+                // 0x48ed50 (EBX = 0x54, ESI = the missile): the launch sound.
+                self.unit_sound(0x54, u, 0);
                 let x = self.unit_sprite_pos(u).0;
                 self.move_and_face(d, u, (x, up));
                 self.units[u as usize].main_order_timer = 0x5a;

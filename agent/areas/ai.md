@@ -1,4 +1,4 @@
-# Computer AI (src/bw/ai*.rs) — paused by the user
+# Computer AI (src/bw/ai*.rs)
 
 - ai.rs: requests heap, budget, player tick, town tick. ai_town.rs: towns, worker /
   building rounds, requests, supply / gas, unit removal. ai_place.rs: building spot
@@ -7,7 +7,12 @@
   0x437e70.
 - Check: `SCBW_MELEE="1,1" SCBW_AI="1" agent/tools/cmp.sh "$INSTALL/maps/(2)Boxer.scm"
   "" "" 8000` must MATCH.
-- Left: guard / region / defense requests (0x4630c0, 0x43f990, 0x43ebb0, 0x43aae0),
-  attack timers 0x43b9e0, target choice 0x477160, military AI 0x43d910, script opcodes,
-  AI orders AtkMoveEP 0x478de0, HarassMove 0x478ec0, GuardPost 0x4778e0, ComputerReturn
-  0x478490, AIPatrol 0x4a1d80.
+- attack.rs: AI target choice 0x477160 `ai_choose_target(u, p3, p4)` (its stack arg 2
+  only feeds 0x476fc0's siege part; dropped), 0x43b790, 0x431de0 / 0x431e90 / 0x431ee0.
+  ai_military.rs: reaction to attack 0x43f320 `ai_react_to_target`. ai_region.rs:
+  0x43c580 support call, 0x462ea0 guard return. ai_town.rs: units joining the AI
+  0x4a2830 / 0x435700 / 0x435770 / 0x435db0 / 0x43e280 / 0x462960.
+- Interceptor parent is the union field +0xc0 (`ptr_at(0xc0)`), not `connected_unit`
+  (+0x80).
+- PlayerAi `flags` is at +0x218 (0x690100 for player 0).
+- Left: see status.md "In flight" (AI todo_port! list) and `--missing ai`.

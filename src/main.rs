@@ -3,6 +3,7 @@
 mod audio;
 mod chat;
 mod bw;
+mod setup;
 mod storage;
 mod storm;
 mod dat;
@@ -13,6 +14,7 @@ mod smk;
 mod portrait;
 mod fog;
 mod game;
+mod glue;
 mod grid;
 mod grp;
 mod hpbar;
@@ -294,6 +296,7 @@ fn main() -> std::io::Result<()> {
             }
             println!("rng seed {:#x} draws {}", st.rng.seed, st.rng.total);
         }
+        Some("glue") => glue::run(&files, args.get(1).map(|s| s.as_str()))?,
         Some("view") => {
             let mut a = view::Assets::load(files)?;
             if args[1].to_ascii_lowercase().ends_with(".rep") {
@@ -1092,7 +1095,7 @@ fn load_chk_raw(path: &str) -> std::io::Result<Vec<u8>> {
     mpq::Mpq::open(path.as_ref())?.read("staredit\\scenario.chk")
 }
 
-fn write_png(path: &str, w: usize, h: usize, idx: &[u8], pal: &[[u8; 3]; 256]) -> std::io::Result<()> {
+pub(crate) fn write_png(path: &str, w: usize, h: usize, idx: &[u8], pal: &[[u8; 3]; 256]) -> std::io::Result<()> {
     let mut enc = png::Encoder::new(std::fs::File::create(path)?, w as u32, h as u32);
     enc.set_color(png::ColorType::Rgb);
     let rgb: Vec<u8> = idx.iter().flat_map(|&i| pal[i as usize]).collect();

@@ -1,5 +1,6 @@
 //! Attacking: the AttackUnit order (0x479bd0), weapon ranges and firing.
 
+use super::ai_town::{ai_index, ai_kind, AI_MILITARY};
 use super::list::NIL;
 use super::{Data, State};
 use crate::todo_port;
@@ -330,7 +331,14 @@ impl State {
             return true;
         }
         if self.units[u as usize].ai != NIL {
-            todo_port!("0x478804", "AI attack: 0x476c50 / 0x477160");
+            let ot = self.units[u as usize].order_target_unit;
+            if self.ai_cant_reach_unit(d, u, ot) || self.unit_at_move_target(u) == 2 {
+                if !self.ai_choose_target(d, u, true, false) {
+                    self.unit_halt_facing(d, u);
+                    self.order_done_or_next(d, u);
+                }
+                return false;
+            }
         } else {
             let un = &self.units[u as usize];
             let st = un.status;
@@ -476,19 +484,32 @@ impl State {
         let min = self.min_attack_range(d, u);
         let buckets = self.target_buckets(d, u, range, min);
         let Some(list) = buckets.iter().find(|b| !b.is_empty()) else { return NIL };
+        self.pick_target(d, u, list)
+    }
+
+    /// 0x4405e0: the target `u` takes from a bucket `list`: for an AI scourge the one with
+    /// the most hp + shields (0x4026d0, first on ties), else the nearest (first on ties).
+    fn pick_target(&self, d: &Data, u: u32, list: &[u32]) -> u32 {
         if list.len() == 1 {
             return list[0];
         }
+        let mut best = 0;
         if self.units[u as usize].ai != NIL && self.units[u as usize].unit_type == 0x2f {
-            todo_port!("0x4405e0", "AI scourge: prefer the toughest target (0x4026d0)");
+            let mut life = self.life_now(d, list[0]) as u32;
+            for (i, &c) in list.iter().enumerate().skip(1) {
+                let l = self.life_now(d, c) as u32;
+                if l > life {
+                    life = l;
+                    best = i;
+                }
+            }
+            return list[best];
         }
-        // 0x4405e0: nearest (first on ties).
         let up = self.unit_sprite_pos(u);
         let dist = |st: &State, c: u32| {
             let p = st.unit_sprite_pos(c);
             super::path::approx_distance(up.0 as i32, p.0 as i32, up.1 as i32, p.1 as i32)
         };
-        let mut best = 0;
         let mut bd = dist(self, list[0]);
         for (i, &c) in list.iter().enumerate().skip(1) {
             let dd = dist(self, c);
@@ -703,8 +724,8 @@ impl State {
             }
         }
         if best == NIL || prio != 0 {
-            if self.units[u as usize].ai != NIL {
-                todo_port!("0x477160", "AI target choice");
+            if self.units[u as usize].ai != NIL && self.ai_choose_target(d, u, true, false) {
+                return;
             }
             let c = self.find_auto_target(d, u);
             if c != NIL && self.target_priority(d, u, c) < prio {
@@ -728,7 +749,10 @@ impl State {
     pub fn order_attack_unit(&mut self, d: &Data, u: u32) {
         let un = &self.units[u as usize];
         if self.player_type(un.player) == 1 {
-            todo_port!("0x479bd0", "computer players: 0x462ea0");
+            let t = un.order_target_unit;
+            if (t == NIL || d.dat.units.flags[self.units[t as usize].unit_type as usize] & 1 == 0) && self.ai_guard_return(d, u, 0) {
+                return;
+            }
         }
         self.pick_better_target(d, u);
         if !self.attack_unit_step(d, u) {
@@ -1108,7 +1132,7 @@ impl State {
             self.set_auto_target(d, u, attacker);
         }
         if self.player_type(self.units[u as usize].player) == 1 {
-            todo_port!("0x43f320", "computer player reacts to the attack");
+            self.ai_react_to_target(d, u, attacker, true, false);
         }
         let p = self.units[u as usize].player;
         if reveal && !self.cloaked_from(attacker, u) && p < 8 {
@@ -1167,8 +1191,8 @@ impl State {
             if d.dat.orders.unknown11[mu.order as usize] == 0 || mu.status & 0x2_0000 == 0 {
                 return;
             }
-            if mu.ai != NIL {
-                todo_port!("0x462930", "AI unit flees only toward its AI destination");
+            if !self.ai_may_flee(m) {
+                return;
             }
             if self.cover_chance_pub(d, m) == 0xff {
                 return;
@@ -1182,7 +1206,7 @@ impl State {
 
     /// 0x476a50: a point 192, 128, 64, 32 or 16 pixels from `u`, away from `from`,
     /// that a ground unit can reach (its own position if none).
-    fn flee_point(&mut self, d: &Data, from: u32, u: u32) -> (i16, i16) {
+    pub(super) fn flee_point(&mut self, d: &Data, from: u32, u: u32) -> (i16, i16) {
         let fp = self.unit_sprite_pos(from);
         let up = self.unit_sprite_pos(u);
         let dir = crate::game::flingy::direction_to(fp.0 as i32, fp.1 as i32, up.0 as i32, up.1 as i32);
@@ -1244,8 +1268,8 @@ impl State {
 
     /// 0x476fc0: order `u` to attack `t` with its attack order.
     pub(super) fn order_attack(&mut self, d: &Data, u: u32, mut t: u32, mark: bool) {
-        if self.units[t as usize].unit_type == 0x49 && self.units[t as usize].connected_unit != NIL {
-            t = self.units[t as usize].connected_unit;
+        if self.units[t as usize].unit_type == 0x49 && self.units[t as usize].ptr_at(0xc0) != NIL {
+            t = self.units[t as usize].ptr_at(0xc0);
         }
         let order = d.dat.units.ai_attack_unit[self.units[u as usize].unit_type as usize];
         self.order_with_target(d, u, order, t);
@@ -1318,5 +1342,218 @@ impl State {
         if d.dat.weapons.damage_factor[w as usize] == 2 {
             self.create_bullet(d, u, w, p.0, p.1, player, dir);
         }
+    }
+}
+
+/// AI target choice (0x477160 and its helpers).
+impl State {
+    /// 0x431de0: the best target of `u`'s player (by `u`) among the units in `u`'s
+    /// region grown by 0x120, scored on strength `kind` (0 air, 1 ground).
+    fn ai_region_search_target(&mut self, d: &Data, u: u32, kind: usize) -> u32 {
+        let (x, y) = self.unit_sprite_pos(u);
+        let r = super::path::region_at(&self.sai, x as i32, y as i32);
+        let [l, t, rt, b] = self.sai.regions[r as usize].rect;
+        let bx = [l.wrapping_sub(0x120), t.wrapping_sub(0x120), rt.wrapping_add(0x120), b.wrapping_add(0x120)];
+        let mut search = std::mem::replace(&mut self.search, super::collide::UnitSearch::empty());
+        let start = search.units_in_finder_box(self, bx);
+        let units = search.results(start);
+        search.pop();
+        self.search = search;
+        let p = self.units[u as usize].player;
+        self.ai_best_target(d, &units, p, u, r, kind)
+    }
+
+    /// 0x431e90 (`kind` 1, ground) / 0x431ee0 (`kind` 0, air): the target `u`'s AI has for
+    /// its region (a military unit takes its region's, else a search around `u`).
+    fn ai_unit_target(&mut self, d: &Data, u: u32, kind: usize) -> u32 {
+        let ai = self.units[u as usize].ai;
+        if ai_kind(ai) != AI_MILITARY {
+            return self.ai_region_search_target(d, u, kind);
+        }
+        let m = &self.ai.military.items[ai_index(ai) as usize];
+        if m.parent == u && d.dat.units.flags[self.units[u as usize].unit_type as usize] & 1 == 0 {
+            let rg = self.reg(m.region.0, m.region.1);
+            return if kind == 1 { rg.ground_target } else { rg.air_target };
+        }
+        NIL
+    }
+
+    /// 0x476c50 (EAX = `t`) as the 0x477160 callers use it.
+    fn ai_cant_reach_unit(&mut self, d: &Data, u: u32, t: u32) -> bool {
+        let p = self.unit_sprite_pos(t);
+        self.cant_reach_ground(d, u, p)
+    }
+
+    /// The test 0x477160 repeats on every candidate `c`: unusable when missing, out of
+    /// reach (`p4`), not attackable, or a mine / scarab / interceptor (unless `p3`).
+    fn ai_target_bad(&mut self, d: &Data, u: u32, c: u32, p3: bool, p4: bool) -> bool {
+        c == NIL
+            || (p4 && self.ai_cant_reach_unit(d, u, c))
+            || !self.can_attack(d, u, c, true)
+            || (!p3 && super::ai_region::is_minor_target(self.units[c as usize].unit_type))
+    }
+
+    /// 0x476930 (EAX = `c`): `c` is an enemy of `u` that can hit it from where it is
+    /// (a damaged hallucination never counts; a loaded bunker always does).
+    fn ai_threatens(&self, d: &Data, c: u32, u: u32) -> bool {
+        let cu = &self.units[c as usize];
+        if self.alliances[self.units[u as usize].player as usize][self.alliance_owner(c)] != 0 {
+            return false;
+        }
+        if cu.status & 0x4000_0000 != 0 && self.life_max(d, c) != self.life_now(d, c) {
+            return false;
+        }
+        if self.can_attack(d, c, u, true) {
+            return !self.cannot_hit_now(d, c, u);
+        }
+        cu.unit_type == 0x7d && self.has_loaded_units(c)
+    }
+
+    /// 0x43b790 (EAX = `a`, ECX = `u`, stack `b`): the better of two candidate targets for
+    /// `u` (interceptors count as their carrier; NIL when neither is usable).
+    fn ai_better_target(&self, d: &Data, u: u32, a: u32, b: u32) -> u32 {
+        let carrier = |c: u32| {
+            if c == NIL {
+                return NIL;
+            }
+            let cu = &self.units[c as usize];
+            let k = cu.ptr_at(0xc0);
+            if cu.unit_type == 0x49 && k != NIL && (self.can_hit_now(d, u, k) || self.units[u as usize].status & 0x20000 != 0) { k } else { c }
+        };
+        let (mut a, mut b) = (carrier(a), carrier(b));
+        let ok = |c: u32| c != NIL && !self.ignores_target(d, u, c) && self.can_attack(d, u, c, true);
+        if !ok(a) {
+            a = NIL;
+        }
+        if !ok(b) {
+            b = NIL;
+        }
+        if a == NIL {
+            return b;
+        }
+        if b == NIL {
+            return a;
+        }
+        let bunker = |c: u32| self.units[c as usize].unit_type == 0x7d && self.has_loaded_units(c);
+        if !bunker(b) && !self.is_armed(d, b) && self.is_armed(d, a) {
+            return a;
+        }
+        if !(bunker(a) || self.is_armed(d, a) || !self.is_armed(d, b)) {
+            return b;
+        }
+        if !(self.ai_threatens(d, a, u) || !self.ai_threatens(d, b, u)) {
+            return b;
+        }
+        if self.can_hit_now(d, u, a) {
+            return a;
+        }
+        if self.can_hit_now(d, u, b) {
+            return b;
+        }
+        if self.unit_box_gap(d, u, a) <= self.unit_box_gap(d, u, b) { a } else { b }
+    }
+
+    /// 0x439050: `u`'s AI does not forbid looking for a new target (a military unit in
+    /// the region it is assigned to does, while that region is in state 7).
+    fn ai_may_look_for_target(&self, u: u32) -> bool {
+        let ai = self.units[u as usize].ai;
+        if ai_kind(ai) != AI_MILITARY {
+            return true;
+        }
+        let (p, r) = self.ai.military.items[ai_index(ai) as usize].region;
+        let rg = self.reg(p, r);
+        let (x, y) = self.unit_sprite_pos(u);
+        super::path::region_at(&self.sai, x as i32, y as i32) != rg.id || rg.state != 7
+    }
+
+    /// 0x477160: an AI unit looks for its order / auto target (the region's target, the
+    /// current ones, else the nearest enemy) and attacks the best. `p3` allows mines,
+    /// scarabs and interceptors; `p4` requires the target to be reachable. True if it
+    /// has a target. (Its stack argument 1 only matters to the siege tank part of 0x476fc0.)
+    pub(super) fn ai_choose_target(&mut self, d: &Data, u: u32, p3: bool, mut p4: bool) -> bool {
+        let un = &self.units[u as usize];
+        if un.ai == NIL || !self.is_armed(d, u) {
+            return false;
+        }
+        let head = un.order_queue_head;
+        let head_order = if head != NIL { Some(self.orders[head as usize].order) } else { None };
+        if head_order == Some(0x98) {
+            return false;
+        }
+        if un.order == 0x60 {
+            p4 = true;
+            if un.auto_target == NIL && head_order == Some(0xa) {
+                return false;
+            }
+        }
+        let (ot, mt) = (un.order_target_unit, un.move_target_unit);
+        if ot != NIL && un.status & 0x20000 != 0 && mt != NIL && self.is_enemy(u, mt) && self.unit_at_move_target(u) == 2 {
+            let sp = self.unit_sprite_pos(u);
+            let un = &mut self.units[u as usize];
+            un.fl.move_target = sp;
+            un.status &= !0x8_0000;
+            self.units[ot as usize].status |= 0x80;
+            if ot == self.units[u as usize].auto_target {
+                self.units[u as usize].auto_target = NIL;
+            }
+            self.clear_order_target(d, u);
+        }
+        // The region's target (the unit's own kind first), else the other kind.
+        let kind = if self.units[u as usize].status & 4 == 0 { 1 } else { 0 };
+        let mut region = self.ai_unit_target(d, u, kind);
+        if self.ai_target_bad(d, u, region, p3, p4) {
+            region = self.ai_unit_target(d, u, 1 - kind);
+            if self.ai_target_bad(d, u, region, p3, p4) {
+                region = NIL;
+            }
+        }
+        // The order target, if the order uses weapon targeting.
+        let mut order_t = if d.dat.orders.use_weapon_targeting[self.units[u as usize].order as usize] != 0 { self.units[u as usize].order_target_unit } else { NIL };
+        if self.ai_target_bad(d, u, order_t, p3, p4) {
+            order_t = NIL;
+        }
+        if p4 {
+            let a = self.units[u as usize].auto_target;
+            if a != NIL && self.ai_cant_reach_unit(d, u, a) {
+                self.units[u as usize].auto_target = NIL;
+            }
+        }
+        let auto = self.units[u as usize].auto_target;
+        if auto != NIL && !self.disabled(auto) {
+            let au = &self.units[auto as usize];
+            let (atype, aot) = (au.unit_type, au.order_target_unit);
+            if (atype != 0x7d && (aot == NIL || self.units[aot as usize].player != self.units[u as usize].player)) || (p4 && self.ai_cant_reach_unit(d, u, auto)) {
+                self.units[u as usize].auto_target = NIL;
+            }
+            let auto = self.units[u as usize].auto_target;
+            if auto == NIL || !self.can_attack(d, u, auto, true) || (!p3 && super::ai_region::is_minor_target(self.units[auto as usize].unit_type)) {
+                self.units[u as usize].auto_target = NIL;
+            }
+        }
+        let auto = self.units[u as usize].auto_target;
+        let first = self.ai_better_target(d, u, order_t, region);
+        let mut t = self.ai_better_target(d, u, first, auto);
+        if t == NIL {
+            if !self.ai_may_look_for_target(u) {
+                return false;
+            }
+            let found = if self.ai_guard_return(d, u, 1) { NIL } else { self.find_auto_target(d, u) };
+            t = self.ai_better_target(d, u, NIL, found);
+            if self.ai_target_bad(d, u, t, p3, p4) {
+                return false;
+            }
+        }
+        if self.units[u as usize].order_target_unit != t {
+            if self.units[u as usize].status & 0x20 == 0 {
+                self.order_attack(d, u, t, true);
+            } else {
+                self.units[u as usize].order_target_unit = t;
+            }
+            let ty = self.units[u as usize].unit_type;
+            if (is_carrier(ty) || is_reaver_type(ty)) && !self.can_hit_now(d, u, t) {
+                self.units[u as usize].status |= 8;
+            }
+        }
+        true
     }
 }

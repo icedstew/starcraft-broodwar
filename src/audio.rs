@@ -20,9 +20,16 @@ pub struct Audio {
     table: [i32; 100],
     /// 0x5998f0: the 8 playing-sound slots.
     slots: RefCell<[Option<Slot>; 8]>,
-    /// 0x6d127c +4 per sound id: when it last started (ms since `epoch`).
+    /// 0x6d127c +4 per sound id: when it last started (`now_ms`).
     last: RefCell<HashMap<u16, u128>>,
-    epoch: std::time::Instant,
+}
+
+/// Wall clock in ms (std has no clock on wasm32).
+fn now_ms() -> u128 {
+    #[cfg(not(target_arch = "wasm32"))]
+    return std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |t| t.as_millis());
+    #[cfg(target_arch = "wasm32")]
+    return js_sys::Date::now() as u128;
 }
 
 struct Slot {
@@ -61,8 +68,7 @@ impl Audio {
         sink.log_on_drop(false);
         let names = dat::parse_tbl(&files.read("arr/sfxdata.tbl").ok()?);
         Some(Audio { sink, names, cache: RefCell::new(HashMap::new()), music: None, volumes: (25, 50),
-            table: volume_table(), slots: RefCell::new(Default::default()), last: RefCell::new(HashMap::new()),
-            epoch: std::time::Instant::now() })
+            table: volume_table(), slots: RefCell::new(Default::default()), last: RefCell::new(HashMap::new()) })
     }
 
     /// Decoded-on-demand wav cache, kept forever. Stands in for the native sound cache:
@@ -159,7 +165,7 @@ impl Audio {
 
     /// 0x4bbaf0: starts the sound in a slot unless the same id began under 80 ms ago.
     fn start(&self, files: &Storage, dat: &Dat, id: u16, atten: i32, pan: i32, unit: Option<u32>, flags: u8) {
-        let now = self.epoch.elapsed().as_millis();
+        let now = now_ms();
         if self.last.borrow().get(&id).is_some_and(|&t| now < t + 80) {
             return;
         }
@@ -219,5 +225,23 @@ impl Audio {
         player.set_volume(self.volumes.0 as f32 / 50.0);
         player.append(src);
         self.music = Some(player);
+    }
+
+    /// 0x4a5f50: fade the music out (attenuation falls 5, 10, 15, ... per 20 ms step
+    /// from the current level until below -4000), then close it (0x4a5e40).
+    pub fn fade_out(&mut self) {
+        let Some(p) = self.music.take() else { return };
+        let mut level = self.table[(self.volumes.0 as i32 * 99 / 100).clamp(0, 99) as usize].max(-10000);
+        let mut step = 5;
+        loop {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            level -= step;
+            if level < -4000 {
+                break;
+            }
+            step += 5;
+            p.set_volume(10f32.powf(level as f32 / 2000.0));
+        }
+        p.stop();
     }
 }

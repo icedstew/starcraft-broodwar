@@ -671,7 +671,9 @@ impl State {
         };
         let n = self.sai.region_count as usize;
         for p in 0..8usize {
-            if self.player_types[p] != 1 {
+            // Before 0x437a70 sets up the regions (start units removed by 0x49da40) the
+            // native arrays are zeroed: nothing to forget, strengths stay 0.
+            if self.player_types[p] != 1 || self.ai.regions[p].is_empty() {
                 continue;
             }
             for r in 1..n {
@@ -699,12 +701,7 @@ impl State {
         let (rp, rid) = self.ai.military.items[m as usize].region;
         let state = self.ai.regions[rp as usize][rid as usize].state;
         if state == 8 {
-            // 0x447040: the attack force forgets one unit of this type.
-            let ty = if t == 0x1e { 5 } else { t as u16 };
-            let pl = self.units[u as usize].player as usize;
-            if let Some(e) = self.ai.players[pl].attack_force.iter_mut().take(0x3f).find(|e| **e == ty + 1) {
-                *e = 0xe5;
-            }
+            self.ai_attack_force_forget(self.units[u as usize].player, t as u16);
         } else if fight_on && state != 0 && !matches!(state, 1 | 8 | 9 | 2) {
             let (x, y) = self.unit_sprite_pos(u);
             let here = super::path::region_at(&self.sai, x as i32, y as i32);
@@ -723,11 +720,8 @@ impl State {
         true
     }
 
-    /// 0x434c90: unit `u` leaves its town: a worker (count down) or a building, larva,
-    /// egg or overlord; the town forgets it as main building or builder and is removed
-    /// when empty (0x4347e0). Other units keep their AI.
-    fn town_remove_unit(&mut self, d: &Data, u: u32) -> bool {
-        // 0x432760: a resource leaves every town's slots.
+    /// 0x432760: a resource (ecx) leaves every town's slots.
+    fn ai_resource_forget(&mut self, d: &Data, u: u32) {
         let t = self.units[u as usize].unit_type;
         let flags = d.dat.units.flags[t as usize];
         if flags & 0x2000 != 0 {
@@ -750,6 +744,15 @@ impl State {
                 }
             }
         }
+    }
+
+    /// 0x434c90: unit `u` leaves its town: a worker (count down) or a building, larva,
+    /// egg or overlord; the town forgets it as main building or builder and is removed
+    /// when empty (0x4347e0). Other units keep their AI.
+    fn town_remove_unit(&mut self, d: &Data, u: u32) -> bool {
+        self.ai_resource_forget(d, u);
+        let t = self.units[u as usize].unit_type;
+        let flags = d.dat.units.flags[t as usize];
         let r = self.units[u as usize].ai;
         if r == NIL {
             return false;
@@ -797,14 +800,17 @@ impl State {
         true
     }
 
-    /// 0x4347e0: a town with nothing left (or only overlords, whose units move to the
-    /// nearest other town, 0x434330) is removed with its scripts (0x45ae20); resources
-    /// lose their AI marks and its area its town flag.
-    fn town_remove_if_empty(&mut self, d: &Data, town: u32) {
-        if !self.town_empty_or_merged(d, town) {
-            return;
+    /// 0x447040: `player`'s attack force forgets one unit of type `t` (a Zerg Guardian
+    /// cocoon, 0x1e, counts as 5).
+    fn ai_attack_force_forget(&mut self, player: u8, t: u16) {
+        let ty = if t == 0x1e { 5 } else { t };
+        if let Some(e) = self.ai.players[player as usize].attack_force.iter_mut().take(0x3f).find(|e| **e == ty + 1) {
+            *e = 0xe5;
         }
-        // 0x45ae20
+    }
+
+    /// 0x45ae20: the running AI scripts of town `town` are freed.
+    fn ai_scripts_remove_town(&mut self, town: u32) {
         let mut s = self.ai.active_scripts;
         while s != NIL {
             let next = self.ai.scripts.items[s as usize].link.next;
@@ -815,6 +821,16 @@ impl State {
             }
             s = next;
         }
+    }
+
+    /// 0x4347e0: a town with nothing left (or only overlords, whose units move to the
+    /// nearest other town, 0x434330) is removed with its scripts (0x45ae20); resources
+    /// lose their AI marks and its area its town flag.
+    fn town_remove_if_empty(&mut self, d: &Data, town: u32) {
+        if !self.town_empty_or_merged(d, town) {
+            return;
+        }
+        self.ai_scripts_remove_town(town);
         let mut u = self.visible_units.head;
         while u != NIL {
             let un = &self.units[u as usize];
@@ -1381,7 +1397,7 @@ impl State {
     }
 
     /// Drop interruptible orders (and `order`) from the end of `u`'s queue.
-    fn drop_queue_tail_for(&mut self, d: &Data, u: u32, order: u8) {
+    pub(super) fn drop_queue_tail_for(&mut self, d: &Data, u: u32, order: u8) {
         loop {
             let t = self.units[u as usize].order_queue_tail;
             if t == NIL {
@@ -1606,7 +1622,9 @@ impl State {
     pub(super) fn building_ai(&mut self, d: &Data, u: u32) -> bool {
         match self.units[u as usize].unit_type {
             0x2a => todo_port!("0x434df0", "AI overlord"),
-            0x6b => todo_port!("0x4a13c0", "AI comsat"),
+            0x6b => {
+                self.ai_cast_spell(d, u, 0);
+            }
             0x6c => todo_port!("0x434d50", "AI nuke silo"),
             _ => {}
         }
@@ -1878,5 +1896,267 @@ impl State {
         self.ai_pop_request(player);
         self.building_ai(d, u);
         false
+    }
+}
+
+/// Units joining a computer player's forces (0x4a2830 and its callees).
+impl State {
+    /// The town of a worker or building AI entry (`+0x14`).
+    fn ai_entry_town(&self, r: u32) -> Option<u32> {
+        match ai_kind(r) {
+            AI_WORKER => Some(self.ai.workers.items[ai_index(r) as usize].town),
+            AI_BUILDING => Some(self.ai.buildings.items[ai_index(r) as usize].town),
+            _ => None,
+        }
+    }
+
+    /// The shared "unit leaves its own building AI" step of 0x435700 / 0x435770 /
+    /// 0x435db0: resource slots (0x432760), the entry back to the building pool
+    /// (0x404500), the town forgets it as builder / main building.
+    fn ai_detach_building_entry(&mut self, d: &Data, u: u32) {
+        self.ai_resource_forget(d, u);
+        let r = self.units[u as usize].ai;
+        if r == NIL {
+            return;
+        }
+        let Some(town) = self.ai_entry_town(r) else { return };
+        if ai_kind(r) != AI_BUILDING {
+            todo_port!("0x404500", "a worker entry released into the building pool");
+            return;
+        }
+        let mut head = self.ai.towns.items[town as usize].buildings;
+        self.ai.buildings.release(&mut head, ai_index(r));
+        let tw = &mut self.ai.towns.items[town as usize];
+        tw.buildings = head;
+        if tw.building_scv == u {
+            tw.building_scv = NIL;
+        }
+        if tw.main_building == u {
+            tw.main_building = NIL;
+        }
+        self.units[u as usize].ai = NIL;
+    }
+
+    /// 0x4a2830: `u` (made by `parent`, a computer player's unit) joins the computer's
+    /// forces: a medic becomes the free medic, workers join the parent's town, an
+    /// Overlord-like 0x2a building does too (0x435770), a 0x28 unit a region, any other
+    /// follows the parent's build request.
+    pub(super) fn ai_unit_joins(&mut self, d: &Data, parent: u32, u: u32) {
+        if self.player_type(self.units[parent as usize].player) != 1 {
+            return;
+        }
+        let p = self.units[u as usize].player;
+        let t = self.units[u as usize].unit_type;
+        if self.player_type(p) == 1 && t == 0x22 && self.ai.players[p as usize].free_medic == NIL {
+            self.ai.players[p as usize].free_medic = u;
+        }
+        if d.dat.units.flags[t as usize] & 8 != 0 {
+            self.ai_join_town_of(d, parent, u);
+        } else if t == 0x2a {
+            self.ai_building_joins_town(d, parent, u);
+        } else if t != 0x28 {
+            self.ai_unit_joins_request(d, parent, u);
+        } else {
+            self.ai_unit_joins_region(d, parent, u);
+        }
+    }
+
+    /// 0x435700: `u` joins the town of `parent`'s AI (the unit detaches from its own
+    /// entry first when it is `parent`).
+    fn ai_join_town_of(&mut self, d: &Data, parent: u32, u: u32) {
+        let r = self.units[parent as usize].ai;
+        if r == NIL {
+            return;
+        }
+        let Some(town) = self.ai_entry_town(r) else {
+            todo_port!("0x435700", "a parent with a guard / military AI");
+            return;
+        };
+        if parent == u {
+            self.ai_detach_building_entry(d, u);
+        }
+        self.town_add_unit(d, u, town);
+    }
+
+    /// 0x435770: new building `u` of `parent`'s town (as 0x435700); a Bunker (0x7d) after
+    /// the first minute gets guard posts, a Missile Turret (0x7c) one once the town has
+    /// four of them.
+    pub(super) fn ai_building_joins_town(&mut self, d: &Data, parent: u32, u: u32) {
+        if self.player_type(self.units[parent as usize].player) != 1 {
+            return;
+        }
+        let r = self.units[parent as usize].ai;
+        if r == NIL {
+            return;
+        }
+        let Some(town) = self.ai_entry_town(r) else {
+            todo_port!("0x435770", "a parent with a guard / military AI");
+            return;
+        };
+        if parent == u {
+            self.ai_detach_building_entry(d, u);
+        }
+        self.town_add_unit(d, u, town);
+        let (player, ty) = (self.units[u as usize].player, self.units[u as usize].unit_type);
+        let (x, y) = self.unit_sprite_pos(u);
+        if ty == 0x7d && self.trig.elapsed > 0x3c {
+            self.guard_create(player, 5, x, y);
+            self.guard_create(player, 1, x, y);
+            return;
+        }
+        if ty == 0x7c {
+            let mut n = 0u32;
+            let one = |s: &State, w: u32| if s.units[w as usize].unit_type == 0x7c { 1 } else { s.producing(d, w, 0x7c) };
+            let mut w = self.ai.towns.items[town as usize].workers;
+            while w != NIL {
+                n += one(self, self.ai.workers.items[w as usize].parent);
+                w = self.ai.workers.items[w as usize].link.next;
+            }
+            let mut b = self.ai.towns.items[town as usize].buildings;
+            while b != NIL {
+                n += one(self, self.ai.buildings.items[b as usize].parent);
+                b = self.ai.buildings.items[b as usize].link.next;
+            }
+            if n > 3 {
+                self.guard_create(player, 1, x, y);
+            }
+        }
+    }
+
+    /// 0x433fe0: a cancelled building (now a drone) goes from its building AI back into
+    /// its town as a worker.
+    pub(super) fn ai_cancelled_building(&mut self, d: &Data, u: u32) {
+        if self.player_type(self.units[u as usize].player) != 1 {
+            return;
+        }
+        let r = self.units[u as usize].ai;
+        if r == NIL {
+            return;
+        }
+        let Some(town) = self.ai_entry_town(r) else { return };
+        if ai_kind(r) != AI_BUILDING {
+            todo_port!("0x404500", "a worker entry released into the building pool");
+            return;
+        }
+        self.units[u as usize].ai = NIL;
+        let mut head = self.ai.towns.items[town as usize].buildings;
+        self.ai.buildings.release(&mut head, ai_index(r));
+        self.ai.towns.items[town as usize].buildings = head;
+        self.town_add_unit(d, u, town);
+    }
+
+    /// 0x43e280: `u` (made by `parent`) joins the region it stands in: an idle region
+    /// first goes to state 1.
+    fn ai_unit_joins_region(&mut self, d: &Data, parent: u32, u: u32) {
+        let (x, y) = self.unit_sprite_pos(u);
+        let r = super::path::region_at(&self.sai, x as i32, y as i32);
+        let p = self.units[parent as usize].player;
+        if self.ai.regions[p as usize][r as usize].state == 0 {
+            self.set_ai_region_state(d, p, r, 1);
+        }
+        self.region_add_military(d, p, r, u, true);
+    }
+
+    /// 0x435db0: `u` (made by `parent`'s building) takes the job its build request
+    /// gave it: a guard post, a region, or a new guard post of its own (0x462960).
+    fn ai_unit_joins_request(&mut self, d: &Data, parent: u32, u: u32) {
+        let t = self.units[u as usize].unit_type;
+        if t == 0x2c || t == 0x3e {
+            return;
+        }
+        if self.units[u as usize].status & 0x4000_0000 != 0 {
+            let (x, y) = self.unit_sprite_pos(u);
+            let r = super::path::region_at(&self.sai, x as i32, y as i32);
+            let p = self.units[u as usize].player;
+            self.region_add_military(d, p, r, u, true);
+            return;
+        }
+        if matches!(t, 0x44 | 0x3f | 0x67 | 0xe | 0x54) {
+            return;
+        }
+        let r = self.units[parent as usize].ai;
+        if r == NIL {
+            return;
+        }
+        if ai_kind(r) != AI_BUILDING {
+            todo_port!("0x435db0", "a parent with a non-building AI");
+            return;
+        }
+        let b = ai_index(r) as usize;
+        let idx = if parent == u {
+            self.ai_detach_building_entry(d, u);
+            0
+        } else if self.units[parent as usize].unit_type == t {
+            0
+        } else {
+            self.units[parent as usize].build_queue_slot as usize
+        };
+        if self.ai.buildings.items[b].train_queue_types[idx] == 2 {
+            let g = self.ai.buildings.items[b].train_queue_values[idx] as usize;
+            if self.ai.guards.items[g].parent == NIL {
+                let gd = &mut self.ai.guards.items[g];
+                gd.parent = u;
+                gd.home = gd.other_home;
+                self.units[u as usize].ai = ai_ref(AI_GUARD, g as u32);
+                return;
+            }
+            // 0x438bf0: the region the unit stands in.
+            let (x, y) = self.unit_sprite_pos(u);
+            let reg = super::path::region_at(&self.sai, x as i32, y as i32);
+            self.ai.buildings.items[b].train_queue_types[idx] = 1;
+            self.ai.buildings.items[b].train_queue_values[idx] = super::ai::ai_region_ref(self.units[u as usize].player, reg);
+        }
+        if self.ai.buildings.items[b].train_queue_types[idx] != 1 {
+            self.ai_guard_register(d, u);
+            return;
+        }
+        let v = self.ai.buildings.items[b].train_queue_values[idx];
+        self.region_add_military(d, (v >> 16) as u8, v as u16, u, false);
+    }
+
+    /// 0x462960: a computer player's unit (not one with `ai_internal` bit 2) gets a
+    /// guard post at its position: an unowned one of its type there is reused.
+    pub(super) fn ai_guard_register(&mut self, d: &Data, u: u32) {
+        let p = self.units[u as usize].player;
+        if self.player_type(p) != 1 {
+            return;
+        }
+        let t = self.units[u as usize].unit_type;
+        if d.dat.units.ai_internal[t as usize] & 2 != 0 {
+            return;
+        }
+        let (x, y) = self.unit_sprite_pos(u);
+        let mut g = self.ai.guard_lists[p as usize];
+        while g != NIL {
+            let gd = &self.ai.guards.items[g as usize];
+            if gd.parent == NIL && gd.unit_id == t && gd.other_home == (x, y) {
+                break;
+            }
+            g = gd.link.next;
+        }
+        if g == NIL {
+            let mut head = self.ai.guard_lists[p as usize];
+            let Some(n) = self.ai.guards.alloc(&mut head) else { return };
+            self.ai.guard_lists[p as usize] = head;
+            let gd = &mut self.ai.guards.items[n as usize];
+            gd.ai_type = 1;
+            gd.unit_id = t;
+            g = n;
+        }
+        let gd = &mut self.ai.guards.items[g as usize];
+        gd.parent = u;
+        gd.home = (x, y);
+        gd.other_home = (x, y);
+        gd.times_died = 0;
+        self.units[u as usize].ai = ai_ref(AI_GUARD, g);
+    }
+
+    /// 0x462930: an AI unit may flee unless it guards a post it is not standing at.
+    pub(super) fn ai_may_flee(&self, u: u32) -> bool {
+        let r = self.units[u as usize].ai;
+        if r != NIL && ai_kind(r) == AI_GUARD {
+            return self.ai.guards.items[ai_index(r) as usize].home == self.unit_sprite_pos(u);
+        }
+        true
     }
 }

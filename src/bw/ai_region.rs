@@ -8,13 +8,14 @@
 use super::ai::AiRegion;
 use super::ai_town::{ai_index, ai_kind, ai_ref, AI_MILITARY};
 use super::list::NIL;
+use super::sai::{NeighborPtr, Sai};
 use super::path::{approx_distance, region_at};
 use super::{Data, State};
 use crate::todo_port;
 
 /// Unit types that never count as real targets: mines, scarabs, interceptors and the
 /// like (0x47b450).
-fn is_minor_target(t: u16) -> bool {
+pub(super) fn is_minor_target(t: u16) -> bool {
     matches!(t, 0x59 | 0x5a | 0x5f | 0x5e | 0x5d | 0x60)
 }
 
@@ -300,6 +301,168 @@ impl State {
         }
     }
 
+    /// 0x43c580: the AI unit `u` asks for help (`other` is the unit it deals with): the
+    /// region's detector comes (order 0x9f), else the nearest busy-able worker (SCV /
+    /// Overlord / ...) is sent to `u` (0xa3) and the nearest Queen-like caster to `other`
+    /// (0x92); a scanner building near scans first (0x8b on `other`).
+    pub(super) fn ai_call_support(&mut self, d: &Data, u: u32, other: u32) {
+        let node = self.units[u as usize].ai;
+        if node == NIL {
+            return;
+        }
+        let player = self.units[u as usize].player;
+        self.ai.players[player as usize].flags |= 0x100;
+        let det = if ai_kind(node) == AI_MILITARY {
+            let (rp, rid) = self.ai.military.items[ai_index(node) as usize].region;
+            Some(self.reg(rp, rid).detector)
+        } else if ai_kind(node) == super::ai_town::AI_GUARD {
+            let h = self.ai.guards.items[ai_index(node) as usize].other_home;
+            let r = region_at(&self.sai, h.0 as i32, h.1 as i32);
+            Some(self.reg(player, r).detector)
+        } else {
+            None
+        };
+        if let Some(det) = det {
+            if det != NIL {
+                self.order_on(d, u, 0x9f, det);
+                return;
+            }
+        }
+        let (ux, uy) = self.unit_sprite_pos(u);
+        let (mut best_a, mut best_b) = (NIL, NIL);
+        let (mut dist_a, mut dist_b) = (9999999u32, 9999999u32);
+        let mut c = self.player_units[player as usize];
+        while c != NIL {
+            let cu = &self.units[c as usize];
+            let next = cu.player_next;
+            let order = cu.order;
+            if cu.sprite != NIL && order != 0 {
+                let t = cu.unit_type;
+                let (cx, cy) = self.unit_sprite_pos(c);
+                let as_worker = matches!(t, 9 | 0x54) || (t == 0x2a && !self.has_loaded_units(c));
+                if as_worker {
+                    if cu.u8_at(0x123) == 0 && matches!(order, 0x9c | 0xa3 | 0xa0 | 0x7a | 0x9f) {
+                        let dd = approx_distance(ux as i32, cx as i32, uy as i32, cy as i32);
+                        if dd < dist_a {
+                            dist_a = dd;
+                            best_a = c;
+                        }
+                    }
+                } else if t == 0x2d {
+                    if self.can_attack(d, u, other, true) && self.units[other as usize].unit_type != 0x67 {
+                        let cost = self.order_energy_cost(d, 0x92) as u16;
+                        if !self.energy_short(c, cost) && self.can_use_tech(d, c, 0x11, self.units[c as usize].player) == Ok(1) {
+                            let dd = approx_distance(ux as i32, cx as i32, uy as i32, cy as i32);
+                            if dd < dist_b {
+                                dist_b = dd;
+                                best_b = c;
+                            }
+                        }
+                    }
+                } else if t == 0x6b && cu.status & 1 != 0 {
+                    let ut = self.units[u as usize].unit_type;
+                    if ((ut == 0x7d && self.has_loaded_units(u)) || (self.is_armed_pub(d, u) && d.dat.units.flags[ut as usize] & 8 == 0))
+                        && !self.energy_short(c, ((d.dat.techdata.energy_cost[4] & 0xff) as u16) << 8)
+                        && order != 0x8b
+                    {
+                        self.order_on(d, other, 0x8b, c);
+                        return;
+                    }
+                }
+            }
+            c = next;
+        }
+        if best_a != NIL {
+            let pos = self.unit_sprite_pos(u);
+            self.ai_support_queue(d, best_a, 0xa3, pos);
+        }
+        if best_b != NIL {
+            let pos = self.unit_sprite_pos(other);
+            self.ai_support_queue(d, best_b, 0x92, pos);
+        }
+    }
+
+    /// The tail of 0x43c580 for each helper: mark it (+0x93), drop its interruptible
+    /// orders (and `order`), queue `order` at `pos` and start the queue.
+    fn ai_support_queue(&mut self, d: &Data, c: u32, order: u8, pos: (i16, i16)) {
+        let f = self.units[c as usize].u8_at(0x93);
+        self.units[c as usize].set_u8_at(0x93, f | 1);
+        if self.units[c as usize].order != 0 {
+            self.drop_queue_tail_for(d, c, order);
+            self.order_queue_append(d, c, order, 0xe4, pos, NIL);
+        }
+        self.prepare_next_order(d, c);
+    }
+
+    /// 0x436e70: `u` is a military AI unit whose region is gathering (state 1 / 2), or
+    /// attacking (8 / 9) when `param` is 0.
+    pub(super) fn ai_region_gathering(&self, u: u32, param: u32) -> bool {
+        let node = self.units[u as usize].ai;
+        if node == NIL || ai_kind(node) != AI_MILITARY {
+            return false;
+        }
+        let (rp, rid) = self.ai.military.items[ai_index(node) as usize].region;
+        let s = self.reg(rp, rid).state;
+        s == 1 || (param == 0 && Self::region_attacking(s)) || s == 2
+    }
+
+    /// 0x462ea0: a guard-post AI unit that has strayed from its post (other region,
+    /// farther than 0xc0, not fighting) goes back to it (0xa3) unless `param` is nonzero;
+    /// true when it should (or does) return.
+    pub(super) fn ai_guard_return(&mut self, d: &Data, u: u32, param: u32) -> bool {
+        let node = self.units[u as usize].ai;
+        if node == NIL || ai_kind(node) != super::ai_town::AI_GUARD {
+            return false;
+        }
+        let home = self.ai.guards.items[ai_index(node) as usize].home;
+        let un = &self.units[u as usize];
+        let t = un.unit_type as usize;
+        let g = d.dat.units.staredit_group_flags[t];
+        if g & 5 == 0 && g & 2 != 0 && d.dat.units.flags[t] & 0x4000_0000 != 0 && un.hp as u32 != d.dat.units.hit_points[t] {
+            return false;
+        }
+        if un.auto_target != NIL {
+            return false;
+        }
+        let (x, y) = self.unit_sprite_pos(u);
+        if region_at(&self.sai, x as i32, y as i32) == region_at(&self.sai, home.0 as i32, home.1 as i32) {
+            return false;
+        }
+        if self.near_point(u, 0xc0, home) {
+            return false;
+        }
+        let target = un.order_target_unit;
+        if target != NIL && self.target_visible(target, u) {
+            let sub = un.subunit;
+            let base = if sub != NIL && d.dat.units.flags[self.units[sub as usize].unit_type as usize] & 0x10 != 0 { sub } else { u };
+            let b = &self.units[base as usize];
+            let w = if self.units[target as usize].status & 4 != 0 {
+                d.dat.units.air_weapon[b.unit_type as usize]
+            } else if b.unit_type == 0x67 && b.status & 0x10 == 0 {
+                0x82
+            } else {
+                d.dat.units.ground_weapon[b.unit_type as usize]
+            };
+            if w < 0x82 {
+                let min = d.dat.weapons.min_range[w as usize];
+                if min == 0 || !self.box_distance_within(d, base, min, target) {
+                    let range = self.weapon_range(d, u, w);
+                    if self.in_attack_range(d, u, range, target) {
+                        return false;
+                    }
+                }
+            }
+        }
+        let head = self.units[u as usize].order_queue_head;
+        if head != NIL && self.orders[head as usize].order == 0x98 {
+            return false;
+        }
+        if param == 0 {
+            self.order_at(d, u, 0xa3, home);
+        }
+        true
+    }
+
     /// 0x436f70: a campaign region's slowest unit (+0x24), ground units first.
     fn region_pick_slowest(&mut self, p: u8, r: u16) {
         if !self.campaign_ai(p) {
@@ -363,14 +526,9 @@ impl State {
             self.order_now(d, u, 0x63);
             unsieged = true;
         }
-        // 0x4381d0
-        let r = self.units[u as usize].ai;
-        if r == NIL || ai_kind(r) != AI_MILITARY || self.ai.military.items[ai_index(r) as usize].parent != u || d.dat.units.flags[self.units[u as usize].unit_type as usize] & 1 != 0 {
-            return;
-        }
-        let (rp, rid) = self.ai.military.items[ai_index(r) as usize].region;
+        let Some((rp, rid)) = self.ai_army_region(d, u) else { return };
         let rstate = self.reg(rp, rid).state;
-        if !is_detector_type(self.units[u as usize].unit_type) && (rstate == 1 || matches!(rstate, 8 | 9)) {
+        if !is_detector_type(self.units[u as usize].unit_type) && (rstate == 1 || Self::region_attacking(rstate)) {
             order = if self.units[u as usize].unit_type == 0x22 { 0xb1 } else { 0x9e };
         }
         let st = self.units[u as usize].status;
@@ -503,7 +661,7 @@ impl State {
 
     /// 0x431990: the best target among `units` for player `p` (by `attacker`, or for a
     /// region when NIL), scored on strength `kind` (0 air, 1 ground).
-    fn ai_best_target(&mut self, d: &Data, units: &[u32], p: u8, attacker: u32, region: u16, kind: usize) -> u32 {
+    pub(super) fn ai_best_target(&mut self, d: &Data, units: &[u32], p: u8, attacker: u32, region: u16, kind: usize) -> u32 {
         let (atype, here, ai) = if attacker != NIL {
             (self.units[attacker as usize].unit_type, self.unit_region(attacker), self.units[attacker as usize].ai)
         } else {
@@ -576,6 +734,22 @@ impl State {
         true
     }
 
+    /// 0x4315e0: `base` (the target's strength) adjusted by its type (Vulture mines,
+    /// passengers, ...).
+    fn ai_target_adjust(&self, d: &Data, c: u32, kind: usize, base: u32) -> u32 {
+        let ct = self.units[c as usize].unit_type;
+        let un = &self.units[c as usize];
+        match ct {
+            1 if (0x7b..0x82).contains(&un.order) => 1000,
+            2 => base.wrapping_add(un.u8_at(0xc0) as u32 * 100),
+            0xb | 0x2a | 0x39 | 0x45 => base.wrapping_add(self.loaded_space(d, c).wrapping_mul(100)),
+            0x1e => base.wrapping_add(base >> 2),
+            0x22 => base.wrapping_add(d.strength[kind][0]),
+            0x54 => base.wrapping_add(0x32),
+            _ => base,
+        }
+    }
+
     /// 0x431730: how much the AI wants target `c` (strength `kind` per hit point, *128;
     /// eggs and the like 0, minor targets 1).
     fn ai_target_score(&self, d: &Data, c: u32, kind: usize) -> u32 {
@@ -591,17 +765,7 @@ impl State {
             return 1;
         }
         let base = self.base_strength(d, c, kind);
-        // 0x4315e0
-        let un = &self.units[c as usize];
-        let s = match ct {
-            1 if (0x7b..0x82).contains(&un.order) => 1000,
-            2 => base.wrapping_add(un.u8_at(0xc0) as u32 * 100),
-            0xb | 0x2a | 0x39 | 0x45 => base.wrapping_add(self.loaded_space(d, c).wrapping_mul(100)),
-            0x1e => base.wrapping_add(base >> 2),
-            0x22 => base.wrapping_add(d.strength[kind][0]),
-            0x54 => base.wrapping_add(0x32),
-            _ => base,
-        };
+        let s = self.ai_target_adjust(d, c, kind, base);
         let life = self.life_now(d, c).max(0) as u32;
         let life = if life == 0 { 1 } else { life };
         let score = s.wrapping_shl(7) / life;
@@ -613,7 +777,7 @@ impl State {
     }
 
     /// 0x403430: `c` is a working detector (finished, not disabled).
-    fn is_active_detector(&self, d: &Data, c: u32) -> bool {
+    pub(super) fn is_active_detector(&self, d: &Data, c: u32) -> bool {
         let cu = &self.units[c as usize];
         d.dat.units.flags[cu.unit_type as usize] & 0x8000 != 0
             && cu.status & 1 != 0
@@ -739,7 +903,7 @@ impl State {
     /// 0x443fb0: the region path from `a`'s centre to `b`'s goes through no region
     /// that is lost, has targets or flag 0x20 for `player` (different groups count as
     /// safe).
-    fn ai_path_safe(&mut self, a: u16, b: u16, player: u8) -> bool {
+    pub(super) fn ai_path_safe(&mut self, a: u16, b: u16, player: u8) -> bool {
         if a == b || self.sai.regions[a as usize].group != self.sai.regions[b as usize].group {
             return true;
         }
@@ -1130,6 +1294,13 @@ impl State {
         false
     }
 
+    /// 0x437180: region `b` is among region `a`'s neighbours.
+    fn region_has_neighbor(&self, a: u16, b: u16) -> bool {
+        let ra = &self.sai.regions[a as usize];
+        let n = ra.neighbor_count as i32 - ra.zero_neighbors as i8 as i32;
+        (0..n.max(0) as usize).any(|i| self.sai.neighbor(a as usize, i) == b)
+    }
+
     /// 0x437e70: `player`'s units can get from region `a` to `b`: neighbours, an air
     /// target at `a` that can be hit from the air, else the 10-frame flood (0x437070)
     /// through regions without enemies reaches `b`. Other groups: no; non-players: yes.
@@ -1140,10 +1311,7 @@ impl State {
         if self.sai.regions[a as usize].group != self.sai.regions[b as usize].group {
             return false;
         }
-        // 0x437180
-        let ra = &self.sai.regions[a as usize];
-        let n = ra.neighbor_count as i32 - ra.zero_neighbors as i8 as i32;
-        if (0..n.max(0) as usize).any(|i| self.sai.neighbor(a as usize, i) == b) {
+        if self.region_has_neighbor(a, b) {
             return true;
         }
         let p = player as usize;
@@ -1235,4 +1403,128 @@ fn decay(v: u16, fast: bool) -> u16 {
         return v - 300;
     }
     0
+}
+
+/// Region neighbour list pointer (region +0xc) element write; `Sai::set_neighbor` is private.
+fn set_region_neighbor(sai: &mut Sai, r: usize, i: usize, v: u16) {
+    match sai.regions[r].neighbors {
+        NeighborPtr::Inline(s) => sai.regions[s as usize].inline_neighbors[i] = v,
+        NeighborPtr::Shared(o) => sai.neighbor_buf[o as usize + i] = v,
+        NeighborPtr::Null => panic!("null neighbor list"),
+    }
+}
+
+/// 0x49c8c0: byte at region +6 (walkable neighbour count) and the neighbour list pointer
+/// (+0xc; read entries with `Sai::neighbor`). Region in AX.
+pub(super) fn region_neighbor_list(sai: &Sai, region: u16) -> (u8, NeighborPtr) {
+    let r = &sai.regions[region as usize];
+    (r.walkable_neighbors, r.neighbors)
+}
+
+/// Node of the pool 0x51a328/0x51a330: a neighbour region and a copy of its neighbour list
+/// (Storm Ordinal_401 allocation of 0xc + 2*count bytes; here a Vec, last element = tail).
+pub(super) struct PathNode {
+    region: u16,
+    list: Vec<u16>,
+}
+
+/// 0x4e2820: for each neighbour of `region`: push a node with that neighbour's full list
+/// and remove `region` from the neighbour's list (counts +7 and +6 decremented).
+pub(super) fn ai_path_push_neighbors(sai: &mut Sai, pool: &mut Vec<PathNode>, region: u16) {
+    let count = sai.regions[region as usize].neighbor_count as usize;
+    for k in 0..count {
+        let nb = sai.neighbor(region as usize, k);
+        let n = nb as usize;
+        let len = sai.regions[n].neighbor_count as usize;
+        let list: Vec<u16> = (0..len).map(|i| sai.neighbor(n, i)).collect();
+        // Remove `region` by shifting the entries after it down (loops forever if absent).
+        let pos = list.iter().position(|&x| x == region).expect("0x4e2820: region not in neighbour list");
+        for i in pos..len - 1 {
+            set_region_neighbor(sai, n, i, list[i + 1]);
+        }
+        pool.push(PathNode { region: nb, list });
+        sai.regions[n].neighbor_count -= 1;
+        sai.regions[n].walkable_neighbors = sai.regions[n].walkable_neighbors.wrapping_sub(1);
+    }
+}
+
+/// 0x4e27a0: restore the neighbour lists saved by 0x4e2820, newest node first, and free
+/// the pool.
+pub(super) fn ai_path_restore_neighbors(sai: &mut Sai, pool: &mut Vec<PathNode>) {
+    while let Some(node) = pool.pop() {
+        let n = node.region as usize;
+        sai.regions[n].neighbor_count = sai.regions[n].neighbor_count.wrapping_add(1);
+        sai.regions[n].walkable_neighbors = sai.regions[n].walkable_neighbors.wrapping_add(1);
+        for (i, &v) in node.list.iter().enumerate().take(sai.regions[n].neighbor_count as usize) {
+            set_region_neighbor(sai, n, i, v);
+        }
+    }
+}
+
+/// 0x4e2700: run the region path search (0x4e1d90) for `ctx`; of its path entries
+/// `lo..=min(hi, count - 2)` pick the region with the highest nonzero region property
+/// (+0x20, last of equals) into `out`. 0 = found, 3 = none with a property, 2 = no path
+/// or only a closest-reachable path, 4 = range outside the path.
+pub(super) fn ai_path_best_region(sai: &mut Sai, lo: u32, hi: u32, ctx: &mut super::path::PathCtx, out: &mut u16) -> u32 {
+    if !super::path::find_region_path(sai, ctx) || ctx.unreachable != 0 {
+        return 2;
+    }
+    let count = ctx.region_count as i32 as u32;
+    if lo <= count {
+        let top = hi.min(count.wrapping_sub(2));
+        if lo <= top {
+            let mut best = 0u8;
+            for i in lo..=top {
+                let r = ctx.regions[i as usize];
+                let v = sai.regions[r as usize].properties;
+                if v != 0 && best <= v {
+                    *out = r;
+                    best = v;
+                }
+            }
+            return if best != 0 { 0 } else { 3 };
+        }
+    }
+    4
+}
+
+/// 0x4e29b0: search for paths from region `a` to `b` (same group) while removing, one
+/// by one, the best region found on the previous path (up to three, stored in `out`) from
+/// the region graph. `lo` (at least 2) and `hi` bound the path indices considered. Returns
+/// (result: the index of the path that found an alternative, 3 if the path got 10 regions
+/// longer, else 0; status stored through param_5: 0 found, 1 longer, 2 other group, 3 none,
+/// 4 bad args). The neighbour lists are restored before returning.
+pub(super) fn ai_region_path_search(sai: &mut Sai, lo: u32, a: u16, b: u16, hi: u32, out: &mut [u16; 3]) -> (u32, u32) {
+    let lo = lo.max(2);
+    if a == b || hi < lo {
+        return (0, 4);
+    }
+    if sai.regions[a as usize].group != sai.regions[b as usize].group {
+        return (0, 2);
+    }
+    let (ca, cb) = (sai.regions[a as usize].center, sai.regions[b as usize].center);
+    let mut ctx = super::path::PathCtx::default();
+    ctx.start = ((ca.0 >> 8) as i16, (ca.1 >> 8) as i16);
+    ctx.target = ((cb.0 >> 8) as i16, (cb.1 >> 8) as i16);
+    ctx.start_region = a;
+    ctx.target_region = b;
+    let mut status = ai_path_best_region(sai, lo, hi, &mut ctx, &mut out[0]);
+    if status != 0 {
+        return (0, status);
+    }
+    let first_count = ctx.region_count;
+    let mut pool = Vec::new();
+    let mut dummy = 0u16;
+    for k in 1..4usize {
+        ai_path_push_neighbors(sai, &mut pool, out[k - 1]);
+        let dest = if k < 3 { &mut out[k] } else { &mut dummy };
+        status = ai_path_best_region(sai, lo, hi, &mut ctx, dest);
+        if status != 0 {
+            ai_path_restore_neighbors(sai, &mut pool);
+            return (if status == 3 { 0 } else { k as u32 }, if status == 3 { 3 } else { 0 });
+        }
+    }
+    let ret = if (first_count as i32) + 10 < ctx.region_count as i32 { (3, 1) } else { (0, 3) };
+    ai_path_restore_neighbors(sai, &mut pool);
+    ret
 }

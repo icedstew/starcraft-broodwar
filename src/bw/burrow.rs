@@ -4,7 +4,6 @@
 use super::list::NIL;
 use super::sprite::iflag;
 use super::{Data, State};
-use crate::todo_port;
 
 impl State {
     /// 0x4c1fa0: Burrow command: units that can burrow (units.dat flag 0x100000) and may
@@ -105,7 +104,8 @@ impl State {
             }
             let s = self.units[u as usize].sprite;
             self.sprite_images_run_anim(d, s, 0x19);
-            // 0x48ed50: the burrow sound (UI).
+            // 0x48ed50 (EBX = 0x10, ESI = the unit): the burrow sound.
+            self.unit_sound(0x10, u, 0);
             self.units[u as usize].order_state = 3;
         }
         if self.units[u as usize].order_signal & 4 == 0 {
@@ -143,7 +143,9 @@ impl State {
         let un = &self.units[u as usize];
         if un.ai != NIL && un.main_order_timer == 0 {
             self.units[u as usize].main_order_timer = 7;
-            todo_port!("0x4a13c0", "AI: burrowed unit checks whether to come up (0x477160)");
+            if !self.ai_cast_spell(d, u, 0) {
+                self.ai_choose_target(d, u, true, false);
+            }
         }
     }
 
@@ -159,7 +161,8 @@ impl State {
             self.sprites[s as usize].flags &= !0x40;
             self.set_secondary_order(u, 0x17);
             self.sprite_images_run_anim(d, s, 0x1a);
-            // 0x48ed50: the unburrow sound (UI).
+            // 0x48ed50 (EBX = 0x11, ESI = the unit): the unburrow sound.
+            self.unit_sound(0x11, u, 0);
             self.units[u as usize].order_state = 1;
             return;
         }

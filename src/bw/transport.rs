@@ -6,6 +6,12 @@ use super::{Data, State};
 use crate::todo_port;
 
 impl State {
+    /// 0x402140: distance (0x40c360) from the unit's exact position (+0x2c/+0x30) to (x, y).
+    pub(super) fn exact_distance_to(&self, u: u32, x: i32, y: i32) -> u32 {
+        let (ex, ey) = self.units[u as usize].fl.exact;
+        super::path::approx_distance(ex, x, ey, y)
+    }
+
     /// 0x4e6ef0 (EBX = `u`): the closest of `u`'s player's completed, grounded transports that can
     /// take `u` (or one that already has `u` as its order target). Returns whether one
     /// was found (a hurt transport counts even when none can load `u`) and the unit.
@@ -46,10 +52,8 @@ impl State {
                             super::path::region_at(&self.sai, a.0 as i32, a.1 as i32) == super::path::region_at(&self.sai, b.0 as i32, b.1 as i32)
                         };
                         if ok {
-                            // 0x402140: distance from the unit's exact position (+0x2c/+0x30) to the transport's sprite.
-                            let (ex, ey) = self.units[u as usize].fl.exact;
                             let sp = self.unit_sprite_pos(c);
-                            let dist = super::path::approx_distance(ex, sp.0 as i32, ey, sp.1 as i32);
+                            let dist = self.exact_distance_to(u, sp.0 as i32, sp.1 as i32);
                             if dist < best {
                                 found = c;
                                 best = dist;
@@ -196,8 +200,8 @@ impl State {
         if self.units[u as usize].status & 0x40 != 0 {
             return;
         }
-        if self.units[u as usize].ai != NIL {
-            todo_port!("0x477160", "AI target choice (0x476180 gate) before Pickup4");
+        if self.ai_choose_target(d, u, false, true) {
+            return;
         }
         let mut tr = self.units[u as usize].order_target_unit;
         if tr == NIL {
@@ -246,7 +250,9 @@ impl State {
         while slot < cap && self.loaded_unit(tr, slot).is_some() {
             slot += 1;
         }
-        // 0x48ed50: the load sound (UI).
+        // 0x48ed50 (EBX = 0x28 + the transport's race, ESI = the transport): the load sound.
+        let race = Self::supply_race_of(d, self.units[tr as usize].unit_type);
+        self.unit_sound(0x28 + race, tr, 0);
         if self.units[u as usize].unit_type == 7 && self.units[u as usize].ai != NIL {
             todo_port!("0x4e78e0", "AI town builder SCV loaded");
         }
@@ -333,7 +339,7 @@ impl State {
         let grounded = self.units[u as usize].status & 2 != 0;
         if found && !done {
             if self.units[u as usize].ai != NIL && !grounded {
-                todo_port!("0x43df30", "AI transport could not unload");
+                self.ai_transport_pick_region(d, u);
                 return;
             }
         } else if done && !grounded && self.has_loaded_units(u) {
@@ -350,6 +356,42 @@ impl State {
             }
         }
         self.order_nothing(d, u);
+    }
+
+    /// 0x43df30: an AI transport that could not unload goes to a neighbouring region of
+    /// its own: one of its AI's base regions (state 4, 5, 8, 9), else a neutral one
+    /// (state 0), else any other; the last match in each class wins. Without a candidate
+    /// it stays in its region. An unwalkable target region triggers 0x43db50 instead.
+    fn ai_transport_pick_region(&mut self, d: &Data, u: u32) {
+        let p = self.units[u as usize].player;
+        let (x, y) = self.unit_sprite_pos(u);
+        let here = super::path::region_at(&self.sai, x as i32, y as i32);
+        let n = self.sai.regions[here as usize].walkable_neighbors as usize;
+        let (mut base, mut neutral, mut other) = (0x9c4u16, 0x9c4u16, 0x9c4u16);
+        for i in 0..n {
+            let nb = self.sai.neighbor(here as usize, i);
+            match self.ai.regions[p as usize][nb as usize].state {
+                4 | 5 | 8 | 9 => base = nb,
+                0 => neutral = nb,
+                _ => other = nb,
+            }
+        }
+        let r = if base != 0x9c4 {
+            base
+        } else if neutral != 0x9c4 {
+            neutral
+        } else if other != 0x9c4 {
+            other
+        } else {
+            here
+        };
+        let reg = &self.sai.regions[r as usize];
+        if reg.flags == 0x1ffd {
+            self.ai_ghost_to_enemy_region(d, u);
+        } else {
+            let c = reg.center;
+            self.order_at(d, u, 0x70, ((c.0 >> 8) as i16, (c.1 >> 8) as i16));
+        }
     }
 
     /// 0x4e76c0: a free spot for passenger `u` next to transport `tr`.
@@ -421,7 +463,10 @@ impl State {
                 // 0x4ebae0 (a copy of 0x4eb9f0).
                 self.place_unit_at(d, u, p.0, p.1);
             } else {
-                // 0x48ed50: the unload sound (UI).
+                // 0x48ed50 (EBX = 0x2b + the transport's race, ESI = the transport): the
+                // unload sound.
+                let race = Self::supply_race_of(d, self.units[tr as usize].unit_type);
+                self.unit_sound(0x2b + race, tr, 0);
                 self.show_unit(d, u);
             }
             if slot < 8 {

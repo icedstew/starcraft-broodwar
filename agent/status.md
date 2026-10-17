@@ -1,4 +1,4 @@
-# Status (updated 2026-10-16)
+# Status (updated 2026-10-17)
 
 Read first. Kept short: what is in flight and what is next. Rewrite it in the same commit
 as each step (conventions.md). Durable facts per area: [areas/sim.md](areas/sim.md),
@@ -17,48 +17,38 @@ renderer at 2x/4x); the 8-bit 1.16.1 renderer stays the default and the test ref
 ## Metric (the user watches this)
 
 `python3 -I re/coverage.py agent/local/scratch/dump/bw116n.c .` "reachable from both":
-2026-10-16: no AI 1129/1615 (69%), AI only 147/358 (41%), all 1276/1973 (64%).
-Next targets: `--missing both` (frontier list, one line per function).
+2026-10-17: no AI 1145/1615 (70%), AI only 229/358 (63%), all 1374/1973 (69%).
+Front end AI only: 99/100 (1 deferred: save/load 0x4044c0).
+Frontier lists: `--missing both` (non-AI), `--missing ai`, `--missing ai-front`.
 
-## Current direction (user, 2026-10-16)
+## Current direction (user, 2026-10-17)
 
-Increase functions ported. AI stays paused. No screenshot tests unless working on UI.
-Work in small units: one function or cluster per commit, status updated with it.
+AI unpaused: port the AI ("reachable from front end (AI only)" done 2026-10-17).
+No screenshot tests unless working on UI. Small units, status updated with each commit.
 Delegate per agents.md: Haiku triage, Sonnet porting, Opus review / hard RE / commits.
 
 ## In flight
 
-- Message / chat UI pass (user picked it, 2026-10-16). Done: message ring src/msgs.rs
-  (0x48cd30 & co.), error line, trigger display text 0x4c5770, notices (left 0x4c4d60,
-  eliminated 0x489e80) via State::notices + player_names, error helpers 0x48cf00 /
-  0x48ef30 / 0x48f6c0 / energy 0x360+race, CTF 0x4e3de0 / 0x4e3e90 / 0x4e3f30.
-  Left: chat entry / receive 0x48d1c0 (needs networking), names outside replays.
-- Porting loop: triaged through 0x48d560 and the 0x49 / 0x4c-0x4f slices of
-  `--missing both` through 0x4f5c50 (non-AI); easy equivalents extracted. What is left
-  without AI: save/load (pointer <-> index fixups, section writers via 0x4c3450), UI
-  overlay pools (selection circles / hp bars as image records, 0x4d4e80..0x4d7070),
-  chat 0x48d1c0, placebox, dialogs, Win32 / Storm / CRT. Resolved: pause / unpause
-  (0x488800 / 0x488790, Scene), 0x48a180 (player_dropped), 0x6d5c20 / 0x6d5c24 are never
-  written (always 0), so callers passing (0, 0) are right.
-
-- UI / UX fixes from user play (2026-10-16): tooltips (0x481510 / 0x459030), portrait
-  overlay conover.pcx, placement sound, fog sound gate, button errors, replay selection,
-  1.16.1 key map (areas/ui.md "Keys"). Open question to the user: save/load as
-  native-compatible .snx (all pools in 1.16.1 layout, AI data included) or scbw-only.
-
-- Subagent loop (2026-10-16/17): porters + verifier per agents.md, several in parallel on
-  disjoint files. Done this round: advisor / unit sounds with 0x48ed50 gate, 0x48ec10
-  volume + pan, native mixer (0x4bc270 / 0x4bbfd0 / 0x4bb740, volume table read from the
-  user's exe at runtime), talking portrait (0x45efe0 / 0x45ea30), minimap pings
-  (0x4a34c0 / 0x4a3870 / 0x4a4f10), right-click flash (0x4ebbd0), replay chat (0x48d1c0),
-  chat box + cheats (0x4b23e0, hashes read from the exe), cheat command 0x12 (0x4b1fa0),
-  AtkMoveEP 0x478de0, HarassMove, GuardPost, AIPatrol, Pickup4, 0x4e7420, patrolling
-  medics heal, many extractions. Known gaps: GuardPost / Medic skip 0x4a13c0 (AI spell
-  casting, runs for every unit natively); 0x477160 AI target choice; transmission /
-  center-view waits now end by the front end (0x45e610 / 0x4894a0). Save / load mapped in
-  areas/saveload.md; deferred by the user (2026-10-17). Also done: placement box
-  (placebox.cpp), multi-select card sets 0x458bc0, portrait variants 0x45e7a0 / 0x45e8a0,
-  local selection list in State (0x49ae40 / 0x49f7a0 / 0x4c3b40 / 0x45d040).
+- Committed 2026-10-17 (suite, 6 replays to 20000, AI Boxer 8000 / 20000): last
+  session's x9 work (AI spells 0x4a13c0, ai_script opcodes, path search 0x4e29b0, UI
+  training panel / minimap terrain / button tooltips) plus the AI front-end cluster:
+  target choice 0x477160 (attack.rs), reaction to attacks 0x43f320 (ai_military.rs),
+  0x43c580 / 0x436e70 / 0x462ea0 (ai_region.rs), unit joins AI 0x4a2830 / 0x435770 /
+  0x435db0 / 0x462960 (ai_town.rs). Fixed: interceptor parent is +0xc0 (union), not
+  connected_unit +0x80, in 0x476fc0 / 0x43b790.
+- AI todo_port! left (grep `todo_port!("0x4` in src/bw/ai*.rs attack.rs): 0x476fc0
+  siege-tank part (0x442460, 0x476870), 0x4a2450, 0x440770, 0x463040, guard requests
+  0x4630c0, region requests 0x43f990, defense 0x43ebb0 (needs 0x43e2e0), town request
+  0x43aae0, attack timers 0x43b9e0, military step 0x43d910, ComputerReturn 0x478490.
+  Next: `--missing ai` frontier (127 left), triage then clusters per agents.md.
+- Front end (not started in code): src/glue.rs top loop 0x4e0820, glue loop 0x4de200,
+  title 0x4d49a0, main menu 0x4db930 / 0x4db7a0, single player 0x4dc320; glue popups
+  0x4b7180 / 0x4b59a0 / 0x4b5cc0 / 0x4b7a70. Save / load deferred (areas/saveload.md).
+- Triaged non-AI frontier 2026-10-17: music stream 0x4a5e40..0x4a6250 and 0x4aad40 are
+  Win32 / Miles (bucket them replaced; 0x4a5f50 fade-out has ~14 callers, audio.rs has
+  no fade); 0x402140 / 0x48eae0 / 0x4c3db0 claimed equivalents, not yet verified;
+  0x463a10 port-small (0x48e1e0 in death.rs may be missing its call).
+- Don't commit README.md, .gitignore, web/*, cov.html (user's own work).
 
 ## Next steps
 

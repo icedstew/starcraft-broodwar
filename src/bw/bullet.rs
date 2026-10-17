@@ -306,7 +306,7 @@ impl State {
     }
 
     /// 0x4765b0: chance (out of 256) that `owner`'s shot at `target` misses.
-    fn miss_chance(&mut self, d: &Data, target: u32, owner: u32) -> u32 {
+    pub(super) fn miss_chance(&mut self, d: &Data, target: u32, owner: u32) -> u32 {
         let c = self.cover_chance(d, target);
         if self.units[owner as usize].status & 4 == 0 && self.units[target as usize].status & 4 == 0 {
             let (a, b) = (self.unit_pos(owner), self.unit_pos(target));

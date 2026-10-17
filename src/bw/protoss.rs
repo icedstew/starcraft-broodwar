@@ -4,7 +4,6 @@
 
 use super::list::NIL;
 use super::{Data, State};
-use crate::todo_port;
 
 /// Warp texture image shown while a Protoss building warps in.
 const WARP_TEXTURE: u16 = 0xd3;
@@ -70,11 +69,12 @@ impl State {
                 }
                 self.units[u as usize].order_target_unit = b;
                 if self.player_type(player) == 1 {
-                    todo_port!("0x435770", "AI: new building joins its town");
+                    self.ai_building_joins_town(d, u, b);
                 }
                 self.order_now(d, b, 0x30);
                 self.units[u as usize].order_state = 3;
-                // 0x48ed50: warp-in sound.
+                // 0x48ed50 (EBX = 0x210, ESI = the probe): the warp-in sound.
+                self.unit_sound(0x210, u, 0);
             }
             3 => {
                 let un = &self.units[u as usize];
@@ -142,7 +142,8 @@ impl State {
             0 => {
                 if self.units[u as usize].remaining_build_time == 0 {
                     self.images_anim(d, u, 0xd);
-                    // 0x48ed50: warp-in sound.
+                    // 0x48ed50 (EBX = 0x211, ESI = the building): the warp-in done sound.
+                    self.unit_sound(0x211, u, 0);
                     self.units[u as usize].order_state = 1;
                 }
             }

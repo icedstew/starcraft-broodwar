@@ -306,8 +306,8 @@ impl State {
 
     /// 0x463900: Medic (idle): heal the nearest hurt unit.
     pub(super) fn order_medic(&mut self, d: &Data, u: u32) {
-        if self.units[u as usize].ai != NIL {
-            todo_port!("0x4a13c0", "AI spellcasting (needs AI structs)");
+        if self.units[u as usize].ai != NIL && self.ai_cast_spell(d, u, 0) {
+            return;
         }
         let h = self.find_heal_target(d, u);
         if h != NIL {

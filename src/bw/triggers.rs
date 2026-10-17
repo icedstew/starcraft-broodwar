@@ -13,6 +13,12 @@ pub const TRIGGER_SIZE: usize = 0x960;
 /// 0x5124d8: milliseconds per frame at each game speed.
 pub const FRAME_MS: [u32; 7] = [0xa7, 0x6f, 0x53, 0x43, 0x38, 0x30, 0x2a];
 
+/// 0x4deb90: milliseconds per frame for game speed `speed`; a replay's multiplier divides
+/// it (a game's would multiply, never used here).
+pub fn replay_frame_ms(speed: usize, mult: u32) -> u32 {
+    (FRAME_MS[speed.min(6)] / mult.max(1)).max(1)
+}
+
 /// 0x4abaf0: the trigger file of the game type (template +8 and +4).
 /// ponytail: 0x4ab230 (computer players' AI scripts) and 0x4aba20 (capture the flag
 /// setup) are not ported.

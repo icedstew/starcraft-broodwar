@@ -17,6 +17,24 @@ fn addon_pos(d: &Data, t: u16) -> (i16, i16) {
 }
 
 impl State {
+    /// 0x463a10 (BX = `t`, the unit type being placed): the highlight sprite of `t`'s
+    /// footprint, offset from `u`'s sprite so that `t` lines up with `u` less its addon
+    /// offset (half placement boxes, 0x662860 / 0x662538), made with the UI image
+    /// allocator 0x4d6f90. Returns whether it was made.
+    pub fn footprint_sprite(&mut self, d: &Data, u: u32, t: u16) -> bool {
+        let ut = self.units[u as usize].unit_type;
+        let (puw, puh) = super::build::placement(d, ut);
+        let (ptw, pth) = super::build::placement(d, t);
+        let (ax, ay) = addon_pos(d, ut);
+        let x = (-(puw / 2) as i16).wrapping_sub(ax).wrapping_add((ptw / 2) as i16);
+        let y = (-(puh / 2) as i16).wrapping_sub(ay).wrapping_add((pth / 2) as i16);
+        let fl = d.dat.units.flingy[t as usize] as usize;
+        let image = d.dat.sprites.image[d.dat.flingy.sprite[fl] as usize];
+        let _args = (self.units[u as usize].sprite, image, x, y, t);
+        todo_port!("0x4d6f90", "UI image allocator: the footprint sprite on the unit's sprite");
+        false
+    }
+
     /// 0x48e0a0: build command for addon `t` at tile (tx, ty): the addon's spot and the
     /// building's spot it implies must both be free (0x473fb0 twice, errors 0x48d930).
     pub fn command_build_addon(&mut self, d: &Data, u: u32, order: u8, tx: i16, ty: i16, t: u16) {
@@ -134,7 +152,7 @@ impl State {
         self.units[u as usize].current_build_unit = a;
         self.start_order_now(d, a, 0x2c);
         if self.units[u as usize].ai != NIL {
-            todo_port!("0x435770", "AI: the new addon joins the town");
+            self.ai_building_joins_town(d, u, a);
         }
         self.units[a as usize].connected_unit = u;
     }

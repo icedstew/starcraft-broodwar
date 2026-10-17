@@ -43,6 +43,14 @@ Read when working on the HUD, dialogs, menus or glue screens.
   (0x4ca500, not ported), Alt+S / Alt+L save / load (not ported), Ctrl+M music,
   Ctrl+S sound (read from Local.dll's RT_ACCELERATOR resources).
 
+- Button strings in stat_txt.tbl are hotkey, kind byte (0 plain, 1 unit, 2 upgrade,
+  3 tech), text; kind 0 ends a C string, so read them with `dat::tbl_button`, not
+  `parse_tbl` (0x4593a0 takes the text at +2).
+- Minimap buttons (rez\minimap.bin, proc 0x4a5570: event 0xe user 2 = 0x4a54f0):
+  button 2 terrain on / off (0x6d5bbf), tooltip stat_txt 0x32b / 0x32a (1-based).
+  The tooltip says Tab, but no Tab was found in Local.dll accelerators (table at file
+  0x5aa0) or the minimap procs: not wired yet.
+
 ## Left
 
 - Dialog translucency: flag 0x40000 -> 0x416f30 blends the key color (0x4c8e80) through

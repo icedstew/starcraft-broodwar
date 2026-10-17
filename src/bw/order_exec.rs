@@ -226,7 +226,7 @@ impl State {
                 && self.can_attack(d, c, u, true)
                 && (self.units[c as usize].status & 0x2_0000 != 0 || self.can_hit_now(d, c, u))
             {
-                todo_port!("0x43f320", "computer unit reacts to a nearby target");
+                self.ai_react_to_target(d, c, u, false, true);
             }
         }
     }
@@ -838,8 +838,7 @@ impl State {
             return true;
         }
         if self.units[u as usize].ai != NIL {
-            todo_port!("0x477160", "AI attack-move target choice");
-            return true;
+            return !self.ai_choose_target(d, u, false, false);
         }
         self.attack_move_switch(d, u, order, t, true);
         false
@@ -851,7 +850,7 @@ impl State {
             return;
         }
         if self.units[u as usize].ai != NIL {
-            todo_port!("0x477160", "AI attack-move target choice");
+            self.ai_choose_target(d, u, false, false);
             return;
         }
         let t = self.find_auto_target(d, u);
@@ -1261,9 +1260,12 @@ impl State {
                 self.put_back_on_map(d, u);
             }
             Some(p) => {
-                // 0x48ed50: the nydus sounds.
+                // 0x48ed50 (EBX = 0x13, ESI = the entered canal, then its exit): the nydus
+                // sounds.
+                self.unit_sound(0x13, c, 0);
                 self.set_unit_position(d, u, p.0, p.1);
                 self.put_back_on_map(d, u);
+                self.unit_sound(0x13, e, 0);
                 self.order_done_or_next(d, u);
             }
         }
@@ -1615,7 +1617,8 @@ impl State {
         };
         self.finish_unit_pre(d, s);
         self.finish_unit_post(d, s);
-        // 0x48ed50: the sweep sound (UI).
+        // 0x48ed50 (EBX = 0x184, ESI = the scanner's caster): the sweep sound.
+        self.unit_sound(0x184, u, 0);
         if !cheat {
             let e = &mut self.units[u as usize].energy;
             *e = e.wrapping_sub(cost << 8);
@@ -1812,13 +1815,20 @@ impl State {
         }
         let flags = d.dat.units.flags[t as usize];
         let st = self.units[u as usize].status;
-        if self.race_of(d, u) == 1 && flags & 0x4000_0000 != 0 {
-            todo_port!("0x436e70", "AI: mechanical terran units go for repairs (0x440770)");
-            let _ = st;
+        if self.race_of(d, u) == 1
+            && flags & 0x4000_0000 != 0
+            && !self.ai_region_gathering(u, 0)
+            && ((self.units[u as usize].hp + 0xff) >> 8) != self.max_hp_points(d, u)
+            && st & 0x20000 != 0
+            && self.units[u as usize].u8_at(0x11a) == 0
+            && self.units[u as usize].u8_at(0x118) == 0
+            && flags & 8 == 0
+        {
+            todo_port!("0x440770", "AI: mechanical terran unit looks for a repair site (then 0x4752b0 order 0x31)");
         } else if t == 5 {
-            todo_port!("0x4a12c0", "AI siege tank mode");
+            self.ai_siege_up(d, u);
         } else if flags & 0x10_0000 != 0 {
-            todo_port!("0x4a1340", "AI burrowing");
+            self.ai_burrow_down(d, u);
         }
     }
 
@@ -1844,9 +1854,9 @@ impl State {
         }
     }
 
-    /// 0x476610: a ground unit (pathing flag 1) whose target `p` is in another region
+    /// 0x476610 / 0x476c50 (target unit instead of a point): a ground unit (pathing flag 1) whose target `p` is in another region
     /// group or not reachable.
-    fn cant_reach_ground(&mut self, d: &Data, u: u32, p: (i16, i16)) -> bool {
+    pub(super) fn cant_reach_ground(&mut self, d: &Data, u: u32, p: (i16, i16)) -> bool {
         if self.units[u as usize].pathing_flags & 1 == 0 {
             return false;
         }
@@ -1863,7 +1873,7 @@ impl State {
     }
 
     /// 0x478ec0: HarassMove: attack-move (0x478370) that, every 15 frames, also keeps
-    /// the unit's AI group together (AI military units, todo) and returns to the order
+    /// the unit's AI army together (0x43aa10, 0x439550, 0x438410, 0x43c170) and returns to the order
     /// target through the regions in between (0x4eb9c0) before looking for enemies.
     fn order_harass_move(&mut self, d: &Data, u: u32) {
         let order = self.units[u as usize].order;
@@ -1871,15 +1881,32 @@ impl State {
             return;
         }
         self.units[u as usize].main_order_timer = 0xf;
+        // AI army units (the 0x43aa10 / 0x439550 / 0x438410 guards are all false otherwise)
         let ai = self.units[u as usize].ai;
         if ai != NIL
             && ai_kind(ai) == AI_MILITARY
             && self.ai.military.items[ai_index(ai) as usize].parent == u
             && d.dat.units.flags[self.units[u as usize].unit_type as usize] & 1 == 0
         {
-            todo_port!("0x43aa10", "HarassMove: AI military unit waits for / follows its slowest group member (0x43aa10, 0x439550, 0x438410, 0x43c170)");
-            return;
+            let (p, r) = self.ai.military.items[ai_index(ai) as usize].region;
+            let slowest = self.reg(p, r).slowest_military;
+            if slowest == u {
+                if self.ai_slowest_waits(d, u) {
+                    self.unit_halt_facing(d, u);
+                    return;
+                }
+            } else {
+                if slowest != NIL && !self.ai_keeps_up(d, u) {
+                    self.move_to_unit(d, u, slowest);
+                    return;
+                }
+                if self.ai_group_mate_busy(d, u) {
+                    self.unit_halt_facing(d, u);
+                    return;
+                }
+            }
         }
+        self.ai_army_return(d, u);
         if self.unit_at_move_target(u) != 0 {
             let (sx, sy) = self.unit_sprite_pos(u);
             let (tx, ty) = self.units[u as usize].order_target_pos;
@@ -2042,7 +2069,7 @@ impl State {
     }
 
     /// 0x4778e0: GuardPost: every 15 frames an AI guard unit with nothing better to do
-    /// (spells 0x4a13c0, target choice 0x477160: todo) walks back to its guard post
+    /// (target choice 0x477160) walks back to its guard post
     /// (sieged tanks unsiege first), else idles.
     fn order_guard_post(&mut self, d: &Data, u: u32) {
         if self.units[u as usize].main_order_timer != 0 {
@@ -2050,8 +2077,12 @@ impl State {
         }
         self.units[u as usize].main_order_timer = 0xf;
         if self.units[u as usize].ai != NIL {
-            todo_port!("0x4a13c0", "GuardPost: AI spellcasting");
-            todo_port!("0x477160", "GuardPost: AI target choice");
+            if self.ai_cast_spell(d, u, 0) {
+                return;
+            }
+            if self.ai_choose_target(d, u, true, false) {
+                return;
+            }
         }
         let t = self.units[u as usize].unit_type;
         if t == 0x54 {

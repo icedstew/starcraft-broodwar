@@ -903,7 +903,7 @@ impl State {
 
     /// 0x4e8320: nearest unit to `p` passing `ok`, scanning the finder outward from
     /// the given indices and shrinking `b` as better ones turn up.
-    fn nearest_unit(&mut self, mut b: [i16; 4], exclude: u32, p: (i16, i16), idx: [i32; 4], ok: &mut dyn FnMut(&mut State, u32) -> bool) -> u32 {
+    pub(super) fn nearest_unit(&mut self, mut b: [i16; 4], exclude: u32, p: (i16, i16), idx: [i32; 4], ok: &mut dyn FnMut(&mut State, u32) -> bool) -> u32 {
         let (x, y) = (p.0 as i32, p.1 as i32);
         let [mut xd, mut yd, mut xa, mut ya] = idx;
         let dx = (x - b[0] as i32).max(b[2] as i32 - x);
