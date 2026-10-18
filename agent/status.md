@@ -105,10 +105,10 @@ Delegate per agents.md: Haiku triage, Sonnet porting, Opus review / hard RE / co
   "Not enough energy." not shown (tl1341_p2 f22444); cloaked observer shimmer differs by
   pixels (tl1339 f23040). Porters started on minimap / messages / cloak (rate-limited;
   resume them, partial work was reverted where it was debug only).
-- Play: F10 (game menu) does not always open; no pylon psi field shown while placing a
-  protoss building; no geyser placement preview for refineries; command card button
-  press effect and click sounds (command card and menus) missing?; tooltip when hovering
-  a training queue slot (cancel)?
+- Play: fixed 2026-10-18: F10 / hotkeys / Enter dropped (input between 42 ms ticks),
+  psi fields and geyser highlights while placing, command button pressed look and click
+  sound (Misc\Button.wav), chat caret glyph. Left: status panel tooltips (0x457350,
+  0x4575a0, 0x457b10, 0x457c20: none ported; check the training queue slots).
 - Leave-game desync (replay command 0x57): tl1313 f62308, tl1309 f83856, tl1363 f32442,
   tl1488 f54254, tl1320 f20320 diverge; tl1427 / 1453 / 1460 leaves match.
 
