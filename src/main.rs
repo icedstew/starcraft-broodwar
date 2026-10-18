@@ -8,6 +8,7 @@ mod storage;
 mod storm;
 mod dat;
 mod dlg;
+mod scrollbar;
 mod menu;
 mod msgs;
 mod smk;
@@ -60,7 +61,7 @@ fn main() -> std::io::Result<()> {
     if args.first().map(String::as_str) == Some("rep") {
         let r = replay::Replay::parse(&std::fs::read(&args[1])?)?;
         let h = &r.header;
-        println!("map {:?} {}x{}, {} frames, title {:?}, host {:?}", h.map_name, h.map_width, h.map_height, h.frames, h.title, h.host);
+        println!("map {:?} {}x{}, {} frames, title {:?}, host {:?}, start time {}", h.map_name, h.map_width, h.map_height, h.frames, h.title, h.host, h.start_time);
         println!("seed {:#x}, game type {} / {}", h.start_time, h.game_type, h.sub_type);
         if std::env::var_os("REPHDR").is_some() {
             for (i, c) in h.raw.chunks(16).enumerate() {

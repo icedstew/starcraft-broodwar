@@ -29,9 +29,16 @@ Read when working on the HUD, dialogs, menus or glue screens.
 - Shade blits (0x416f30, table 0x6d05a8 from 0x417270): source 0 keeps the screen, the
   shade color (tEffect.pcx) blends, other colors are drawn.
 
+- Combo boxes (type 13) share `ListBox`; open = flag 0x100000 (0x41a580 grows the rect
+  by the rows), drawn last. List scroll bars: src/scrollbar.rs (`ScrollBar` on
+  `ListBox.scroll`, frames 0x10..0x1f).
+- Create game: src/glue_create.rs (child module of glue); per-control procs table
+  0x51aa08 by id - 1.
+
 ## Verification
 
-- Glue screens: `SCBW_GLUE_INPUT="c x y;k vk(hex);t text;w ms" SCBW_CHARACTERS=<dir>
+- Glue screens: `SCBW_GLUE_INPUT="c x y;d x y;m x y;u x y;k vk(hex);t text;w ms"
+  SCBW_CHARACTERS=<dir>
   scbw glue out.png`; native with a wine + Xvfb + xdotool script like re/native_game.sh
   (login flow: Single Player 217,120; Expansion 367,275; the New ID popup opens itself
   with no characters).

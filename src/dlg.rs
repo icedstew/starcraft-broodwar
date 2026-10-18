@@ -71,6 +71,19 @@ pub struct Ctl {
     pub list: Option<ListBox>,
     /// Edit controls (type 8) once 0x416450 ran (event 10); the text is `text` (+0x14).
     pub edit: Option<Edit>,
+    /// The create game screen's list and folder label: the frames of glue\create\iCreate.grp
+    /// (0x59ba60) their draws (`Update::MapList` / `DirLabel`) use.
+    pub icons: Vec<Icon>,
+}
+
+/// A frame of a grp: its offset in the box, size and pixels (0 transparent).
+#[derive(Clone, Debug)]
+pub struct Icon {
+    pub x: i32,
+    pub y: i32,
+    pub w: i32,
+    pub h: i32,
+    pub px: Vec<u8>,
 }
 
 /// 0x41b140 +0x47: the most rows a list box holds.
@@ -98,6 +111,16 @@ pub struct ListBox {
     pub batch: bool,
     /// The left button went down in the list (the dialog's capture 0x6d5e54 / 0x6d5e4c).
     pub pressed: bool,
+    /// Combo boxes (type 13) +0x4c: bit 0 the drop-down opens upward (0x41b410: it does not
+    /// fit above the dialog's bottom).
+    pub up: u8,
+    /// Combo boxes +0x50: the closed top (0x41a110), the open rect grows from it.
+    pub saved_top: i32,
+    /// The dialog's rect bottom (+0xa of the parent, 0x41b410 compares with it); 479 until the
+    /// caller sets it.
+    pub parent_bottom: i32,
+    /// +0x36: the scroll bar child (0x414c90, scrollbar.rs).
+    pub scroll: Option<Box<crate::scrollbar::ScrollBar>>,
 }
 
 /// An edit control's state (dlg\edit.cpp, 0x416450).
@@ -166,6 +189,10 @@ pub enum Update {
     MenuButton,
     /// 0x47e590: a tip: color 2, left aligned, no line gap.
     Tip,
+    /// 0x4ad6b0: a row of the create game screen's map list (folder or map icon first).
+    MapList,
+    /// 0x4ad980: the create game screen's folder label (the folder icon, then the text).
+    DirLabel,
 }
 
 #[derive(Clone, Debug)]
@@ -184,16 +211,35 @@ pub struct Dialog {
 }
 
 impl Ctl {
-    /// 0x41b410 (list boxes): the rows shown, the bottom snapped to whole rows, the
-    /// selection and the top row kept in range.
+    /// 0x41b410 (list boxes, combo boxes): the rows shown, the bottom snapped to whole
+    /// rows, the selection and the top row kept in range. A combo box is laid out with its
+    /// drop-down rows added (0x41b410 grows the rect down, or up when it does not fit) and
+    /// shrunk back after; 0x418e00 enables it.
     pub fn list_layout(&mut self) {
-        let t = self.rect.1;
-        let b = self.rect.3;
+        let combo = self.ty == 13;
         let Some(l) = self.list.as_mut() else { return };
         if l.batch {
             return;
         }
         let rh = l.row_h as i32;
+        let mut grow = 0;
+        if combo {
+            grow = rh * l.items.len() as i32;
+            if l.parent_bottom < self.rect.3 + grow {
+                self.rect.1 -= grow;
+                l.up |= 1;
+            } else {
+                self.rect.3 += grow;
+                l.up = 0;
+            }
+            // 0x418e00
+            if self.flags & flag::DISABLED != 0 {
+                self.flags &= !flag::DISABLED;
+                todo_port!("0x418900", "enabled control: tooltip / focus bookkeeping");
+            }
+        }
+        let t = self.rect.1;
+        let b = self.rect.3;
         let rows = (b - t + 1) as i16 as i32 / rh.max(1);
         l.rows = rows as u8;
         let h = (l.row_h as i32 * rows) as i16 as i32;
@@ -211,8 +257,16 @@ impl Ctl {
         if mt < l.top {
             l.top = mt;
         }
-        if n > l.rows {
-            todo_port!("0x41b300", "list box scroll bar (0x414c90 child) shown");
+        let (scroll, up) = (l.scroll.is_some(), l.up);
+        if scroll {
+            self.list_scroll_layout();
+        }
+        if combo {
+            if up & 1 == 0 {
+                self.rect.3 -= grow;
+            } else {
+                self.rect.1 += grow;
+            }
         }
     }
 
@@ -281,18 +335,27 @@ impl Ctl {
     }
 
     /// 0x41a1b0: (x, y) relative to the dialog is over the rows (a shown scroll bar is
-    /// not counted; none is ported).
+    /// not counted). A combo box's rows exclude its button row.
     pub fn list_inside(&self, x: i32, y: i32) -> bool {
-        let (l, t, r, b) = self.rect;
+        let (l, mut t, r, mut b) = self.rect;
+        let r = r - self.list.as_ref().map_or(0, |lb| lb.scroll_width());
+        if let Some(lb) = self.list.as_ref().filter(|_| self.ty == 13) {
+            if lb.up & 1 == 0 {
+                t += lb.row_h as i32;
+            } else {
+                b -= lb.row_h as i32;
+            }
+        }
         (l..=r).contains(&x) && (t..=b).contains(&y)
     }
 
     /// 0x41a2c0: the row at (x, y) relative to the dialog; above or below the list it is
-    /// the row next to the highlighted one (the drag scrolls).
+    /// the row next to the highlighted one (the drag scrolls). A combo box that opens
+    /// downward starts below its button row.
     pub fn list_row_at(&self, _x: i32, y: i32) -> u8 {
         let Some(l) = self.list.as_ref() else { return 0xff };
         let n = l.items.len() as u8;
-        let y0 = self.rect.1;
+        let y0 = self.rect.1 + if self.ty == 13 && l.up & 1 == 0 { l.row_h as i32 } else { 0 };
         let r = if y < y0 {
             if l.top < l.hover {
                 l.top
@@ -316,6 +379,18 @@ impl Ctl {
             n.wrapping_sub(1)
         } else {
             r
+        }
+    }
+
+    /// 0x41a140 (events 0xe code 6; 0x41a4e0 for event 5 also redraws): the open drop-down
+    /// closes, the rect back to the button (the saved top, one row high).
+    pub fn combo_close(&mut self) {
+        let Some(l) = self.list.as_ref() else { return };
+        if self.flags & 0x100000 != 0 {
+            self.flags &= !0x100000;
+            self.rect.1 = l.saved_top;
+            // DAT_006d04b0 = 0: the caller's "open combo" is gone.
+            self.rect.3 = l.row_h as i32 + l.saved_top;
         }
     }
 
@@ -502,6 +577,7 @@ impl Dialog {
                 align: 0,
                 list: None,
                 edit: None,
+                icons: Vec::new(),
             }
         };
         let mut this = ctl(0);
@@ -808,7 +884,7 @@ pub struct Surf<'a> {
 }
 
 impl Skin {
-    fn frame_wh(&self, f: u16) -> (i32, i32) {
+    pub(crate) fn frame_wh(&self, f: u16) -> (i32, i32) {
         self.grp.frame(f as usize).map_or((0, 0), |f| (f.w, f.h))
     }
 
@@ -822,8 +898,8 @@ impl Skin {
         }]
     }
 
-    /// 0x41b140 (a list box's event 10): no rows, the row height (the font's, at least
-    /// the height of frame 0x35: 0x6d0500, then flag 0x20000000), the layout.
+    /// 0x41b140 (a list or combo box's event 10; a combo then 0x41a110): no rows, the row
+    /// height (the font's, at least the height of frame 0x35: 0x6d0500, then flag 0x20000000), the layout.
     pub fn list_init(&self, c: &mut Ctl) {
         let fh = self.font_of(c).height;
         let min = self.frame_wh(0x35).1;
@@ -834,11 +910,58 @@ impl Skin {
             c.flags &= !0x2000_0000;
             fh
         };
-        c.list = Some(ListBox { row_h: row_h as u8, ..Default::default() });
+        c.list = Some(ListBox { row_h: row_h as u8, parent_bottom: 479, ..Default::default() });
         c.list_layout();
         // 0x6d04c8 + 2 * 0x6d04f4: lists taller than a scroll bar's arrows and thumb get
         // one (0x414c90, id - 0x8000), shown by 0x41b300 once the rows overflow.
-        todo_port!("0x414c90", "list box scroll bar child control");
+        self.list_scroll_create(c);
+        if c.ty == 13 {
+            // 0x41bc40 -> 0x41a110: the closed rect is one row high, below the saved top.
+            let l = c.list.as_mut().unwrap();
+            l.saved_top = c.rect.1;
+            c.rect.3 = c.rect.1 + row_h;
+            c.flags |= 0x20000;
+        }
+    }
+
+    /// 0x41a580 (a combo box's event 4, the left button down): the rect grows by the rows
+    /// (down, or up when 0x41b410 found no room) and a bit more for the frame, and the
+    /// combo is open (flag 0x100000; the native keeps it in 0x6d04b0 for 0x41a530 /
+    /// 0x44fd30 / 0x471860 to close). Not drawn last natively: drawn in control order.
+    pub fn combo_open(&self, c: &mut Ctl) {
+        let Some(l) = c.list.as_ref() else { return };
+        let (a, b) = if c.flags & 0x2000_0000 != 0 {
+            (self.frame_wh(0x2f).1, self.frame_wh(0x23).1)
+        } else {
+            (self.frame_wh(0x47).1, self.frame_wh(0x3b).1)
+        };
+        let ext = l.row_h as i32 * l.items.len() as i32 + (a - b);
+        if l.up & 1 == 0 {
+            c.rect.3 += ext;
+        } else {
+            c.rect.1 -= ext;
+        }
+        c.flags = (c.flags | 1) & !0x4000_0000 | 0x100000;
+    }
+
+    /// 0x41bc40 (a combo box's event proc), the parts before it hands the event to the
+    /// list box proc 0x41baa0: event 4 opens, event 5 closes (0x41a4e0), event 0xe code 6
+    /// closes (0x41a140), code 0 with no rows disables (0x418640), code 10 initializes.
+    /// Mouse up then selects: 0x41a490 sends event 0xe code 0xb with the highlighted row
+    /// when it is a row other than the selected one (`Ctl::list_select`).
+    pub fn combo_proc(&self, c: &mut Ctl, event: u16, code: u32) {
+        match (event, code) {
+            (4, _) => self.combo_open(c),
+            (5, _) | (0xe, 6) => c.combo_close(),
+            (0xe, 0) if c.list.as_ref().is_some_and(|l| l.items.is_empty()) => {
+                // 0x418640
+                if c.flags & flag::DISABLED == 0 {
+                    c.flags = c.flags & !0x80 | flag::DISABLED;
+                }
+            }
+            (0xe, 10) => self.list_init(c),
+            _ => {}
+        }
     }
 
     /// 0x416450 (an edit's event 10): empty, caret 0, insert mode.
@@ -861,7 +984,7 @@ impl Skin {
 
     /// 0x4ef600: dialog grp frame `f` at (x, y) (plus the frame's offsets), clipped to
     /// `clip` (left, top, right, bottom inclusive).
-    fn frame(&self, f: u8, x: i32, y: i32, clip: (i32, i32, i32, i32), s: &mut Surf) {
+    pub(crate) fn frame(&self, f: u8, x: i32, y: i32, clip: (i32, i32, i32, i32), s: &mut Surf) {
         let Some(fr) = self.grp.frame(f as usize) else { return };
         let (fx, fy) = (x + fr.x, y + fr.y);
         let (l, t) = (fx.max(clip.0), fy.max(clip.1));
@@ -963,7 +1086,12 @@ impl Skin {
             }
             }
         }
-        for (i, c) in dlg.controls.iter().enumerate() {
+        // An open combo (0x100000, 0x6d04b0) shows over the controls after it: the
+        // native screens have its rows on top (its redraw comes after theirs); it is
+        // drawn last here.
+        let open = |c: &Ctl| c.ty == 13 && c.flags & 0x100000 != 0;
+        let order = dlg.controls.iter().enumerate().filter(|(_, c)| !open(c)).chain(dlg.controls.iter().enumerate().filter(|(_, c)| open(c)));
+        for (i, c) in order {
             if c.flags & flag::VISIBLE == 0 {
                 continue;
             }
@@ -979,6 +1107,10 @@ impl Skin {
             }
             let r = dlg.abs(&c);
             self.draw_ctl(&c, r, s);
+            // A list's scroll bar child (0x414c90) is its own control, drawn after it.
+            if c.list.as_ref().is_some_and(|l| l.scroll.is_some()) {
+                self.list_scroll_draw(&c, r, s);
+            }
         }
     }
 
@@ -1006,6 +1138,11 @@ impl Skin {
                 self.ctl_text(c, &c.text, r, d, d, 0x22, s);
             }
             return;
+        }
+        match (c.update, c.ty) {
+            (Update::MapList, 12) => return self.map_list_ctl(c, r, s),
+            (Update::DirLabel, _) => return self.dir_label_ctl(c, r, s),
+            _ => {}
         }
         match c.ty {
             1 | 2 if f & flag::WIDE != 0 => {
@@ -1066,6 +1203,7 @@ impl Skin {
             5 => self.image_ctl(c, r, s),
             8 => self.edit_ctl(c, r, s),
             12 => self.list_ctl(c, r, s),
+            13 => self.combo_ctl(c, r, s),
             6 => self.hscroll(c, r, s),
             9..=11 if !c.text.is_empty() => {
                 self.ctl_text(c, &c.text, r, 0, 0, [0x11, 0x12, 0x14][c.ty as usize - 9], s);
@@ -1074,45 +1212,205 @@ impl Skin {
         }
     }
 
-    /// 0x41b950 -> 0x41af10 per row: a list box's rows from the top row, in their color
-    /// (the highlighted row 4), cut with "..." (0x51b2cc) when wider than the row.
-    fn list_ctl(&self, c: &Ctl, r: (i32, i32, i32, i32), s: &mut Surf) {
+    /// An icon (frame of iCreate.grp, 0x4ef440 mode 1: its own box at (x, y), the frame's
+    /// offsets are not used) clipped.
+    fn icon(&self, i: &Icon, x: i32, y: i32, clip: (i32, i32, i32, i32), s: &mut Surf) {
+        self.blit(&i.px, i.w, i.h, x, y, clip, None, true, s);
+    }
+
+    /// 0x4ad6b0 for each row (the list box's draw): the folder (frames 0 / 1) or map icon
+    /// (3 / 4) of its node (the data's top byte is the node's flags, 8 a folder), lit when the
+    /// row is the highlighted one, centered in the row; the text after it (color 3, 4
+    /// lit), cut to what fits.
+    fn map_list_ctl(&self, c: &Ctl, r: (i32, i32, i32, i32), s: &mut Surf) {
         let Some(l) = c.list.as_ref() else { return };
-        if c.flags & 0x20000 == 0 {
-            todo_port!("0x4f02c0", "list box frame");
-        }
         let font = self.font_of(c);
         let rh = l.row_h as i32;
         let mut top = r.1;
         let mut row = l.top;
         for _ in 0..l.rows.min(l.items.len() as u8) {
-            let color = if row == l.hover && c.flags & 0x1000_0000 == 0 {
-                4
-            } else {
-                match l.items.get(row as usize).map_or(0, |i| i.1 & 0xf) {
-                    0 => 3,
-                    x => x,
-                }
-            };
-            if c.flags & 0x20000 == 0 {
-                todo_port!("0x4ef710", "list box row background (frames 0x2000)");
-            }
             if let Some(item) = l.items.get(row as usize) {
-                let x0 = r.0 + 2;
-                let mut t: Vec<u8> = item.0.iter().copied().take(0xff).collect();
-                let avail = r.2 - x0;
-                if avail < font.width_bytes(&t) {
-                    let lim = avail - font.width_bytes(b"...");
-                    while !t.is_empty() && lim < font.width_bytes(&t) {
-                        t.pop();
+                let lit = row == l.hover;
+                let frame = if item.2 >> 24 == 8 { lit as usize } else { 3 + lit as usize };
+                // 0x41af10 gives 0x4ad6b0 the row's left + 2 and its own rect.
+                let mut dx = 2;
+                if let Some(i) = c.icons.get(frame) {
+                    let y = top + (rh + 1) / 2 - i.h / 2;
+                    self.icon(i, r.0 + dx, y, r, s);
+                    dx += i.w + 2;
+                }
+                let x0 = r.0 + dx;
+                let mut t: Vec<u8> = Vec::new();
+                let avail = r.2 - x0 + 1;
+                for &ch in item.0.iter().take(0xff) {
+                    if font.width_bytes(&[t.as_slice(), &[ch]].concat()) > avail {
+                        break;
                     }
-                    t.extend_from_slice(b"...");
+                    t.push(ch);
                 }
                 let o = TextOpts { flags: 0x11, spacing: 1, line_gap: 3, clip: (x0, top, r.2, top + rh) };
-                font.draw_bytes(&t, x0, top, color, &o, TextDst { rows: &self.text_rows, out: s.px, w: s.w, h: s.h });
+                font.draw_bytes(&t, x0, top, if lit { 4 } else { 3 }, &o, TextDst { rows: &self.text_rows, out: s.px, w: s.w, h: s.h });
             }
             top += rh;
             row = row.wrapping_add(1);
+        }
+    }
+
+    /// 0x4ad980: the folder label: the folder icon (frame 2) centered in the label, the text
+    /// after it.
+    fn dir_label_ctl(&self, c: &Ctl, r: (i32, i32, i32, i32), s: &mut Surf) {
+        let mut dx = 0;
+        if let Some(i) = c.icons.get(2) {
+            let y = r.1 + (r.3 - r.1 + 1) / 2 - i.h / 2;
+            self.icon(i, r.0, y, r, s);
+            dx = i.w + 2;
+        }
+        if !c.text.is_empty() {
+            self.ctl_text(c, &c.text, r, dx, 0, 0x11, s);
+        }
+    }
+
+    /// 0x41b950 -> 0x41af10 per row: a list box's rows from the top row, in their color
+    /// (the highlighted row 4), cut with "..." (0x51b2cc) when wider than the row.
+    fn list_ctl(&self, c: &Ctl, r: (i32, i32, i32, i32), s: &mut Surf) {
+        let Some(l) = c.list.as_ref() else { return };
+        if c.flags & 0x20000 == 0 {
+            self.list_frame(c, r, s);
+        }
+        let rh = l.row_h as i32;
+        let mut top = r.1;
+        let mut row = l.top;
+        for _ in 0..l.rows.min(l.items.len() as u8) {
+            self.list_row(c, row, (r.0, top, r.2, top + rh), 2, 0, s);
+            top += rh;
+            row = row.wrapping_add(1);
+        }
+    }
+
+    /// 0x4f02c0: the frame of a list box: an inner outline (0x6ceb30 with the focus flag
+    /// 0x1000, else 0x6ceb2f) and the outer one (0x6ceb2c).
+    fn list_frame(&self, c: &Ctl, r: (i32, i32, i32, i32), s: &mut Surf) {
+        let col = self.colors.get();
+        let inner = col[if c.flags & 0x1000 != 0 { 0x10 } else { 0xf }];
+        self.outline((r.0 + 1, r.1 + 1, r.2 - 1, r.3 - 1), inner, s);
+        self.outline(r, col[0xc], s);
+    }
+
+    /// 0x41af10 (the row callback at +0x52; `dx`, `dy` the text offset): row `row` in
+    /// `rect`: its background (frames 0x4d.., or 0x35.. with flag 0x20000000) unless the
+    /// control has flag 0x20000, then its text, cut with "..." when wider than the rect.
+    #[allow(clippy::too_many_arguments)]
+    fn list_row(&self, c: &Ctl, row: u8, rect: (i32, i32, i32, i32), dx: i32, dy: i32, s: &mut Surf) {
+        let Some(l) = c.list.as_ref() else { return };
+        if l.items.is_empty() {
+            return;
+        }
+        let font = self.font_of(c);
+        let color = if row == l.hover && c.flags & 0x1000_0000 == 0 {
+            4
+        } else {
+            match l.items.get(row as usize).map_or(0, |i| i.1 & 0xf) {
+                0 => 3,
+                x => x,
+            }
+        };
+        if c.flags & 0x20000 == 0 {
+            let (base, pw) = if c.flags & 0x2000_0000 != 0 { (0x35, self.frame_wh(0x35).0) } else { (0x4d, self.frame_wh(0x4d).0) };
+            self.wide_pw(base, pw, rect.0, rect.1, rect.2 - rect.0 + 1, rect, s);
+        }
+        if let Some(item) = l.items.get(row as usize) {
+            let x0 = rect.0 + dx;
+            let y0 = rect.1 + dy;
+            let mut t: Vec<u8> = item.0.iter().copied().take(0xff).collect();
+            let avail = rect.2 - x0;
+            if avail < font.width_bytes(&t) {
+                let lim = avail - font.width_bytes(b"...");
+                while !t.is_empty() && lim < font.width_bytes(&t) {
+                    t.pop();
+                }
+                t.extend_from_slice(b"...");
+            }
+            let o = TextOpts { flags: 0x11, spacing: 1, line_gap: 3, clip: (x0, y0, rect.2, rect.3) };
+            font.draw_bytes(&t, x0, y0, color, &o, TextDst { rows: &self.text_rows, out: s.px, w: s.w, h: s.h });
+        }
+    }
+
+    /// 0x41b110 (a combo box's draw): the closed combo (0x41ac50), then the drop-down
+    /// rows (0x41a6d0) while it is open (flag 0x100000).
+    fn combo_ctl(&self, c: &Ctl, r: (i32, i32, i32, i32), s: &mut Surf) {
+        self.combo_body(c, r, s);
+        if c.flags & 0x100000 != 0 {
+            self.combo_rows(c, r, s);
+        }
+    }
+
+    /// 0x41ac50: the combo box's body at its saved top (one 0x2f high): the three-piece
+    /// background (frames 0x4d.. closed, 0x50.. lit by flag 0x80, 0x47../0x44.. open down
+    /// / up; with flag 0x20000000 0x35.., 0x38.., 0x2f.., 0x2c..), the arrow button (0x4a,
+    /// 0x4b lit, 0x4c disabled; 0x32, 0x33, 0x34) and the selected row's text.
+    fn combo_body(&self, c: &Ctl, r: (i32, i32, i32, i32), s: &mut Surf) {
+        let Some(l) = c.list.as_ref() else { return };
+        let f = c.flags;
+        let (open, up, lit, dis) = (f & 0x100000 != 0, l.up & 1 != 0, f & 0x80 != 0, f & 2 != 0);
+        let (btn, base, pw, bw) = if f & 0x2000_0000 == 0 {
+            let (mut btn, mut base) = (0x4a, 0x4d);
+            if open {
+                base = if up { 0x44 } else { 0x47 };
+            } else if lit {
+                (btn, base) = (0x4b, 0x50);
+            } else if dis {
+                btn = 0x4c;
+            }
+            (btn, base, self.frame_wh(0x3b).0, self.frame_wh(0x4a).0)
+        } else {
+            let (mut btn, mut base) = (0x32, 0x35);
+            if open {
+                base = if up { 0x2c } else { 0x2f };
+            } else if lit {
+                (btn, base) = (0x33, 0x38);
+            } else if dis {
+                btn = 0x34;
+            }
+            (btn, base, self.frame_wh(0x23).0, self.frame_wh(0x32).0)
+        };
+        let bw = bw + 4;
+        // The rect is the saved top (+0x50) and the frame's height (0x6d04bc, frame 0x2f).
+        let top = l.saved_top + (r.1 - c.rect.1);
+        let bottom = top + self.frame_wh(0x2f).1;
+        self.wide_pw(base, pw, r.0, top, r.2 - r.0 + 1, r, s);
+        self.frame(btn, r.2 - bw, top + 4, r, s);
+        if l.items.is_empty() || l.sel == 0xff {
+            return;
+        }
+        // The text is drawn with the control's text pointer on the selected row and flag
+        // 2 clear, align 0x11 (0x4ef870, offset 4, 0).
+        let mut t = c.clone();
+        t.flags &= !2;
+        let text = l.items[l.sel as usize].0.clone();
+        self.ctl_text(&t, &text, (r.0, top, r.2 - bw, bottom), 4, 0, 0x11, s);
+    }
+
+    /// 0x41a6d0: the open combo box's drop-down: from the button's side a background piece
+    /// (edge frame 0x41 / 0x3b, then 0x3e; with flag 0x20000000 0x29 / 0x23, then 0x26)
+    /// and the row's text per row, last row at the bottom when it opens down, row 0 at the
+    /// top when it opens up.
+    fn combo_rows(&self, c: &Ctl, r: (i32, i32, i32, i32), s: &mut Surf) {
+        let Some(l) = c.list.as_ref() else { return };
+        let (first_down, first_up, mid, pw) = if c.flags & 0x2000_0000 != 0 {
+            (0x29, 0x23, 0x26, self.frame_wh(0x23).0)
+        } else {
+            (0x41, 0x3b, 0x3e, self.frame_wh(0x3b).0)
+        };
+        let rh = l.row_h as i32;
+        let n = l.items.len() as i32;
+        let (mut top, step, mut row, first) = if l.up & 1 == 0 { (r.3 - rh, -rh, n - 1, first_down) } else { (r.1, rh, 0, first_up) };
+        let rstep = step.signum();
+        for k in 0..n.max(1) {
+            let rect = (r.0, top, r.2, top + rh);
+            self.wide_pw(if k == 0 { first } else { mid }, pw, r.0, top, r.2 - r.0 + 1, r, s);
+            self.list_row(c, row as u8, rect, 4, 0, s);
+            row += rstep;
+            top += step;
         }
     }
 
@@ -1273,10 +1571,16 @@ impl Skin {
         }
     }
 
-    /// 0x4ef710: a three-piece row from frames `base`, `base + 1` (repeated), `base + 2`,
-    /// each 0x6d04e8 (frame 103's width) wide, over `width` pixels from (x, y).
+    /// 0x4ef710 with the piece width 0x6d04e8 (frame 103's width), as the buttons use it.
     fn wide(&self, base: u8, x: i32, y: i32, width: i32, clip: (i32, i32, i32, i32), s: &mut Surf) {
-        let pw = self.frame_wh(0x67).0.max(1);
+        self.wide_pw(base, self.frame_wh(0x67).0, x, y, width, clip, s);
+    }
+
+    /// 0x4ef710: a three-piece row from frames `base`, `base + 1` (repeated), `base + 2`,
+    /// each `pw` (EDI) wide, over `width` pixels from (x, y).
+    #[allow(clippy::too_many_arguments)]
+    fn wide_pw(&self, base: u8, pw: i32, x: i32, y: i32, width: i32, clip: (i32, i32, i32, i32), s: &mut Surf) {
+        let pw = pw.max(1);
         let right = x + width - 1;
         self.frame(base, x, y, (clip.0, clip.1, clip.2.min(right - pw), clip.3), s);
         let n = (width - pw - 1) / pw;

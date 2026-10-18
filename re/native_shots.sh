@@ -34,13 +34,15 @@ GDBPY=${NATIVE_GDBPY:-$GDBPY}   # another gdb script (e.g. a one-off probe)
 INSTALL=${SCBW_INSTALL:-$HOME/Downloads/StarCraft-BroodWar_1.16.1}
 W=$(mktemp -d "${TMPDIR:-/tmp}/native_shots.XXXXXX")
 # No Mono/Gecko: their install prompts stall wineboot in a fresh prefix.
-export WINEPREFIX=$W/prefix WINEDEBUG=-all DISPLAY=:78 WINEDLLOVERRIDES='mscoree,mshtml='
+# NATIVE_DISPLAY=<n> (default 78): the Xvfb display, so several captures can run at once.
+DNUM=${NATIVE_DISPLAY:-78}
+export WINEPREFIX=$W/prefix WINEDEBUG=-all DISPLAY=:$DNUM WINEDLLOVERRIDES='mscoree,mshtml='
 mkdir -p "$OUT/native" "$W/cap"
 # NATIVE_SHOTS_KEEP=1 keeps the temp dir (with a screenshot after each menu step).
 cleanup() { wineserver -k 2>/dev/null || true; kill $XVFB 2>/dev/null || true; [ -n "$NATIVE_SHOTS_KEEP" ] && echo "kept $W" || rm -rf "$W"; }
 trap cleanup EXIT
 
-Xvfb :78 -screen 0 640x480x24 >/dev/null 2>&1 &  # must be 640x480
+Xvfb :$DNUM -screen 0 640x480x24 >/dev/null 2>&1 &  # must be 640x480
 XVFB=$!
 wineboot -i >/dev/null 2>&1
 G=$WINEPREFIX/drive_c/StarCraft

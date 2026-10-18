@@ -15,6 +15,9 @@ use crate::storage::Storage;
 use crate::palette::{self, Pal};
 use crate::todo_port;
 
+#[path = "glue_create.rs"]
+mod create;
+
 /// What the glue asks the sound system for (the window loop plays them: `Audio` is not
 /// the glue's).
 #[derive(Clone, Debug, PartialEq)]
@@ -269,6 +272,8 @@ pub struct Glue {
     /// The last left button press (clock, control id): a second one on the same control
     /// within the double-click time (500 ms) is event 6.
     last_press: Option<(u32, i16)>,
+    /// The create game screen's globals (glue_create.rs).
+    create: create::Create,
 }
 
 impl Glue {
@@ -328,6 +333,7 @@ impl Glue {
             login_timer: None,
             edit_refuse: Vec::new(),
             last_press: None,
+            create: create::Create::default(),
         }
     }
 
@@ -497,9 +503,16 @@ impl Glue {
     fn init_controls(&mut self, files: &Storage, dlg: &mut Dialog) {
         let p = self.palette_id();
         let skin = &self.look(files, p).skin;
+        let bottom = dlg.this.rect.3;
         for c in &mut dlg.controls {
             match c.ty {
-                12 => skin.list_init(c),
+                12 | 13 => {
+                    skin.list_init(c);
+                    // 0x41b410 opens a combo up when its rows pass the dialog's bottom.
+                    if let Some(l) = c.list.as_mut() {
+                        l.parent_bottom = bottom;
+                    }
+                }
                 8 => skin.edit_init(c),
                 _ => {}
             }
@@ -1075,6 +1088,9 @@ impl Glue {
         if open == Open::Login && id == 8 {
             self.login_buttons();
         }
+        if matches!(open, Open::Create(_)) {
+            self.create_event(id, row);
+        }
     }
 
     /// 0x4ed560: Ok and Delete work only with a profile selected.
@@ -1237,10 +1253,10 @@ impl Glue {
     fn open_create(&mut self, files: &Storage, which: u8) {
         let bin = if self.setup.multiplayer { "rez/gluCreat.bin" } else { "rez/gluCustm.bin" };
         let dlg = self.open_glue_dialog(files, bin);
-        // 0x59ba60 = 0x4d2b30 (the map list buffer), 0x6d5a74 = 1.
-        todo_port!("0x4d2b30", "map list buffer of the create game screen");
-        self.show_palette();
         self.dlg = Some((dlg, Open::Create(which)));
+        // The event proc 0x4af5c0's event 10 and 0 (and 0x405 when the controls have slid
+        // in): glue_create.rs.
+        self.create_open(files, which);
     }
 
     /// 0x4af6d0 (after 0x41a080): 0xc (play) picks the ready room of the local slot's race
@@ -1728,8 +1744,7 @@ impl Glue {
                 todo_port!("0x4b4a30", "score screen event proc (tabs, 0x4b4600 / 0x4b4a00 init, continue)");
             }
             Open::Create(_) => {
-                self.activated = id;
-                todo_port!("0x4af5c0", "create game event proc (map list, game type, options)");
+                self.create_activate(files, id);
             }
             Open::Login => {
                 self.login_activate(files, id);
@@ -1961,6 +1976,10 @@ impl Glue {
                 }
                 let Some((dlg, _)) = self.top() else { return };
                 let c = &mut dlg.controls[i];
+                // 0x415af0 event 4 on the list's scroll bar child.
+                if c.list_scroll_click(mx - ox, my - oy) {
+                    return;
+                }
                 if c.list_inside(mx - ox, my - oy) {
                     let r = c.list_row_at(mx - ox, my - oy);
                     if let Some(l) = c.list.as_mut() {
@@ -1968,6 +1987,29 @@ impl Glue {
                         l.pressed = true;
                     }
                     c.list_scroll_to(r);
+                }
+            }
+            13 => {
+                // 0x41bc40 event 4: 0x41a580 opens the drop-down, then 0x41ab20 as a list.
+                let p = self.palette_id();
+                self.look(files, p);
+                let skin = &self.looks[p].as_ref().unwrap().skin;
+                let top = if self.popup.is_some() { self.popup.as_mut() } else { self.dlg.as_mut() };
+                let Some((dlg, _)) = top else { return };
+                let c = &mut dlg.controls[i];
+                if c.flags & crate::dlg::flag::DISABLED != 0 {
+                    return;
+                }
+                skin.combo_proc(c, 4, 0);
+                if c.list_inside(mx - ox, my - oy) {
+                    let r = c.list_row_at(mx - ox, my - oy);
+                    if let Some(l) = c.list.as_mut() {
+                        l.hover = r;
+                    }
+                    c.list_scroll_to(r);
+                }
+                if let Some(l) = c.list.as_mut() {
+                    l.pressed = true;
                 }
             }
             8 => {
@@ -1987,6 +2029,9 @@ impl Glue {
         let (mx, my) = self.mouse;
         let Some((dlg, _)) = self.top() else { return };
         let (ox, oy) = dlg.origin();
+        for c in dlg.controls.iter_mut().filter(|c| c.list_scroll_active()) {
+            c.list_scroll_drag(mx - ox, my - oy);
+        }
         for c in dlg.controls.iter_mut().filter(|c| c.list.as_ref().is_some_and(|l| l.pressed)) {
             if c.list_inside(mx - ox, my - oy) {
                 let r = c.list_row_at(mx - ox, my - oy);
@@ -2002,9 +2047,18 @@ impl Glue {
     /// The left button went up (event 5): a list that was pressed selects the highlighted
     /// row (0x41a490: event 0xb when it differs and is a row).
     pub fn release(&mut self) {
+        let (mx, my) = self.mouse;
         let Some((dlg, _)) = self.top() else { return };
+        let (ox, oy) = dlg.origin();
         let mut ev = None;
         for c in dlg.controls.iter_mut() {
+            if c.list_scroll_active() {
+                c.list_scroll_release(mx - ox, my - oy);
+            }
+            // 0x41bc40 event 5: a combo closes (0x41a4e0) before 0x41a490 selects.
+            if c.ty == 13 && c.list.as_ref().is_some_and(|l| l.pressed) {
+                c.combo_close();
+            }
             let Some(l) = c.list.as_mut().filter(|l| l.pressed) else { continue };
             l.pressed = false;
             if l.hover != l.sel && (l.hover as usize) < l.items.len() {
@@ -2038,6 +2092,7 @@ impl Glue {
     /// (0x4dcea0 -> 0x4be120 advances 0x597390).
     pub fn tick(&mut self, files: &Storage, ms: u32) {
         self.clock_ms = self.clock_ms.wrapping_add(ms);
+        self.create_tick(files, ms);
         // 0x4edaa0 event 8 code 0x57: the timer goes (0x416000), New ID opens.
         if let Some(left) = self.login_timer {
             if left > ms {
@@ -2206,6 +2261,7 @@ pub fn run(files: &Storage, shot: Option<&str>) -> std::io::Result<()> {
     };
     let mut pressed: Option<i16> = None;
     let mut was_down = false;
+    let mut held: Option<i16> = None;
     let mut script: std::collections::VecDeque<String> = std::env::var("SCBW_GLUE_INPUT").map(|v| v.split(';').map(str::to_string).collect()).unwrap_or_default();
     let mut popped = false;
     // Typed characters (WM_CHAR).
@@ -2277,6 +2333,27 @@ pub fn run(files: &Storage, shot: Option<&str>) -> std::io::Result<()> {
                         glue.release();
                         if let Some(id) = hit {
                             glue.mouse_down();
+                            glue.activate(files, id);
+                        }
+                    }
+                    // d x y: the button goes down (held); m x y: the mouse moves while held;
+                    // u x y: it goes up (a held button activates as on a click).
+                    Some("d") => {
+                        glue.mouse_to(num(1), num(2));
+                        glue.press(files);
+                        let top = glue.popup.as_ref().or(glue.dlg.as_ref());
+                        held = top.and_then(|(dlg, _)| dlg.hit(num(1), num(2)).filter(|&i| activates(&dlg.controls[i])).map(|i| dlg.controls[i].id));
+                    }
+                    Some("m") => {
+                        glue.mouse_to(num(1), num(2));
+                        glue.drag();
+                    }
+                    Some("u") => {
+                        glue.mouse_to(num(1), num(2));
+                        glue.release();
+                        let top = glue.popup.as_ref().or(glue.dlg.as_ref());
+                        let hit = top.and_then(|(dlg, _)| dlg.hit(num(1), num(2)).map(|i| dlg.controls[i].id));
+                        if let Some(id) = held.take().filter(|&id| hit == Some(id)) {
                             glue.activate(files, id);
                         }
                     }

@@ -76,8 +76,14 @@ Delegate per agents.md: Haiku triage, Sonnet porting, Opus review / hard RE / co
   popup backgrounds with flag 0x40000 blend only the shade color (0x416f30), force names
   and the profile name check read network.tbl (not gluAll). Checked against native
   (9 login steps, only the cursor differs): `SCBW_GLUE_INPUT` drives `scbw glue <png>`.
-- Glue left: dialog event procs (ready rooms 0x4f7150 / 0x4f74b0 / 0x4f7810, create
-  0x4af5c0, score 0x4b4a30), mission list 0x4b7820, 0x4a8590, error popup 0x4bb300,
+- 2026-10-18 (subagent wave: Haiku triage, Sonnet porters on dlg.rs / scrollbar.rs /
+  glue_create.rs): create game screen 0x4af5c0 / 0x4af6d0 (src/glue_create.rs: map list
+  with folders, info panel, game types from templates, slot owner / race combos, the Ok
+  path to 0x4d3fc0 (todo)), combo boxes (type 13, dlg.rs), list scroll bars
+  (src/scrollbar.rs, auto-repeat timer todo). 13 native create-screen shots match but the
+  cursor (`d`/`m`/`u` hold verbs added to SCBW_GLUE_INPUT).
+- Glue left: dialog event procs (ready rooms 0x4f7150 / 0x4f74b0 / 0x4f7810, score
+  0x4b4a30), game creation 0x4d3fc0 -> game start, mission list 0x4b7820, 0x4a8590, error popup 0x4bb300,
   OK/Cancel 0x4b5b20 (taken as OK), the glue -> game start (glue.rs `Top::Game`), list
   scroll bars (0x414c90), combo boxes (type 13), Tab focus (0x418a60).
 - Don't commit README.md, .gitignore, web/*, cov.html (user's own work).
@@ -86,8 +92,10 @@ Delegate per agents.md: Haiku triage, Sonnet porting, Opus review / hard RE / co
 
 1. Re-run `agent/tools/aistress.sh 25000 <seed> agent/local/tgt/debug/scbw` with new
    seeds / longer; fix what it finds. Then 0x4a6250 and the glue event procs.
-2. Glue event procs: create game 0x4af5c0 next (map list = list box, combos), then the
-   glue -> game start, score, ready rooms.
+2. Glue -> game start (0x4d3fc0 then state START into view.rs), score, ready rooms.
+3. Screenshot tests on more replays (user, 2026-10-18): native shots for tl1339..1363
+   (`NATIVE_DISPLAY` lets captures run in parallel), more tl.net replays downloaded to
+   the scratchpad; repshot each, fix the worst first.
 3. Unported non-AI frontier (`--missing both`), triage then port.
 4. Run tl1341 / 1349 / 1354 / 1356 replays on the current binary (areas/sim.md).
 5. Workflow: porters on disjoint files run in parallel fine (shared target dir; they
