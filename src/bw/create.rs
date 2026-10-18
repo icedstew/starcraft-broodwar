@@ -639,6 +639,13 @@ impl State {
         self.unit_sounds.push((id, u, min_vol, sp.x, sp.y));
     }
 
+    /// 0x48d140 (with the sprintf 0x41f1b0 of network.tbl line 0x11 and the name 0x47b090 done
+    /// by the front end): the line "WARNING: Unit unplaceable! (name) (x,y)" in color 3 for 7 s
+    /// and sound 2.
+    pub fn unit_unplaceable(&mut self, t: u16, x: i16, y: i16) {
+        self.unplaced.push((t, x, y));
+    }
+
     /// 0x48ee30: an error for `player`: advisor sound `sound` (sfxdata id) and stat_txt
     /// line `msg`, both for the local player only.
     pub fn local_error(&mut self, player: u8, sound: u16, msg: u16) {

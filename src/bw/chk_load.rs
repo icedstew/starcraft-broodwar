@@ -391,8 +391,9 @@ impl State {
             }
             return Some(u);
         }
-        // No room: a "could not be placed" chat line for the map maker (0x48d140, display)
-        // and the unit dies unseen.
+        // No room: a "could not be placed" line for the map maker and the unit dies unseen.
+        let (ux, uy) = self.unit_sprite_pos(u);
+        self.unit_unplaceable(t, ux, uy);
         self.units[u as usize].order_flags |= 4;
         self.kill_unit(d, u);
         None
@@ -439,13 +440,7 @@ impl State {
             self.fill_hangar(d, u, p[0xc]);
         }
         if valid & 1 != 0 && state & 1 != 0 {
-            // 0x491a50: personnel cloaking (10) for ghosts and their heroes, cloaking
-            // field (9) for wraiths, none (0x2c) otherwise.
-            let tech = match ut {
-                1 | 0x10 | 100 | 99 | 0x68 | 0x33 => 10,
-                8 | 0x15 => 9,
-                _ => 0x2c,
-            };
+            let tech = super::ai_script::cloak_tech(ut as u16);
             let pl = self.units[u as usize].player;
             if self.can_use_tech(d, u, tech, pl) == Ok(1) {
                 self.burrowed_cloak(d, u);

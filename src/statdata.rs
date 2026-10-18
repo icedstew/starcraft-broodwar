@@ -63,6 +63,27 @@ fn stat(strings: &[String], id: u16) -> String {
     strings.get(id as usize - 1).map_or(String::new(), |s| s.split('\0').next().unwrap_or("").to_string())
 }
 
+/// 0x47b090: a unit type's name: the map's string when the unit's map string id (units.dat /
+/// UNIx, 0x660260) is set, else stat_txt `t + 1`. Empty for an id past the table.
+pub fn unit_name(d: &Data, strings: &[String], t: u16) -> String {
+    if t >= 0xe4 {
+        return String::new();
+    }
+    let id = d.dat.units.name_string[t as usize];
+    if id == 0 {
+        return stat(strings, t + 1);
+    }
+    let Some(tbl) = d.dat.map_tbl.as_deref() else { return String::new() };
+    let u16_at = |o: usize| tbl.get(o..o + 2).map(|b| u16::from_le_bytes([b[0], b[1]]) as usize);
+    match (u16_at(0), u16_at(id as usize * 2)) {
+        (Some(n), Some(off)) if (id as usize) <= n && off <= tbl.len() => {
+            let s = &tbl[off..];
+            String::from_utf8_lossy(&s[..s.iter().position(|&b| b == 0).unwrap_or(s.len())]).into_owned()
+        }
+        _ => String::new(),
+    }
+}
+
 /// A building is shown disabled (lockdown, stasis, maelstrom, or status 0x400).
 fn disabled(st: &State, u: u32) -> bool {
     let un = &st.units[u as usize];
@@ -384,8 +405,7 @@ pub fn unit_panel(st: &State, d: &Data, strings: &[String], u: u32) -> Vec<(i16,
         let total = if un.status & 0x4000_0000 != 0 { 0x546 } else { 0x708 };
         out.push((-8, Show::Text(format!("\x04{}/{}", un.remove_timer / 10, total / 10))));
     }
-    // 0x47b090: the name (heroes and the like have their own string table entry).
-    out.push((-5, Show::Text(stat(strings, t + 1))));
+    out.push((-5, Show::Text(unit_name(d, strings, t))));
     out
 }
 

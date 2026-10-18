@@ -10,6 +10,7 @@
 
 use crate::dlg::{Dialog, Effects, Skin, Surf};
 use crate::grp::{Blend, Grp};
+use crate::setup::{slot, Setup};
 use crate::storage::Storage;
 use crate::todo_port;
 
@@ -95,6 +96,22 @@ pub enum Open {
     Error,
     /// 0x4b5cc0: GLUEOK_BIN with a title and a text.
     ErrorSplit,
+    /// 0x4f71f0 (0 zerg) / 0x4f7550 (1 terran) / 0x4f78b0 (2 protoss): rez\gluRdy?.bin, event
+    /// proc 0x4f7150 / 0x4f74b0 / 0x4f7810.
+    Ready(u8),
+    /// 0x4edc30: rez\gluLogin.bin, event proc 0x4edaa0.
+    Login,
+    /// 0x4af6d0: rez\gluCustm.bin (single player) / gluCreat.bin (network), event proc
+    /// 0x4af5c0.
+    Create(u8),
+    /// 0x4b4af0: rez\gluScore.bin, event proc 0x4b4a30; true when the local player won.
+    Score(bool),
+    /// 0x4b2930: rez\gluCmpgn.bin, event proc 0x4b28b0.
+    Campaign,
+    /// 0x4b52a0: rez\gluExpCmpgn.bin, event proc 0x4b5220.
+    CampaignExp,
+    /// 0x4b6490: rez\gluLoad.bin, event proc 0x4b6410.
+    Load,
 }
 
 /// 0x50e06c + 0x10a: the light percentage translucent image controls use (0x6d5e24).
@@ -136,10 +153,27 @@ pub struct Glue {
     pub popup: Option<(Dialog, Open)>,
     /// 0x41a080's result once the event proc ended the dialog (0x4dd040).
     result: Option<i32>,
-    /// rez\stat_txt.tbl (0x6d1220).
-    stat_txt: Vec<String>,
+    /// rez\network.tbl (0x6d1220: the default player name, the campaign advice, ...).
+    network: Vec<String>,
+    /// rez\network.tbl as read.
+    network_raw: Vec<u8>,
     /// rez\gluAll.tbl (0x4ddd30).
     glu_all: Vec<String>,
+    /// gluAll.tbl as read (Setup's profile name check).
+    glu_all_raw: Vec<u8>,
+    /// The game-setup globals the glue fills (the profile, the mission 0x57f244).
+    pub setup: Setup,
+    /// 0x59b760 / 0x59a0d4: per race (0 zerg, 1 terran, 2 protoss) the campaign select's
+    /// advice code (0 none, -10 .. -12), for the classic and the Brood War screen.
+    campaign_advice: [[i32; 3]; 2],
+    /// 0x6dc2ac: the glue sound ids (0xa5 .. 0xad) once 0x4de0b0 set them (0x6d6364).
+    sound_list: Option<[u16; 9]>,
+    /// 0x6d6368: tick of the last hover sound.
+    sound_tick: u32,
+    /// GetTickCount stand-in: the sum of the `tick` steps.
+    clock_ms: u32,
+    /// 0x6d5a60: when set, 0x4b4af0 uses layout 1 (zerg victory) whatever the race.
+    g6d5a60: u32,
     /// 0x6cddc4 / 0x6cddc8: the mouse.
     pub mouse: (i32, i32),
     /// 0x50e064: the palette currently shown (-1 none).
@@ -151,14 +185,34 @@ pub struct Glue {
     cursor_ms: u32,
     /// 0x6d63b0: an error dialog is being shown as a popup.
     error_depth: u8,
+    /// 0x6d11cc: the campaign mission record (a VA into the exe's 8-byte records of
+    /// 0x5122a0 / 0x5122ac: +2 mission, +4 scenario number, +6 race), 0 none.
+    camp_rec: u32,
+    /// 0x51ca1c: a campaign map continues (set by 0x4a8590).
+    camp_cont: bool,
+    /// 0x5122b8: the scenario (cinematic) number 0x4e0820 case 10 plays.
+    scenario: u32,
+    /// 0x6cef50: a UI notice rectangle is pending (0x6cef52 / 54 / 56 / 58: its four words,
+    /// 0x6cef51: flags).
+    notice: (bool, u8, [i16; 4]),
+    /// 0x51a0e9: the palette is blanked (set by 0x4dcee0).
+    pal_blank: bool,
+    /// 0x6d5a6c: UI flags (0x20000000: no mission text screens).
+    g6d5a6c: u32,
+    /// The install's StarCraft.exe: the campaign tables are read from its data.
+    exe: Vec<u8>,
+    /// arr\mapdata.tbl (0x59c080): the campaign map names by mission number.
+    map_names: Vec<String>,
 }
 
 impl Glue {
     /// 0x4e0820 (before its loop): state 4 (glue), settings, cursor at (320, 240).
     pub fn new(files: &Storage) -> Glue {
         todo_port!("0x4e0820", "0x4daf30 / 0x4d2ff0 / 0x4e05b0 / 0x4db060 / 0x4f6100 init, CPUThrottle");
-        let stat_txt = files.read("rez/stat_txt.tbl").map(|d| crate::dat::parse_tbl(&d)).unwrap_or_default();
-        let glu_all = files.read("rez/gluAll.tbl").map(|d| crate::dat::parse_tbl(&d)).unwrap_or_default();
+        let network_raw = files.read("rez/network.tbl").unwrap_or_default();
+        let network = if network_raw.is_empty() { Vec::new() } else { crate::dat::parse_tbl(&network_raw) };
+        let glu_all_raw = files.read("rez/gluAll.tbl").unwrap_or_default();
+        let glu_all = if glu_all_raw.is_empty() { Vec::new() } else { crate::dat::parse_tbl(&glu_all_raw) };
         Glue {
             state: state::GLUE,
             screen: screen::MAIN,
@@ -174,14 +228,30 @@ impl Glue {
             dlg: None,
             popup: None,
             result: None,
-            stat_txt,
+            network,
+            network_raw,
             glu_all,
+            glu_all_raw,
+            setup: Setup::default(),
+            campaign_advice: [[0; 3]; 2],
+            sound_list: None,
+            sound_tick: 0,
+            clock_ms: 0,
+            g6d5a60: 0,
             mouse: (320, 240),
             shown: -1,
             looks: (0..PALETTES.len()).map(|_| None).collect(),
             cursor_frame: 0,
             cursor_ms: 0,
             error_depth: 0,
+            camp_rec: 0,
+            camp_cont: false,
+            scenario: 0,
+            notice: (false, 0, [0; 4]),
+            pal_blank: false,
+            g6d5a6c: 0,
+            exe: std::fs::read(crate::install_dir().join("StarCraft.exe")).unwrap_or_default(),
+            map_names: files.read("arr/mapdata.tbl").map(|d| crate::dat::parse_tbl(&d)).unwrap_or_default(),
         }
     }
 
@@ -215,8 +285,11 @@ impl Glue {
                 Top::Credits
             }
             state::AFTER_GAME => {
-                todo_port!("0x4f7ae0", "after a game: 0x4f7ae0, 0x5122b8 = 0x1c, 0x4dc320(1)");
-                self.state = state::GLUE;
+                todo_port!("0x4f7ae0", "play the scenario cinematic 0x5122b8");
+                self.scenario = 0x1c;
+                if self.state == state::AFTER_GAME {
+                    self.campaign_next(files, true);
+                }
                 Top::Glue
             }
             _ => Top::Quit,
@@ -239,8 +312,8 @@ impl Glue {
     }
 
     /// 0x4de200 before its loop: the glue resources, then (first pass) the start screen.
-    fn glue_enter(&mut self) {
-        todo_port!("0x4de200", "0x4de0b0 sound hooks 0x4dd1d0 (hover 0xa6 / click 0xa5)");
+    fn glue_enter(&mut self, files: &Storage) {
+        self.glue_sound_init();
         if self.state == 6 || self.state == 7 {
             self.state = state::GLUE;
             self.screen = 0x11;
@@ -251,17 +324,18 @@ impl Glue {
         }
         self.first = false;
         if self.player_name.is_empty() {
-            // stat_txt string 0x48 (1-based index 0x49), else the default at 0x501b7d.
-            self.player_name = self.stat_txt.get(0x48).cloned().unwrap_or_default();
+            // network.tbl word 0x48 (string index 0x47), else the default at 0x501b7d.
+            self.player_name = self.network.get(0x47).cloned().unwrap_or_default();
             self.player_name.truncate(0x18);
         }
         self.expansion = self.direct_map;
         // 0x57f1e3 = 0.
-        if !self.direct_map || self.expansion_installed {
-            // 0x4db200 (campaign .bin present) and 0x4dbfc0 (start the mission 0x57f244)
-            // pick ready room 8 / 7 / 9 by 0x51c608 and set 0x6d11c0; 0x596904 = 1 with
-            // 0x6d5a6c & 0x20000000.
-            todo_port!("0x4de200", "start screen probe 0x4db200 / 0x4dbfc0");
+        // 0x4db200 (campaign .bin present; it returns 1, so AX = 1) and 0x4dbfc0 (start the
+        // mission) pick ready room 8 / 7 / 9 by 0x51c608 and set 0x6d11c0; 0x596904 = 1 with
+        // 0x6d5a6c & 0x20000000.
+        if (!self.direct_map || self.expansion_installed) && self.campaign_bin_present(files) && self.start_mission(files, 1) {
+            todo_port!("0x4de200", "ready room by 0x51c608, 0x6d11c0 = 1, 0x596904 = 1 (0x6d5a6c & 0x20000000)");
+            return;
         }
         // Their failure path.
         self.screen = screen::MAIN;
@@ -272,7 +346,7 @@ impl Glue {
     /// entering it first when it was not running.
     fn glue_step(&mut self, files: &Storage) {
         if self.state != state::GLUE {
-            self.glue_enter();
+            self.glue_enter(files);
             if self.state != state::GLUE {
                 return;
             }
@@ -285,16 +359,17 @@ impl Glue {
                 self.multiplayer = false;
                 self.screen = screen::MAIN;
             }
-            screen::LOGIN => todo_port!("0x4edc30", "gluLogin.bin"),
-            screen::CAMPAIGN => todo_port!("0x4b2930", "campaign select"),
-            screen::READY_T => todo_port!("0x4f7550", "ready room (terran)"),
-            screen::READY_Z => todo_port!("0x4f71f0", "ready room (zerg)"),
-            screen::READY_P => todo_port!("0x4f78b0", "ready room (protoss)"),
-            screen::CREATE | screen::CREATE2 => todo_port!("0x4af6d0", "create game"),
-            screen::LOAD => todo_port!("0x4b6490", "load game"),
-            screen::SCORE_FIRST..=screen::SCORE_LAST => todo_port!("0x4b4af0", "score"),
-            screen::CAMPAIGN2 => todo_port!("0x4b52a0", "expansion campaign select"),
-            screen::EXIT => todo_port!("0x4dcc90", "glue exit"),
+            screen::LOGIN => self.open_login(files),
+            screen::CAMPAIGN => self.open_campaign(files, false),
+            screen::READY_Z => self.open_ready(files, 0),
+            screen::READY_T => self.open_ready(files, 1),
+            screen::READY_P => self.open_ready(files, 2),
+            screen::CREATE => self.open_create(files, 0),
+            screen::CREATE2 => self.open_create(files, 1),
+            screen::LOAD => self.open_load(files),
+            screen::SCORE_FIRST..=screen::SCORE_LAST => self.open_score(files),
+            screen::CAMPAIGN2 => self.open_campaign(files, true),
+            screen::EXIT => self.glue_exit(),
             _ => self.screen = screen::MAIN,
         }
     }
@@ -319,23 +394,26 @@ impl Glue {
     fn open_main(&mut self, files: &Storage) {
         // 0x6d5a10 = 0 (the 0x4de200 case), 0x57f0b4 = 0.
         self.multiplayer = false;
-        let Ok(bin) = files.read("rez/gluMain.bin") else {
-            crate::bw::fatal_error("rez\\gluMain.bin");
-        };
-        let mut dlg = Dialog::parse(&bin);
-        // +0x18 |= 4.
-        dlg.this.flags |= 4;
-        // 0x4194e0: the images (eTail, pIntro, pCredit).
-        dlg.bind(files);
-        // 0x41a080: event 10 to the controls (the light-up buttons open their videos), then
-        // to the event proc 0x4db7a0: case 10 (0x4dd9e0), case 0 (0x4db280 + 0x4de150 +
-        // title music), the dialog's init.
-        dlg.init_lightups(files);
-        self.glue_dialog_init(files, &mut dlg, true);
+        // The event proc 0x4db7a0: case 10 (0x4dd9e0), case 0 (0x4db280 + 0x4de150 + title
+        // music), the dialog's init.
+        let mut dlg = self.open_glue_dialog(files, "rez/gluMain.bin");
         self.main_version_label(&mut dlg);
         self.show_palette();
         todo_port!("0x4a6310", "title music (unless 0x6d5bbc)");
         self.dlg = Some((dlg, Open::Main));
+    }
+
+    /// The start every glue screen shares: the .bin (0x4ddbe0), +0x18 |= 4, 0x4194e0 (the
+    /// images: eTail, pIntro, pCredit), then 0x41a080's event 10 to the controls (the
+    /// light-up buttons open their videos) and to the event proc (0x4dd9e0).
+    fn open_glue_dialog(&mut self, files: &Storage, bin: &str) -> Dialog {
+        let Ok(d) = files.read(bin) else { crate::bw::fatal_error(bin) };
+        let mut dlg = Dialog::parse(&d);
+        dlg.this.flags |= 4;
+        dlg.bind(files);
+        dlg.init_lightups(files);
+        self.glue_dialog_init(files, &mut dlg, true);
+        dlg
     }
 
     /// 0x4db280: the version label (control 10): gluAll.tbl string 3 ("%s") with the
@@ -381,6 +459,663 @@ impl Glue {
         self.glue_close();
     }
 
+    /// 0x4b26e0 (classic) / 0x4b5050 (Brood War): the advice for each campaign button from
+    /// the player's profile: -10 when the race's first campaign was not started, -11 / -12
+    /// when the other campaigns are not done (the messages network.tbl 0x8d ..).
+    fn campaign_precheck(&mut self, exp: bool) {
+        self.campaign_advice[exp as usize] = [0; 3];
+        self.setup.multiplayer = self.multiplayer;
+        let (p, ok) = self.setup.load_profile(self.player_name.as_bytes());
+        if !ok {
+            let default = self.network.get(0x47).map(String::as_str).unwrap_or_default();
+            // 0x6d5a10 is 0 here (0x4de200's main menu case clears it).
+            if !self.player_name.eq_ignore_ascii_case(default) {
+                todo_port!("0x4bb300", "error popup (string 0x58)");
+            }
+            return;
+        }
+        let w = |o: usize| u32::from_le_bytes(p.0[o..o + 4].try_into().unwrap());
+        // (the three best-mission fields, the limits, the buttons' indices).
+        let (c, e, d, lim1, lim2, ia, ib) = if exp {
+            (w(0x38), w(0x3c), w(0x34), 0x27, 0x30, 1, 0)
+        } else {
+            (w(0x28), w(0x2c), w(0x30), 0xb, 0x15, 0, 2)
+        };
+        let a = &mut self.campaign_advice[exp as usize];
+        if c == 0 && e <= lim1 {
+            a[ia] = -10;
+        }
+        if d == 0 {
+            if e <= lim1 {
+                a[ib] = -11;
+                return;
+            }
+            if c <= lim2 {
+                a[ib] = -12;
+            }
+        }
+    }
+
+    /// 0x4b2930 (`exp` false, rez\gluCmpgn.bin, event proc 0x4b28b0) / 0x4b52a0 (rez\
+    /// gluExpCmpgn.bin, 0x4b5220), before 0x41a080: the campaign select.
+    fn open_campaign(&mut self, files: &Storage, exp: bool) {
+        // 0x6d11c0 = 0, 0x57f0b4 = 0.
+        self.multiplayer = false;
+        self.campaign_precheck(exp);
+        let bin = if exp { "rez/gluExpCmpgn.bin" } else { "rez/gluCmpgn.bin" };
+        let dlg = self.open_glue_dialog(files, bin);
+        todo_port!("0x4dd5e0", "slide-in of the buttons (lists 0x512b10 / 0x512a8c) and its timer 0x4dd220");
+        self.show_palette();
+        todo_port!("0x4a6310", "title music (unless 0x6d5bbc)");
+        self.dlg = Some((dlg, if exp { Open::CampaignExp } else { Open::Campaign }));
+    }
+
+    /// 0x4b2930 / 0x4b52a0 (after 0x41a080): act on the result.
+    fn done_campaign(&mut self, result: i32) {
+        self.screen = match result {
+            5 => screen::LOAD,
+            6 => screen::READY_P,
+            7 => screen::READY_T,
+            8 => screen::READY_Z,
+            9 => screen::LOGIN,
+            10 => screen::CREATE,
+            11 => screen::CREATE2,
+            _ => screen::MAIN,
+        };
+        self.glue_close();
+    }
+
+    /// 0x4b2810 (classic) / 0x4b5180 (Brood War): the campaign select's event proc for an
+    /// activated control: ids 6 / 7 / 8 (protoss, terran, zerg) start their campaign
+    /// (0x4b27a0 / 0x4b5110: the advice confirmation, then 0x4dc0b0) and end the dialog on
+    /// success.
+    fn campaign_activate(&mut self, files: &Storage, id: i16, exp: bool) -> bool {
+        self.activated = id;
+        let idx = match id {
+            6 => 2,
+            7 => 1,
+            8 => 0,
+            _ => return self.end_dialog(id as i32),
+        };
+        if !self.campaign_check(files, idx, exp) {
+            return true;
+        }
+        self.end_dialog(id as i32)
+    }
+
+    /// 0x4b27a0 / 0x4b5110 (EAX = idx: 0 zerg, 1 terran, 2 protoss): with advice for the
+    /// button, ask first (0x4b5b20, the text network.tbl 0x8d / 0x8c (classic) or
+    /// 0x90 / 0x8f (Brood War), 1-based); then start the campaign.
+    fn campaign_check(&mut self, files: &Storage, idx: usize, exp: bool) -> bool {
+        if self.campaign_advice[exp as usize][idx] != 0 {
+            let k = if exp { 0x8e + (idx != 1) as usize } else { 0x8c + (idx == 2) as usize };
+            let _text = self.network.get(k).cloned().unwrap_or_default();
+            todo_port!("0x4b5b20", "OK / Cancel confirmation (GLUEOKCANCEL_BIN) with the advice; taken as OK");
+        }
+        self.campaign_start(files, idx)
+    }
+
+    /// 0x4dc0b0 (EDI = idx): the player's profile (created when missing for the default
+    /// name), the mission list for the race's best mission, then the chosen mission:
+    /// with a scenario number the next game state, else 0x4dbfc0.
+    fn campaign_start(&mut self, files: &Storage, idx: usize) -> bool {
+        // 0x57f1e3 = 0.
+        self.camp_cont = false;
+        self.setup.multiplayer = self.multiplayer;
+        let name = self.player_name.clone();
+        let (mut p, ok) = self.setup.load_profile(name.as_bytes());
+        if !ok {
+            let default = self.network.get(0x47).map(String::as_str).unwrap_or_default();
+            let created = if name.eq_ignore_ascii_case(default) { self.setup.new_profile(name.as_bytes(), &self.glu_all_raw) } else { None };
+            match created {
+                Some(n) => p = n,
+                // 0x6d5a10 is 0 here.
+                None => todo_port!("0x4bb300", "error popup (string 0x58)"),
+            }
+        }
+        // 0x4b7820 returns the chosen record (a VA into the exe's tables), 0 for cancel.
+        let rec: u32 = {
+            todo_port!("0x4b7820", "mission list dialog (gluHist.tbl / .bin, list 0x5122a0 / 0x5122ac [idx]) -> the chosen record");
+            0
+        };
+        self.camp_rec = rec;
+        if rec == 0 {
+            return false;
+        }
+        let (mission, scenario) = (self.exe_u16(rec + 2), self.exe_u16(rec + 4));
+        if p.best(self.expansion, idx as u8) < mission as u32 {
+            p.set_best(self.expansion, idx as u8, mission as u32);
+            self.setup.write_profile(&p);
+        }
+        if scenario != 0 {
+            self.scenario = scenario as u32;
+            self.setup.map_dir_flag = mission;
+            self.setup.next_map.clear();
+            self.state = state::AFTER_GAME;
+            return true;
+        }
+        self.start_mission(files, mission)
+    }
+
+    /// The exe's initialized data: .rdata / .data sit at file offset VA - 0x400000.
+    fn exe_u8(&self, va: u32) -> u8 {
+        va.checked_sub(0x40_0000).and_then(|o| self.exe.get(o as usize)).copied().unwrap_or(0)
+    }
+
+    fn exe_u16(&self, va: u32) -> u16 {
+        u16::from_le_bytes([self.exe_u8(va), self.exe_u8(va + 1)])
+    }
+
+    fn exe_u32(&self, va: u32) -> u32 {
+        u32::from(self.exe_u16(va)) | u32::from(self.exe_u16(va + 2)) << 16
+    }
+
+    /// 0x4dbc20 (ESI = table 0x5122a0 / 0x5122ac, DI = mission): the first record without a
+    /// scenario number (+4 = 0) for the mission in the table's three race lists (zerg,
+    /// terran, protoss; records of 8 bytes ending at +2 = 0); 0 when none.
+    fn camp_find(&self, table: u32, mission: u16) -> u32 {
+        for k in 0..3 {
+            let mut r = self.exe_u32(table + 4 * k);
+            while self.exe_u16(r + 2) != 0 {
+                if self.exe_u16(r + 4) == 0 && self.exe_u16(r + 2) == mission {
+                    return r;
+                }
+                r += 8;
+            }
+        }
+        0
+    }
+
+    /// 0x4dbd60: 0x6d11cc = the record of the current mission 0x57f244 unless it already is
+    /// that one: the classic lists first, then the Brood War ones.
+    fn camp_select(&mut self) {
+        let mission = self.setup.map_dir_flag;
+        if self.camp_rec != 0 && self.exe_u16(self.camp_rec + 2) == mission {
+            return;
+        }
+        self.camp_rec = self.camp_find(0x5122a0, mission);
+        if self.camp_rec == 0 {
+            self.camp_rec = self.camp_find(0x5122ac, mission);
+        }
+    }
+
+    /// 0x4dbd20 (ESI = pointer to the index counter, EBX = file name, EDI = the length of
+    /// its base name): advance the counter to the next entry (< 0x41) of the map name table
+    /// 0x59c080 whose name after its last backslash (SStrChrR, ordinal 572; the table has
+    /// "campaign\\terran\\terran01") begins with the base name
+    /// (SStrCmpI, ordinal 509, over `len` characters). False when the table ends.
+    fn camp_next_name(&self, idx: &mut usize, name: &[u8], len: usize) -> bool {
+        while *idx < 0x41 {
+            if let Some(s) = self.map_names.get(*idx) {
+                if let Some(bs) = s.bytes().rposition(|c| c == b'\\') {
+                    let tail = s.as_bytes()[bs + 1..].iter().copied().chain(std::iter::repeat(0));
+                    let want = name.iter().copied().chain(std::iter::repeat(0));
+                    if tail.zip(want).take(len).all(|(a, b)| a.eq_ignore_ascii_case(&b)) {
+                        return true;
+                    }
+                }
+            }
+            *idx += 1;
+        }
+        false
+    }
+
+    /// 0x4dbda0 (EAX = a file name, 0x57f246; ordinal 572 finds the last '.'): the record of the campaign map called that.
+    /// The extension (".SCM", else Brood War's lists) picks the table; the map is found in
+    /// 0x59c080 by its base name and its index is the mission to look up.
+    fn camp_lookup(&self, name: &[u8]) -> u32 {
+        let Some(dot) = name.iter().rposition(|&c| c == b'.') else { return self.camp_rec };
+        let table = if name[dot..].eq_ignore_ascii_case(b".SCM") { 0x5122a0 } else { 0x5122ac };
+        let mut idx = 0;
+        while self.camp_next_name(&mut idx, name, dot) {
+            let r = self.camp_find(table, idx as u16);
+            if r != 0 {
+                return r;
+            }
+            idx += 1;
+        }
+        self.camp_rec
+    }
+
+    /// 0x4dc1c0: continue with the next scenario named by 0x57f246 (set by the "next
+    /// scenario" trigger action): load it from the directory of the current map through
+    /// 0x4a8590 and open the ready room of the local slot's race. Without a next map, or
+    /// when that fails (popup 0x6a), back to the campaign select (Brood War: +0x10).
+    /// True when a ready room was picked.
+    fn campaign_continue(&mut self, files: &Storage) -> bool {
+        let back = if self.expansion { 0x16 } else { 6 };
+        if self.setup.next_map.first().copied().unwrap_or(0) == 0 {
+            self.screen = back;
+            return true;
+        }
+        let (mut a, mut b) = ([0u8; 0x20], [0u8; 0x20]);
+        if Setup::load_got(files, "Use Map Settings(1)", &mut a, &mut b).is_some() {
+            let mp = self.setup.map_path;
+            let mp = &mp[..mp.iter().position(|&c| c == 0).unwrap_or(mp.len())];
+            if let Some(sep) = mp.iter().rposition(|&c| c == b'\\') {
+                let mut path = mp[..=sep].to_vec();
+                path.extend_from_slice(&self.setup.next_map);
+                // 0x4a8590 (EAX = path, ECX = the template's first 4 bytes, ESI = 0x57ee9c,
+                // stack: 0x6cdfd4) sets 0x51ca1c, picks the slot (0x4dbe50) and starts the
+                // game (0x4d3fc0); 0 is success.
+                let r: i32 = {
+                    todo_port!("0x4a8590", "start the next campaign map (load header, game description, 0x4a68d0, 0x4dbe50, 0x4d3fc0)");
+                    -1
+                };
+                if r == 0 {
+                    let race = self.setup.slots[self.setup.local_slot[0] as usize % 12][slot::RACE];
+                    match race {
+                        0 => self.screen = screen::READY_Z,
+                        1 => self.screen = screen::READY_T,
+                        2 => self.screen = screen::READY_P,
+                        _ => {}
+                    }
+                    if race < 3 {
+                        return true;
+                    }
+                }
+            }
+        }
+        // 0x6d5a10 is 0 here.
+        todo_port!("0x4bb300", "error popup (string 0x6a)");
+        self.screen = back;
+        false
+    }
+
+    /// 0x4dc320 (`flag` = the stack argument): what comes after a game or a scenario. A
+    /// continued map goes through 0x4dc1c0; `flag` 0 starts a game (state 5); otherwise the
+    /// mission text (0x4d91b0), the next record of the campaign (0x57f246 names a jump,
+    /// else the following record) with the profile's progress (0x4dbee0), then the end of
+    /// the list (credits state 9 / the campaign select), a scenario (state 10) or the next
+    /// mission's ready room. False when it could not start the mission.
+    fn campaign_next(&mut self, files: &Storage, flag: bool) -> bool {
+        self.state = state::GLUE;
+        if self.camp_cont {
+            self.campaign_continue(files);
+            return true;
+        }
+        if !flag {
+            self.state = 5;
+            return true;
+        }
+        self.mission_text(false);
+        self.camp_select();
+        if self.camp_rec == 0 || self.exe_u16(self.camp_rec + 2) == 0 {
+            return false;
+        }
+        if self.setup.next_map.first().copied().unwrap_or(0) != 0 {
+            let name = self.setup.next_map.clone();
+            self.camp_rec = self.camp_lookup(&name);
+            self.setup.next_map.clear();
+        } else {
+            self.camp_rec += 8;
+        }
+        let rec = self.camp_rec;
+        let (mission, race) = (self.exe_u16(rec + 2), self.exe_u8(rec + 6));
+        self.setup.record_mission(mission, race, &self.network_raw, &self.glu_all_raw);
+        if mission == 0 {
+            // The end of the list.
+            if !self.expansion {
+                if race != 2 {
+                    self.screen = screen::CAMPAIGN;
+                    self.camp_rec = 0;
+                    return true;
+                }
+            } else if race != 0 {
+                self.screen = screen::CAMPAIGN2;
+                self.camp_rec = 0;
+                return true;
+            }
+            self.state = state::CREDITS_EXP;
+            self.camp_rec = 0;
+            return true;
+        }
+        let scenario = self.exe_u16(rec + 4);
+        if scenario != 0 {
+            self.setup.map_dir_flag = mission;
+            self.scenario = scenario as u32;
+            self.state = state::AFTER_GAME;
+            return true;
+        }
+        if !self.start_mission(files, mission) {
+            return false;
+        }
+        self.screen = match self.exe_u8(self.camp_rec + 6) {
+            0 => screen::READY_Z,
+            1 => screen::READY_T,
+            _ => screen::READY_P,
+        };
+        true
+    }
+
+    /// 0x4d91b0 (`exp` false: the one record of 0x500160, "FinZ09bx" for mission 0x3f) /
+    /// 0x4d9200 (`exp`: the 0x40 records of 0x4fff60, "Est..." per mission): when a
+    /// single-player game ran a mission and 0x6d5a6c lacks 0x20000000, show the mission's
+    /// text screen (rez\<name>.txt on rez\credits.bin, 0x4d8df0).
+    fn mission_text(&mut self, exp: bool) {
+        let mission = self.setup.map_dir_flag;
+        if self.setup.multiplayer || self.g6d5a6c & 0x2000_0000 != 0 || mission == 0 {
+            return;
+        }
+        let (table, n) = if exp { (0x4fff60, 0x40) } else { (0x500160, 1) };
+        for i in 0..n {
+            if self.exe_u16(table + 8 * i + 4) == mission {
+                let ptr = self.exe_u32(table + 8 * i);
+                let name: Vec<u8> = (0..).map(|k| self.exe_u8(ptr + k)).take_while(|&c| c != 0).collect();
+                let _ = name;
+                todo_port!("0x4d8df0", "mission text / credits screen: rez\\<name>.txt on rez\\credits.bin, event proc 0x4d8d60 (scroll 0x4d8bd0, 0x4d8c60)");
+                return;
+            }
+        }
+    }
+
+    /// 0x4db200: whether the campaign dialog (rez\glucmpgn.bin, or gluexpcmpgn.bin for
+    /// Brood War) can be opened from the archives.
+    fn campaign_bin_present(&self, files: &Storage) -> bool {
+        files.read(if self.expansion { "rez/gluexpcmpgn.bin" } else { "rez/glucmpgn.bin" }).is_ok()
+    }
+
+    /// 0x4dbfc0 (AX = mission): start the campaign mission: 0x57f244 = AX, its map (name
+    /// 0x59c080[AX]) loaded by 0x4bf5d0, the game description from the player name and the
+    /// map title, the template (0x4ab750), the local slot (0x4dbe50), then 0x4d3fc0. False
+    /// when it cannot.
+    fn start_mission(&mut self, files: &Storage, mission: u16) -> bool {
+        self.setup.map_dir_flag = mission;
+        let path = self.map_names.get(mission as usize).cloned().unwrap_or_default();
+        let mut hdr = [0u8; 0x20];
+        if !self.setup.load_map(files, &path, &mut hdr, true, &self.glu_all_raw) {
+            return false;
+        }
+        let (mut a, mut b) = ([0u8; 0x20], [0u8; 0x20]);
+        if Setup::load_got(files, "Use Map Settings(1)", &mut a, &mut b).is_none() {
+            return false;
+        }
+        if !self.setup.local_slot_setup() {
+            return false;
+        }
+        // 0x596888 = 0.
+        todo_port!("0x4d3fc0", "create the single-player game from the description (name, map title, template, settings 0x6cdfd4)");
+        false
+    }
+
+    /// 0x4f71f0 (`race` 0 zerg, rez\glurdyz.bin, event proc 0x4f7150) / 0x4f7550 (1 terran,
+    /// glurdyt.bin, 0x4f74b0) / 0x4f78b0 (2 protoss, glurdyp.bin, 0x4f7810), before 0x41a080:
+    /// the ready room (mission briefing). The music of the race (0x4a6310: 0xa + race)
+    /// after the previous one fades out (0x4a5f50) and the mission text (0x4d9200).
+    fn open_ready(&mut self, files: &Storage, race: u8) {
+        todo_port!("0x4a5f50", "fade out the music (audio.rs)");
+        todo_port!("0x4a6310", "ready room music 0xa + race");
+        self.mission_text(true);
+        if self.state != state::GLUE {
+            return;
+        }
+        self.shown = -1;
+        let bin = ["rez/glurdyz.bin", "rez/glurdyt.bin", "rez/glurdyp.bin"][race as usize];
+        let dlg = self.open_glue_dialog(files, bin);
+        // The event proc's case 10: 0x46d3c0 (briefing init), the slide-in 0x4dd5e0 (list
+        // 0x512a70 / 0x512a54 / 0x512a14) and 0x4dd9e0; case 0: 0x4de150.
+        todo_port!("0x46d3c0", "briefing init; 0x4f70f0 / 0x4f7450 / 0x4f77b0 frame images on event 0x405");
+        todo_port!("0x4dd5e0", "slide-in of the buttons and its timer 0x4dd220");
+        self.show_palette();
+        self.dlg = Some((dlg, Open::Ready(race)));
+    }
+
+    /// 0x4f71f0 / 0x4f7550 / 0x4f78b0 (after 0x41a080): 0xe (back) goes to the campaign
+    /// select (Brood War +0x10) or, in a network game, to the screen of the provider
+    /// (0x4dc5b0); 0x13 (next) is 0x4dc320(1); 0x65 starts the game (state 1); 100 stays;
+    /// anything else goes to the main menu. All but 0x13 / 0x65 then fade the music
+    /// (0x4a5f50) and play 0x16 (0x4a6310).
+    fn done_ready(&mut self, files: &Storage, result: i32, _race: u8) {
+        match result {
+            0x13 => {
+                self.campaign_next(files, true);
+                self.glue_close();
+                return;
+            }
+            0x65 => {
+                self.state = state::START;
+                self.glue_close();
+                return;
+            }
+            0xe if self.setup.multiplayer => self.net_screen(),
+            0xe => self.screen = if self.expansion { screen::CAMPAIGN2 } else { screen::CAMPAIGN },
+            100 => {}
+            _ => self.screen = screen::MAIN,
+        }
+        todo_port!("0x4a5f50", "fade out the music (audio.rs)");
+        todo_port!("0x4a6310", "music 0x16");
+        self.glue_close();
+    }
+
+    /// 0x4dc5b0: the screen of the network provider 0x59688c: 'NXPN' ... 10 (game list),
+    /// 'BNET' 4 (battle.net), modem 0x14, 'LBCS' direct 0x15, anything else the main menu.
+    fn net_screen(&mut self) {
+        self.screen = match self.setup.net_provider {
+            0x4d444d58 | 0x4d4f444d => screen::MODEM,
+            0x4950584e | 0x41544c4b | 0x49505858 | 0x5544504e => screen::GAMESEL,
+            0x5343424c => screen::DIRECT,
+            0x424e4554 => screen::BATTLE_NET,
+            _ => screen::MAIN,
+        };
+    }
+
+    /// 0x4edc30 (rez\gluLogin.bin, event proc 0x4edaa0), before 0x41a080: the profile
+    /// login.
+    fn open_login(&mut self, files: &Storage) {
+        let dlg = self.open_glue_dialog(files, "rez/gluLogin.bin");
+        self.show_palette();
+        self.dlg = Some((dlg, Open::Login));
+    }
+
+    /// 0x4edc30 (after 0x41a080): 4 (ok) goes on: single player to the campaign select
+    /// (Brood War +0x10), network to the provider's screen (modem 0x14, direct 0x15, else
+    /// the game list 10); 5 (cancel) 0x4c4680 then the connection select (2) in a network
+    /// game, else the main menu; anything else the main menu.
+    fn done_login(&mut self, result: i32) {
+        match result {
+            4 if !self.setup.multiplayer => self.screen = if self.expansion { screen::CAMPAIGN2 } else { screen::CAMPAIGN },
+            4 => {
+                self.screen = match self.setup.net_provider {
+                    0x4d444d58 | 0x4d4f444d => screen::MODEM,
+                    0x5343424c => screen::DIRECT,
+                    _ => screen::GAMESEL,
+                }
+            }
+            5 => {
+                todo_port!("0x4c4680", "login cancel cleanup");
+                self.screen = if self.setup.multiplayer { screen::SELCONN } else { screen::MAIN };
+            }
+            _ => self.screen = screen::MAIN,
+        }
+        self.glue_close();
+    }
+
+    /// 0x4af6d0 (EAX = `which`, 0x59b844: 0 from screen 0xb, 1 from 0xc), before 0x41a080:
+    /// the create game screen, rez\gluCustm.bin (single player) or gluCreat.bin (network)
+    /// with event proc 0x4af5c0.
+    fn open_create(&mut self, files: &Storage, which: u8) {
+        let bin = if self.setup.multiplayer { "rez/gluCreat.bin" } else { "rez/gluCustm.bin" };
+        let dlg = self.open_glue_dialog(files, bin);
+        // 0x59ba60 = 0x4d2b30 (the map list buffer), 0x6d5a74 = 1.
+        todo_port!("0x4d2b30", "map list buffer of the create game screen");
+        self.show_palette();
+        self.dlg = Some((dlg, Open::Create(which)));
+    }
+
+    /// 0x4af6d0 (after 0x41a080): 0xc (play) picks the ready room of the local slot's race
+    /// (single player with plain settings) or starts the game (state 1), in a network game
+    /// goes to the chat (3); anything but 0xd / -3 (cancel) goes to the main menu; cancel
+    /// drops the mission map and goes back (campaign select, or the provider's screen).
+    fn done_create(&mut self, result: i32, _which: u8) {
+        match result {
+            0xc => {
+                if self.setup.multiplayer {
+                    self.screen = screen::CHAT;
+                } else if self.setup.template[8] == 0 && self.setup.template[0xc] == 0 && self.setup.template[0x12] == 0 && !self.setup.mission {
+                    match self.setup.slots[self.setup.local_slot[0] as usize % 12][slot::RACE] {
+                        0 => self.screen = screen::READY_Z,
+                        1 => self.screen = screen::READY_T,
+                        2 => self.screen = screen::READY_P,
+                        _ => {}
+                    }
+                } else {
+                    self.state = state::START;
+                }
+            }
+            -3 | 0xd => {
+                self.setup.mission = false;
+                self.setup.mission_chk = Vec::new();
+                self.screen = if !self.setup.multiplayer {
+                    if self.expansion { screen::CAMPAIGN2 } else { screen::CAMPAIGN }
+                } else {
+                    match self.setup.net_provider {
+                        0x424e4554 => screen::BATTLE_NET,
+                        0x4d4f444d | 0x4d444d58 => screen::MODEM,
+                        0x5343424c => screen::DIRECT,
+                        _ => screen::GAMESEL,
+                    }
+                };
+            }
+            _ => self.screen = screen::MAIN,
+        }
+        self.glue_close();
+        // 0x59ba60 is freed, 0x6d5a74 = 0.
+    }
+
+    /// 0x4b4af0 (rez\gluScore.bin, event proc 0x4b4a30), before 0x41a080: the score screen
+    /// after a game. 0x4c4220 gives the outcome; the screen (0x512ab0: 0xe .. 0x13), the
+    /// image directory (0x512a98: glue\score{Z,T,P}{d,v}\) and the music (0x512ac8) are
+    /// picked by the local slot's race and victory (index 1 with 0x6d5a60 set).
+    fn open_score(&mut self, files: &Storage) {
+        let (_, local) = self.setup.player_outcomes(self.clock_ms);
+        let won = local == 1;
+        let i = if self.g6d5a60 == 0 {
+            let race = self.setup.slots[self.setup.local_slot[0] as usize % 12][slot::RACE] as u32;
+            race * 2 + won as u32
+        } else {
+            1
+        };
+        self.screen = self.exe_u32(0x512ab0 + 4 * i) as u8;
+        todo_port!("0x4a6310", "score music (0x512ac8[i])");
+        // iScore.grp and tminimap.pcx from the directory 0x512a98[i] (0x4d2b30 buffer,
+        // SBmpAllocLoadImage), then 0x4bca80.
+        todo_port!("0x4bca80", "score screen images (iScore.grp, tMinimap.pcx)");
+        let dlg = self.open_glue_dialog(files, "rez/gluScore.bin");
+        self.show_palette();
+        self.dlg = Some((dlg, Open::Score(won)));
+    }
+
+    /// 0x4b4af0 (after 0x41a080): 7 (continue) goes to the provider's screen in a network
+    /// game, else on with the campaign (0x4dc320 with the victory flag); anything else
+    /// (or a campaign that cannot go on) records the progress (0x4dbee0) of a single-player
+    /// game that is not a continued map and goes to the main menu. Then the music fades.
+    fn done_score(&mut self, files: &Storage, result: i32, won: bool) {
+        let mut done = false;
+        if result == 7 {
+            if self.setup.multiplayer {
+                self.net_screen();
+                done = true;
+            } else {
+                done = self.campaign_next(files, won);
+            }
+        } else if !self.setup.multiplayer && !self.camp_cont {
+            self.camp_select();
+            if self.camp_rec != 0 && self.exe_u16(self.camp_rec + 2) != 0 {
+                let (mission, race) = (self.exe_u16(self.camp_rec + 2), self.exe_u8(self.camp_rec + 6));
+                self.setup.record_mission(mission, race, &self.network_raw, &self.glu_all_raw);
+            }
+        }
+        if !done {
+            self.screen = screen::MAIN;
+        }
+        self.glue_close();
+        todo_port!("0x4a5f50", "fade out the music (audio.rs)");
+    }
+
+    /// 0x4b6490 (rez\gluLoad.bin, event proc 0x4b6410), before 0x41a080: the load game
+    /// screen.
+    fn open_load(&mut self, files: &Storage) {
+        let dlg = self.open_glue_dialog(files, "rez/gluLoad.bin");
+        todo_port!("0x4dd5e0", "slide-in of the buttons (list 0x512a48) and its timer 0x4dd220");
+        self.show_palette();
+        self.dlg = Some((dlg, Open::Load));
+    }
+
+    /// 0x4b6490 (after 0x41a080): 4 loads the game chosen (0x4cf950), 5 goes back to the
+    /// campaign select (Brood War: +0x10), anything else to the main menu.
+    fn done_load(&mut self, result: i32) {
+        match result {
+            4 => todo_port!("0x4cf950", "load the chosen saved game"),
+            5 => self.screen = if self.expansion { screen::CAMPAIGN2 } else { screen::CAMPAIGN },
+            _ => self.screen = screen::MAIN,
+        }
+        self.glue_close();
+    }
+
+    /// 0x4b6410: the load screen's event proc for an activated control: 7 (the game list)
+    /// opens 0x4b62a0, any other ends the dialog.
+    fn load_activate(&mut self, id: i16) -> bool {
+        self.activated = id;
+        if id == 7 {
+            todo_port!("0x4b62a0", "saved game list dialog (0x4b6010)");
+            return true;
+        }
+        self.end_dialog(id as i32)
+    }
+
+    /// 0x4be0b0: flush the pending notice: flags bit 0 is set and 0x41e0d0 (the UI engine,
+    /// bucketed "replaced") gets (0x6cef58 + 0x6cef54 - 1, 0x6cef56 + 0x6cef52 - 1).
+    fn flush_notice(&mut self) {
+        if self.notice.0 {
+            self.notice.1 |= 1;
+        }
+        self.notice.0 = false;
+    }
+
+    /// 0x4dcee0: one-time init of the dialog palette: blank the fade table (0x6ceb40), copy
+    /// the palette 0x6ce320 to 0x6ce720, 0x41e8b0 and 0x41ca00 (UI engine, "replaced"), then
+    /// flush the notice (0x4be0b0).
+    fn glue_palette_init(&mut self) {
+        if !self.pal_blank {
+            self.pal_blank = true;
+        }
+        self.flush_notice();
+    }
+
+    /// 0x4dcc90: the exit screen: back to the main menu; an open popup or error dialog
+    /// (0x6d5a3c / 0x6d5a58) and the screen's dialog (0x51c418) are destroyed (0x419ea0)
+    /// with 0x6d051c = 3 (the popup's last button 0x6d5a54, else 3) or -1.
+    fn glue_exit(&mut self) {
+        self.screen = screen::MAIN;
+        self.activated = -1;
+        if self.popup.take().is_some() {
+            self.activated = 3;
+            self.error_depth = 0;
+        }
+        self.dlg = None;
+        self.result = None;
+    }
+
+    /// 0x4de0b0: the glue sounds: the list 0x6dc2ac = 0xa5 .. 0xad (once), the sound
+    /// hook 0x6d5eac = 0x4dd1d0.
+    fn glue_sound_init(&mut self) {
+        self.sound_list.get_or_insert([0xa5, 0xa6, 0xa7, 0xa8, 0xa9, 0xaa, 0xab, 0xac, 0xad]);
+        todo_port!("0x4bccf0", "play / preload the sound list");
+    }
+
+    /// 0x4dd1d0: the dialogs' sound hook: event 0 (hover) is sound 0xa6 at most every
+    /// 200 ms (`now` is GetTickCount), event 1 (click) 0xa5. Returns the sound to play.
+    fn glue_sound_hook(&mut self, event: i32, now: u32) -> Option<u16> {
+        match event {
+            0 if now.wrapping_sub(self.sound_tick) > 199 => {
+                self.sound_tick = now;
+                Some(0xa6)
+            }
+            1 => Some(0xa5),
+            _ => None,
+        }
+    }
+
     /// 0x4dcfa0: after a glue dialog: its background cache is dropped (the next one
     /// loads its own); when the next screen has another palette the old one fades out.
     fn glue_close(&mut self) {
@@ -403,8 +1138,8 @@ impl Glue {
             3 | 4 => {
                 if self.spawn {
                     // The spawn version has no single player campaign / multiplayer: the
-                    // popup with stat_txt string 0x66 (0-based), else the empty default.
-                    let msg = self.stat_txt.get(0x66).cloned().unwrap_or_default();
+                    // popup with network.tbl string 0x66 (0-based), else the empty default.
+                    let msg = self.network.get(0x66).cloned().unwrap_or_default();
                     self.open_popup(files, &msg);
                     return true;
                 }
@@ -543,12 +1278,45 @@ impl Glue {
             Open::Main => {
                 self.main_activate(files, id);
             }
+            Open::Campaign => {
+                self.campaign_activate(files, id, false);
+            }
+            Open::CampaignExp => {
+                self.campaign_activate(files, id, true);
+            }
+            Open::Load => {
+                self.load_activate(id);
+            }
+            Open::Score(_) => {
+                self.activated = id;
+                todo_port!("0x4b4a30", "score screen event proc (tabs, 0x4b4600 / 0x4b4a00 init, continue)");
+            }
+            Open::Create(_) => {
+                self.activated = id;
+                todo_port!("0x4af5c0", "create game event proc (map list, game type, options)");
+            }
+            Open::Login => {
+                self.activated = id;
+                todo_port!("0x4edaa0", "login event proc (profile list, create / delete, ok / cancel)");
+            }
+            Open::Ready(_) => {
+                // The event proc's activation (event 0xe code 2) is 0x46d160.
+                self.activated = id;
+                todo_port!("0x46d160", "ready room button events (briefing / start / cancel)");
+            }
             _ => {}
         }
         if let Some(r) = self.result.take() {
             let (_, open) = self.dlg.take().unwrap();
-            if open == Open::Main {
-                self.done_main(r);
+            match open {
+                Open::Main => self.done_main(r),
+                Open::Campaign | Open::CampaignExp => self.done_campaign(r),
+                Open::Load => self.done_load(r),
+                Open::Score(won) => self.done_score(files, r, won),
+                Open::Create(which) => self.done_create(r, which),
+                Open::Login => self.done_login(r),
+                Open::Ready(race) => self.done_ready(files, r, race),
+                _ => {}
             }
         }
     }
@@ -574,6 +1342,7 @@ impl Glue {
     /// (0x4dcea0 -> 0x4be120 advances 0x597390).
     pub fn tick(&mut self, files: &Storage, ms: u32) {
         let _ = files;
+        self.clock_ms = self.clock_ms.wrapping_add(ms);
         for (d, _) in [self.dlg.as_mut(), self.popup.as_mut()].into_iter().flatten() {
             d.tick(ms);
         }

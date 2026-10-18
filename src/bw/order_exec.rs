@@ -1787,7 +1787,12 @@ impl State {
                 return;
             }
         } else if t == 0x22 {
-            todo_port!("0x436ae0", "AI medic");
+            if self.ai_medic_region_idle(u) {
+                self.ai_ghost_to_enemy_region(d, u);
+            } else {
+                self.order_now(d, u, 0xaf);
+            }
+            return;
         }
         let ai = self.units[u as usize].ai;
         if ai == NIL {
@@ -1805,7 +1810,7 @@ impl State {
                 self.units[u as usize].main_order_timer = if busy { 0x2d } else { 3 };
             }
             super::ai_town::AI_MILITARY => {
-                todo_port!("0x43d910", "AI military");
+                self.ai_military_step(d, u);
                 self.units[u as usize].main_order_timer = 3;
             }
             _ => {
@@ -1824,7 +1829,10 @@ impl State {
             && self.units[u as usize].u8_at(0x118) == 0
             && flags & 8 == 0
         {
-            todo_port!("0x440770", "AI: mechanical terran unit looks for a repair site (then 0x4752b0 order 0x31)");
+            let site = self.ai_building_scv_near(d, u);
+            if site != NIL {
+                self.order_on(d, u, 0x31, site);
+            }
         } else if t == 5 {
             self.ai_siege_up(d, u);
         } else if flags & 0x10_0000 != 0 {
@@ -2015,7 +2023,7 @@ impl State {
     /// 0x4384f0: where `u`'s player's AI patrol goes next: the centre of a random
     /// neighbouring region in state 4 / 5 (those without flag 1 first, then without flag
     /// 4), else of the nearest such region. The chosen region gets flag 4.
-    fn ai_patrol_region(&mut self, _d: &Data, u: u32) -> (i16, i16) {
+    pub(super) fn ai_patrol_region(&mut self, _d: &Data, u: u32) -> (i16, i16) {
         let p = self.units[u as usize].player as usize;
         let (sx, sy) = self.unit_sprite_pos(u);
         let mut chosen = super::path::region_at(&self.sai, sx as i32, sy as i32) as usize;
@@ -2103,9 +2111,43 @@ impl State {
         self.order_now(d, u, 0x9c);
     }
 
-    /// 0x478490: ComputerReturn.
-    fn order_computer_return(&mut self, _d: &Data, _u: u32) {
-        todo_port!("0x478490", "ComputerReturn");
+    /// 0x478490: ComputerReturn (0xa3): an AI unit walks to its order target position; a guard
+    /// unit that arrives takes it as its new home.
+    fn order_computer_return(&mut self, d: &Data, u: u32) {
+        if self.ai_choose_target(d, u, true, false) {
+            return;
+        }
+        if self.units[u as usize].unit_type == 0x22 {
+            self.order_medic(d, u);
+            if self.units[u as usize].order != 0xa3 {
+                return;
+            }
+        }
+        if self.units[u as usize].order_state == 0 {
+            let p = self.units[u as usize].order_target_pos;
+            if !self.move_and_face(d, u, p) {
+                return;
+            }
+            self.units[u as usize].order_state = 1;
+        }
+        let ai = self.units[u as usize].ai;
+        if ai == NIL {
+            return;
+        }
+        if ai_kind(ai) != AI_GUARD {
+            self.order_now(d, u, 0x9c);
+        } else if self.unit_at_move_target(u) != 0 {
+            let pos = self.unit_sprite_pos(u);
+            self.guard_set_home(ai, pos);
+            self.order_now(d, u, 0x9c);
+        }
+    }
+
+    /// 0x462830: a guard AI's home position (not for other AI kinds).
+    fn guard_set_home(&mut self, ai: u32, pos: (i16, i16)) {
+        if ai != NIL && ai_kind(ai) == AI_GUARD {
+            self.ai.guards.items[ai_index(ai) as usize].home = pos;
+        }
     }
 
 }

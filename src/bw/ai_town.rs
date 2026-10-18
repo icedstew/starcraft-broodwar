@@ -46,7 +46,7 @@ impl State {
     }
 
     /// 0x432020: a new town of `player` at (x, y), first in the player's town list.
-    fn create_town(&mut self, player: u8, x: i16, y: i16) -> Option<u32> {
+    pub(super) fn create_town(&mut self, player: u8, x: i16, y: i16) -> Option<u32> {
         let mut head = self.ai.town_lists[player as usize];
         let t = self.ai.towns.alloc(&mut head)?;
         self.ai.town_lists[player as usize] = head;
@@ -58,7 +58,7 @@ impl State {
     /// 0x433dd0: town `town` takes `u`: workers get a worker AI, buildings (and larvae,
     /// eggs, overlords) a building AI; the first depot becomes the town's main building
     /// and gas buildings fill its gas slots.
-    fn town_add_unit(&mut self, d: &Data, u: u32, town: u32) {
+    pub(super) fn town_add_unit(&mut self, d: &Data, u: u32, town: u32) {
         let t = self.units[u as usize].unit_type;
         let flags = d.dat.units.flags[t as usize];
         if flags & 8 != 0 {
@@ -220,7 +220,7 @@ impl State {
 
     /// 0x43a010: a building of `player` makes its region one the AI holds (state 4,
     /// and for allied computers too); town halls and depots get extra defense needs.
-    fn ai_region_add_building(&mut self, d: &Data, player: u8, u: u32) {
+    pub(super) fn ai_region_add_building(&mut self, d: &Data, player: u8, u: u32) {
         let p = player as usize;
         let s = &self.sprites[self.units[u as usize].sprite as usize];
         let r = super::path::region_at(&self.sai, s.x as i32, s.y as i32);
@@ -415,9 +415,21 @@ impl State {
         }
         if last != NIL {
             self.town_supply_request(d, last);
-            todo_port!("0x43ebb0", "AI town defense requests");
-            todo_port!("0x43aae0", "AI town requests 0x43aae0");
+            self.ai_town_defense_requests(d, player, last);
+            self.ai_town_turret_request(d, player, last);
         }
+    }
+
+    /// 0x43aae0 (stack `val`, `player`): when a region wants a turret (flag 0x10),
+    /// request a missile turret / spore colony type 0x7c (priority 0x50) for the town.
+    fn ai_town_turret_request(&mut self, d: &Data, player: u8, val: u32) {
+        if !(1..self.sai.region_count).any(|r| self.reg(player, r).flags & 0x10 != 0) {
+            return;
+        }
+        let f = d.dat.units.flags[0x7c];
+        let ty = if f & 8 != 0 { 4 } else { ((f & 2) << 1 | 3) as u8 };
+        self.ai_add_need(d, player, ty, 0x7c);
+        self.ai_push_request(player, ty, 0x7c, 0x50, val);
     }
 
     /// The count 0x436320 makes of unit type `t` in a town: its workers and buildings
@@ -580,7 +592,7 @@ impl State {
         while u != NIL {
             let un = &self.units[u as usize];
             let t = un.unit_type;
-            if un.sprite != NIL && un.order != 0 && d.dat.units.flags[t as usize] & 0x2000 != 0 && !(0xb0..=0xb2).contains(&t) && un.u8_at(0xd8) as u32 == a {
+            if un.sprite != NIL && un.order != 0 && d.dat.units.flags[t as usize] & 0x2000 != 0 && !super::ai_areas::is_mineral(t) && un.u8_at(0xd8) as u32 == a {
                 if g[0] == NIL {
                     g[0] = u;
                 } else if g[1] == NIL {
@@ -619,7 +631,7 @@ impl State {
         let mut u = self.visible_units.head;
         while u != NIL {
             let un = &self.units[u as usize];
-            if un.sprite != NIL && un.order != 0 && (0xb0..=0xb2).contains(&un.unit_type) && un.u8_at(0xd8) as u32 == a {
+            if un.sprite != NIL && un.order != 0 && super::ai_areas::is_mineral(un.unit_type) && un.u8_at(0xd8) as u32 == a {
                 return u;
             }
             u = un.link.next;
@@ -632,6 +644,11 @@ impl State {
     /// post loses it, the free medic is replaced (0x4477c0).
     pub(super) fn ai_release_unit(&mut self, d: &Data, u: u32, keep_region: bool) {
         self.ai_forget_unit(d, u, keep_region);
+        self.ai_release_unit_rest(d, u);
+    }
+
+    /// 0x4a1e50 after 0x439d60: its town (0x434c90), the guard post, the free medic.
+    pub(super) fn ai_release_unit_rest(&mut self, d: &Data, u: u32) {
         self.town_remove_unit(d, u);
         let r = self.units[u as usize].ai;
         if r != NIL && ai_kind(r) == AI_GUARD {
@@ -663,7 +680,7 @@ impl State {
     /// enemies of it lose its type's strength from the region it is in; a military
     /// unit leaves its region (which, when `fight_on` and the region is lost, goes to
     /// state 3). True for a military unit.
-    fn ai_forget_unit(&mut self, d: &Data, u: u32, fight_on: bool) -> bool {
+    pub(super) fn ai_forget_unit(&mut self, d: &Data, u: u32, fight_on: bool) -> bool {
         let t = self.units[u as usize].unit_type as usize;
         let owner = {
             let un = &self.units[u as usize];
@@ -721,7 +738,7 @@ impl State {
     }
 
     /// 0x432760: a resource (ecx) leaves every town's slots.
-    fn ai_resource_forget(&mut self, d: &Data, u: u32) {
+    pub(super) fn ai_resource_forget(&mut self, d: &Data, u: u32) {
         let t = self.units[u as usize].unit_type;
         let flags = d.dat.units.flags[t as usize];
         if flags & 0x2000 != 0 {
@@ -749,7 +766,7 @@ impl State {
     /// 0x434c90: unit `u` leaves its town: a worker (count down) or a building, larva,
     /// egg or overlord; the town forgets it as main building or builder and is removed
     /// when empty (0x4347e0). Other units keep their AI.
-    fn town_remove_unit(&mut self, d: &Data, u: u32) -> bool {
+    pub(super) fn town_remove_unit(&mut self, d: &Data, u: u32) -> bool {
         self.ai_resource_forget(d, u);
         let t = self.units[u as usize].unit_type;
         let flags = d.dat.units.flags[t as usize];
@@ -978,8 +995,7 @@ impl State {
             }
             let g = d.dat.units.staredit_group_flags[depot as usize];
             let r = if g & 1 != 0 { 0 } else if g & 2 != 0 { 1 } else if g & 4 != 0 { 2 } else { 3 };
-            // 0x4888c0
-            let used = if r < 3 { self.players.supply_used[r][p] } else { 0 };
+            let used = self.supply_used_of(r as u8, p);
             let need = (used + 0xd) as u32;
             let hall = self.town_hall_type(player);
             let hall_supply = d.dat.units.supply_provided[hall as usize] as u32;
@@ -1202,9 +1218,8 @@ impl State {
             u = next;
         }
         if self.ai.players[p].flags & 0x20 == 0 {
-            let _ = if first { 5 } else { 2 };
-            todo_port!("0x445aa0", "a new town claims the regions around it");
-            todo_port!("0x43a8f0", "AI regions near the enemy start");
+            self.ai_claim_regions(d, player, (x, y), if first { 5 } else { 2 });
+            self.ai_claim_enemy_paths(d, player, (x, y));
         }
         Some(town)
     }
@@ -1212,14 +1227,150 @@ impl State {
 
 impl State {
     /// 0x4a2450: per-type AI behaviour that replaces the normal unit AI this round
-    /// (true when it gave an order).
+    /// (true when it gave an order; the original also leaves 0 after the arbiter's
+    /// and the carrier / reaver's orders).
     pub(super) fn ai_special_unit_order(&mut self, d: &Data, u: u32) -> bool {
         self.ai_decloak_when_safe(d, u);
-        let t = self.units[u as usize].unit_type;
-        if matches!(t, 2 | 5 | 0xb | 0x45 | 0x2a | 0x47 | 0x48 | 0x53 | 0x7c | 0x90 | 0x92 | 0xa2 | 0xac) {
-            todo_port!("0x4a2450", "AI per-type behaviour");
+        let un = &self.units[u as usize];
+        let (t, player) = (un.unit_type, un.player);
+        match t {
+            2 => {
+                if self.can_use_tech(d, u, 3, player) == Ok(1) {
+                    if let Some(pos) = self.ai_mine_spot(u) {
+                        self.order_at(d, u, 0x84, pos);
+                        return true;
+                    }
+                }
+            }
+            5 => {
+                let ai = self.units[u as usize].ai;
+                if ai != NIL
+                    && ai_kind(ai) == AI_GUARD
+                    && !self.ai_guard_return(d, u, 0)
+                    && self.can_use_tech(d, u, 5, player) == Ok(1)
+                    && self.units[u as usize].order_queue_head == NIL
+                {
+                    self.order_now(d, u, 0x62);
+                    return true;
+                }
+            }
+            0xb | 0x45 | 0x2a => {
+                if t == 0xb && (self.units[u as usize].hp + 0xff) >> 8 != self.max_hp_points(d, u) {
+                    let scv = self.ai_building_scv_near(d, u);
+                    if scv != NIL {
+                        if self.has_loaded_units(u) {
+                            self.order_now(d, u, 0x6f);
+                        } else {
+                            self.order_on(d, u, 0x31, scv);
+                        }
+                        return true;
+                    }
+                }
+                if t != 0x2a && self.ai_ghost_to_enemy_region(d, u) {
+                    return true;
+                }
+                if self.has_loaded_units(u) {
+                    self.order_now(d, u, 0x6f);
+                    return true;
+                }
+            }
+            0x47 => {
+                let (x, y) = self.unit_sprite_pos(u);
+                let b = [x.wrapping_sub(0x280), y.wrapping_sub(0x280), x.wrapping_add(0x280), y.wrapping_add(0x280)];
+                let mut search = std::mem::replace(&mut self.search, super::collide::UnitSearch::empty());
+                let start = search.units_in_finder_box(self, b);
+                let found = search.results(start);
+                search.pop();
+                self.search = search;
+                let player = self.units[u as usize].player;
+                for c in found {
+                    let cu = &self.units[c as usize];
+                    if cu.player == player && cu.auto_target != NIL && d.dat.units.flags[cu.unit_type as usize] & 1 == 0 {
+                        let pos = self.unit_sprite_pos(c);
+                        self.order_at(d, u, 0xe, pos);
+                        return true;
+                    }
+                }
+            }
+            0x48 | 0x53 => {
+                let ammo = Self::ammo_type(t);
+                if self.can_make_unit(d, u, ammo, player) == Ok(1)
+                    && self.queue_build(d, u, ammo)
+                    && !self.ammo_building_full(u)
+                {
+                    self.clear_secondary_order(u, 0x3f);
+                }
+            }
+            0x7c | 0x90 | 0x92 | 0xa2 => {
+                self.order_now(d, u, 0x12);
+                return true;
+            }
+            0xac => {
+                if self.units[u as usize].energy >> 8 >= 0x32 {
+                    let mut c = self.player_units[player as usize];
+                    while c != NIL {
+                        let cu = &self.units[c as usize];
+                        if self.can_recharge(d, c, u) && cu.auto_target == NIL && !self.ai_region_gathering(c, 0) && cu.shields & !0xff <= 0x2800 {
+                            let pos = self.unit_sprite_pos(c);
+                            self.order_at(d, u, 0x43, pos);
+                            return false;
+                        }
+                        c = self.units[c as usize].player_next;
+                    }
+                }
+            }
+            _ => {}
         }
         false
+    }
+
+    /// 0x440770 (callback 0x4402b0): the nearest worker of `u`'s player that is the
+    /// building worker of its AI's town.
+    pub(super) fn ai_building_scv_near(&mut self, d: &Data, u: u32) -> u32 {
+        let b = [0, 0, self.map_px.0 as i16, self.map_px.1 as i16];
+        self.nearest_unit_to(u, b, &mut |st: &mut State, c: u32| {
+            let cu = &st.units[c as usize];
+            cu.player == st.units[u as usize].player
+                && d.dat.units.flags[cu.unit_type as usize] & 8 != 0
+                && cu.status & 0x40 == 0
+                && cu.ai != NIL
+                && st.ai_entry_town(cu.ai).is_some_and(|t| st.ai.towns.items[t as usize].building_scv == c)
+        })
+    }
+
+    /// 0x439740: where a vulture lays a mine: a random spot within 0x100 of the centre
+    /// of one of its player's base regions (state 4 / 5 with flag 1 or 0x40), in the
+    /// walkable region group the vulture is in and with no spider mine of the player's
+    /// within 0x60.
+    fn ai_mine_spot(&mut self, u: u32) -> Option<(i16, i16)> {
+        let player = self.units[u as usize].player;
+        let regs = &self.ai.regions[player as usize];
+        let cands: Vec<usize> = (1..(self.sai.region_count as i16 as usize).max(1))
+            .filter(|&r| regs.get(r).is_some_and(|a| matches!(a.state, 4 | 5) && a.flags & 0x41 != 0))
+            .collect();
+        if cands.is_empty() {
+            return None;
+        }
+        let pick = self.rng.rand(0x2c) as usize % cands.len();
+        let c = self.sai.regions[cands[pick]].center;
+        let x = ((c.0 >> 8) + (self.rng.rand(0x2d) & 0x1ff) as i32 - 0x100).clamp(0, self.map_px.0 as i32 - 1);
+        let y = ((c.1 >> 8) + (self.rng.rand(0x2e) & 0x1ff) as i32 - 0x100).clamp(0, self.map_px.1 as i32 - 1);
+        let (ux, uy) = self.unit_sprite_pos(u);
+        let ur = super::path::region_at(&self.sai, ux as i32, uy as i32) as usize;
+        let sr = super::path::region_at(&self.sai, x, y) as usize;
+        if self.sai.regions[ur].group != self.sai.regions[sr].group || self.sai.regions[sr].flags == 0x1ffd {
+            return None;
+        }
+        let b = [(x - 0x60) as i16, (y - 0x60) as i16, (x + 0x60) as i16, (y + 0x60) as i16];
+        let mut search = std::mem::replace(&mut self.search, super::collide::UnitSearch::empty());
+        let start = search.units_in_finder_box(self, b);
+        let found = search.results(start);
+        search.pop();
+        self.search = search;
+        if found.iter().any(|&m| self.units[m as usize].unit_type == 0xd && self.units[m as usize].player == player) {
+            return None;
+        }
+        Some((x as i16, y as i16))
     }
 
     /// 0x4a1240: a cloaked AI unit (secondary order 0x6d, cloakable) with no threat
@@ -1240,7 +1391,7 @@ impl State {
 
     /// 0x476930 (EAX = 0): `u`'s order target is an enemy that can hit it from where it
     /// is (a damaged hallucination never counts; a loaded bunker always does).
-    fn threatened_by_target(&self, d: &Data, u: u32) -> bool {
+    pub(super) fn threatened_by_target(&self, d: &Data, u: u32) -> bool {
         let t = self.units[u as usize].order_target_unit;
         if t == NIL {
             return false;
@@ -1357,7 +1508,7 @@ impl State {
     }
 
     /// 0x432b90: the `n`-th of the town's gas slots in `state` (NIL if fewer).
-    fn town_gas(&self, town: u32, state: u8, n: u32) -> u32 {
+    pub(super) fn town_gas(&self, town: u32, state: u8, n: u32) -> u32 {
         let tw = &self.ai.towns.items[town as usize];
         let mut count = 0;
         for g in tw.gas_buildings {
@@ -1621,11 +1772,11 @@ impl State {
     /// pick a unit to train itself (0x433890).
     pub(super) fn building_ai(&mut self, d: &Data, u: u32) -> bool {
         match self.units[u as usize].unit_type {
-            0x2a => todo_port!("0x434df0", "AI overlord"),
+            0x2a => self.ai_overlord_patrol(d, u),
             0x6b => {
                 self.ai_cast_spell(d, u, 0);
             }
-            0x6c => todo_port!("0x434d50", "AI nuke silo"),
+            0x6c => self.ai_nuke_silo(d, u),
             _ => {}
         }
         let ai = self.units[u as usize].ai;
@@ -1649,10 +1800,7 @@ impl State {
                 self.ai_train(d, player, u, true)
             }
             1 | 2 => self.ai_train(d, player, u, pick),
-            3 => {
-                todo_port!("0x434ff0", "AI building places a building (zerg)");
-                true
-            }
+            3 => self.ai_zerg_building_request(d, player, u, b),
             4 => {
                 self.ai_train_worker(d, player, u, b);
                 true
@@ -1666,13 +1814,10 @@ impl State {
                 true
             }
             7 => {
-                todo_port!("0x434e70", "AI addon");
+                self.ai_addon(d, player, u, b);
                 true
             }
-            8 => {
-                todo_port!("0x435130", "AI request type 8");
-                true
-            }
+            8 => self.ai_nuke_request(d, player, u),
             _ => true,
         }
     }
@@ -1684,8 +1829,27 @@ impl State {
         let p = player as usize;
         let id = self.ai.players[p].requests[0].id;
         let maker = match id {
-            0x2c | 0x3e | 0x44 | 0x3f | 0x67 => {
-                todo_port!("0x435f10", "AI morph requests (0x4375f0, 0x437410, 0x437320, 0x437570)");
+            0x2c | 0x3e | 0x67 => {
+                let m = self.ai_find_morph_source(player, if id == 0x67 { 0x26 } else { 0x2b });
+                if m == NIL {
+                    self.ai_request_done(d, player, false);
+                    self.ai_pop_request(player);
+                    return false;
+                }
+                m
+            }
+            0x44 | 0x3f => {
+                let found = if id == 0x44 { self.ai_find_merge_pair(player, 0x43, true) } else { self.ai_find_merge_pair(player, 0x3d, false) };
+                let Some((a, b)) = found else {
+                    self.ai_request_done(d, player, false);
+                    self.ai_pop_request(player);
+                    return false;
+                };
+                let o = if id == 0x44 { 0x69 } else { 0xb7 };
+                self.order_on(d, a, o, b);
+                self.order_on(d, b, o, a);
+                self.ai_request_done(d, player, true);
+                self.ai_pop_request(player);
                 return false;
             }
             _ => u,
@@ -1709,16 +1873,27 @@ impl State {
                 self.ai_pop_request(player);
                 return false;
             }
-            // 0x4672f0
             let val = self.ai.players[p].requests[0].val;
-            let ty = self.ai_top_request_type(player);
-            let slot = self.free_build_slot(maker);
-            if slot == 5 || !self.queue_build(d, maker, id) {
-                return false;
+            if maker == u {
+                let ty = self.ai_top_request_type(player);
+                if !self.ai_enqueue(d, maker, id, ty, val) {
+                    return false;
+                }
+            } else {
+                // A morph's source unit leaves its AI role and takes the request's.
+                if !self.queue_build(d, maker, id) {
+                    return false;
+                }
+                self.ai_release_unit(d, maker, false);
+                if self.ai_top_request_type(player) == 2 {
+                    let gd = &mut self.ai.guards.items[val as usize];
+                    gd.parent = maker;
+                    gd.home = gd.other_home;
+                    self.units[maker as usize].ai = ai_ref(AI_GUARD, val);
+                } else {
+                    self.region_add_military(d, (val >> 16) as u8, val as u16, maker, true);
+                }
             }
-            let bai = ai_index(self.units[maker as usize].ai) as usize;
-            self.ai.buildings.items[bai].train_queue_types[slot] = ty;
-            self.ai.buildings.items[bai].train_queue_values[slot] = val;
             self.ai_request_done(d, player, true);
             self.ai_pop_request(player);
             if matches!(self.units[maker as usize].unit_type, 0x23 | 0x2b | 0x26) {
@@ -1732,6 +1907,283 @@ impl State {
             return self.ai_drop_request_retry(d, player, u, picked);
         }
         false
+    }
+
+    /// 0x432480 then 0x46e1c0: `u` can make `id`, with the failure code of the last check.
+    fn ai_can_make(&mut self, d: &Data, u: u32, id: u16, player: u8) -> (bool, u8) {
+        if !self.ai_same_race(d, u, id) {
+            return (false, self.req_error.get());
+        }
+        let r = self.can_make_unit(d, u, id, player);
+        (r == Ok(1), self.req_code(r))
+    }
+
+    /// 0x4672f0: queue unit `id` in `u`'s build queue and note the request (`ty`, `val`)
+    /// it is for in the building's AI entry.
+    fn ai_enqueue(&mut self, d: &Data, u: u32, id: u16, ty: u8, val: u32) -> bool {
+        let slot = self.free_build_slot(u);
+        if slot == 5 || !self.queue_build(d, u, id) {
+            return false;
+        }
+        let bai = ai_index(self.units[u as usize].ai) as usize;
+        self.ai.buildings.items[bai].train_queue_types[slot] = ty;
+        self.ai.buildings.items[bai].train_queue_values[slot] = val;
+        true
+    }
+
+    /// 0x434df0: an idle overlord (at its move target) flies on to the next patrol region.
+    fn ai_overlord_patrol(&mut self, d: &Data, u: u32) {
+        if self.units[u as usize].fl.move_target == self.unit_sprite_pos(u) {
+            let p = self.ai_patrol_region(d, u);
+            self.move_to_facing(d, u, p);
+        }
+    }
+
+    /// 0x434d50: a nuclear silo under its nuke limit builds a nuke (order 0x7c).
+    fn ai_nuke_silo(&mut self, d: &Data, u: u32) {
+        let player = self.units[u as usize].player;
+        if !self.ai_at_build_limit(player, 0xe)
+            && self.ai_same_race(d, u, 0xe)
+            && self.can_make_unit(d, u, 0xe, player) == Ok(1)
+            && self.ai_can_afford(d, player, 0xe)
+            && self.ai_enqueue(d, u, 0xe, 8, 0)
+        {
+            self.order_now(d, u, 0x7c);
+            self.set_secondary(u, 0x26);
+        }
+    }
+
+    /// 0x435130: request type 8 (id 0x54): the building queues it unless at the build
+    /// limit, in which case the request is dropped.
+    fn ai_nuke_request(&mut self, d: &Data, player: u8, u: u32) -> bool {
+        let p = player as usize;
+        if self.ai.players[p].requests[0].id != 0x54 {
+            return false;
+        }
+        let (ok, code) = self.ai_can_make(d, u, 0x54, player);
+        if ok {
+            if !self.ai_can_afford(d, player, 0x54) {
+                return false;
+            }
+            if self.ai_at_build_limit(player, 0x54) {
+                self.ai_request_done(d, player, false);
+                self.ai_pop_request(player);
+                return false;
+            }
+            if !self.ai_enqueue(d, u, 0x54, 5, 0) {
+                return false;
+            }
+            self.set_secondary(u, 0x26);
+            self.ai_request_done(d, player, true);
+            self.ai_pop_request(player);
+            return true;
+        }
+        if matches!(code, 2 | 0x17 | 0x15 | 8 | 7 | 0xd) {
+            self.ai_drop_request_retry(d, player, u, false);
+        }
+        false
+    }
+
+    /// 0x434ff0: request type 3 for a Zerg building (a hatchery makes the overlord, a
+    /// larva or drone the morphs 0x84 / 0x85 / 0x92 / 0x90 / 0x89 itself) for `b`'s town.
+    fn ai_zerg_building_request(&mut self, d: &Data, player: u8, u: u32, b: u32) -> bool {
+        let p = player as usize;
+        let top = self.ai.players[p].requests[0];
+        let id = top.id;
+        if !self.ai_can_afford(d, player, id) {
+            return false;
+        }
+        let town = self.ai.buildings.items[b as usize].town;
+        if id == 0x2a {
+            if self.units[u as usize].unit_type == 0x23 && self.ai_enqueue(d, u, id, 3, town) {
+                self.order_now(d, u, 0x2a);
+                self.ai_request_done(d, player, true);
+                self.ai_pop_request(player);
+            }
+        } else if matches!(id, 0x84 | 0x85 | 0x92 | 0x90 | 0x89) && top.val == town {
+            let (ok, code) = self.ai_can_make(d, u, id, player);
+            if ok {
+                if !self.queue_build(d, u, id) {
+                    return false;
+                }
+                self.order_now(d, u, 0x2b);
+                self.ai_request_done(d, player, true);
+                self.ai_pop_request(player);
+                return true;
+            }
+            if matches!(code, 2 | 0x17 | 0x15 | 8 | 7 | 0xd) {
+                self.ai_drop_request_retry(d, player, u, false);
+            }
+        }
+        false
+    }
+
+    /// 0x446a40 (`flag` = EDI): the spot search 0x4465c0 for `u` with radius 3 (0x28 for type 0x7c);
+    /// with `flag` it is skipped while the owner's build_cooldown is set, and a miss sets it.
+    fn ai_spot_flagged(&mut self, d: &Data, u: u32, t: u16, pos: (i16, i16), flag: bool) -> Option<(i16, i16)> {
+        let owner = self.units[u as usize].player as usize;
+        if flag && self.ai.players[owner].build_cooldown != 0 {
+            return None;
+        }
+        let spot = self.ai_find_build_spot(d, u, t, pos, if t == 0x7c { 0x28 } else { 3 });
+        if spot.is_none() && flag {
+            self.ai.players[owner].build_cooldown = 1;
+        }
+        spot
+    }
+
+    /// 0x446aa0: 0x446a40 (flag clear) at the building's own position.
+    fn ai_addon_spot(&mut self, d: &Data, u: u32, t: u16) -> Option<(i16, i16)> {
+        let pos = self.unit_sprite_pos(u);
+        self.ai_spot_flagged(d, u, t, pos, false)
+    }
+
+    /// 0x465330: the ammunition (interceptor / scarab) a unit type builds, else 0.
+    fn ammo_type(t: u16) -> u16 {
+        match t {
+            0x48 | 0x52 => 0x49,
+            0x53 | 0x51 => 0x55,
+            _ => 0,
+        }
+    }
+
+    /// 0x465450: a carrier / reaver type whose secondary order state is 2.
+    fn ammo_building_full(&self, u: u32) -> bool {
+        let un = &self.units[u as usize];
+        matches!(un.unit_type, 0x48 | 0x52 | 0x53 | 0x51) && un.secondary_order_state == 2
+    }
+
+    /// 0x474280: set the secondary order and reset its position, target and state.
+    fn clear_secondary_order(&mut self, u: u32, order: u8) {
+        let un = &mut self.units[u as usize];
+        un.secondary_order = order;
+        un.secondary_order_pos = (0, 0);
+        un.current_build_unit = NIL;
+        un.secondary_order_state = 0;
+    }
+
+    /// 0x434e70: request type 7: the building places an add-on near itself (0x446aa0 then,
+    /// with AI flag 0x20, a wider search 0x4465c0) and the request is done.
+    fn ai_addon(&mut self, d: &Data, player: u8, u: u32, b: u32) {
+        let p = player as usize;
+        let id = self.ai.players[p].requests[0].id;
+        if self.ai.players[p].requests[0].val != self.ai.buildings.items[b as usize].town {
+            return;
+        }
+        let (ok, code) = self.ai_can_make(d, u, id, player);
+        if ok {
+            if !self.ai_can_afford(d, player, id) {
+                return;
+            }
+            let big = if id == 0x7c { 0x28 } else { 0x40 };
+            let mut spot = self.ai_addon_spot(d, u, id);
+            if spot.is_none() && self.ai.players[p].flags & 0x20 != 0 {
+                let pos = self.unit_sprite_pos(u);
+                if self.ai.players[p].build_cooldown == 0 {
+                    spot = self.ai_find_build_spot(d, u, id, pos, big);
+                    if spot.is_none() {
+                        self.ai.players[p].build_cooldown = 1;
+                    }
+                }
+            }
+            if let Some(s) = spot {
+                self.ai_request_done(d, player, true);
+                self.ai_pop_request(player);
+                self.order_at(d, u, 0x24, s);
+                self.clear_build_queue(d, u);
+                self.units[u as usize].set_u16_at(0xc4, id);
+                return;
+            }
+        } else {
+            if !matches!(code, 2 | 0x17 | 0x15 | 8 | 7 | 0xd) {
+                return;
+            }
+        }
+        self.ai_drop_request_retry(d, player, u, false);
+    }
+
+    /// The region state of a military AI entry's region.
+    fn ai_military_region_state(&self, ai: u32) -> u8 {
+        let (p, r) = self.ai.military.items[ai_index(ai) as usize].region;
+        self.ai.regions[p as usize][r as usize].state
+    }
+
+    /// 0x4375f0 (type 0x2b) / 0x437570 (type 0x26): a free unit of `ty` of `player`'s
+    /// (no target, a guard or a military AI) for a morph: the first with a guard AI or
+    /// a military AI in a region of state 0 / 4 / 5, else the last one in another state.
+    /// NIL if none.
+    fn ai_find_morph_source(&self, player: u8, ty: u16) -> u32 {
+        let mut best = NIL;
+        let mut u = self.player_units[player as usize];
+        while u != NIL {
+            let cur = u;
+            let un = &self.units[cur as usize];
+            u = un.player_next;
+            if un.sprite == NIL || un.order == 0 || un.unit_type != ty || un.auto_target != NIL || un.order_target_unit != NIL || un.ai == NIL {
+                continue;
+            }
+            match ai_kind(un.ai) {
+                AI_GUARD => return cur,
+                AI_MILITARY => match self.ai_military_region_state(un.ai) {
+                    0 | 5 | 4 => return cur,
+                    _ => best = cur,
+                },
+                _ => {}
+            }
+        }
+        best
+    }
+
+    /// 0x437410 (high templar, 0x43) / 0x437320 (dark templar, 0x3d): two finished
+    /// units of `player`'s that can merge (not already merging) as an archon. The 0x4368c0
+    /// pairs: a guard AI unit, or a military AI one in region state 0 / 4 / 5 / 8 / 9 (for
+    /// high templar: with energy 0x4b+), are taken in order. Else (`ht`: the two of lowest
+    /// energy) the first and the last military AI ones.
+    fn ai_find_merge_pair(&self, player: u8, ty: u16, ht: bool) -> Option<(u32, u32)> {
+        let mut taken: Vec<u32> = Vec::new();
+        let (mut best, mut best_e, mut second) = (NIL, 9999u32, NIL);
+        let mut second_e = 9999u32;
+        let mut u = self.player_units[player as usize];
+        while u != NIL {
+            let cur = u;
+            let un = &self.units[cur as usize];
+            u = un.player_next;
+            if un.sprite == NIL || un.order == 0 || un.unit_type != ty || un.status & 1 == 0 || un.status & 0x40 != 0 || un.order == if ht { 0x69 } else { 0xb7 } || un.ai == NIL {
+                continue;
+            }
+            match ai_kind(un.ai) {
+                AI_GUARD => {
+                    taken.push(cur);
+                    if taken.len() == 2 {
+                        return Some((taken[0], taken[1]));
+                    }
+                }
+                AI_MILITARY => {
+                    let e = (un.energy >> 8) as u32;
+                    if ht {
+                        if best == NIL || e < best_e {
+                            best = cur;
+                            best_e = e;
+                        } else if second == NIL || e < second_e {
+                            second = cur;
+                            second_e = e;
+                        }
+                    } else if best == NIL {
+                        best = cur;
+                    } else {
+                        second = cur;
+                    }
+                    if (!ht || e >= 0x4b) && matches!(self.ai_military_region_state(un.ai), 0 | 5 | 4 | 8 | 9) {
+                        taken.push(cur);
+                        if taken.len() == 2 {
+                            return Some((taken[0], taken[1]));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        if best != NIL && second != NIL { Some((best, second)) } else { None }
     }
 
     /// 0x436173 in 0x435f10: drop the top request; unless `picked`, run the building's
@@ -1772,6 +2224,20 @@ impl State {
         self.ai_pop_request(player);
     }
 
+    /// 0x4486c0 (cost `m`, `g` of the tech): the player has the minerals and gas and
+    /// they are within what the AI has available (the zero supply part always passes).
+    fn ai_research_affordable(&self, player: u8, m: u32, g: u32) -> bool {
+        let p = player as usize;
+        let pa = &self.ai.players[p];
+        m as i32 <= self.players.minerals[p] && g as i32 <= self.players.gas[p] && m <= pa.minerals_available && g <= pa.gas_available
+    }
+
+    /// 0x448750 (cost `m`, `g` of the upgrade; 0x42d190 without messages is the
+    /// player's resource check): the same test for an upgrade.
+    fn ai_upgrade_affordable(&self, player: u8, m: u32, g: u32) -> bool {
+        self.ai_research_affordable(player, m, g)
+    }
+
     /// 0x434670: start the requested upgrade (0x448750 checks the AI's budget).
     fn ai_start_upgrade(&mut self, d: &Data, player: u8, u: u32) {
         let p = player as usize;
@@ -1780,12 +2246,7 @@ impl State {
         if r == Ok(1) {
             let (m, g, _) = self.upgrade_cost(d, player, id as u8);
             let (m, g) = (m as u16 as u32, g as u16 as u32);
-            // 0x42d190 / 0x42d0c0 without messages.
-            if self.players.minerals[p] < m as i32 || self.players.gas[p] < g as i32 {
-                return;
-            }
-            let pa = &self.ai.players[p];
-            if m <= pa.minerals_available && g <= pa.gas_available && self.start_upgrade(d, u, id as u8) {
+            if self.ai_upgrade_affordable(player, m, g) && self.start_upgrade(d, u, id as u8) {
                 self.order_now(d, u, 0x4c);
                 self.ai_request_done(d, player, true);
                 self.ai_pop_request(player);
@@ -1804,9 +2265,7 @@ impl State {
         let r = self.can_research(d, u, id, player);
         if r == Ok(1) {
             let (m, g) = (d.dat.techdata.mineral_cost[id as usize] as u32, d.dat.techdata.gas_cost[id as usize] as u32);
-            let pa = &self.ai.players[p];
-            let ok = m as i32 <= self.players.minerals[p] && g as i32 <= self.players.gas[p] && m <= pa.minerals_available && g <= pa.gas_available;
-            if ok && self.start_research(d, u, id as u8) {
+            if self.ai_research_affordable(player, m, g) && self.start_research(d, u, id as u8) {
                 self.order_now(d, u, 0x4b);
                 self.ai_request_done(d, player, true);
                 self.ai_pop_request(player);
@@ -1815,6 +2274,17 @@ impl State {
             self.ai_request_done(d, player, false);
             self.ai_pop_request(player);
             self.building_ai(d, u);
+        }
+    }
+
+    /// 0x432430 (unit in eax, slot in ecx): a building AI's train queue entry `slot`
+    /// is no longer wanted.
+    pub(super) fn ai_clear_train_slot(&mut self, u: u32, slot: u8) {
+        let ai = self.units[u as usize].ai;
+        if ai != NIL && ai_kind(ai) == AI_BUILDING {
+            let b = &mut self.ai.buildings.items[ai_index(ai) as usize];
+            b.train_queue_types[slot as usize] = 0;
+            b.train_queue_values[slot as usize] = 0;
         }
     }
 
@@ -1846,19 +2316,26 @@ impl State {
             let mut pos = self.ai.towns.items[town as usize].position;
             let radius = match id {
                 0x7d => {
-                    todo_port!("0x4348c0", "AI bunker placement (0x4376f0, 0x444eb0, 0x4390a0)");
-                    return false;
+                    if let Some(q) = self.ai_region_flag_spot(tp, 2) {
+                        pos = q;
+                    }
+                    let r = super::path::region_at(&self.sai, pos.0 as i32, pos.1 as i32);
+                    self.ai_defense_regions(d, tp, r, 1);
+                    0x40
                 }
                 0x7c => {
-                    todo_port!("0x4348c0", "AI turret placement (0x437670)");
-                    return false;
+                    if let Some(q) = self.ai_region_flag_spot(tp, 0x10) {
+                        pos = q;
+                    }
+                    0x28
                 }
                 0x83 if self.ai.towns.items[town as usize].main_building != NIL => {
-                    todo_port!("0x444630", "AI expansion hatchery spot");
-                    return false;
+                    pos = self.ai_expansion_spot(d, self.ai.towns.items[town as usize].resource_area);
+                    0x40
                 }
                 0x8f | 0xa2 => {
-                    todo_port!("0x444eb0", "AI defense building region bookkeeping");
+                    let r = super::path::region_at(&self.sai, pos.0 as i32, pos.1 as i32);
+                    self.ai_defense_regions(d, tp, r, 4);
                     0x40
                 }
                 _ => 0x40,
@@ -1871,6 +2348,19 @@ impl State {
                 None => {
                     self.ai.players[p].build_cooldown = 1;
                     return self.ai_drop_build_request(d, u);
+                }
+            }
+            if id == 0x7d {
+                // The bunker's region is claimed (state 4, flags 0x41) with a ground need.
+                let r = super::path::region_at(&self.sai, pos.0 as i32, pos.1 as i32);
+                if self.ai.regions[tp as usize][r as usize].state == 0 {
+                    self.set_ai_region_state(d, tp, r, 4);
+                    let unwalkable = self.sai.regions[r as usize].flags == 0x1ffd;
+                    let reg = &mut self.ai.regions[tp as usize][r as usize];
+                    reg.flags |= 0x41;
+                    if !unwalkable {
+                        reg.needed_ground_strength = 1000;
+                    }
                 }
             }
             pos
@@ -1887,6 +2377,188 @@ impl State {
         self.clear_build_queue(d, u);
         self.queue_build(d, u, id);
         true
+    }
+
+    /// 0x4376f0 (`flag` 2, bunkers) / 0x437670 (`flag` 0x10, turrets): the first AI region
+    /// of `player` with that flag; the flag is cleared and the region's centre is the spot.
+    fn ai_region_flag_spot(&mut self, player: u8, flag: u8) -> Option<(i16, i16)> {
+        let n = self.sai.region_count as usize;
+        let regs = &mut self.ai.regions[player as usize];
+        let mut i = 1;
+        while i < n && regs.get(i).is_some_and(|r| r.flags & flag == 0) {
+            i += 1;
+        }
+        if i == n {
+            return None;
+        }
+        regs.get_mut(i)?.flags &= !flag;
+        let c = self.sai.regions[i].center;
+        Some(((c.0 >> 8) as i16, (c.1 >> 8) as i16))
+    }
+
+    /// 0x444630: where a town's expansion hatchery goes: the area's position, moved
+    /// 0xc0 pixels from its farthest resource depot towards the area if that gets closer.
+    fn ai_expansion_spot(&self, d: &Data, area: u8) -> (i16, i16) {
+        let a = self.areas[area as usize].pos;
+        let (mut best, mut found) = (0u32, NIL);
+        let mut u = self.visible_units.head;
+        while u != NIL {
+            let un = &self.units[u as usize];
+            if un.sprite != NIL && un.order != 0 && d.dat.units.flags[un.unit_type as usize] & 0x2000 != 0 && un.u8_at(0xd8) == area {
+                let (ux, uy) = self.unit_sprite_pos(u);
+                let dist = super::path::approx_distance(a.0 as i32, ux as i32, a.1 as i32, uy as i32);
+                if best <= dist {
+                    best = dist;
+                    found = u;
+                }
+            }
+            u = un.link.next;
+        }
+        if found == NIL {
+            return a;
+        }
+        let (ux, uy) = self.unit_sprite_pos(found);
+        let dir = crate::game::flingy::direction_to(ux as i32, uy as i32, a.0 as i32, a.1 as i32);
+        let (tx, ty) = crate::game::flingy::direction_table()[dir as usize];
+        let px = ((tx * 0xc0) >> 8) + ux as i32;
+        let py = ((ty * 0xc0) >> 8) + uy as i32;
+        let before = super::path::approx_distance(ux as i32, a.0 as i32, uy as i32, a.1 as i32);
+        let after = super::path::approx_distance(px, a.0 as i32, py, a.1 as i32);
+        if after < before { (px as i16, py as i16) } else { a }
+    }
+
+    /// 0x4a0ec0: of the units of player slot `slot`, the closest (0x40c360) to
+    /// (`x`, `y`) among those that are not flagged 0x10 and belong to an enemy of
+    /// `player` and stand in a walkable region.
+    fn ai_nearest_enemy(&self, d: &Data, slot: usize, player: u8, x: i32, y: i32) -> u32 {
+        let (mut best, mut found) = (99_999_999u32, NIL);
+        let mut u = self.player_units[slot];
+        while u != NIL {
+            let un = &self.units[u as usize];
+            if un.sprite != NIL && un.order != 0 && d.dat.units.flags[un.unit_type as usize] & 0x10 == 0 {
+                let owner = if un.player == 0xb { self.sprites[un.sprite as usize].owner } else { un.player };
+                let (ux, uy) = self.unit_sprite_pos(u);
+                if self.alliances[player as usize][owner as usize] == 0
+                    && self.sai.regions[super::path::region_at(&self.sai, ux as i32, uy as i32) as usize].flags != 0x1ffd
+                {
+                    let dist = super::path::approx_distance(x, ux as i32, y, uy as i32);
+                    if dist < best {
+                        best = dist;
+                        found = u;
+                    }
+                }
+            }
+            u = un.player_next;
+        }
+        found
+    }
+
+    /// 0x444eb0: list (0x69262c) the regions on up to three paths from region `r` to each
+    /// enemy's nearest unit, for paths of at most `max` regions found by 0x4e29b0.
+    fn ai_defense_regions(&mut self, d: &Data, player: u8, r: u16, max: u32) {
+        let c = self.sai.regions[r as usize].center;
+        let (cx, cy) = ((c.0 >> 8) as i16 as i32, (c.1 >> 8) as i16 as i32);
+        self.ai.area_candidates.clear();
+        for slot in 0..8usize {
+            if self.alliances[player as usize][slot] != 0 {
+                continue;
+            }
+            let e = self.ai_nearest_enemy(d, slot, player, cx, cy);
+            if e == NIL {
+                continue;
+            }
+            let (ex, ey) = self.unit_sprite_pos(e);
+            let er = super::path::region_at(&self.sai, ex as i32, ey as i32);
+            for n in 2..=6u32 {
+                let mut out = [0u16; 3];
+                let (cnt, _) = super::ai_region::ai_region_path_search(&mut self.sai, 2, r, er, n, &mut out);
+                if cnt == 0 || cnt > max {
+                    continue;
+                }
+                for &reg in &out[..cnt as usize] {
+                    if !self.ai.area_candidates.contains(&reg) {
+                        self.ai.area_candidates.push(reg);
+                    }
+                }
+                break;
+            }
+        }
+    }
+
+    /// 0x445aa0: a new town at `pos` claims the regions around it (0x445310 down to
+    /// `depth` steps; 2 when 0x444eb0 listed no region).
+    fn ai_claim_regions(&mut self, d: &Data, player: u8, pos: (i16, i16), depth: u32) {
+        let r = super::path::region_at(&self.sai, pos.0 as i32, pos.1 as i32);
+        self.ai_defense_regions(d, player, r, 4);
+        let depth = if self.ai.area_candidates.is_empty() { 2 } else { depth };
+        let mut visited = vec![false; self.sai.regions.len()];
+        self.ai_claim_region(d, player, r, 1, &mut visited, depth);
+    }
+
+    /// 0x445310: region `r` (reached after `step` steps, at most `max`) becomes the
+    /// player's own (state 4 from idle, flag 1, flag 0x40 for flag 0x20 AIs); then,
+    /// unless it was listed by 0x444eb0 (0x443470), so do its neighbours.
+    fn ai_claim_region(&mut self, d: &Data, player: u8, r: u16, step: u32, visited: &mut [bool], max: u32) {
+        if r == 0 || visited[r as usize] || step > max {
+            return;
+        }
+        let p = player as usize;
+        if self.ai.regions[p][r as usize].state == 0 {
+            self.set_ai_region_state(d, player, r, 4);
+            let f20 = self.ai.players[p].flags & 0x20 != 0;
+            let reg = &mut self.ai.regions[p][r as usize];
+            reg.flags |= 1;
+            if f20 {
+                reg.flags |= 0x40;
+            }
+        }
+        visited[r as usize] = true;
+        if self.ai.area_candidates.contains(&r) {
+            return;
+        }
+        let n = super::ai_region::region_neighbor_list(&self.sai, r).0;
+        for k in 0..n as usize {
+            let nb = self.sai.neighbor(r as usize, k);
+            self.ai_claim_region(d, player, nb, step + 1, visited, max);
+        }
+    }
+
+    /// 0x43a8f0: for each enemy slot, the regions on the (first found) path from the
+    /// region at `pos` to the enemy unit nearest to it become the player's own (state 4,
+    /// flags 0x41, a ground need of 1000 unless unwalkable).
+    pub(super) fn ai_claim_enemy_paths(&mut self, d: &Data, player: u8, pos: (i16, i16)) {
+        let p = player as usize;
+        let from = super::path::region_at(&self.sai, pos.0 as i32, pos.1 as i32);
+        for slot in 0..8usize {
+            if self.alliances[p][slot] != 0 {
+                continue;
+            }
+            let e = self.ai_nearest_enemy(d, slot, player, pos.0 as i32, pos.1 as i32);
+            if e == NIL {
+                continue;
+            }
+            let (ex, ey) = self.unit_sprite_pos(e);
+            let er = super::path::region_at(&self.sai, ex as i32, ey as i32);
+            for n in 2..=6u32 {
+                let mut out = [0u16; 3];
+                let (cnt, _) = super::ai_region::ai_region_path_search(&mut self.sai, 2, from, er, n, &mut out);
+                if cnt == 0 {
+                    continue;
+                }
+                for &r in &out[..cnt as usize] {
+                    if self.ai.regions[p][r as usize].state == 0 {
+                        self.set_ai_region_state(d, player, r, 4);
+                        let unwalkable = self.sai.regions[r as usize].flags == 0x1ffd;
+                        let reg = &mut self.ai.regions[p][r as usize];
+                        reg.flags |= 0x41;
+                        if !unwalkable {
+                            reg.needed_ground_strength = 1000;
+                        }
+                    }
+                }
+                break;
+            }
+        }
     }
 
     /// 0x433640: drop the top request and let `u` run a building AI round (0x4361a0).

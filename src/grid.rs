@@ -218,16 +218,24 @@ pub fn decrypt(data: &mut [u8], key: &[u8]) -> Option<usize> {
     (t[4] == 0 && u32::from_le_bytes(t[..4].try_into().unwrap()) == state[0]).then(|| len - 0x48 + t[5] as usize)
 }
 
-/// 0x4d9ba0: the font key, decrypted from `font\font.gid` with the key 0x480a40 makes.
-pub fn font_key(gid: &[u8]) -> Option<Vec<u8>> {
+/// 0x480a40 (EBX = out, `n` = size): n - 1 nonzero bytes of the CRT rand seeded with
+/// 0x150b. (The original then reseeds the CRT rand with time(); scbw has no other CRT
+/// rand user.)
+fn rand_key(n: usize) -> Vec<u8> {
     let mut rng = Rand(0x150b);
-    let mut key1 = Vec::with_capacity(0x14);
-    while key1.len() < 0x13 {
+    let mut key = Vec::with_capacity(n);
+    while key.len() < n - 1 {
         let b = rng.next();
         if b != 0 {
-            key1.push(b);
+            key.push(b);
         }
     }
+    key
+}
+
+/// 0x4d9ba0: the font key, decrypted from `font\font.gid` with the key 0x480a40 makes.
+pub fn font_key(gid: &[u8]) -> Option<Vec<u8>> {
+    let key1 = rand_key(0x14);
     let mut blob = gid.to_vec();
     let n = decrypt(&mut blob, &key1)?;
     (n < blob.len()).then(|| blob[..n].to_vec())

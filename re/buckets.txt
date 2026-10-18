@@ -28,8 +28,13 @@ replaced 0x448b20   # Win32
 replaced 0x448ec0   # Win32
 replaced 0x4f6100   # handle set (APPADDEX)
 replaced 0x4d92a0   # Storm timer setup
+replaced 0x4da510   # free glue font handles (Storm); Rust drops them
+replaced 0x4dc870   # free dialog allocations 0x51c5c8 (Storm); Rust drops them
+replaced 0x4dc940   # free cursor allocations 0x50e170 (Storm); Rust drops them
+replaced 0x4ddf90   # cursor GRP load + pointer fixup; ui.rs Look::load (0x512708 names)
 replaced 0x4cdb70   # network.tbl accessor (Vec lookup)
 replaced 0x4015a0   # Storm list unlink
+replaced 0x404bc0   # Storm TSList next link (EAX ? [EAX+4] : list+8); Rust uses Vec
 replaced 0x4015f0   # Storm list free
 replaced 0x401650   # Storm list pop
 replaced 0x402330   # trigger list free (Vec clear)

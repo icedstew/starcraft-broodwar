@@ -8,7 +8,6 @@ use super::build::placement;
 use super::list::NIL;
 use super::path::{approx_distance, region_at};
 use super::{Data, State};
-use crate::todo_port;
 
 /// 64x64 tiles centred on the search spot (row major, `grid[row * 64 + col]`).
 type Grid = [u8; 0x1000];
@@ -44,7 +43,8 @@ impl State {
     /// to place unit type `t` near `pos`, within `radius` (path tiles) if possible.
     /// Returns the building's centre in pixels.
     pub(super) fn ai_find_build_spot(&mut self, d: &Data, builder: u32, t: u16, pos: (i16, i16), radius: u32) -> Option<(i16, i16)> {
-        let (cx, cy) = (tile(pos.0), tile(pos.1));
+        let mut pos = pos;
+        let (mut cx, mut cy) = (tile(pos.0), tile(pos.1));
         let player = self.units[builder as usize].player;
         if d.dat.units.flags[t as usize] & 2 != 0 {
             // An add-on goes where the builder's add-on slot is.
@@ -58,8 +58,9 @@ impl State {
                 return Some(((bw / 2 + (x as i32 - ax) * 32) as i16, (bh / 2 + (y as i32 - ay) * 32) as i16));
             }
         }
-        // 0x4442e0 / 0x440420 (todo) pick a region whose centre the search starts from.
-        let alt_region = 0x9c4u32;
+        // 0x4442e0 picks a region whose centre the search starts from; 0x440420 moves the
+        // search to the building to power.
+        let mut alt_region = 0x9c4u32;
         let mut keep_lines = true;
         let mut ty = t;
         match t {
@@ -68,16 +69,22 @@ impl State {
             0x73 => ty = 0x72,
             0x75 | 0x76 => ty = 0x74,
             0x78 => ty = 0x71,
-            0x7d => {
-                todo_port!("0x4442e0", "AI bunker spot near a defended region");
-            }
-            0x8f => {
-                if self.ai.players[player as usize].flags & 0x80 == 0 {
-                    todo_port!("0x4442e0", "AI creep colony spot near a defended region");
+            0x8f | 0x7d => {
+                if t == 0x7d || self.ai.players[player as usize].flags & 0x80 == 0 {
+                    if let Some(r) = self.ai_defended_region(player) {
+                        alt_region = r;
+                        keep_lines = false;
+                    }
                 }
             }
             0x9c => {
-                todo_port!("0x440420", "AI pylon spot next to a building to power");
+                let u = self.ai_building_to_power(player, pos);
+                if u != NIL {
+                    pos = self.unit_sprite_pos(u);
+                    cx = tile(pos.0);
+                    cy = tile(pos.1);
+                    keep_lines = false;
+                }
             }
             _ => {}
         }
@@ -139,6 +146,136 @@ impl State {
         Some(((w / 2 + spot.0 * 32) as i16, (h / 2 + spot.1 * 32) as i16))
     }
 
+    /// 0x4442e0: of the candidate regions (0x69262c), the one farthest (path tiles) from
+    /// `player`'s nearest bunker / creep colony / sunken colony; the only one if single.
+    fn ai_defended_region(&mut self, player: u8) -> Option<u32> {
+        let cands: Vec<u32> = self.ai.area_candidates.iter().map(|&r| r as u32).collect();
+        match cands.len() {
+            0 => return None,
+            1 => return Some(cands[0]),
+            _ => {}
+        }
+        let pts: Vec<(i32, i32)> = cands
+            .iter()
+            .map(|&r| {
+                let c = self.sai.regions[r as usize].center;
+                (((c.0 >> 8) as i16) as i32, ((c.1 >> 8) as i16) as i32)
+            })
+            .collect();
+        let mut dist = vec![99_999_999u32; cands.len()];
+        let mut u = self.player_units[player as usize];
+        while u != NIL {
+            let un = &self.units[u as usize];
+            let next = un.player_next;
+            if un.sprite != NIL && un.order != 0 && matches!(un.unit_type, 0x7d | 0x8f | 0x92) {
+                let (ux, uy) = self.unit_sprite_pos(u);
+                for (i, p) in pts.iter().enumerate() {
+                    let dd = self.ai_path_tiles((ux as i32, uy as i32), *p);
+                    if dd < dist[i] {
+                        dist[i] = dd;
+                    }
+                }
+            }
+            u = next;
+        }
+        let (mut best, mut idx) = (dist[0], 0);
+        for i in 1..dist.len() {
+            if best < dist[i] {
+                best = dist[i];
+                idx = i;
+            }
+        }
+        Some(cands[idx])
+    }
+
+    /// 0x440420: the nearest building of `player` to `pos` on the whole map (0x4e8320
+    /// with callback 0x440190), NIL if none.
+    fn ai_building_to_power(&mut self, player: u8, pos: (i16, i16)) -> u32 {
+        let ix = super::finder::search(&self.finder.x, self.finder.count, true, pos.0 as i32) as i32;
+        let iy = super::finder::search(&self.finder.y, self.finder.count, true, pos.1 as i32) as i32;
+        let b = [0, 0, self.map_px.0 as i16, self.map_px.1 as i16];
+        self.nearest_unit(b, NIL, pos, [ix - 1, iy - 1, ix, iy], &mut |st: &mut State, c: u32| {
+            st.units[c as usize].status & 0x400 != 0 && st.units[c as usize].player == player
+        })
+    }
+
+    /// 0x443ac0: clear the keep-out patterns (17x17 down to 5x5 tiles, starting at
+    /// `stage`) around `player`'s turrets / bunkers / cannons (only type `t` for the
+    /// first group) and creep / sunken / spore colonies; a smaller pattern if all
+    /// would be cleared.
+    fn grid_defense_spots(&self, g: &mut Grid, player: u8, pos: (i16, i16), t: u16, mut stage: u32) {
+        const PATTERNS: [(usize, &str); 4] = [
+            (17, "......xxxxx..........xxxxxxxxx.......xxxxxxxxxxx.....xxxxxxxxxxxxx...xxxxxxxxxxxxxxx..xxxxxxxxxxxxxxx.xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.xxxxxxxxxxxxxxx..xxxxxxxxxxxxxxx...xxxxxxxxxxxxx.....xxxxxxxxxxx.......xxxxxxxxx..........xxxxx......"),
+            (13, "....xxxxx.......xxxxxxx.....xxxxxxxxx...xxxxxxxxxxx.xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.xxxxxxxxxxx...xxxxxxxxx.....xxxxxxx.......xxxxx...."),
+            (9, "...xxx....xxxxxxx..xxxxxxx.xxxxxxxxxxxxxxxxxxxxxxxxxxx.xxxxxxx..xxxxxxx....xxx..."),
+            (5, ".xxx.xxxxxxxxxxxxxxx.xxx."),
+        ];
+        loop {
+            let backup = *g;
+            let mut u = self.player_units[player as usize];
+            while u != NIL {
+                let un = &self.units[u as usize];
+                if un.sprite != NIL && un.order != 0 {
+                    let hit = match un.unit_type {
+                        0x7c | 0x7d | 0xa2 => un.unit_type == t,
+                        0x8f | 0x90 | 0x92 => true,
+                        _ => false,
+                    };
+                    if hit {
+                        let Some(&(n, pat)) = PATTERNS.get(stage as usize) else { return };
+                        let pat = pat.as_bytes();
+                        let (ux, uy) = self.unit_sprite_pos(u);
+                        let mut row = (uy as i32 - pos.1 as i32) / 32 - (n as i32 >> 1) + 0x1f;
+                        let col0 = (ux as i32 - pos.0 as i32) / 32 - (n as i32 >> 1) + 0x1f;
+                        for r in 0..n {
+                            if row > 0x3f {
+                                break;
+                            }
+                            if row >= 0 {
+                                for c in 0..n {
+                                    let col = col0 + c as i32;
+                                    if (0..64).contains(&col) && pat[r * n + c] == b'x' {
+                                        g[(row * 64 + col) as usize] = 0;
+                                    }
+                                }
+                            }
+                            row += 1;
+                        }
+                    }
+                }
+                u = self.units[u as usize].player_next;
+            }
+            if !empty(g) {
+                return;
+            }
+            *g = backup;
+            if stage > 2 {
+                return;
+            }
+            stage += 1;
+        }
+    }
+
+    /// 0x4448d0: drop the tiles where a cannon would already be powered, unless that
+    /// would leave nothing.
+    fn grid_pylon_spots(&self, d: &Data, g: &mut Grid, player: u8, pos: (i16, i16)) {
+        let backup = *g;
+        for row in 0..64 {
+            for col in 0..64 {
+                let i = row * 64 + col;
+                if g[i] != 0 {
+                    let (x, y) = Self::cell_px(pos, row, col);
+                    if self.psi_powered(d, 0xa2, x, y, player) {
+                        g[i] = 0;
+                    }
+                }
+            }
+        }
+        if empty(g) {
+            *g = backup;
+        }
+    }
+
     /// 0x4461b0: fill the grid with the tiles `t` fits on and narrow it down.
     fn ai_place_grid(&mut self, d: &Data, g: &mut Grid, t: u16, player: u8, pos: (i16, i16), radius: u32) {
         self.grid_fill(d, g, t, player, pos, radius);
@@ -158,10 +295,19 @@ impl State {
         }
         self.grid_addons(d, g, t, player, pos);
         match t {
-            0x7c | 0xa2 => todo_port!("0x443ac0", "AI turret / cannon spot"),
-            0x7d => todo_port!("0x443ac0", "AI bunker spot (0x4442e0)"),
-            0x8f => todo_port!("0x443ac0", "AI creep colony spot (0x4442e0)"),
-            0x9c => todo_port!("0x4448d0", "AI pylon spot"),
+            0x7c | 0xa2 => self.grid_defense_spots(g, player, pos, t, 0),
+            // Bunkers and creep colonies keep spacing only without a defended region.
+            0x7d => {
+                if self.ai_defended_region(player).is_none() {
+                    self.grid_defense_spots(g, player, pos, t, 0);
+                }
+            }
+            0x8f => {
+                if self.ai.players[player as usize].flags & 0x80 != 0 || self.ai_defended_region(player).is_none() {
+                    self.grid_defense_spots(g, player, pos, t, 0);
+                }
+            }
+            0x9c => self.grid_pylon_spots(d, g, player, pos),
             _ => {
                 if !town_hall {
                     self.grid_spacing(d, g, t, player, pos);

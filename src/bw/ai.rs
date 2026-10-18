@@ -673,7 +673,7 @@ impl State {
                 self.count_enemy_strength(d);
                 let p = self.ai.region_player as usize;
                 if self.player_types[p] == 1 && self.ai.players[p].flags & 0x20 == 0 {
-                    crate::todo_port!("0x43b9e0", "AI attack timers");
+                    self.ai_attack_timers(d, p as u8);
                 }
             }
         }
@@ -776,9 +776,9 @@ impl State {
         pa.spell_cooldown = pa.spell_cooldown.saturating_sub(1);
         pa.attack_failed = pa.attack_failed.saturating_sub(1);
         self.ai_reset_budget(d, p as u8);
-        crate::todo_port!("0x4630c0", "AI guard requests");
+        self.ai_guard_requests(d, p as u8);
         if self.trig.elapsed > 9 {
-            crate::todo_port!("0x43f990", "AI region requests");
+            self.ai_region_requests(d, p as u8);
         }
         self.ai_town_requests(d, p as u8);
     }
@@ -953,7 +953,7 @@ impl State {
     /// 0x43e7d0: after 0x167 seconds (unless a computer has flag 0x20): compare each
     /// computer's ground strength with its enemies' and allies'; flag 2 (+0x219) when
     /// outnumbered, and 0x43e050 (give up / attack) when far ahead.
-    fn ai_compare_armies(&mut self, _d: &Data) {
+    fn ai_compare_armies(&mut self, d: &Data) {
         if self.trig.elapsed <= 0x167 {
             return;
         }
@@ -971,7 +971,7 @@ impl State {
             if un.sprite != NIL && un.order != 0 && p < 8 {
                 let v = un.ground_strength as u32;
                 own[p] = own[p].wrapping_add(v);
-                if _d.dat.units.flags[un.unit_type as usize] & 9 == 0 {
+                if d.dat.units.flags[un.unit_type as usize] & 9 == 0 {
                     for q in 0..8 {
                         if p == q || al(p, q) == 2 {
                             allied[q] = allied[q].wrapping_add(v);
@@ -1005,7 +1005,7 @@ impl State {
                 pa.flags &= !0x200;
             }
             if (allied[p] > 5999 || self.trig.elapsed > 0xa8b) && enemy[p] != 0 && enemy[p] * 2 < allied[p] {
-                crate::todo_port!("0x43e050", "AI: far ahead of its enemies");
+                self.ai_attack_all_in(d, p as u8, 0);
             }
         }
     }

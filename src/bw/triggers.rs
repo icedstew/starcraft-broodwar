@@ -1592,7 +1592,7 @@ impl State {
             let (hw, hh) = ((v as i16 as i32) / 2, ((v >> 16) as i16 as i32) / 2);
             let (tx, ty) = ((x / 32 - hw / 32) as i16, (y / 32 - hh / 32) as i16);
             if self.creation_placement_check(d, player, tx, ty, t, 0) != 0 {
-                // String 0x12 "can't create unit" at the spot (UI).
+                self.unit_unplaceable(t, x as i16, y as i16);
                 return None;
             }
         }
@@ -1609,14 +1609,12 @@ impl State {
             self.spread_creep_instantly(d, t, ux as i32, uy as i32);
             self.creep_unmark_receding(d, u);
         }
-        // 0x4a0960
-        self.finish_unit_pre(d, u);
-        if !self.place_unit(d, u) {
-            // String 0x12 at the spot (UI).
+        if !self.finish_and_place(d, u) {
+            let (ux, uy) = self.unit_sprite_pos(u);
+            self.unit_unplaceable(t, ux, uy);
             self.kill_unit(d, u);
             return None;
         }
-        self.finish_unit_post(d, u);
         if colony {
             self.creep_unmark_receding(d, u);
         }
@@ -1632,7 +1630,7 @@ impl State {
         let gas_done = self.units[u as usize].status & 1 != 0 && matches!(ut, 0x6e | 0x9d | 0x95);
         if ut == 0xbc || gas_done {
             self.units[u as usize].set_u16_at(0xd0, 5000);
-        } else if (0xb0..=0xb2).contains(&ut) {
+        } else if super::ai_areas::is_mineral(ut) {
             self.units[u as usize].set_u16_at(0xd0, 1500);
             self.mineral_frames(d, u);
         }
@@ -1939,7 +1937,7 @@ impl State {
             return false;
         }
         self.units[u as usize].set_u16_at(0xd0, v as u16);
-        if (0xb0..=0xb2).contains(&ty) {
+        if super::ai_areas::is_mineral(ty) {
             self.mineral_frames(d, u);
         }
         true

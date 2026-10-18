@@ -759,9 +759,63 @@ impl State {
             return;
         }
         if self.units[u as usize].ai != NIL {
-            todo_port!("0x43ffd0", "AI attack notification");
+            self.ai_stim_check(d, u);
         }
         self.fire(d, u, 5);
+    }
+
+    /// 0x43ffd0: a computer marine or firebat (not stimmed, or net speed bonus 0 or less)
+    /// at least half healthy whose target could hit it, is in reach of it and has 100 or
+    /// more hp and shields uses Stim Packs.
+    fn ai_stim_check(&mut self, d: &Data, u: u32) {
+        let un = &self.units[u as usize];
+        let t = un.order_target_unit;
+        if !matches!(un.unit_type, 0 | 0x20) || t == NIL {
+            return;
+        }
+        let speed = (un.stim_timer != 0) as i32 + (un.status & 0x1000_0000 != 0) as i32 - (un.ensnare_timer != 0) as i32;
+        if speed >= 1 {
+            return;
+        }
+        if ((un.hp + 0xff) >> 8) < self.max_hp_points(d, u) / 2 {
+            return;
+        }
+        // 0x476730: the target can attack this unit.
+        if !self.can_attack(d, t, u, true) || !self.target_visible(t, u) {
+            return;
+        }
+        let w = self.weapon_against(d, u, t);
+        if w >= NO_WEAPON {
+            return;
+        }
+        let wu = self.weapon_unit(d, u);
+        let min = d.dat.weapons.min_range[w as usize];
+        if min != 0 && self.box_distance_within(d, wu, min, t) {
+            return;
+        }
+        let r = self.weapon_range(d, u, w);
+        if !self.in_attack_range(d, wu, r, t) {
+            return;
+        }
+        let player = self.units[u as usize].player;
+        if self.can_use_tech(d, u, 0, player) == Ok(1) && self.life_now(d, t) >= 100 {
+            self.ai_stim(d, u);
+        }
+    }
+
+    /// 0x4554a0: Stim Packs (as the command 0x4c2f30 does): above 10 hp, the stim
+    /// sound, 10 hp lost, stimmed for 37 frames.
+    fn ai_stim(&mut self, d: &Data, u: u32) {
+        if self.units[u as usize].hp <= 0xa00 {
+            return;
+        }
+        let id = self.rng.rand_between(0x1f, 0x116, 0x117);
+        self.unit_sound(id as u16, u, 0);
+        self.apply_damage_pub(d, u, 0xa00, NIL, 0xff, true);
+        if self.units[u as usize].stim_timer < 0x25 {
+            self.units[u as usize].stim_timer = 0x25;
+            self.update_speed(d, u);
+        }
     }
 
     /// 0x476ed0: fire at the order target with the right weapon, starting `anim`
@@ -1395,7 +1449,7 @@ impl State {
 
     /// 0x476930 (EAX = `c`): `c` is an enemy of `u` that can hit it from where it is
     /// (a damaged hallucination never counts; a loaded bunker always does).
-    fn ai_threatens(&self, d: &Data, c: u32, u: u32) -> bool {
+    pub(super) fn ai_threatens(&self, d: &Data, c: u32, u: u32) -> bool {
         let cu = &self.units[c as usize];
         if self.alliances[self.units[u as usize].player as usize][self.alliance_owner(c)] != 0 {
             return false;

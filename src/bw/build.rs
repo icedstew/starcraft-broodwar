@@ -342,8 +342,13 @@ impl State {
         let found = search.results(start);
         search.pop();
         self.search = search;
-        // 0x4e8280 with 0x473490: units.dat flag 0x2000 (resource container).
-        found.into_iter().any(|c| d.dat.units.flags[self.units[c as usize].unit_type as usize] & 0x2000 != 0)
+        // 0x4e8280 with 0x473490.
+        found.into_iter().any(|c| self.is_resource_container(d, c))
+    }
+
+    /// 0x473490: units.dat flag 0x2000 (resource container) of `u`'s type.
+    fn is_resource_container(&self, d: &Data, u: u32) -> bool {
+        d.dat.units.flags[self.units[u as usize].unit_type as usize] & 0x2000 != 0
     }
 
     /// 0x473720: units in the way, per tile not already failed (4 blocked, 1 blocked by

@@ -151,6 +151,9 @@ pub struct Setup {
     pub league_id: u8,
     /// 0x57f244: the map is read from a loose directory (not an archive).
     pub map_dir_flag: u16,
+    /// 0x57f246: the next scenario's file name (a C string; 0x4c50e0 fills it, the campaign
+    /// flow 0x4dc1c0 reads it).
+    pub next_map: Vec<u8>,
     /// 0x596bc4: the map archive.
     pub map_archive: Option<Mpq>,
     /// 0x57fd3c: the map path; 0x57fe40: the map title.
@@ -213,6 +216,7 @@ impl Default for Setup {
             expansion: false,
             league_id: 0,
             map_dir_flag: 0,
+            next_map: Vec::new(),
             map_archive: None,
             map_path: [0; 0x104],
             map_title: [0; 0x20],
@@ -841,6 +845,16 @@ impl Setup {
         ok
     }
 
+    /// 0x4bd0c0 (DX = 1-based string id): the map's string (STR chunk, 0x5993d4): None
+    /// without a table or for id 0, "" (0x501b7d) for an id past its count.
+    pub fn map_string(&self, id: u16) -> Option<&[u8]> {
+        let t = self.map_tbl.as_deref()?;
+        if id == 0 {
+            return None;
+        }
+        Some(tbl_str(t, id as usize - 1))
+    }
+
     /// 0x4bf5d0: load a map's (or the mission's) header for a game start: the lobby slots
     /// from the OWNR / SIDE chunks, the forces, the map path and title. `keep_dir` is the
     /// `param_3` flag (0: forget the loose-directory mode).
@@ -1021,12 +1035,12 @@ impl Setup {
 
     /// 0x4dbee0: after a mission: raise the profile's best mission for the race to
     /// `reached` (`result` +2) and save. A missing profile named like glue string 0x47 (the
-    /// default player) is created. `race` is `result` +6.
-    pub fn record_mission(&mut self, reached: u16, race: u8, glu_tbl: &[u8]) {
+    /// default player, in rez\network.tbl `net_tbl`) is created. `race` is `result` +6.
+    pub fn record_mission(&mut self, reached: u16, race: u8, net_tbl: &[u8], glu_tbl: &[u8]) {
         let name = self.local_name;
         let (mut p, ok) = self.load_profile(&name);
         if !ok {
-            let created = if cstr(&name).eq_ignore_ascii_case(tbl_str(glu_tbl, 0x47)) { self.new_profile(&name, glu_tbl) } else { None };
+            let created = if cstr(&name).eq_ignore_ascii_case(tbl_str(net_tbl, 0x47)) { self.new_profile(&name, glu_tbl) } else { None };
             match created {
                 Some(n) => p = n,
                 None => {

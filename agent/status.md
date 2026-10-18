@@ -1,4 +1,4 @@
-# Status (updated 2026-10-17)
+# Status (updated 2026-10-17, evening)
 
 Read first. Kept short: what is in flight and what is next. Rewrite it in the same commit
 as each step (conventions.md). Durable facts per area: [areas/sim.md](areas/sim.md),
@@ -17,9 +17,12 @@ renderer at 2x/4x); the 8-bit 1.16.1 renderer stays the default and the test ref
 ## Metric (the user watches this)
 
 `python3 -I re/coverage.py agent/local/scratch/dump/bw116n.c .` "reachable from both":
-2026-10-17: no AI 1145/1615 (70%), AI only 229/358 (63%), all 1374/1973 (69%).
-Front end AI only: 99/100 (1 deferred: save/load 0x4044c0).
-Frontier lists: `--missing both` (non-AI), `--missing ai`, `--missing ai-front`.
+2026-10-17 (after the coverage fix below): no AI 1140/1615 (70%), AI only 350/358 (97%),
+all 1490/1973 (75%); front end 683/1186. Frontier lists: `--missing both` (non-AI),
+`--missing ai`, `--missing front`. The "left" column is what is still to port.
+Coverage fix 2026-10-17: a `///` line that only mentions an address in prose no longer
+counts; only a doc block's first line or a doc line starting with `/// 0x...` does
+(~90 false credits removed).
 
 ## Current direction (user, 2026-10-17)
 
@@ -29,34 +32,37 @@ Delegate per agents.md: Haiku triage, Sonnet porting, Opus review / hard RE / co
 
 ## In flight
 
-- Committed 2026-10-17 (suite, 6 replays to 20000, AI Boxer 8000 / 20000): last
-  session's x9 work (AI spells 0x4a13c0, ai_script opcodes, path search 0x4e29b0, UI
-  training panel / minimap terrain / button tooltips) plus the AI front-end cluster:
-  target choice 0x477160 (attack.rs), reaction to attacks 0x43f320 (ai_military.rs),
-  0x43c580 / 0x436e70 / 0x462ea0 (ai_region.rs), unit joins AI 0x4a2830 / 0x435770 /
-  0x435db0 / 0x462960 (ai_town.rs). Fixed: interceptor parent is +0xc0 (union), not
-  connected_unit +0x80, in 0x476fc0 / 0x43b790.
-- AI todo_port! left (grep `todo_port!("0x4` in src/bw/ai*.rs attack.rs): 0x476fc0
-  siege-tank part (0x442460, 0x476870), 0x4a2450, 0x440770, 0x463040, guard requests
-  0x4630c0, region requests 0x43f990, defense 0x43ebb0 (needs 0x43e2e0), town request
-  0x43aae0, attack timers 0x43b9e0, military step 0x43d910, ComputerReturn 0x478490.
-  Next: `--missing ai` frontier (127 left), triage then clusters per agents.md.
-- Front end (not started in code): src/glue.rs top loop 0x4e0820, glue loop 0x4de200,
-  title 0x4d49a0, main menu 0x4db930 / 0x4db7a0, single player 0x4dc320; glue popups
-  0x4b7180 / 0x4b59a0 / 0x4b5cc0 / 0x4b7a70. Save / load deferred (areas/saveload.md).
-- Triaged non-AI frontier 2026-10-17: music stream 0x4a5e40..0x4a6250 and 0x4aad40 are
-  Win32 / Miles (bucket them replaced; 0x4a5f50 fade-out has ~14 callers, audio.rs has
-  no fade); 0x402140 / 0x48eae0 / 0x4c3db0 claimed equivalents, not yet verified;
-  0x463a10 port-small (0x48e1e0 in death.rs may be missing its call).
+- 2026-10-17 session (subagent waves: Haiku triage, Sonnet porters per file, Opus
+  review): AI "left" 126 -> 0 and front end 32 -> 0 under the old count. Ported: AI
+  script opcodes (all of 0x45b850 but 0x3b = 0x4355c0), attack planning ai_attack.rs
+  (0x43abb0, 0x43b0b0, 0x43b570, 0x43e050), region / guard / defense requests
+  (ai_military.rs 0x43f990, 0x4630c0, 0x43ebb0), building spots 0x443ac0 / 0x4442e0 /
+  0x4448d0 / 0x440420, building-round helpers (ai_town.rs: 0x4361a0 / 0x435f10 /
+  0x4348c0 / 0x4a2450 callees, 0x445aa0, 0x43a8f0, 0x43aae0), military step 0x43d910,
+  attack timers 0x43b9e0, medic 0x436ae0, stim 0x43ffd0, worker bonus 0x447a70,
+  ComputerReturn 0x478490; glue: campaign select / start / lookup chain, load screen,
+  ready rooms, login / create / score open-close (event procs todo), 0x6d1220 is
+  network.tbl; unit names from the map's STR (0x47b090), "unit unplaceable" line
+  0x48d140. Review fixes: 0x4a2450 arbiter returns 1; 0x4a2130 calls 0x432760.
+- In progress: the ~40 functions the coverage fix exposed (inline equivalents to
+  extract, UI plumbing to bucket, 0x43cd40 random target, 0x4d8df0 credits screen).
+- AI todo_port! left: 0x43cd40, 0x476fc0 / 0x43d5d0 siege tank parts, 0x4355c0 (opcode
+  0x3b), 0x434c90 non-town-AI branches, 0x404500, 0x435700 / 0x435770 / 0x435db0 parent
+  cases (grep `todo_port!("0x4` in src/bw/ai*.rs attack.rs).
+- Glue left: dialog event procs (ready rooms 0x4f7150 / 0x4f74b0 / 0x4f7810, login
+  0x4edaa0, create 0x4af5c0, score 0x4b4a30), mission list 0x4b7820, 0x4a8590, error
+  popup 0x4bb300, OK/Cancel 0x4b5b20 (taken as OK; campaigns can't start yet anyway).
 - Don't commit README.md, .gitignore, web/*, cov.html (user's own work).
 
 ## Next steps
 
-1. Triage the `--missing both` frontier (no AI) with the triage agent; port the easy
-   ones, document existing equivalents (1.16.1 address on the Rust function that
-   already does the same thing, verified).
-2. UI leftovers in areas/ui.md "Left" (translucency, listbox, selection-circle images).
-3. Run tl1341 / 1349 / 1354 / 1356 replays on the current binary (areas/sim.md).
+1. Finish the coverage-fix list, then the AI todo_port! list above (0x43cd40 first).
+2. Glue event procs, so the ready rooms / login / create / score dialogs work.
+3. Unported non-AI frontier (`--missing both`), triage then port.
+4. Run tl1341 / 1349 / 1354 / 1356 replays on the current binary (areas/sim.md).
+5. Workflow: porters on disjoint files run in parallel fine (shared target dir; they
+   retry when another's file breaks the build). Stage the verified tree (`git add`)
+   before starting the next wave, commit the index after the verifier passes.
 
 ## Always
 

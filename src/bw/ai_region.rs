@@ -65,11 +65,7 @@ impl State {
         reg.flags &= !4;
         reg.unk_count = reg.unk_count.saturating_sub(1);
         match reg.state {
-            0 => {
-                // 0x43b050
-                self.region_recount(d, p, r);
-                self.region_decay_needs(p, r);
-            }
+            0 => self.region_idle_step(d, p, r),
             1 | 2 => self.region_gather(d, p, r),
             3 => self.region_lost(d, p, r),
             4 | 5 => {
@@ -88,6 +84,12 @@ impl State {
         }
     }
 
+    /// 0x43b050: an idle region recounts (0x43a390), then its needs fade.
+    fn region_idle_step(&mut self, d: &Data, p: u8, r: u16) {
+        self.region_recount(d, p, r);
+        self.region_decay_needs(p, r);
+    }
+
     /// The two 0x436980 calls of an idle region (unless flag 0x40): its needed air and
     /// ground strength fade.
     fn region_decay_needs(&mut self, p: u8, r: u16) {
@@ -102,7 +104,7 @@ impl State {
 
     /// 0x43a390: the region's own and present military strength; what it needs grows to
     /// its enemies' (by half again for a melee AI), capped by +0x21c.
-    fn region_recount(&mut self, d: &Data, p: u8, r: u16) {
+    pub(super) fn region_recount(&mut self, d: &Data, p: u8, r: u16) {
         let mut local = (0u16, 0u16);
         let mut all = (0u16, 0u16);
         for m in self.region_military(p, r) {
@@ -461,6 +463,261 @@ impl State {
             self.order_at(d, u, 0xa3, home);
         }
         true
+    }
+
+    /// 0x436ae0: `u` is a military AI unit (medic) whose region is idle (state 0).
+    pub(super) fn ai_medic_region_idle(&self, u: u32) -> bool {
+        let node = self.units[u as usize].ai;
+        if node == NIL || ai_kind(node) != AI_MILITARY {
+            return false;
+        }
+        let (rp, rid) = self.ai.military.items[ai_index(node) as usize].region;
+        self.reg(rp, rid).state == 0
+    }
+
+    /// 0x436eb0 (EAX = region): one of the region's military units is unfinished or
+    /// order 0x6a / 0x96 (in production / being built).
+    fn region_has_unfinished(&self, p: u8, r: u16) -> bool {
+        self.region_military(p, r).into_iter().any(|m| {
+            let o = self.ai.military.items[m as usize].parent;
+            let un = &self.units[o as usize];
+            un.status & 1 == 0 || un.order == 0x6a || un.order == 0x96
+        })
+    }
+
+    /// 0x43c480 (EAX = region id, ECX = `u`): a marine / firebat boards a Bunker of its
+    /// player in region `rid` that has room (a Firebat only one without a Firebat in it):
+    /// the unit is marked, its interruptible orders dropped, order 0x5c (EnterTransport)
+    /// on the bunker queued and started.
+    fn ai_enter_bunker(&mut self, d: &Data, u: u32, rid: u16) -> bool {
+        let mut found = NIL;
+        for c in self.units_in_region(rid) {
+            let cu = &self.units[c as usize];
+            if cu.unit_type != 0x7d || cu.player != self.units[u as usize].player {
+                continue;
+            }
+            if self.units[u as usize].unit_type == 0x20 && self.any_passenger(d, c, |st, p| st.units[p as usize].unit_type == 0x20) {
+                continue;
+            }
+            if self.can_load(d, c, u) {
+                found = c;
+                break;
+            }
+        }
+        if found == NIL {
+            return false;
+        }
+        let f = self.units[u as usize].u8_at(0x93);
+        self.units[u as usize].set_u8_at(0x93, f | 1);
+        let pos = self.unit_sprite_pos(found);
+        if self.units[u as usize].order != 0 {
+            self.drop_queue_tail_for(d, u, 0x5c);
+            self.order_queue_append(d, u, 0x5c, 0xe4, pos, found);
+        }
+        self.prepare_next_order(d, u);
+        true
+    }
+
+    /// 0x43d910: ComputerAI step of a military unit: bunker, spell, target; otherwise it
+    /// goes to its region (the slowest unit's while the region gathers and has unfinished
+    /// units), or halts when it is there.
+    pub(super) fn ai_military_step(&mut self, d: &Data, u: u32) {
+        let Some((rp, rid)) = self.ai_army_region(d, u) else { return };
+        let t = self.units[u as usize].unit_type;
+        if (t == 0 || t == 0x20) && self.ai_enter_bunker(d, u, self.reg(rp, rid).id) {
+            return;
+        }
+        if self.ai_cast_spell(d, u, 0) || self.ai_choose_target(d, u, true, false) {
+            return;
+        }
+        let mut target = self.reg(rp, rid).id;
+        if self.reg(rp, rid).state == 1 {
+            if self.reg(rp, rid).slowest_military == NIL {
+                self.region_pick_slowest(rp, rid);
+            }
+            let slow = self.reg(rp, rid).slowest_military;
+            if slow != NIL && self.region_has_unfinished(rp, rid) {
+                target = self.unit_region(slow);
+            }
+        }
+        if self.unit_region(u) != target {
+            let (x, y) = self.region_center(target);
+            self.ai_military_move(d, u, 0xe, x, y);
+        } else {
+            self.unit_halt_facing(d, u);
+        }
+    }
+
+    /// 0x436f00 (ECX = player): one of the player's regions is gathering or attacking
+    /// (state 1, 2, 8, 9).
+    fn ai_any_region_busy(&self, p: u8) -> bool {
+        let rc = self.sai.region_count as u32;
+        (1..rc).any(|r| self.ai.regions[p as usize].get(r as usize).is_some_and(|a| matches!(a.state, 1 | 2 | 8 | 9)))
+    }
+
+    /// 0x437f20 (EDX = player): the player's units fill its whole attack force list
+    /// (completed, not buildings' subunits, with AI, ...; a siege tank counts as a tank).
+    fn ai_attack_force_ready(&self, d: &Data, p: u8) -> bool {
+        let mut list: Vec<u32> = Vec::new();
+        for &e in self.ai.players[p as usize].attack_force.iter() {
+            if e == 0 {
+                break;
+            }
+            list.push(e as u32 - 1);
+        }
+        let mut n = list.len();
+        let mut last = n as isize - 1;
+        let mut u = self.player_units[p as usize];
+        while u != NIL {
+            let un = &self.units[u as usize];
+            let mut t = un.unit_type as u32;
+            if un.sprite != NIL
+                && un.order != 0
+                && d.dat.units.flags[t as usize] & 0x10 == 0
+            {
+                if t == 0x1e {
+                    t = 5;
+                }
+                if d.dat.units.ai_internal[t as usize] & 1 == 0
+                    && un.status & 1 != 0
+                    && un.order != 0x6a
+                    && un.order != 0x96
+                    && d.dat.orders.use_weapon_targeting[un.order as usize] == 0
+                    && un.ai != NIL
+                {
+                    if let Some(i) = list[..n].iter().position(|&e| e == t) {
+                        list[i] = 0xe4;
+                        if i as isize == last {
+                            n -= 1;
+                            last -= 1;
+                        }
+                    }
+                }
+            }
+            u = un.player_next;
+        }
+        list[..n].iter().all(|&e| e == 0xe4)
+    }
+
+    /// 0x4450e0 (ECX = region `a`, EAX = region `b`): the enemy strength (ground + air)
+    /// along the region path from `a` to `b`, with the regions the attack aims at:
+    /// (cost, first strong region on the path, the region to gather in). 99999999 =
+    /// different groups, 100000000 = no path.
+    fn ai_path_enemy_cost(&mut self, p: u8, a: u16, b: u16) -> (u32, u32, u32) {
+        let strength = |st: &State, r: u16| {
+            let x = st.reg(p, r);
+            (x.enemy_ground_strength as u32) + (x.enemy_air_strength as u32)
+        };
+        let (mut out3, mut out4) = (b as u32, a as u32);
+        if a == b {
+            return (strength(self, a), out3, out4);
+        }
+        if self.sai.regions[a as usize].group != self.sai.regions[b as usize].group {
+            return (99_999_999, out3, out4);
+        }
+        let (ca, cb) = (self.region_center_px(a), self.region_center_px(b));
+        let mut ctx = super::path::PathCtx { start: ca, target: cb, goal: cb, start_region: a, target_region: b, ..Default::default() };
+        if !super::path::find_region_path(&mut self.sai, &mut ctx) {
+            return (100_000_000, out3, out4);
+        }
+        if ctx.region_count > 2 {
+            let mut total = 0u32;
+            for i in 0..(ctx.region_count as usize).min(50) {
+                let r = ctx.regions[i];
+                let s = strength(self, r);
+                if out3 == b as u32 {
+                    if i > 2 {
+                        let w = ctx.regions[i - 3];
+                        if self.sai.regions[w as usize].tile_count > 0x3b {
+                            out4 = w as u32;
+                        }
+                    }
+                    if s != 0 {
+                        out3 = r as u32;
+                    }
+                }
+                total = total.wrapping_add(s);
+            }
+            return (total, out3, out4);
+        }
+        (strength(self, b) + strength(self, a), out3, out4)
+    }
+
+    /// 0x445ba0: the enemy resource depot (flag 0x1000) to attack from region `base`:
+    /// returns (the region to aim at, or 0x9c4 for none, the region to gather in).
+    fn ai_attack_target_region(&mut self, d: &Data, p: u8, base: u16) -> (u32, u32) {
+        let (mut best_cost, mut best_dist) = (99_999_999u32, 99_999_999u32);
+        let cy = self.sai.regions[base as usize].center.1 >> 8;
+        let cx = self.sai.regions[base as usize].center.0 >> 8;
+        let (mut ret, mut out) = (0x9c4u32, 0x9c4u32);
+        let (mut owner, mut best_area, mut count) = (0xffff_ffffu32, 0u32, 0u32);
+        let mut u = self.visible_units.head;
+        while u != NIL {
+            let un = &self.units[u as usize];
+            let next = un.link.next;
+            if d.dat.units.flags[un.unit_type as usize] & 0x1000 != 0 {
+                let mut o = un.player;
+                if o == 0xb {
+                    o = self.sprites[un.sprite as usize].owner;
+                }
+                if self.alliances[p as usize][o as usize] == 0 {
+                    let area = self.start_area_for(u);
+                    if area != 0 {
+                        count += 1;
+                        let ap = self.areas[area as usize].pos;
+                        let dist = approx_distance(cx, ap.0 as i32, cy, ap.1 as i32);
+                        let ar = region_at(&self.sai, ap.0 as i32, ap.1 as i32);
+                        let (cost, p3, p4) = self.ai_path_enemy_cost(p, base, ar);
+                        let un_player = self.units[u as usize].player as u32;
+                        if cost != 100_000_000 {
+                            let take = if cost == 99_999_999 || owner != un_player { dist < best_dist } else { cost <= best_cost };
+                            if take {
+                                owner = un_player;
+                                ret = p3;
+                                out = p4;
+                                best_dist = dist;
+                                best_area = area;
+                                best_cost = cost;
+                            }
+                        }
+                    }
+                }
+            }
+            u = next;
+        }
+        let none = count < 2 && best_cost > 0x3e8 && self.trig.elapsed < 0x5dc && best_area != 0 && self.areas[best_area as usize].start != 0;
+        (if none { 0x9c4 } else { ret }, out)
+    }
+
+    /// 0x43b9e0: once the player's attack force is complete and no region is busy, the
+    /// region at the nearest enemy depot is chosen: the gathering region (state 8)
+    /// starts the attack on it and the attack timer restarts.
+    pub(super) fn ai_attack_timers(&mut self, d: &Data, p: u8) {
+        let pa = &self.ai.players[p as usize];
+        if pa.unk_attack == 0 || pa.flags & 0x800 == 0 || !self.ai_attack_force_ready(d, p) || self.ai_any_region_busy(p) {
+            return;
+        }
+        let area = self.nearest_resource_area(p, 0, 0);
+        let pos = self.areas[area as usize].pos;
+        let base = region_at(&self.sai, pos.0 as i32, pos.1 as i32);
+        let (ret, out) = self.ai_attack_target_region(d, p, base);
+        if ret != 0x9c4 && out != 0x9c4 {
+            let pa = &mut self.ai.players[p as usize];
+            pa.attack_grouping_region = out as u16 + 1;
+            pa.last_attack_second = self.trig.elapsed;
+            self.set_ai_region_state(d, p, out as u16, 8);
+            self.reg_mut(p, out as u16).target_region_id = ret as u16;
+            self.ai_attack_request_used(p);
+        }
+    }
+
+    /// 0x446ba0: the attack request is used up.
+    fn ai_attack_request_used(&mut self, p: u8) {
+        let pa = &mut self.ai.players[p as usize];
+        pa.flags &= !0x800;
+        if pa.unk_attack != 0 {
+            pa.unk_attack -= 1;
+        }
     }
 
     /// 0x436f70: a campaign region's slowest unit (+0x24), ground units first.
@@ -1214,7 +1471,7 @@ impl State {
     /// 0x438050: the attack force (+0x230) less the units region `r` has (and, unless
     /// `finished_only`, the ones being made; eggs count as what they become): 0xe4
     /// marks a slot that is filled.
-    fn attack_force_missing(&self, d: &Data, p: u8, r: u16, finished_only: bool) -> Vec<u32> {
+    pub(super) fn attack_force_missing(&self, d: &Data, p: u8, r: u16, finished_only: bool) -> Vec<u32> {
         let mut list: Vec<u32> = Vec::new();
         for &e in self.ai.players[p as usize].attack_force.iter() {
             if e == 0 {
@@ -1448,7 +1705,7 @@ pub(super) fn ai_path_push_neighbors(sai: &mut Sai, pool: &mut Vec<PathNode>, re
     }
 }
 
-/// 0x4e27a0: restore the neighbour lists saved by 0x4e2820, newest node first, and free
+/// 0x4e27a0 (with the list pop 0x4048b0): restore the neighbour lists saved by 0x4e2820, newest node first, and free
 /// the pool.
 pub(super) fn ai_path_restore_neighbors(sai: &mut Sai, pool: &mut Vec<PathNode>) {
     while let Some(node) = pool.pop() {

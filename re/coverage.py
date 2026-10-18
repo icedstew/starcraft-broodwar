@@ -10,7 +10,8 @@ and "left" (still to port). `--missing` lists only the left ones unless `--all` 
 Functions are tagged with a source file when their body mentions an assert path like
 "Starcraft\\SWAR\\lang\\unit.cpp"; untagged functions inherit the file of the tagged
 functions around them (MSVC keeps each object file contiguous). A function counts as
-ported when src/ documents its address (`/// 0x...`), and as todo when only a
+ported when src/ documents its address (`/// 0x...` on the first line of a doc
+comment, or at the start of a later doc line), and as todo when only a
 `todo_port!("0x...")` names it.
 """
 import html
@@ -23,6 +24,7 @@ HEADER = re.compile(r"^// ==== 00([0-9a-f]{6}) (\S+)")
 SRC = re.compile(r'"Starcraft\\\\SWAR\\\\lang\\\\([^"]+?\.(?:cpp|c))"', re.I)
 DOC = re.compile(r"///\s*(?:[^\n]*?)\b0x(4[0-9a-f]{5})\b")
 CALL = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(")
+START = re.compile(r"///\s*0x4[0-9a-f]{5}\b")
 LIST = re.compile(r"///\s*(0x4[0-9a-f]{5}(?:\s*(?:/|,|\+|and|or|\(|\))\s*0x4[0-9a-f]{5})+)")
 ADDR = re.compile(r"0x(4[0-9a-f]{5})")
 HEAD = re.compile(r"///\s*(0x4[0-9a-f]{5}[^:\n]*):")
@@ -119,7 +121,15 @@ def scan_src(root):
         for n in files:
             if n.endswith(".rs"):
                 t = open(os.path.join(d, n), errors="replace").read()
-                ported |= {int(a, 16) for a in DOC.findall(t)}
+                # The first address of a doc block's first line ("/// 0xA: ..."), and of
+                # any doc line that starts with one; later lines only mention callees.
+                prev = False
+                for line in t.split("\n"):
+                    s = line.strip()
+                    doc = s.startswith("///")
+                    if doc and (not prev or START.match(s)):
+                        ported |= {int(a, 16) for a in DOC.findall(s)}
+                    prev = doc
                 # A doc line may open with several addresses: "/// 0xA / 0xB + 0xC:".
                 for run in LIST.findall(t):
                     ported |= {int(a, 16) for a in ADDR.findall(run)}

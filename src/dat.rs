@@ -225,6 +225,8 @@ pub struct Dat {
     pub upgrades: Upgrades,
     pub techdata: Techdata,
     pub sfxdata: Sfxdata,
+    /// The scenario's STR section (0x5993d4), set by `view::prepare_map`.
+    pub map_tbl: Option<Vec<u8>>,
 }
 
 impl Dat {
@@ -239,6 +241,7 @@ impl Dat {
             upgrades: Upgrades::load(files)?,
             techdata: Techdata::load(files)?,
             sfxdata: Sfxdata::load(files)?,
+            map_tbl: None,
         })
     }
 }

@@ -27,6 +27,12 @@ impl State {
         Self::supply_race(d, t).map_or(0, |r| self.players.supply_max[r][p])
     }
 
+    /// 0x4888c0 (race in al, player in ecx): supplies used by `p` of race `r` (0 zerg,
+    /// 1 terran, 2 protoss; anything else 0).
+    pub(super) fn supply_used_of(&self, r: u8, p: usize) -> i32 {
+        if r < 3 { self.players.supply_used[r as usize][p] } else { 0 }
+    }
+
     /// 0x4889d0: free supply of `t`'s race (provided, capped, minus used).
     pub(super) fn supply_free(&self, d: &Data, p: usize, t: u16) -> i32 {
         let Some(r) = Self::supply_race(d, t) else { return 0 };
@@ -215,6 +221,7 @@ impl State {
                 } else {
                     self.send_to_rally(d, u, c);
                 }
+                self.ai_clear_train_slot(u, self.units[u as usize].build_queue_slot);
                 let un = &mut self.units[u as usize];
                 let slot = un.build_queue_slot as usize;
                 un.build_queue[slot] = NONE;

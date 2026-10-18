@@ -534,13 +534,34 @@ impl State {
             self.units[u as usize].resource_type = 0;
         }
         let mut amount = amount;
-        if self.units[u as usize].ai != NIL {
-            todo_port!("0x447a70", "AI worker bonus");
-        }
-        if amount == 0 {
-            amount = 0;
+        if self.ai_worker_bonus(u) {
+            amount += 1;
         }
         self.carry(d, u, mineral, image, amount);
+    }
+
+    /// 0x447a70: a computer player's worker (difficulty 2) gets one extra resource
+    /// while the player has fewer than 12 workers of its race done.
+    fn ai_worker_bonus(&self, u: u32) -> bool {
+        let un = &self.units[u as usize];
+        let p = un.player as usize;
+        if un.ai == NIL || self.ai.players[p].difficulty != 2 {
+            return false;
+        }
+        let id = match self.player_races[p] {
+            1 => 7,
+            0 => 0x29,
+            _ => 0x40,
+        };
+        let c = &self.players.completed_counts;
+        let mut n = c[id][p];
+        if id == 0x1e {
+            return (n as u32).wrapping_add(c[5][p] as u32) >= 12;
+        }
+        if id == 5 {
+            n += c[0x1e][p];
+        }
+        n as u32 >= 12
     }
 
     /// 0x469650: take up to 8 from a resource (depleting minerals).
@@ -799,7 +820,6 @@ impl State {
 
     /// 0x442e80: mineral field `m` is a candidate for worker `u`.
     fn mineral_usable(&mut self, d: &Data, m: u32, u: u32, center_elev: u8, radius: i32) -> bool {
-        let _ = d;
         if !is_mineral(self.units[m as usize].unit_type) || self.mineral_enclosed(d, m) {
             return false;
         }

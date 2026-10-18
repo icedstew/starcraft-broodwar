@@ -27,7 +27,8 @@ pub struct ResourceArea {
 /// 0x692688 .. 0x6955e0: 250 slots, slot 0 unused.
 pub const AREA_SLOTS: usize = 0xfa;
 
-fn is_mineral(t: u16) -> bool {
+/// 0x468890: the unit type is a mineral field.
+pub(super) fn is_mineral(t: u16) -> bool {
     (0xb0..=0xb2).contains(&t)
 }
 
@@ -110,7 +111,7 @@ impl State {
     /// 0x445930: the first area resource `u` belongs to: close (0x280 for minerals,
     /// 0x380 for geysers), same region group and elevation, and few path tiles away
     /// (0x14 / 0x1c).
-    fn start_area_for(&mut self, u: u32) -> u32 {
+    pub(super) fn start_area_for(&mut self, u: u32) -> u32 {
         let up = self.unit_sprite_pos(u);
         let mineral = is_mineral(self.units[u as usize].unit_type);
         for i in 1..=self.area_count {

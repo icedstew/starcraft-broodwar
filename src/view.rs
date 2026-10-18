@@ -331,6 +331,16 @@ impl<'a> Scene<'a> {
             self.msgs.print(&ui.font, t.as_bytes(), now, 0);
             self.st.ui_sounds.push(0x17);
         }
+        for (t, x, y) in std::mem::take(&mut self.st.unplaced) {
+            // 0x41f1b0 formats network.tbl line 0x11 with the unit's name; 0x48d140 shows it
+            // 7 s in color 3 and plays sound 2.
+            let Some(f) = ui.network.get(0x11) else { continue };
+            let f = f.split('\0').next().unwrap_or("");
+            let name = with_data(self.a, |d| crate::statdata::unit_name(d, &ui.stat_txt, t));
+            let line = f.replacen("%s", &name, 1).replacen("%d", &x.to_string(), 1).replacen("%d", &y.to_string(), 1);
+            self.msgs.print(&ui.font, line.as_bytes(), now, 0);
+            self.st.ui_sounds.push(2);
+        }
         for (p, text) in std::mem::take(&mut self.st.chat) {
             let st = &self.st;
             let tbl = ui.network.get(0x1a).map_or("", |s| s.split('\0').next().unwrap_or(""));
@@ -1210,6 +1220,7 @@ pub fn prepare_replay(a: &mut Assets, r: &crate::replay::Replay) {
 }
 
 fn apply_map_dat(a: &mut Assets, chk: &Chk, rep: Option<&crate::replay::Header>) {
+    a.bw.dat.map_tbl = chk.section(b"STR ").map(|s| s.to_vec());
     let m = bw::chk_load::ScenarioModes::of_template(&game_template(a, chk, rep));
     if m.flag_59686d || m.flag_596871 || m.flag_596877 {
         return;

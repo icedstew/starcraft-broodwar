@@ -1,7 +1,8 @@
 //! AI military groups moving together (the helpers of HarassMove 0x478ec0): a unit of a
 //! region's army waits for or follows the region's slowest military unit.
 
-use super::ai_town::{ai_index, ai_kind, AI_BUILDING, AI_GUARD, AI_MILITARY};
+use super::ai::{ai_region_ref, REQ_UNIT};
+use super::ai_town::{ai_index, ai_kind, ai_ref, AI_BUILDING, AI_GUARD, AI_MILITARY};
 use super::list::NIL;
 use super::path::{approx_distance, region_at};
 use super::{Data, State};
@@ -521,5 +522,557 @@ impl State {
             return;
         }
         self.ai_retreat(d, u, tgt);
+    }
+}
+
+impl State {
+    /// 0x4484a0: after a request for a morph (`id`), the units it is made from are
+    /// requested too (one priority lower, same value).
+    fn ai_request_morph_parts(&mut self, d: &Data, player: u8, id: u16, priority: u8, val: u32) {
+        let (part, n) = match id {
+            0x2c | 0x3e => (0x2b, 1),
+            0x44 => (0x43, 2),
+            0x3f => (0x3d, 2),
+            0x67 => (0x26, 1),
+            _ => return,
+        };
+        for _ in 0..n {
+            self.ai_add_need(d, player, REQ_UNIT, part);
+            self.ai_push_request(player, REQ_UNIT, part, priority.wrapping_sub(1), val);
+        }
+    }
+
+    /// 0x43b6d0 (ECX = `ty`, ESI = `u`, stack `in_transport_blocks`): `u` is a finished
+    /// unit of type `ty` (a sieged tank counts for 5) with an AI, not busy with order
+    /// 0x6a / 0x96 (0x436e40), not threatened by its target (0x476930), and healthy
+    /// enough (half its hp + shields, except for the types that always count).
+    fn ai_unit_spare(&self, d: &Data, u: u32, ty: u32, in_transport_blocks: bool) -> bool {
+        let un = &self.units[u as usize];
+        let t = un.unit_type as u32;
+        if un.sprite == NIL || un.order == 0 || d.dat.units.flags[t as usize] & 0x10 != 0 || un.ai == NIL {
+            return false;
+        }
+        if t != ty && !(ty == 5 && t == 0x1e) {
+            return false;
+        }
+        // 0x436e40
+        if !(un.status & 1 != 0 && un.order != 0x6a && un.order != 0x96) {
+            return false;
+        }
+        let target = un.order_target_unit;
+        if target != NIL && self.ai_threatens(d, target, u) {
+            return false;
+        }
+        if in_transport_blocks && un.status & 0x20 != 0 {
+            return false;
+        }
+        if t == 0 {
+            return un.order != 0x5c;
+        }
+        if matches!(t, 0x20 | 0x25 | 0x26 | 0x41 | 0x42) {
+            return true;
+        }
+        let max = self.life_max(d, u);
+        (max - (max >> 31)) >> 1 <= self.life_now(d, u)
+    }
+
+    /// 0x43bc40 (stack: region (`p`, `r`), `ty`, centre `cx` / `cy`, target region `tgt`):
+    /// the military AI of the nearest spare unit of type `ty` (not a tank) whose region
+    /// can do without it; the path from the unit's region to the centre's is worked out
+    /// (0x443fb0) when it walks, the result is not used. NIL when none.
+    fn ai_find_spare_military(&mut self, d: &Data, p: u8, r: u16, ty: u32, cx: i32, cy: i32, tgt: u16) -> u32 {
+        if ty == 5 {
+            return NIL;
+        }
+        let src_state = self.reg(p, r).state;
+        let mut best = NIL;
+        let mut best_dist = 9999999u32;
+        let mut u = self.player_units[p as usize];
+        while u != NIL {
+            let cur = u;
+            u = self.units[cur as usize].player_next;
+            if !self.ai_unit_spare(d, cur, ty, true) {
+                continue;
+            }
+            let node = self.units[cur as usize].ai;
+            if ai_kind(node) != AI_MILITARY {
+                continue;
+            }
+            let (mp, mid) = self.ai.military.items[ai_index(node) as usize].region;
+            let tr = self.reg(mp, mid);
+            if mid == r || matches!(tr.state, 7 | 8 | 9) {
+                continue;
+            }
+            if (src_state == 7 || Self::region_attacking(src_state)) && mid == tgt {
+                continue;
+            }
+            let (air, ground) = (self.units[cur as usize].air_strength as i32, self.units[cur as usize].ground_strength as i32);
+            if air != 0 && (tr.all_military_air_strength as i32 - air) < tr.needed_air_strength as i32 {
+                continue;
+            }
+            if ground != 0 && (tr.all_military_ground_strength as i32 - ground) <= tr.needed_ground_strength as i32 {
+                continue;
+            }
+            if self.units[cur as usize].status & 4 == 0 {
+                let a = region_at(&self.sai, cx, cy);
+                let b = self.unit_region_of(cur);
+                let player = self.units[cur as usize].player;
+                self.ai_path_safe(b, a, player);
+            }
+            let (ux, uy) = self.unit_sprite_pos(cur);
+            let dist = approx_distance(cx, ux as i32, cy, uy as i32);
+            if dist < best_dist {
+                best = node;
+                best_dist = dist;
+            }
+        }
+        best
+    }
+
+    /// 0x43bac0 (stack: region (`p`, `r`), `cap`, `ty`, centre `cx` / `cy`, target region
+    /// `tgt`): the AI (guard post or military) of the nearest spare unit of type `ty` that
+    /// the region may take: a guard post when the region attacks (a campaign AI: unless
+    /// it helps), a military unit of a region that is not the same / quiet, with a
+    /// defense priority below `cap`. NIL when none.
+    fn ai_find_spare_far(&mut self, d: &Data, p: u8, r: u16, cap: u32, ty: u32, cx: i32, cy: i32, tgt: u16) -> u32 {
+        let src_state = self.reg(p, r).state;
+        let campaign = self.ai.players[p as usize].flags & 0x20 != 0;
+        let mut best = NIL;
+        let mut best_dist = 9999999u32;
+        let mut u = self.player_units[p as usize];
+        while u != NIL {
+            let cur = u;
+            u = self.units[cur as usize].player_next;
+            if !self.ai_unit_spare(d, cur, ty, false) {
+                continue;
+            }
+            let (ux, uy) = self.unit_sprite_pos(cur);
+            let dist = approx_distance(cx, ux as i32, cy, uy as i32);
+            let node = self.units[cur as usize].ai;
+            if dist >= best_dist || node == NIL {
+                continue;
+            }
+            if ai_kind(node) == AI_GUARD {
+                let take = if campaign { src_state != 7 } else { Self::region_attacking(src_state) };
+                if take {
+                    best = node;
+                    best_dist = dist;
+                }
+            } else if ai_kind(node) == AI_MILITARY {
+                let (mp, mid) = self.ai.military.items[ai_index(node) as usize].region;
+                let tr = self.reg(mp, mid);
+                if mid == r || (matches!(tr.state, 1 | 2) && !campaign) {
+                    continue;
+                }
+                let un = &self.units[cur as usize];
+                if un.status & 0x20 != 0 {
+                    if cap == 0x14 {
+                        continue;
+                    }
+                    if self.ai.players[un.player as usize].flags & 0x20 == 0 && !Self::region_attacking(src_state) {
+                        continue;
+                    }
+                }
+                if (src_state == 7 || Self::region_attacking(src_state)) && mid == tgt {
+                    continue;
+                }
+                if (tr.defense_priority_add as u32) < cap {
+                    best = node;
+                    best_dist = dist;
+                }
+            }
+        }
+        best
+    }
+
+    /// 0x43e2e0 (EAX = region (`p`, `r`), stack `ty`, `cap`): bring a spare unit of type
+    /// `ty` into the region's military: from another region's army (0x43bc40), else from
+    /// a guard post or an army the region may take from (0x43bac0). The old region's
+    /// strengths are counted again (0x43a390). True when a unit was found.
+    fn ai_pull_unit(&mut self, d: &Data, p: u8, r: u16, ty: u32, cap: u32) -> bool {
+        let c = self.sai.regions[r as usize].center;
+        let (cx, cy) = (c.0 >> 8, c.1 >> 8);
+        let tgt = self.reg(p, r).target_region_id;
+        let mut node = self.ai_find_spare_military(d, p, r, ty, cx, cy, tgt);
+        if node == NIL {
+            node = self.ai_find_spare_far(d, p, r, cap, ty, cx, cy, tgt);
+            if node == NIL {
+                return false;
+            }
+        }
+        let idx = ai_index(node) as usize;
+        let (rp, rr) = match ai_kind(node) {
+            AI_GUARD => {
+                let u = self.ai.guards.items[idx].parent;
+                self.units[u as usize].ai = NIL;
+                self.region_add_military(d, p, r, u, true);
+                self.ai.guards.items[idx].parent = NIL;
+                (p, self.unit_region_of(u))
+            }
+            AI_MILITARY => {
+                let m = &self.ai.military.items[idx];
+                let (u, old) = (m.parent, m.region);
+                self.region_remove_military(old.0, old.1, idx as u32);
+                self.units[u as usize].ai = NIL;
+                self.region_add_military(d, p, r, u, true);
+                if self.units[u as usize].status & 0x20 != 0 {
+                    self.unload_unit(d, u);
+                }
+                old
+            }
+            _ => return false,
+        };
+        self.region_recount(d, rp, rr);
+        true
+    }
+
+    /// 0x43e760 (EAX = `list` of unit ids + 1, EBX = region (`p`, `r`)): the strength
+    /// (air or ground) of the units of `list` that could be pulled into the region
+    /// (with its defense priority as the cap).
+    fn ai_pull_list(&mut self, d: &Data, p: u8, r: u16, list: [u16; 0x14], air: bool) -> u32 {
+        let cap = self.reg(p, r).defense_priority_add as u32;
+        let mut sum = 0u32;
+        for e in list {
+            if e == 0 {
+                break;
+            }
+            let id = e as u32 - 1;
+            if self.ai_pull_unit(d, p, r, id, cap) {
+                sum = sum.wrapping_add(d.strength[if air { 0 } else { 1 }][id as usize]);
+            }
+        }
+        sum
+    }
+
+    /// 0x43f100 (EAX = region `r`, stack target region `tgt`, `air`, `need`): ask for the
+    /// units that bring region `r`'s army to `need` more strength for `tgt` (air or
+    /// ground enemies): first the units of the defense lists that can be pulled in
+    /// (not for an attack target, state 4, with a real size), else request them. Returns
+    /// the strength gained or asked for (999 when there is nothing to ask).
+    fn ai_region_defense(&mut self, d: &Data, p: u8, r: u16, tgt: u16, air: bool, need: u32) -> u32 {
+        let pi = p as usize;
+        let unwalkable = self.sai.regions[r as usize].flags == 0x1ffd || self.sai.regions[tgt as usize].flags == 0x1ffd;
+        if self.reg(p, tgt).state == 4 {
+            if self.sai.regions[tgt as usize].tile_count < 0x10 {
+                return 999;
+            }
+        } else {
+            let k = match (air, unwalkable) {
+                (false, false) => 4,
+                (false, true) => 6,
+                (true, false) => 5,
+                (true, true) => 7,
+            };
+            let list = self.ai.players[pi].defense_units[k];
+            let s = self.ai_pull_list(d, p, r, list, air);
+            if s != 0 {
+                return s;
+            }
+        }
+        let k = match (air, unwalkable) {
+            (false, false) => 0,
+            (false, true) => 2,
+            (true, false) => 1,
+            (true, true) => 3,
+        };
+        let list = self.ai.players[pi].defense_units[k];
+        if list[0] == 0 {
+            return 999;
+        }
+        let priority = self.ai.players[pi].defense_priority_base.wrapping_add(self.reg(p, r).defense_priority_add);
+        let val = ai_region_ref(p, r);
+        let mut total = 0u32;
+        for e in list {
+            if e == 0 {
+                break;
+            }
+            let id = e - 1;
+            // 0x4485b0 (flag 0x200 off: the request is made, flag 1 off, flag 0x40 on)
+            self.ai_request_unit(d, p, id, priority, val, false, false);
+            total = total.wrapping_add(d.strength[if air { 0 } else { 1 }][id as usize]);
+            if self.ai.players[pi].flags & 0x20 != 0 && need <= total {
+                break;
+            }
+        }
+        total
+    }
+
+    /// 0x43e670 (EAX = region (`p`, `r`) attacking, state 8): pull the units of the attack
+    /// force the region misses into it, else request them (priority 0x3c; 0xa0 for a
+    /// melee AI that was not hit in the last 30 seconds).
+    fn ai_attack_force_requests(&mut self, d: &Data, p: u8, r: u16) {
+        let flags = self.ai.players[p as usize].flags;
+        let missing = self.attack_force_missing(d, p, r, flags & 0x20 == 0);
+        let hit = self.ai.players[p as usize].previous_building_hit_second;
+        let cap = if flags & 0x20 == 0 && (hit == 0 || self.trig.elapsed.wrapping_sub(hit) > 0x1d) { 0xa0 } else { 0x3c };
+        for id in missing {
+            if id < 0xe4 && !self.ai_pull_unit(d, p, r, id, cap) {
+                self.ai_request_unit(d, p, id as u16, 0x3c, ai_region_ref(p, r), true, true);
+            }
+        }
+    }
+
+    /// 0x43f990: one computer player's region requests: every region that attacks (8)
+    /// or defends (4+) asks for the strength it misses against its target's enemies;
+    /// then (not with flag 8) 2 more observers (Protoss) and up to 5 (2 for a campaign
+    /// AI) dropships / shuttles for the last region that waits (4 / 5), once the
+    /// player has a control tower / observer.
+    pub(super) fn ai_region_requests(&mut self, d: &Data, player: u8) {
+        let p = player as usize;
+        let mut last: Option<u16> = None;
+        for r in 1..self.sai.region_count {
+            let state = self.reg(player, r).state;
+            if state <= 3 {
+                continue;
+            }
+            if state == 8 {
+                self.ai_attack_force_requests(d, player, r);
+                continue;
+            }
+            if state == 5 || state == 4 {
+                last = Some(r);
+            }
+            let tgt = if state < 7 { r } else { self.reg(player, r).target_region_id };
+            let mut have = self.reg(player, r).all_military_air_strength as u32;
+            let mut need = self.reg(player, tgt).needed_air_strength as u32;
+            if need != 0 && have < need {
+                while have < need {
+                    have = have.wrapping_add(self.ai_region_defense(d, player, r, tgt, true, need - have));
+                    need = self.reg(player, tgt).needed_air_strength as u32;
+                }
+            }
+            let mut have = self.reg(player, r).all_military_ground_strength as u32;
+            let mut need = self.reg(player, tgt).needed_ground_strength as u32;
+            if need != 0 && have < need {
+                while have < need {
+                    let air = self.reg(player, tgt).enemy_air_strength != 0;
+                    have = have.wrapping_add(self.ai_region_defense(d, player, r, tgt, air, need - have));
+                    need = self.reg(player, tgt).needed_ground_strength as u32;
+                }
+            }
+            let pa = &mut self.ai.players[p];
+            if pa.flags & 0x40 != 0 {
+                if pa.defense_priority_base != 0 {
+                    pa.defense_priority_base -= 1;
+                }
+                pa.flags &= !0x40;
+            }
+        }
+        if self.ai.players[p].flags & 8 != 0 {
+            return;
+        }
+        let id: u16 = match self.player_races[p] {
+            1 => {
+                if self.players.completed_counts[0x73][p] == 0 {
+                    return;
+                }
+                0xb
+            }
+            2 => {
+                let count = self.players.unit_counts[0x54][p] as u32;
+                if count < 2 {
+                    for _ in 0..2 - count {
+                        self.ai_add_need(d, player, REQ_UNIT, 0x54);
+                        self.ai_push_request(player, 8, 0x54, 0x50, 0);
+                    }
+                }
+                0x45
+            }
+            _ => return,
+        };
+        let Some(r) = last else { return };
+        let count = self.players.unit_counts[id as usize][p] as u32;
+        let limit = if self.ai.players[p].flags & 0x20 != 0 { 2 } else { 5 };
+        let priority = if count != 0 { 0x32 } else { 0x50 };
+        let val = ai_region_ref(player, r);
+        if count < limit {
+            for _ in 0..limit - count {
+                self.ai.players[p].flags |= 0x40;
+                self.ai_add_need(d, player, REQ_UNIT, id);
+                self.ai_push_request(player, REQ_UNIT, id, priority, val);
+                self.ai_request_morph_parts(d, player, id, priority, val);
+            }
+        }
+    }
+
+    /// 0x43ebb0 (stack `val`, `player`): defense requests for a town (`val` is the
+    /// value the requests carry): a bunker (0x50) when a region wants one (flag 2),
+    /// and for each finished bunker with room, a firebat (when the list allows them,
+    /// none sits in the bunker and there are fewer firebats than bunkers) or a marine
+    /// pulled from elsewhere (0x43e2e0) or requested (priority 0x14 / 100) for the
+    /// bunker's region.
+    pub(super) fn ai_town_defense_requests(&mut self, d: &Data, player: u8, val: u32) {
+        let p = player as usize;
+        for r in 1..self.sai.region_count {
+            if self.reg(player, r).flags & 2 != 0 {
+                let f = d.dat.units.flags[0x7d];
+                let ty = if f & 8 != 0 { 4 } else { ((f & 2) << 1 | 3) as u8 };
+                self.ai_add_need(d, player, ty, 0x7d);
+                self.ai_push_request(player, ty, 0x7d, 0x50, val);
+                break;
+            }
+        }
+        let mut b = self.player_units[p];
+        while b != NIL {
+            let cur = b;
+            b = self.units[cur as usize].player_next;
+            let un = &self.units[cur as usize];
+            if un.sprite == NIL
+                || un.order == 0
+                || un.unit_type != 0x7d
+                || un.status & 1 == 0
+                || self.loaded_space(d, cur) >= d.dat.units.space_provided[0x7d] as u32
+            {
+                continue;
+            }
+            let list = self.ai.players[p].defense_units[4];
+            let listed = |id: u16| list.iter().take_while(|&&e| e != 0).any(|&e| e == id);
+            let mut ty = None;
+            if listed(0x21) {
+                let fewer = self.players.completed_counts[0x20][p] < self.players.completed_counts[0x7d][p];
+                if !self.any_passenger(d, cur, |st, c| st.units[c as usize].unit_type == 0x20) && fewer {
+                    ty = Some(0x20);
+                }
+            }
+            if ty.is_none() {
+                if !listed(1) {
+                    return;
+                }
+                ty = Some(0);
+            }
+            let ty = ty.unwrap_or(0);
+            let (x, y) = self.unit_sprite_pos(cur);
+            let r = region_at(&self.sai, x as i32, y as i32);
+            let cap = if self.ai.players[p].flags & 0x20 != 0 && self.loaded_space(d, cur) != 0 { 0x14 } else { 100 };
+            if !self.ai_pull_unit(d, player, r, ty, cap) {
+                let val = ai_region_ref(player, r);
+                self.ai.players[p].flags |= 0x40;
+                self.ai_add_need(d, player, REQ_UNIT, ty as u16);
+                self.ai_push_request(player, REQ_UNIT, ty as u16, cap as u8, val);
+                self.ai_request_morph_parts(d, player, ty as u16, cap as u8, val);
+                if cap == 100 {
+                    return;
+                }
+            }
+        }
+    }
+
+    /// 0x4379b0 (ECX = `player`, stack `ty`, `x`; EBX = `y`): the nearest finished
+    /// unit of type `ty` that belongs to an army (not state 1 / 7 / 8 / 9) which keeps
+    /// more ground strength than it needs without that unit.
+    fn ai_find_spare_for_guard(&self, player: u8, ty: u16, x: i32, y: i32) -> u32 {
+        let mut best = NIL;
+        let mut best_dist = 9999999u32;
+        let mut u = self.player_units[player as usize];
+        while u != NIL {
+            let un = &self.units[u as usize];
+            let next = un.player_next;
+            if un.sprite != NIL && un.order != 0 && un.unit_type == ty && un.ai != NIL && ai_kind(un.ai) == AI_MILITARY {
+                let (mp, mid) = self.ai.military.items[ai_index(un.ai) as usize].region;
+                let tr = self.reg(mp, mid);
+                if !matches!(tr.state, 1 | 8 | 9 | 7)
+                    && tr.all_military_ground_strength as i32 - un.ground_strength as i32 > tr.needed_ground_strength as i32
+                {
+                    let (ux, uy) = self.unit_sprite_pos(u);
+                    let dist = approx_distance(x, ux as i32, y, uy as i32);
+                    if dist < best_dist {
+                        best = u;
+                        best_dist = dist;
+                    }
+                }
+            }
+            u = next;
+        }
+        best
+    }
+
+    /// 0x448630 (EAX = guard post `g`, ECX = `player`): request the guard's unit (2, 0x32)
+    /// unless a building was hit in the last 30 seconds; its home region is the value.
+    fn ai_guard_request(&mut self, d: &Data, player: u8, g: u32) {
+        let hit = self.ai.players[player as usize].previous_building_hit_second;
+        if hit != 0 && self.trig.elapsed.wrapping_sub(hit) <= 0x1d {
+            return;
+        }
+        let gd = &self.ai.guards.items[g as usize];
+        let id = if gd.unit_id == 0x1e { 5 } else { gd.unit_id };
+        let home = gd.home;
+        self.ai_add_need(d, player, REQ_UNIT, id);
+        self.ai_push_request(player, 2, id, 0x32, ai_ref(AI_GUARD, g));
+        let r = region_at(&self.sai, home.0 as i32, home.1 as i32);
+        self.ai_request_morph_parts(d, player, id, 0x32, ai_region_ref(player, r));
+    }
+
+    /// 0x4630c0: one computer player's guard posts: a campaign AI drops posts whose unit
+    /// died 3 times, a post whose unit is a hallucination is dropped; a post without a
+    /// unit (after its build time passed) gets a spare Zergling / Scourge from an army
+    /// (0x4379b0) or requests its unit (0x448630).
+    pub(super) fn ai_guard_requests(&mut self, d: &Data, player: u8) {
+        let p = player as usize;
+        let mut g = self.ai.guard_lists[p];
+        while g != NIL {
+            let next = self.ai.guards.items[g as usize].link.next;
+            let gd = &self.ai.guards.items[g as usize];
+            let release = if self.ai.players[p].flags & 0x20 != 0 && gd.times_died >= 3 {
+                true
+            } else if gd.parent != NIL {
+                self.units[gd.parent as usize].status & 0x4000_0000 != 0
+            } else {
+                self.ai_guard_post(d, player, g);
+                false
+            };
+            if release {
+                let mut head = self.ai.guard_lists[p];
+                self.ai.guards.release(&mut head, g);
+                self.ai.guard_lists[p] = head;
+            }
+            if self.ai.guard_lists[p] == NIL {
+                return;
+            }
+            g = next;
+        }
+    }
+
+    /// The part of 0x4630c0 for a guard post `g` without a unit.
+    fn ai_guard_post(&mut self, d: &Data, player: u8, g: u32) {
+        let gd = &self.ai.guards.items[g as usize];
+        let prev = gd.previous_update;
+        if prev != 0 {
+            let mut t = gd.unit_id as usize;
+            if t == 0x1e {
+                t = 5;
+            }
+            let bt = |i: usize| d.dat.units.build_time[i] as u32;
+            let mut time = bt(t);
+            match t {
+                0x2c | 0x3e => time += bt(0x2b),
+                0x3f => time += bt(0x3d),
+                0x44 => time += bt(0x43),
+                0x67 => time += bt(0x26),
+                _ => {}
+            }
+            let limit = if gd.times_died == 0 { time / 15 + 5 + prev } else { prev + 300 };
+            if self.trig.elapsed <= limit {
+                return;
+            }
+        }
+        let (ox, oy) = (gd.other_home.0, gd.other_home.1);
+        let t = gd.unit_id;
+        let r = region_at(&self.sai, ox as i32, oy as i32);
+        let tr = self.reg(player, r);
+        if tr.state == 3 || tr.air_target != NIL || tr.ground_target != NIL || tr.flags & 0x20 != 0 {
+            return;
+        }
+        let spare = if t == 0x25 || t == 0x2f { self.ai_find_spare_for_guard(player, t, ox as i32, oy as i32) } else { NIL };
+        if spare != NIL {
+            self.ai_release_unit(d, spare, false);
+            let gd = &mut self.ai.guards.items[g as usize];
+            gd.home = gd.other_home;
+            gd.parent = spare;
+            self.units[spare as usize].ai = ai_ref(AI_GUARD, g);
+            self.order_now(d, spare, 0x9c);
+        } else {
+            self.ai_guard_request(d, player, g);
+            self.ai.guards.items[g as usize].previous_update = self.trig.elapsed;
+        }
     }
 }

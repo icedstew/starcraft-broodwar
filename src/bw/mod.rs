@@ -7,6 +7,7 @@
 pub mod addon;
 pub mod ai;
 pub mod ai_areas;
+pub mod ai_attack;
 pub mod ai_military;
 pub mod ai_place;
 pub mod ai_region;
@@ -338,6 +339,9 @@ pub struct State {
     /// Notices for the front end's message lines (0x48d0c0): a network.tbl format
     /// (0-based) and the player its %s (name) or %d (number) names.
     pub notices: Vec<(u16, u8)>,
+    /// 0x48d140 requests: a unit (type, x, y) that could not be placed; the front end prints
+    /// network.tbl line 0x11 with the type's name (0x47b090).
+    pub unplaced: Vec<(u16, i16, i16)>,
     /// Chat packets (0x5c) received, (sender slot, text) for 0x48d1c0 in the front end.
     pub chat: Vec<(u8, Vec<u8>)>,
     /// 0x66ff60: why the last requirement check failed (soft failures, Ok(-1), set it
@@ -498,6 +502,7 @@ impl State {
             center_view: None,
             ui_attached: false,
             notices: Vec::new(),
+            unplaced: Vec::new(),
             chat: Vec::new(),
             speech: Vec::new(),
             unit_sounds: Vec::new(),

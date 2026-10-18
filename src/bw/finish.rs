@@ -94,6 +94,17 @@ impl State {
         }
     }
 
+    /// 0x4a0960: finish_unit_pre, place the unit (0x49ec30) and, when it fits,
+    /// finish_unit_post. False if there was no room.
+    pub fn finish_and_place(&mut self, d: &Data, u: u32) -> bool {
+        self.finish_unit_pre(d, u);
+        if !self.place_unit(d, u) {
+            return false;
+        }
+        self.finish_unit_post(d, u);
+        true
+    }
+
     /// 0x49fa40 finish_unit_post.
     pub fn finish_unit_post(&mut self, d: &Data, u: u32) {
         let t = self.units[u as usize].unit_type as usize;

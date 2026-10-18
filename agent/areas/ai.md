@@ -15,4 +15,9 @@
 - Interceptor parent is the union field +0xc0 (`ptr_at(0xc0)`), not `connected_unit`
   (+0x80).
 - PlayerAi `flags` is at +0x218 (0x690100 for player 0).
+- ai_attack.rs: attack planning 0x43abb0 `ai_choose_attack_region` (stack: player,
+  x, y, force, retry; 0x437770 returns region index + 1), 0x43b0b0, 0x43b570, all-in
+  0x43e050 (AL = mode). ai_military.rs: region / guard / defense requests. Script
+  opcodes 0x0d / 0x0e / 0x64 / 0x49 / 0x42 take the thread's `center` (+0x24 / +0x28).
+- 0x4a2450 per-type AI: the arbiter case returns 1 after its order (asm 0x4a274a).
 - Left: see status.md "In flight" (AI todo_port! list) and `--missing ai`.
