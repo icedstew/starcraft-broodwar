@@ -48,6 +48,56 @@ fn decrypt(data: &mut [u32], mut key: u32) {
     }
 }
 
+fn encrypt(data: &mut [u32], mut key: u32) {
+    let t = crypt_table();
+    let mut seed = 0xEEEE_EEEEu32;
+    for v in data {
+        seed = seed.wrapping_add(t[0x400 + (key & 0xFF) as usize]);
+        let ch = *v;
+        *v = ch ^ key.wrapping_add(seed);
+        key = ((!key << 21).wrapping_add(0x1111_1111)) | (key >> 11);
+        seed = ch.wrapping_add(seed).wrapping_add(seed << 5).wrapping_add(3);
+    }
+}
+
+/// A v1 archive holding `files` stored uncompressed (no sector offset table, flags
+/// 0x80000000 only), 4 KiB sectors, a 16x larger hash table than needed: what
+/// StarEdit's maps look like to Storm, minus compression.
+pub fn write(files: &[(&str, &[u8])]) -> Vec<u8> {
+    let ht_n = (files.len() * 4).next_power_of_two().max(16);
+    let mut out = vec![0u8; 32];
+    let mut blocks = Vec::new();
+    for (_, d) in files {
+        blocks.push([out.len() as u32, d.len() as u32, d.len() as u32, F_EXISTS]);
+        out.extend_from_slice(d);
+    }
+    let mut ht = vec![[0xFFFF_FFFFu32; 4]; ht_n];
+    for (i, (name, _)) in files.iter().enumerate() {
+        let mut slot = hash(name, 0) as usize % ht_n;
+        while ht[slot][3] != 0xFFFF_FFFF {
+            slot = (slot + 1) % ht_n;
+        }
+        ht[slot] = [hash(name, 1), hash(name, 2), 0, i as u32];
+    }
+    let table = |rows: Vec<[u32; 4]>, key: &str, out: &mut Vec<u8>| -> u32 {
+        let pos = out.len() as u32;
+        let mut w: Vec<u32> = rows.into_iter().flatten().collect();
+        encrypt(&mut w, hash(key, 3));
+        for v in w {
+            out.extend_from_slice(&v.to_le_bytes());
+        }
+        pos
+    };
+    let ht_pos = table(ht, "(hash table)", &mut out);
+    let bt_pos = table(blocks, "(block table)", &mut out);
+    let size = out.len() as u32;
+    let hdr = [0x1A51_504D, 32, size, 3 << 16, ht_pos, bt_pos, ht_n as u32, files.len() as u32];
+    for (i, v) in hdr.iter().enumerate() {
+        out[i * 4..i * 4 + 4].copy_from_slice(&v.to_le_bytes());
+    }
+    out
+}
+
 fn decrypt_bytes(data: &mut [u8], key: u32) {
     let n = data.len() / 4;
     let mut w: Vec<u32> = data[..n * 4].chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect();
@@ -258,6 +308,14 @@ fn decompress(c: &[u8], want: usize, flags: u32) -> io::Result<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn write_reads_back() {
+        let chk = (0..10_000u32).map(|i| (i * 7) as u8).collect::<Vec<u8>>();
+        let a = super::write(&[("staredit\\scenario.chk", &chk), ("(listfile)", b"staredit\\scenario.chk\r\n")]);
+        let m = super::Mpq::new(a).unwrap();
+        assert_eq!(m.read("staredit\\scenario.chk").unwrap(), chk);
+    }
+
     #[test]
     fn hash_known_values() {
         // Well-known constants used by every MPQ implementation.

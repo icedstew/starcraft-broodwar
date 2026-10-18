@@ -37,6 +37,12 @@ agent/tools/suite.sh | grep -v MATCH      # regression suite (expect no output)
   the file names). Legacy format (PKWare-imploded sections); each embeds its map's
   `scenario.chk`, so `view`/`shot`/`render` take the `.rep` directly as the map.
 
+- More replays: `~/games/Starcraft/broodwar-reps-tl/` (661 from tl.net ids 1290–2200,
+  2026-10-18; legacy format, all parse; recording version unchecked, so a desync against
+  the original game is possible, but native shots of them are still 1.16.1's).
+- Maps: `~/games/Starcraft/maps-from-reps/` (190 .scx / .scm written by `scbw extractmap
+  <rep>... <dir>` from the replays' scenario.chk; the real 1.16.1 loads and plays them).
+
 All 15 load and play to their recorded end in the real 1.16.1 (checked headless:
 elapsed time at "The replay has finished" equals the header's frame count).
 

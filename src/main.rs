@@ -88,6 +88,46 @@ fn main() -> std::io::Result<()> {
             let data = files.read(&args[1])?;
             std::fs::write(&args[2], data)?;
         }
+        // extractmap <rep>... <dir>: each replay's embedded scenario.chk as a map archive
+        // <dir>/<map name>.scx (.scm for a VER below 0xcd); identical maps are written once,
+        // a different map under a taken name gets its CRC appended.
+        Some("extractmap") => {
+            let (reps, dir) = args[1..].split_at(args.len() - 2);
+            let dir = PathBuf::from(&dir[0]);
+            std::fs::create_dir_all(&dir)?;
+            let (mut new, mut same) = (0, 0);
+            for path in reps {
+                let r = match std::fs::read(path).and_then(|d| replay::Replay::parse(&d)) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        eprintln!("{path}: {e}");
+                        continue;
+                    }
+                };
+                let chk = &r.chk;
+                let ver = map_ver(chk);
+                let ext = if ver >= 0xcd { "scx" } else { "scm" };
+                let name: String = r.header.map_name.chars().filter(|c| !c.is_control() && !"/\\:*?\"<>|".contains(*c)).collect();
+                let name = if name.trim().is_empty() { "unnamed".to_string() } else { name.trim().to_string() };
+                let crc = chk.iter().fold(0x811c_9dc5u32, |h, &b| (h ^ b as u32).wrapping_mul(0x0100_0193));
+                let a = mpq::write(&[("staredit\\scenario.chk", chk), ("(listfile)", b"staredit\\scenario.chk\r\n")]);
+                let mut out = dir.join(format!("{name}.{ext}"));
+                if let Ok(old) = std::fs::read(&out) {
+                    if mpq::Mpq::new(old).and_then(|m| m.read("staredit\\scenario.chk")).is_ok_and(|c| &c == chk) {
+                        same += 1;
+                        continue;
+                    }
+                    out = dir.join(format!("{name} {crc:08x}.{ext}"));
+                    if out.exists() {
+                        same += 1;
+                        continue;
+                    }
+                }
+                std::fs::write(&out, a)?;
+                new += 1;
+            }
+            println!("{new} maps written, {same} already there");
+        }
         Some("dat") => {
             let dat = dat::Dat::load(&files)?;
             let names = dat::parse_tbl(&files.read("rez/stat_txt.tbl")?);
@@ -1269,4 +1309,20 @@ fn apply_moves(st: &mut bw::State, d: &bw::Data, made: &[u32], m: &str) {
         let t: Vec<i16> = p.split(',').filter_map(|n| n.trim().parse().ok()).collect();
         st.order_target(&d, u, 6, (t[0], t[1]), bw::list::NIL);
     }
+}
+
+/// The VER chunk of a scenario.chk (0 when missing).
+fn map_ver(chk: &[u8]) -> u16 {
+    let mut o = 0;
+    while o + 8 <= chk.len() {
+        let len = i32::from_le_bytes(chk[o + 4..o + 8].try_into().unwrap());
+        if &chk[o..o + 4] == b"VER " && len >= 2 && o + 10 <= chk.len() {
+            return u16::from_le_bytes([chk[o + 8], chk[o + 9]]);
+        }
+        if len < 0 {
+            break;
+        }
+        o += 8 + len as usize;
+    }
+    0
 }
