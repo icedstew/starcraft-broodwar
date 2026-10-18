@@ -246,7 +246,7 @@ fn cstr(b: &[u8]) -> &[u8] {
 
 /// The string `idx` (0-based) of a .tbl image (u16 count, u16 offsets); "" when out of
 /// range (0x501b7d).
-fn tbl_str(tbl: &[u8], idx: usize) -> &[u8] {
+pub fn tbl_str(tbl: &[u8], idx: usize) -> &[u8] {
     let u16_at = |o: usize| tbl.get(o..o + 2).map(|b| u16::from_le_bytes([b[0], b[1]]) as usize);
     match (u16_at(0), u16_at(2 + 2 * idx)) {
         (Some(n), Some(off)) if idx < n && off <= tbl.len() => cstr(&tbl[off..]),
@@ -627,6 +627,26 @@ impl Setup {
     pub fn close_map_archive(&mut self) -> bool {
         self.map_archive.take();
         true
+    }
+
+    /// `sstr_copy` of a C string into a 0x19-byte name field.
+    pub fn sstr_into(dst: &mut [u8], src: &[u8]) {
+        sstr_copy(dst, src, 0x19);
+    }
+
+    /// The scenario of the map 0x57fd3c (staredit\\scenario.chk of its archive, as 0x4ccac0
+    /// reads it) and the archive itself.
+    pub fn scenario_chk(&mut self, files: &Storage) -> Option<(Vec<u8>, Option<Mpq>)> {
+        let n = self.map_path.iter().position(|&c| c == 0).unwrap_or(self.map_path.len());
+        let path = String::from_utf8_lossy(&self.map_path[..n]).into_owned();
+        let mut dir = String::new();
+        if !self.open_map(&path, &mut dir, None) {
+            return None;
+        }
+        let name = if dir.is_empty() { "staredit\\scenario.chk".to_string() } else { format!("{dir}\\staredit\\scenario.chk") };
+        let chk = self.read_map_file(&name, files);
+        let a = self.map_archive.take();
+        chk.map(|c| (c, a))
     }
 
     /// 0x4cc110: open the map `path` as an archive and look for a league certificate

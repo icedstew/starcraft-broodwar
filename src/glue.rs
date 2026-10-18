@@ -2284,8 +2284,14 @@ pub fn run(files: &Storage, shot: Option<&str>) -> std::io::Result<()> {
             Top::Quit => return Ok(()),
             Top::Intro | Top::Credits => todo_port!("0x4d4470", "cinematics / credits"),
             Top::Game => {
-                todo_port!("0x4e0710", "start the game set up by the glue");
-                return Ok(());
+                // 0x4e0710: the game; the score screen / next state after it (0x4d9950's
+                // result in 0x596904) are not ported.
+                let Some(g) = glue.begin_game(files) else { return Ok(()) };
+                let mut a = crate::view::Assets::load(crate::storage::Storage::open(&crate::install_dir())?)?;
+                return match shot {
+                    Some(out) => crate::shot_setup(&mut a, g, out),
+                    None => crate::view::run_setup(&mut a, g),
+                };
             }
         }
         // SCBW_GLUE_POPUP="text" (or "title|text"): shows a popup over the screen.

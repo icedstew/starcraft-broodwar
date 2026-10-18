@@ -1048,8 +1048,8 @@ impl Skin {
         };
         let text = if f & flag::HOTKEY != 0 && !text.is_empty() { &text[1..] } else { text };
         let o = TextOpts { flags: align, spacing: if f & flag::NO_SPACING != 0 { 0 } else { 1 }, line_gap: 3, clip: rect };
-        let text = String::from_utf8_lossy(text);
-        font.draw_text(&text, rect.0 + dx, rect.1 + dy, color, &o, TextDst { rows: &self.text_rows, out: s.px, w: s.w, h: s.h });
+        // Bytes as stored: 0x80.. are the font's own glyphs (the caret 0xa6), not UTF-8.
+        font.draw_bytes(text, rect.0 + dx, rect.1 + dy, color, &o, TextDst { rows: &self.text_rows, out: s.px, w: s.w, h: s.h });
     }
 
     /// 0x418440: the focus flag: set on the active control, or on a default button
@@ -1126,7 +1126,7 @@ impl Skin {
                 _ => 1,
             }];
             let o = TextOpts { flags: 0x11, spacing: 1, line_gap: 0, clip: r };
-            font.draw_text(&String::from_utf8_lossy(&c.text), l, t, 2, &o, TextDst { rows: &self.text_rows, out: s.px, w: s.w, h: s.h });
+            font.draw_bytes(&c.text, l, t, 2, &o, TextDst { rows: &self.text_rows, out: s.px, w: s.w, h: s.h });
             return;
         }
         if c.update == Update::MenuButton {
@@ -1541,7 +1541,7 @@ impl Skin {
             0x4000 => 3,
             _ => 1,
         }];
-        let text = String::from_utf8_lossy(if f & flag::HOTKEY != 0 { &c.text[1..] } else { &c.text }).into_owned();
+        let text: &[u8] = if f & flag::HOTKEY != 0 { &c.text[1..] } else { &c.text };
         let t = (c.trect.0 + ox, c.trect.1 + oy, c.trect.2 + ox, c.trect.3 + oy);
         let o = TextOpts { flags: c.align, spacing: if f & flag::NO_SPACING != 0 { 0 } else { 1 }, line_gap: 3, clip: t };
         let mut rows = self.text_rows.clone();
@@ -1556,7 +1556,7 @@ impl Skin {
             }
             3
         };
-        font.draw_text(&text, t.0, t.1, color, &o, TextDst { rows: &rows, out: s.px, w: s.w, h: s.h });
+        font.draw_bytes(text, t.0, t.1, color, &o, TextDst { rows: &rows, out: s.px, w: s.w, h: s.h });
     }
 
     /// The text beside a check / option box (0x21 left, or 0x24 right of a right box).

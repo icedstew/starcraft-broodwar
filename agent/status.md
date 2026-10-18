@@ -98,6 +98,20 @@ Delegate per agents.md: Haiku triage, Sonnet porting, Opus review / hard RE / co
   scroll bars (0x414c90), combo boxes (type 13), Tab focus (0x418a60).
 - Don't commit README.md, .gitignore, web/*, cov.html (user's own work).
 
+## User reports to handle (2026-10-18)
+
+- Replays: minimap player colors wrong (purple shown green), no white border on narrow
+  maps, minimap unit movement looks broken; chat lines not shown (tl1330_p2 f23040);
+  "Not enough energy." not shown (tl1341_p2 f22444); cloaked observer shimmer differs by
+  pixels (tl1339 f23040). Porters started on minimap / messages / cloak (rate-limited;
+  resume them, partial work was reverted where it was debug only).
+- Play: F10 (game menu) does not always open; no pylon psi field shown while placing a
+  protoss building; no geyser placement preview for refineries; command card button
+  press effect and click sounds (command card and menus) missing?; tooltip when hovering
+  a training queue slot (cancel)?
+- Leave-game desync (replay command 0x57): tl1313 f62308, tl1309 f83856, tl1363 f32442,
+  tl1488 f54254, tl1320 f20320 diverge; tl1427 / 1453 / 1460 leaves match.
+
 ## Next steps
 
 1. Re-run `agent/tools/aistress.sh 25000 <seed> agent/local/tgt/debug/scbw` with new

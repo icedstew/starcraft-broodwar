@@ -162,25 +162,34 @@ pub fn is_melee_map(chk: &Chk) -> bool {
 impl<'a> Scene<'a> {
     /// (Call `prepare_map` on the assets first.)
     pub fn new(a: &'a Assets, chk: Chk) -> io::Result<Scene<'a>> {
-        Scene::start(a, chk, None)
+        Scene::start(a, chk, None, None)
+    }
+
+    /// The game the glue menus set up (0x4e0710). (Call `prepare_setup` on the assets first.)
+    pub fn from_setup(a: &'a Assets, g: &GameSetup) -> io::Result<Scene<'a>> {
+        Scene::start(a, Chk::parse(&g.chk), None, Some(g))
     }
 
     /// The game a replay recorded, set up as the replay's header says.
     /// (Call `prepare_replay` on the assets first.)
     pub fn from_replay(a: &'a Assets, r: &crate::replay::Replay) -> io::Result<Scene<'a>> {
-        let mut s = Scene::start(a, Chk::parse(&r.chk), Some(&r.header))?;
+        let mut s = Scene::start(a, Chk::parse(&r.chk), Some(&r.header), None)?;
         s.st.replay_frames = r.header.frames;
         Ok(s)
     }
 
-    fn start(a: &'a Assets, chk: Chk, rep: Option<&crate::replay::Header>) -> io::Result<Scene<'a>> {
+    fn start(a: &'a Assets, chk: Chk, rep: Option<&crate::replay::Header>, gs: Option<&GameSetup>) -> io::Result<Scene<'a>> {
         let ts = Tileset::load(&a.files, chk.tileset())?;
         let terrain = map::render_terrain(&chk, &ts);
         let (tw, _, tunit) = pcx(&a.files.read("game/tunit.pcx")?);
         let colr = match rep {
             // A replay's header keeps each player's color as the game assigned it.
             Some(h) => h.slots.iter().take(8).map(|s| s.color as u8).collect(),
-            None => chk.section(b"COLR").unwrap_or(&[0, 1, 2, 3, 4, 5, 6, 7]).to_vec(),
+            None => match gs {
+                // 0x57f21c: the colors 0x49b360 dealt.
+                Some(g) => g.colors.to_vec(),
+                None => chk.section(b"COLR").unwrap_or(&[0, 1, 2, 3, 4, 5, 6, 7]).to_vec(),
+            },
         };
         let mut player_colors = [[0u8; 8]; 12];
         for (p, pc) in player_colors.iter_mut().enumerate() {
@@ -205,7 +214,7 @@ impl<'a> Scene<'a> {
         for (t, &c) in thpbar.iter_mut().zip(pcx(&a.files.read("game/thpbar.pcx")?).2.iter()) {
             *t = c;
         }
-        let mut st = new_game(a, &chk, rep)?;
+        let mut st = new_game(a, &chk, rep, gs)?;
         let local = st.local_player;
         let mut minimap = load_minimap(&a.files, &chk)?;
         // 0x581dd6: each player's minimap color is the tminimap.pcx entry of its color.
@@ -452,8 +461,12 @@ impl<'a> Scene<'a> {
         self.local
     }
 
-    /// Local player's race (0 zerg, 1 terran, 2 protoss).
+    /// Local player's race (0 zerg, 1 terran, 2 protoss): 0x57f1e2, which 0x4ee180 sets
+    /// to terran (1) when watching a replay (dialog graphics dlgs\terran.grp, the music).
     pub fn local_race(&self) -> usize {
+        if self.st.replay {
+            return 1;
+        }
         (self.st.player_races[self.local as usize] as usize).min(2)
     }
 
@@ -1105,9 +1118,27 @@ impl<'a> Scene<'a> {
     }
 }
 
+/// What 0x4e0710 hands the game: the glue's game setup (the slot table 0x57eee0 after the
+/// races are dealt and the players placed, the template 0x596865, the colors 0x57f21c).
+pub struct GameSetup {
+    /// staredit\\scenario.chk of the map.
+    pub chk: Vec<u8>,
+    /// The map archive (its sounds), moved to the assets by `prepare_setup`.
+    pub mpq: Option<crate::mpq::Mpq>,
+    pub types: [u8; 12],
+    pub races: [u8; 12],
+    pub names: [String; 12],
+    pub colors: [u8; 8],
+    pub template: [u8; 0x20],
+    /// The local player's slot.
+    pub local: u8,
+    /// 0x51ca10: the game seed.
+    pub seed: u32,
+}
+
 /// Engine state for a new game on `chk` (map load, players, melee starting units), or
 /// for the game replay header `rep` recorded.
-fn new_game(a: &Assets, chk: &Chk, rep: Option<&crate::replay::Header>) -> io::Result<bw::State> {
+fn new_game(a: &Assets, chk: &Chk, rep: Option<&crate::replay::Header>, gs: Option<&GameSetup>) -> io::Result<bw::State> {
     let (w, h) = chk.dims();
     let mut st = bw::State::new((w, h), chk.tileset() as u16, 1700);
     let name = map::TILESETS[chk.tileset()];
@@ -1126,8 +1157,8 @@ fn new_game(a: &Assets, chk: &Chk, rep: Option<&crate::replay::Header>) -> io::R
         st.init_psi(&a.bw.psi_grp);
         st.init_thingies(d);
         st.load_terrain(&ts, w as u16, h as u16, &chk.mtxm());
-        let melee = rep.is_none() && is_melee_map(chk) && std::env::var("SCBW_NOMELEE").is_err();
-        st.template = game_template(a, chk, rep);
+        let melee = rep.is_none() && gs.is_none() && is_melee_map(chk) && std::env::var("SCBW_NOMELEE").is_err();
+        st.template = game_template(a, chk, rep, gs);
         let modes = bw::chk_load::ScenarioModes::of_template(&st.template);
         let units = chk.section(b"UNIT").unwrap_or(&[]); // start locations: the last UNIT handler call sets them
         if let Some(h) = rep {
@@ -1148,6 +1179,20 @@ fn new_game(a: &Assets, chk: &Chk, rep: Option<&crate::replay::Header>) -> io::R
             // Header byte 0: 1 = Brood War (0x58f440).
             st.is_expansion = h.engine == 1;
             st.local_player = h.slots.iter().position(|s| s.kind == 2).unwrap_or(0) as u8;
+        } else if let Some(g) = gs {
+            // 0x4ef100 / 0x4eee00 read the slot table 0x57eee0 the glue filled (races dealt by
+            // 0x4a9a30, types by 0x4a9d80).
+            st.rng.seed = g.seed;
+            for p in 0..12 {
+                st.player_types[p] = g.types[p];
+                st.player_races[p] = g.races[p];
+                st.player_names[p] = g.names[p].clone();
+            }
+            if modes.flag_59686d || modes.flag_596871 || modes.flag_596877 {
+                // As for a replay: the melee starting resources go to all eight players.
+                st.players.minerals[..8].fill(50);
+            }
+            st.local_player = g.local;
         } else if melee {
             // ponytail: local player is slot 0 playing SCBW_RACE (default terran); other
             // start locations get idle computer slots cycling the races (no AI yet).
@@ -1253,7 +1298,10 @@ fn new_game(a: &Assets, chk: &Chk, rep: Option<&crate::replay::Header>) -> io::R
 
 /// 0x596865: the game's template (a replay keeps its game type and sub type; a map
 /// played here is Melee, or Use Map Settings when it is not a melee map).
-fn game_template(a: &Assets, chk: &Chk, rep: Option<&crate::replay::Header>) -> [u8; 0x20] {
+fn game_template(a: &Assets, chk: &Chk, rep: Option<&crate::replay::Header>, gs: Option<&GameSetup>) -> [u8; 0x20] {
+    if let Some(g) = gs {
+        return g.template;
+    }
     let melee = rep.is_none() && is_melee_map(chk) && std::env::var("SCBW_NOMELEE").is_err();
     let (gt, sub) = match rep {
         Some(h) => (h.game_type, h.sub_type),
@@ -1266,16 +1314,22 @@ fn game_template(a: &Assets, chk: &Chk, rep: Option<&crate::replay::Header>) -> 
 /// Use Map Settings games: UNIx / UPGx / TECx rewrite the dat tables when the scenario
 /// loads (0x5004a8 handler list).
 pub fn prepare_map(a: &mut Assets, chk: &Chk) {
-    apply_map_dat(a, chk, None);
+    apply_map_dat(a, chk, None, None);
+}
+
+/// `prepare_map` for a game the glue set up; the map archive goes to the assets.
+pub fn prepare_setup(a: &mut Assets, g: &mut GameSetup) {
+    apply_map_dat(a, &Chk::parse(&g.chk), None, Some(g));
+    a.map_mpq = g.mpq.take();
 }
 
 pub fn prepare_replay(a: &mut Assets, r: &crate::replay::Replay) {
-    apply_map_dat(a, &Chk::parse(&r.chk), Some(&r.header));
+    apply_map_dat(a, &Chk::parse(&r.chk), Some(&r.header), None);
 }
 
-fn apply_map_dat(a: &mut Assets, chk: &Chk, rep: Option<&crate::replay::Header>) {
+fn apply_map_dat(a: &mut Assets, chk: &Chk, rep: Option<&crate::replay::Header>, gs: Option<&GameSetup>) {
     a.bw.dat.map_tbl = chk.section(b"STR ").map(|s| s.to_vec());
-    let m = bw::chk_load::ScenarioModes::of_template(&game_template(a, chk, rep));
+    let m = bw::chk_load::ScenarioModes::of_template(&game_template(a, chk, rep, gs));
     if m.flag_59686d || m.flag_596871 || m.flag_596877 {
         return;
     }
@@ -1972,6 +2026,13 @@ pub fn run(a: &mut Assets, chk: Chk) -> io::Result<()> {
     run_with(a, Scene::new(a, chk)?, None)
 }
 
+/// Play the game the glue menus set up (0x4e0710).
+pub fn run_setup(a: &mut Assets, mut g: GameSetup) -> io::Result<()> {
+    prepare_setup(a, &mut g);
+    let a: &Assets = a;
+    run_with(a, Scene::from_setup(a, &g)?, None)
+}
+
 /// Watch a replay; the camera follows a player (Tab: next player, F: follow on/off).
 pub fn run_replay(a: &mut Assets, rep: crate::replay::Replay) -> io::Result<()> {
     prepare_replay(a, &rep);
@@ -2055,6 +2116,12 @@ pub fn frame_loop<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Option<Re
     // The next 42 ms tick of input and game logic (the browser build ticks per call).
     #[cfg(not(target_arch = "wasm32"))]
     let mut next_tick = std::time::Instant::now();
+    // Input between ticks: the window is redrawn (and its events taken) at the display
+    // rate, the game reads input every 42 ms. Key presses and button downs of the frames
+    // in between are kept for the next tick (as Windows queues the messages).
+    let mut pend_keys: Vec<Key> = Vec::new();
+    let mut pend_rep: Vec<Key> = Vec::new();
+    let (mut pend_l, mut pend_r) = (false, false);
     Ok(move || {
         if !win.is_open() {
             return Ok(false);
@@ -2064,6 +2131,10 @@ pub fn frame_loop<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Option<Re
         {
             let (now, dt) = (std::time::Instant::now(), std::time::Duration::from_millis(42));
             if now < next_tick {
+                pend_keys.extend(win.get_keys_pressed(minifb::KeyRepeat::No));
+                pend_rep.extend(win.get_keys_pressed(minifb::KeyRepeat::Yes));
+                pend_l |= win.get_mouse_down(minifb::MouseButton::Left);
+                pend_r |= win.get_mouse_down(minifb::MouseButton::Right);
                 // Between ticks: only the cursor moves.
                 let kind = if menu.is_some() { 0 } else { scene.cursor_kind(cx, cy, vx, vy, drag_start.is_some()) };
                 scene.gamma = settings.gamma;
@@ -2074,6 +2145,12 @@ pub fn frame_loop<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Option<Re
             next_tick = if now > next_tick + dt { now + dt } else { next_tick + dt };
         }
         tick += 1;
+        let mut keys_no: Vec<Key> = std::mem::take(&mut pend_keys);
+        keys_no.extend(win.get_keys_pressed(minifb::KeyRepeat::No));
+        let mut keys_rep: Vec<Key> = std::mem::take(&mut pend_rep);
+        keys_rep.extend(win.get_keys_pressed(minifb::KeyRepeat::Yes));
+        let lmb = win.get_mouse_down(minifb::MouseButton::Left) || std::mem::take(&mut pend_l);
+        let rmb = win.get_mouse_down(minifb::MouseButton::Right) || std::mem::take(&mut pend_r);
         let shift = win.is_key_down(Key::LeftShift) || win.is_key_down(Key::RightShift);
         // The game menu (F10 or the console's MENU button) takes all input while open;
         // single player and replays pause under it (0x4f57a0 -> 0x488790).
@@ -2096,11 +2173,11 @@ pub fn frame_loop<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Option<Re
         };
         if menu.is_some() {
             typed.borrow_mut().clear();
-            let ldown = win.get_mouse_down(minifb::MouseButton::Left);
+            let ldown = lmb;
             let mut act = None;
             if let (Some(m), Some(u)) = (menu.as_mut(), ui.as_ref()) {
                 act = m.mouse(&u.skin, cx, cy, ldown, &mut settings);
-                for k in win.get_keys_pressed(minifb::KeyRepeat::No) {
+                for k in keys_no.clone() {
                     let ch = match k {
                         Key::Escape => Some(0x1b),
                         Key::Enter => Some(b'\r'),
@@ -2146,11 +2223,11 @@ pub fn frame_loop<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Option<Re
             present(&mut win, &rgb, vw as usize, vh as usize)?;
             return Ok(true);
         }
-        let mdown = win.get_mouse_down(minifb::MouseButton::Left);
+        let mdown = lmb;
         let on_menu_btn = ui.as_ref().and_then(|u| u.stat_f10.screen_rect(1)).is_some_and(|(l, t, r, b)| (l..=r).contains(&cx) && (t..=b).contains(&cy));
         let menu_clicked = menu_btn_down && !mdown && on_menu_btn;
         menu_btn_down = mdown && (menu_btn_down || (on_menu_btn && !lmb_was_down));
-        if menu_clicked || win.is_key_pressed(Key::F10, minifb::KeyRepeat::No) {
+        if menu_clicked || keys_no.contains(&Key::F10) {
             menu = open_menu(&scene, crate::menu::Kind::Game, 0, &mut settings);
             menu_paused = true;
             scene.pause_game();
@@ -2183,7 +2260,7 @@ pub fn frame_loop<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Option<Re
         if cy >= vh - 2 { vy += sp }
         let (ox, oy, scale) = minimap_geom(&scene);
         let map_pt = (cx + vx, cy + vy);
-        let down = win.get_mouse_down(minifb::MouseButton::Left);
+        let down = lmb;
         let clicked = down && !lmb_was_down;
         lmb_was_down = down;
         // Command card: click a button or press its hotkey (enabled buttons only).
@@ -2216,7 +2293,7 @@ pub fn frame_loop<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Option<Re
             for c in typed_chars {
                 scene.chat.char(c as u8);
             }
-            for k in win.get_keys_pressed(minifb::KeyRepeat::Yes) {
+            for k in keys_rep.clone() {
                 match k {
                     Key::Enter | Key::NumPadEnter => {
                         if let crate::chat::Done::Submit(t) = scene.chat.enter() {
@@ -2236,14 +2313,14 @@ pub fn frame_loop<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Option<Re
                     k => scene.chat.key(k),
                 }
             }
-        } else if win.is_key_pressed(Key::Enter, minifb::KeyRepeat::No) && menu.is_none() {
+        } else if keys_no.contains(&Key::Enter) && menu.is_none() {
             let c = ["z", "t", "p"][scene.local_race()];
             if let Ok(d) = a.files.read(&format!("rez/{c}textbox.bin")) {
                 scene.chat.open(crate::dlg::Dialog::parse(&d), scene.clock_ms);
             }
             chat_keys.push(Key::Enter);
         }
-        let keys = if scene.chat.open || !chat_keys.is_empty() { Vec::new() } else { win.get_keys_pressed(minifb::KeyRepeat::No) };
+        let keys = if scene.chat.open || !chat_keys.is_empty() { Vec::new() } else { keys_no.clone() };
         for k in keys {
             use minifb::Key::*;
             if let Some(g) = [Key0, Key1, Key2, Key3, Key4, Key5, Key6, Key7, Key8, Key9].iter().position(|&n| n == k) {
@@ -2426,7 +2503,7 @@ pub fn frame_loop<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Option<Re
                 }
             }
         }
-        let rdown = win.get_mouse_down(minifb::MouseButton::Right);
+        let rdown = rmb;
         if rdown && !rmb_was_down && (scene.end_targeting() || scene.placing.take().is_some()) {
             // Right-click cancels targeting / placement.
         } else if replay.is_some() {

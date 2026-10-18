@@ -1151,6 +1151,28 @@ fn load_camera_or(default: Option<&std::path::Path>) -> std::collections::HashMa
         .collect()
 }
 
+/// Headless game from the glue (`scbw glue out.png`, game started): steps
+/// SCBW_GLUE_SHOT_FRAMES (default 24) frames, then writes the game screen centered on the
+/// local player's start location.
+pub(crate) fn shot_setup(a: &mut view::Assets, mut g: view::GameSetup, out: &str) -> std::io::Result<()> {
+    view::prepare_setup(a, &mut g);
+    let a: &view::Assets = a;
+    let mut scene = view::Scene::from_setup(a, &g)?;
+    let frames: usize = std::env::var("SCBW_GLUE_SHOT_FRAMES").ok().and_then(|f| f.parse().ok()).unwrap_or(24);
+    scene.step();
+    for _ in 0..frames {
+        scene.step();
+    }
+    let (sx, sy) = scene.st.start_locations[scene.local_player() as usize];
+    let (x, y) = ((sx as i32 - 320).max(0), (sy as i32 - 180).max(0));
+    scene.st.screen_tile = ((x >> 5) as u16, (y >> 5) as u16);
+    let ui = ui::Ui::load(&a.files, ["zerg", "terran", "protoss"][scene.local_race()]).ok();
+    let (w, h) = (view::SCREEN_W as usize, view::SCREEN_H as usize);
+    let (mut idx, mut rgb) = (vec![0u8; w * h], vec![0u32; w * h]);
+    view::compose_with_cursor(&scene, ui.as_ref(), x, y, None, None, &mut idx, &mut rgb);
+    write_png_rgb(out, w, h, &rgb)
+}
+
 fn load_chk(path: &str) -> std::io::Result<map::Chk> {
     Ok(map::Chk::parse(&load_chk_raw(path)?))
 }

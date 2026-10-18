@@ -1348,8 +1348,10 @@ impl Glue {
         if !self.setup.local_slot_setup() {
             return -0x7fff_fff9;
         }
-        self.create.game_desc = d;
-        todo_port!("0x4d3fc0", "create the single-player game from the description 0x5967f8 (SNetCreateGame, the slot / storm tables, 0x4a8d40, 0x4d3240)");
+        self.create.game_desc = d.clone();
+        if !self.create_game(&d) {
+            return -0x7fff_fff9;
+        }
         todo_port!("0x4a7210", "put the map first in the recent maps list of the registry");
         0
     }
@@ -1556,5 +1558,194 @@ impl Glue {
                 }
             }
         }
+    }
+
+    /// 0x4d3fc0 (EAX = the description `d`, 0x8d bytes), single-player path: start the game
+    /// 0x59688c = provider, the (here: one) player's storm id, the description (0x5967f8) and
+    /// the storm id -> slot tables and per-game tables. The Storm calls (the provider setup
+    /// 0x4d3cc0, SNetCreateGame Ordinal 101) are not ported: networking is our own; the
+    /// local player's storm id is 0.
+    fn create_game(&mut self, d: &[u8]) -> bool {
+        // 0x4d3cc0 (provider setup: Ordinal 117 / 114 / 123 callbacks 0x4c4980, 0x4c3c90,
+        // 0x47f750, 0x4aaea0): a single-player game has provider 0 (0x59688c).
+        todo_port!("0x4d3cc0", "Storm provider setup and message callbacks for the game");
+        self.setup.net_provider = 0;
+        // Ordinal 101 (SNetCreateGame) returns the local storm id in 0x51268c.
+        let (me, id) = (self.setup.local_slot[0], 0u32);
+        self.setup.local_storm_id = id;
+        self.setup.slot_by_storm[id as usize] = me;
+        self.setup.slot_by_storm2[id as usize] = self.setup.local_slot[1];
+        if let Some(s) = self.setup.slots.get_mut(me as usize) {
+            s[slot::STORM..slot::STORM + 4].copy_from_slice(&id.to_le_bytes());
+        }
+        self.create.game_desc = d.to_vec();
+        // 0x596888 = 1 (the description is in place)
+        self.setup.index_human_slots();
+        self.setup.reset_game_tables();
+        true
+    }
+
+    /// 0x4dbbe0: the computer slots (5) get the random race (6).
+    fn race_computers_random(&mut self) {
+        for s in self.setup.slots[..12].iter_mut().rev() {
+            if s[slot::TYPE] == 5 {
+                s[slot::RACE] = 6;
+            }
+        }
+    }
+
+    /// 0x4dbb70 (`race`): the first open slot (6) from slot 7 down becomes a computer (5) of
+    /// that race. False when there is none.
+    fn race_computer_add(&mut self, race: u8) -> bool {
+        for s in self.setup.slots[..8].iter_mut().rev() {
+            if s[slot::TYPE] == 6 {
+                s[slot::TYPE] = 5;
+                s[slot::RACE] = race;
+                return true;
+            }
+        }
+        false
+    }
+
+    /// 0x4ee110: the races picked in the create screen (0x57f266 ..) go to the slots of a
+    /// melee-type game: the computers' become random, the local slot gets the first, and
+    /// open slots become computers of the others.
+    fn race_picks_apply(&mut self) {
+        let t = &self.setup.template;
+        if self.setup.multiplayer || !self.create.race_picked || (t[8] == 0 && t[0xc] == 0 && t[0x12] == 0) {
+            return;
+        }
+        self.race_computers_random();
+        let me = self.setup.local_slot[0] as usize;
+        self.setup.slots[me][slot::RACE] = self.create.race_pick[0];
+        for k in 1..9 {
+            let r = self.create.race_pick[k];
+            if r != 7 {
+                self.race_computer_add(r);
+            }
+        }
+    }
+
+    /// 0x4a9d80 (the part a single-player game takes; `rand_on` is 0x6d11c8): the slot types
+    /// (computer 5 -> 1, open 6 / 8 -> 0), then for the melee game types (template 0x59686d /
+    /// 0x596871 / 0x596877) the occupied slots are put on random free start slots, unless
+    /// 0x596872. Returns what 0x49b360 takes.
+    fn place_players(&mut self) -> bool {
+        for s in self.setup.slots[..12].iter_mut().rev() {
+            match s[slot::TYPE] {
+                5 => s[slot::TYPE] = 1,
+                6 | 8 => s[slot::TYPE] = 0,
+                _ => {}
+            }
+        }
+        let t = self.setup.template;
+        if self.setup.multiplayer && t[0x10] != 0 {
+            todo_port!("0x485160", "team melee: put the forces on shared start locations");
+            return false;
+        }
+        if t[8] == 0 && t[0xc] == 0 && t[0x12] == 0 {
+            todo_port!("0x4a9c90", "Use Map Settings: shuffle the players within their forces");
+            return false;
+        }
+        if t[0xd] != 0 {
+            self.setup.index_human_slots();
+            return false;
+        }
+        let occupied = |ty: u8| matches!(ty, 2 | 1 | 3 | 4 | 7);
+        let list: Vec<_> = self.setup.slots[..8].iter().filter(|s| occupied(s[slot::TYPE])).copied().collect();
+        for i in 0..8 {
+            self.setup.slots[i] = self.setup.lobby[i];
+        }
+        for entry in list.iter().rev() {
+            let cand: Vec<usize> = (0..8).filter(|&i| matches!(self.setup.slots[i][slot::TYPE], 6 | 5 | 3 | 4 | 7)).collect();
+            let r = self.create_lcg_if_on();
+            let pick = cand.get(((r * cand.len() as u32) >> 15) as usize).copied().unwrap_or(0);
+            self.setup.slots[pick] = *entry;
+            self.setup.slots[pick][slot::INDEX..slot::INDEX + 4].copy_from_slice(&(pick as u32).to_le_bytes());
+        }
+        for s in self.setup.slots[..12].iter_mut().rev() {
+            if !occupied(s[slot::TYPE]) {
+                s[slot::TYPE] = 0;
+            }
+        }
+        self.setup.index_human_slots();
+        true
+    }
+
+    /// The next random number of 0x51ca14 with 0x6d11c8 on, else 0.
+    fn create_lcg_if_on(&mut self) -> u32 {
+        if self.create.rand_on { self.create_lcg() } else { 0 }
+    }
+
+    /// 0x49b360 (`placed`): unless 0x596872 (and not `placed`), the 8 player colors
+    /// 0x57f21c are dealt from 0..8 at random.
+    fn deal_colors(&mut self, placed: bool) -> [u8; 8] {
+        let mut colors = [0, 1, 2, 3, 4, 5, 6, 7];
+        if self.setup.template[0xd] != 0 && !placed {
+            return colors;
+        }
+        let mut pool: Vec<u8> = (0..8).collect();
+        for n in (1..=8usize).rev() {
+            let r = self.create_lcg_if_on();
+            let k = ((n as u32 * r) >> 15 & 0xff) as usize;
+            colors[n - 1] = pool.remove(k.min(pool.len() - 1));
+        }
+        colors
+    }
+
+    /// 0x4ed2b0: the computer / neutral slots (1, 3, 4, 7) are named from network.tbl: by
+    /// race and the slot's color (0x57f21c).
+    fn name_computers(&mut self, colors: &[u8; 8]) {
+        let base: u8 = if self.setup.expansion { 0x74 } else { 0 };
+        for i in 0..8 {
+            let s = &mut self.setup.slots[i];
+            if !matches!(s[slot::TYPE], 1 | 3 | 4 | 7) {
+                continue;
+            }
+            let c = match s[slot::RACE] {
+                0 => base.wrapping_add(0x25),
+                2 => base.wrapping_add(0x2d),
+                _ => base.wrapping_add(0x1d),
+            };
+            let n = colors[i].wrapping_add(c);
+            let name = if n == 0 { crate::setup::tbl_str(&self.network_raw, 10) } else { crate::setup::tbl_str(&self.network_raw, n as usize - 1) };
+            Setup::sstr_into(&mut s[slot::NAME..], name);
+        }
+    }
+
+    /// 0x4e0710 (-> 0x4ef100, 0x4eee00): the game set up by the glue for the game window.
+    /// With 0x6d11c8 on: the picked races go to the slots (0x4ee110), the seed 0x51ca10
+    /// seeds the numbers (0x51ca14), 0x4a9a30 deals the random races, 0x4a9d80 places the
+    /// players, 0x49b360 deals the colors, 0x4ed2b0 names the computers; the map is the
+    /// scenario of the map archive 0x57fd3c. The rest of 0x4ef100 / 0x4eee00 is the game
+    /// start `view` runs; 0x4d9950 (the game loop), 0x4ee8c0 and the score screen after it
+    /// are not ported.
+    pub fn begin_game(&mut self, files: &Storage) -> Option<crate::view::GameSetup> {
+        self.race_picks_apply();
+        // 0x51ca10 = time (a debug seed from SCBW_SEED); 0x51ca14 = 0x51ca10.
+        let seed = std::env::var("SCBW_SEED").ok().and_then(|s| s.parse().ok()).unwrap_or_else(|| {
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |t| t.as_secs() as u32)
+        });
+        self.create.seed = seed;
+        self.create.rand_on = true;
+        self.assign_races();
+        let placed = self.place_players();
+        let colors = self.deal_colors(placed);
+        self.create.rand_on = false;
+        self.name_computers(&colors);
+        let (chk, mpq) = self.setup.scenario_chk(files)?;
+        let name = |s: &[u8]| String::from_utf8_lossy(&s[..s.iter().position(|&c| c == 0).unwrap_or(s.len())]).into_owned();
+        let s = &self.setup.slots;
+        Some(crate::view::GameSetup {
+            chk,
+            mpq,
+            types: std::array::from_fn(|i| s[i][slot::TYPE]),
+            races: std::array::from_fn(|i| s[i][slot::RACE].min(2)),
+            names: std::array::from_fn(|i| name(&s[i][slot::NAME..slot::NAME + 0x19])),
+            colors,
+            template: self.setup.template,
+            local: self.setup.local_slot[0] as u8,
+            seed,
+        })
     }
 }

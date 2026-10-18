@@ -216,7 +216,7 @@ impl Chat {
         let Some(label) = d.get(1) else { return };
         let lr = (ox + label.rect.0, oy + label.rect.1 + dy, ox + label.rect.0 + 279, oy + label.rect.3 + dy);
         let Some(edit) = d.get(6) else { return };
-        let lw = skin.fonts[1].width(&String::from_utf8_lossy(&label.text));
+        let lw = skin.fonts[1].width_bytes(&label.text);
         let mut l: Ctl = label.clone();
         l.flags |= 0;
         skin.ctl_text(&l, &label.text, lr, 0, 0, 0x11, &mut s);
