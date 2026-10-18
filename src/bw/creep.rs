@@ -161,7 +161,7 @@ impl State {
     }
 
     /// MSVC `rand` (0x40c7bd), used for creep tile variations.
-    fn crt_rand(&mut self) -> u32 {
+    pub fn crt_rand(&mut self) -> u32 {
         self.crt_seed = self.crt_seed.wrapping_mul(0x343fd).wrapping_add(0x269ec3);
         (self.crt_seed >> 16) & 0x7fff
     }

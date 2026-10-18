@@ -371,7 +371,8 @@ impl State {
 
     /// 0x4cd360: create and finish a map-placed unit.
     fn chk_place_unit(&mut self, d: &Data, ty: u16, x: i16, y: i16, player: u8) -> Option<u32> {
-        if d.dat.units.staredit_availability[ty as usize] & 0x200 != 0 && !self.is_expansion {
+        // Types >= 228 read past the 0x661518 table into unused zeroed bss (0x681517 for 0xffff): flag clear.
+        if d.dat.units.staredit_availability.get(ty as usize).copied().unwrap_or(0) & 0x200 != 0 && !self.is_expansion {
             return None;
         }
         let Some(u) = self.create_unit(d, ty, x, y, player) else {

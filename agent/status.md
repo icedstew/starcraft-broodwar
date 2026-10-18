@@ -82,6 +82,14 @@ Delegate per agents.md: Haiku triage, Sonnet porting, Opus review / hard RE / co
   path to 0x4d3fc0 (todo)), combo boxes (type 13, dlg.rs), list scroll bars
   (src/scrollbar.rs, auto-repeat timer todo). 13 native create-screen shots match but the
   cursor (`d`/`m`/`u` hold verbs added to SCBW_GLUE_INPUT).
+- 2026-10-18 screenshot tests: creep tile variants now match native (CRT rand seeded
+  with the game seed at 0x4ef100, one draw in 0x4ee2d0). Mean differing pixels per
+  replay (re/repshots.sh): 1361 0.2, 1339 0.6, 1346 0.7, 1340 0.8, 1349 0.9, 1356 0.9,
+  1352 1.0, 1354 1.6, 1363 2.3, 1330 3.5, 1412 6.8, 1341 8.3, 1347 8.7 (%); tl1359
+  captured, not compared yet. Left in 1330: a drone's mining frame at f120. All 751
+  replays (broodwar-reps-116 + broodwar-reps-tl) play to the end in scbw after fixes for
+  out-of-range reads native tolerates (neutral medic AI slot, UNIT type 0xffff, full
+  hotkey group, empty egg queue).
 - Glue left: dialog event procs (ready rooms 0x4f7150 / 0x4f74b0 / 0x4f7810, score
   0x4b4a30), game creation 0x4d3fc0 -> game start, mission list 0x4b7820, 0x4a8590, error popup 0x4bb300,
   OK/Cancel 0x4b5b20 (taken as OK), the glue -> game start (glue.rs `Top::Game`), list

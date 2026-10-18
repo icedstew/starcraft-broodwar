@@ -1184,6 +1184,12 @@ fn new_game(a: &Assets, chk: &Chk, rep: Option<&crate::replay::Header>) -> io::R
         st.init_player_ai();
         // 0x4eec30 -> 0x489b30: trigger state for a new game (0x489790: who is in it).
         st.init_trigger_players();
+        // 0x4ef100: srand(0x51ca10, the game seed) for the CRT rand creep tiles use; then
+        // 0x4ee2d0 draws once for the music variant 0x51a3b4 (outside campaigns, in the
+        // process's first game: 0x51a3b4 starts at -1). Games here are never campaign
+        // missions (0x57f244 = 0).
+        st.crt_seed = st.rng.seed;
+        st.crt_rand();
         // 0x4eee00 loads the scenario right after 0x4ef100 seeds the RNG, with it on.
         // Handler order (table 0x5001e8): MTXM, THG2 (its unit doodads draw from the
         // RNG too), UNIT.
@@ -1896,7 +1902,7 @@ impl Follow {
             Some(0x14 | 0x15 | 0x2f) => self.focus = Some((u16_at(1), u16_at(3))),
             Some(0x0c) => self.focus = Some((u16_at(2) * 32 + 16, u16_at(4) * 32 + 16)),
             Some(0x09 | 0x0a | 0x0b) => {
-                let sel = bw::select::selection_units(&st.selections[player as usize]);
+                let sel: Vec<u32> = bw::select::selection_units(&st.selections[player as usize]).iter().copied().filter(|&u| u != NIL && st.units[u as usize].sprite != NIL).collect();
                 if !sel.is_empty() {
                     let n = sel.len() as i32;
                     let (sx, sy) = sel.iter().fold((0, 0), |(x, y), &u| {

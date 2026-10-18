@@ -36,7 +36,9 @@ impl Data<'_> {
 }
 
 fn dims(d: &Data, ut: u16) -> (i32, i32, i32, i32) {
-    let dim = d.dat.units.dimensions[ut as usize];
+    // Map protectors place type 0xffff: 0x6617c8 + 0xffff * 8 = 0x6e17c0 is in the exe's
+    // .rsrc (mapped), bytes 58 58 10 00 88 80 10 00, i.e. left 22616: never fits the map.
+    let dim = if ut == 0xffff { 0x0010_8088_0010_5858 } else { d.dat.units.dimensions[ut as usize] };
     (dim as i16 as i32, (dim >> 16) as i16 as i32, (dim >> 32) as i16 as i32, (dim >> 48) as i16 as i32)
 }
 
@@ -584,8 +586,15 @@ impl State {
             let s = if matches!(t, 0x24 | 0x3b | 0x61) {
                 // Eggs / cocoons: count the unit being morphed into.
                 let inner = un.build_queue[un.build_queue_slot as usize] as usize;
-                let s = d.dat.units.supply_required[inner] as i32;
-                if d.dat.units.flags[inner] & 0x400 != 0 { s << 1 } else { s }
+                // An empty slot (0xe4) reads past the arrays: supply_required[0xe4] (0x663dcc) is
+                // padding (0); flags[0xe4] (0x664410) is the first 4 bytes of space_required.
+                let (s, f) = if inner == 0xe4 {
+                    let sr = &d.dat.units.space_required;
+                    (0, u32::from_le_bytes([sr[0], sr[1], sr[2], sr[3]]))
+                } else {
+                    (d.dat.units.supply_required[inner] as i32, d.dat.units.flags[inner])
+                };
+                if f & 0x400 != 0 { s << 1 } else { s }
             } else if d.dat.units.flags[t] & 0x400 != 0 && un.status & status::COMPLETED == 0 {
                 supply << 1
             } else {

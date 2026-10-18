@@ -482,7 +482,11 @@ impl State {
             if !fresh && (self.hotkeys[slot][..n].contains(&h) || n != 0 && !self.multi_selectable(d, u)) {
                 continue;
             }
-            self.hotkeys[slot][n] = h;
+            // Native writes at flat index n + slot*12: a full group (n == 12) spills into
+            // the next group's first entry.
+            if let Some(e) = self.hotkeys.get_mut(slot + n / 12) {
+                e[n % 12] = h;
+            }
             n += 1;
             if n > 11 {
                 return;

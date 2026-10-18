@@ -667,7 +667,9 @@ impl State {
     pub(super) fn ai_replace_free_medic(&mut self, u: u32) {
         if self.units[u as usize].unit_type == 0x22 {
             let p = self.units[u as usize].player as usize;
-            if self.ai.players[p].free_medic == u {
+            // Players 8..11 index past the AI table (0x6903bc + p * 0x4e8 lands in other
+            // globals from 0x692728 on), which does not hold this unit.
+            if p < 8 && self.ai.players[p].free_medic == u {
                 self.ai.players[p].free_medic = NIL;
                 let mut m = self.player_units[p];
                 while m != NIL {
