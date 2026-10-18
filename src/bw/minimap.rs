@@ -293,8 +293,10 @@ impl Minimap {
         self.checksum = 0;
         let local = st.local_player as usize;
         let vision = st.local_vision_mask as u32;
+        // Watching a replay (0x6d0f14) every player is drawn in its color and there is no
+        // local pass.
         for p in (0..12).rev() {
-            if p == local {
+            if p == local && !st.replay {
                 continue;
             }
             let base = self.player_color(st, p);
@@ -315,7 +317,7 @@ impl Minimap {
         }
         // 0x4a48e0: the local player's units, blinking while under attack.
         self.blinking = false;
-        let mut u = st.player_units[local];
+        let mut u = if st.replay { NIL } else { st.player_units[local] };
         while u != NIL {
             let t = st.units[u as usize].unit_type;
             if !Self::skip(d, t) {

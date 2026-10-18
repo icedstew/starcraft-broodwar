@@ -185,13 +185,18 @@ impl<'a> Scene<'a> {
         let ts = Tileset::load(&a.files, chk.tileset())?;
         let terrain = map::render_terrain(&chk, &ts);
         let (tw, _, tunit) = pcx(&a.files.read("game/tunit.pcx")?);
-        let colr = match rep {
-            // A replay's header keeps each player's color as the game assigned it.
-            Some(h) => h.slots.iter().take(8).map(|s| s.color as u8).collect(),
+        // The map's COLR: the tunit.pcx row of each color slot.
+        let map_colr = chk.section(b"COLR").unwrap_or(&[0, 1, 2, 3, 4, 5, 6, 7]).to_vec();
+        let via_colr = |c: u8| map_colr.get(c as usize).copied().unwrap_or(c);
+        let colr: Vec<u8> = match rep {
+            // A replay's header keeps each player's color slot 0x57f21c as the game dealt
+            // it (0x4de950); the remap 0x581d76 takes the row COLR[slot] (checked against
+            // the running game: tl1313's player 0, slot 6 -> row 10).
+            Some(h) => h.slots.iter().take(8).map(|s| via_colr(s.color as u8)).collect(),
             None => match gs {
-                // 0x57f21c: the colors 0x49b360 dealt.
-                Some(g) => g.colors.to_vec(),
-                None => chk.section(b"COLR").unwrap_or(&[0, 1, 2, 3, 4, 5, 6, 7]).to_vec(),
+                // 0x57f21c: the colors 0x49b360 dealt, through COLR the same way.
+                Some(g) => g.colors.iter().map(|&c| via_colr(c)).collect(),
+                None => map_colr.clone(),
             },
         };
         let mut player_colors = [[0u8; 8]; 12];
