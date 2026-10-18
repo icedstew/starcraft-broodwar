@@ -68,16 +68,26 @@ Delegate per agents.md: Haiku triage, Sonnet porting, Opus review / hard RE / co
   / 0x4e78e0 non-matching AI kinds (1.16.1 reads the entry as the other struct; never
   hit in aistress), 0x45b850 unknown script opcode. UI 0x49eb70 ported 2026-10-18
   (`portrait_dropped`: a talking unit that dies hides the portrait until the talk ends).
-- Glue left: dialog event procs (ready rooms 0x4f7150 / 0x4f74b0 / 0x4f7810, login
-  0x4edaa0, create 0x4af5c0, score 0x4b4a30), mission list 0x4b7820, 0x4a8590, error
-  popup 0x4bb300, OK/Cancel 0x4b5b20 (taken as OK; campaigns can't start yet anyway).
+- 2026-10-18: login screen 0x4edaa0 ported (profile list 0x4ed720 / 0x4ed640, Ok
+  0x4ed3f0, New ID 0x4ed940 with the edit popup 0x4b6e50, Delete 0x4ed840 with the
+  Ok/Cancel popup 0x4b73b0); list boxes (dlg/lbox.cpp) and edits (dlg/edit.cpp) in
+  dlg.rs; glue keyboard (0x418eb0 / 0x418ab0: hotkeys, Enter / Esc, keys to lists and
+  edits) and list mouse. Fixed: glue fonts are font10/14/16/16x (0x4daec0), image and
+  popup backgrounds with flag 0x40000 blend only the shade color (0x416f30), force names
+  and the profile name check read network.tbl (not gluAll). Checked against native
+  (9 login steps, only the cursor differs): `SCBW_GLUE_INPUT` drives `scbw glue <png>`.
+- Glue left: dialog event procs (ready rooms 0x4f7150 / 0x4f74b0 / 0x4f7810, create
+  0x4af5c0, score 0x4b4a30), mission list 0x4b7820, 0x4a8590, error popup 0x4bb300,
+  OK/Cancel 0x4b5b20 (taken as OK), the glue -> game start (glue.rs `Top::Game`), list
+  scroll bars (0x414c90), combo boxes (type 13), Tab focus (0x418a60).
 - Don't commit README.md, .gitignore, web/*, cov.html (user's own work).
 
 ## Next steps
 
 1. Re-run `agent/tools/aistress.sh 25000 <seed> agent/local/tgt/debug/scbw` with new
    seeds / longer; fix what it finds. Then 0x4a6250 and the glue event procs.
-2. Glue event procs, so the ready rooms / login / create / score dialogs work.
+2. Glue event procs: create game 0x4af5c0 next (map list = list box, combos), then the
+   glue -> game start, score, ready rooms.
 3. Unported non-AI frontier (`--missing both`), triage then port.
 4. Run tl1341 / 1349 / 1354 / 1356 replays on the current binary (areas/sim.md).
 5. Workflow: porters on disjoint files run in parallel fine (shared target dir; they

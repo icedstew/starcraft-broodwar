@@ -10,7 +10,7 @@
 
 use crate::dlg::{Dialog, Effects, Skin, Surf};
 use crate::grp::{Blend, Grp};
-use crate::setup::{slot, Setup};
+use crate::setup::{slot, Profile, Setup};
 use crate::storage::Storage;
 use crate::palette::{self, Pal};
 use crate::todo_port;
@@ -153,6 +153,10 @@ pub enum Open {
     CampaignExp,
     /// 0x4b6490: rez\gluLoad.bin, event proc 0x4b6410.
     Load,
+    /// 0x4b6e50 from 0x4ed940 (New ID): rez\gluPEdit.bin, event proc 0x4b6cc0.
+    NewId,
+    /// 0x4b73b0 from 0x4ed840 (Delete): rez\gluPOkCancel.bin, event proc 0x4b6d60.
+    DeleteChar,
 }
 
 /// 0x50e06c + 0x10a: the light percentage translucent image controls use (0x6d5e24).
@@ -256,6 +260,15 @@ pub struct Glue {
     fade: Option<Fade>,
     /// The control the mouse is over (event 9 of the glue buttons).
     hover: Option<i16>,
+    /// 0x51a220 / 0x51a228: the login screen's profiles, by creation time (0x4ed440).
+    profiles: Vec<Profile>,
+    /// The login dialog's 50 ms timer 0x57 (no profiles: New ID opens), ms left.
+    login_timer: Option<u32>,
+    /// 0x599a88: the characters gluPEdit's edit refuses (0x4b6b10).
+    edit_refuse: Vec<u8>,
+    /// The last left button press (clock, control id): a second one on the same control
+    /// within the double-click time (500 ms) is event 6.
+    last_press: Option<(u32, i16)>,
 }
 
 impl Glue {
@@ -311,6 +324,10 @@ impl Glue {
             gamma: 100,
             fade: None,
             hover: None,
+            profiles: Vec::new(),
+            login_timer: None,
+            edit_refuse: Vec::new(),
+            last_press: None,
         }
     }
 
@@ -471,8 +488,22 @@ impl Glue {
         dlg.this.flags |= 4;
         dlg.bind(files);
         dlg.init_lightups(files);
+        self.init_controls(files, &mut dlg);
         self.glue_dialog_init(files, &mut dlg, true);
         dlg
+    }
+
+    /// Event 10 to the list boxes (0x41b140) and edits (0x416450) of a new dialog.
+    fn init_controls(&mut self, files: &Storage, dlg: &mut Dialog) {
+        let p = self.palette_id();
+        let skin = &self.look(files, p).skin;
+        for c in &mut dlg.controls {
+            match c.ty {
+                12 => skin.list_init(c),
+                8 => skin.edit_init(c),
+                _ => {}
+            }
+        }
     }
 
     /// 0x4db280: the version label (control 10): gluAll.tbl string 3 ("%s") with the
@@ -625,7 +656,7 @@ impl Glue {
         let (mut p, ok) = self.setup.load_profile(name.as_bytes());
         if !ok {
             let default = self.network.get(0x47).map(String::as_str).unwrap_or_default();
-            let created = if name.eq_ignore_ascii_case(default) { self.setup.new_profile(name.as_bytes(), &self.glu_all_raw) } else { None };
+            let created = if name.eq_ignore_ascii_case(default) { self.setup.new_profile(name.as_bytes(), &self.network_raw) } else { None };
             match created {
                 Some(n) => p = n,
                 // 0x6d5a10 is 0 here.
@@ -811,7 +842,7 @@ impl Glue {
         }
         let rec = self.camp_rec;
         let (mission, race) = (self.exe_u16(rec + 2), self.exe_u8(rec + 6));
-        self.setup.record_mission(mission, race, &self.network_raw, &self.glu_all_raw);
+        self.setup.record_mission(mission, race, &self.network_raw);
         if mission == 0 {
             // The end of the list.
             if !self.expansion {
@@ -882,7 +913,7 @@ impl Glue {
         self.setup.map_dir_flag = mission;
         let path = self.map_names.get(mission as usize).cloned().unwrap_or_default();
         let mut hdr = [0u8; 0x20];
-        if !self.setup.load_map(files, &path, &mut hdr, true, &self.glu_all_raw) {
+        if !self.setup.load_map(files, &path, &mut hdr, true, &self.network_raw) {
             return false;
         }
         let (mut a, mut b) = ([0u8; 0x20], [0u8; 0x20]);
@@ -959,11 +990,222 @@ impl Glue {
     }
 
     /// 0x4edc30 (rez\gluLogin.bin, event proc 0x4edaa0), before 0x41a080: the profile
-    /// login.
+    /// login. Event 10: the list (8, proc 0x4ed770 from 0x51a478) gets flag 0x20000;
+    /// event 0: 0x4ed720, 0x4de150, then the list's 0x4ed640.
     fn open_login(&mut self, files: &Storage) {
-        let dlg = self.open_glue_dialog(files, "rez/gluLogin.bin");
-        self.show_palette();
+        let mut dlg = self.open_glue_dialog(files, "rez/gluLogin.bin");
+        if let Some(c) = dlg.get_mut(8) {
+            c.flags |= 0x20000;
+        }
         self.dlg = Some((dlg, Open::Login));
+        self.login_profiles();
+        self.show_palette();
+        self.login_fill();
+    }
+
+    /// 0x4ed720: the profiles of this mode (0x4a8ab0, 0x4ed490: at most 0xfa, the
+    /// network flag matching 0x57f0b4, in creation time order); with none the 50 ms
+    /// timer 0x57 is set.
+    fn login_profiles(&mut self) {
+        self.profiles.clear();
+        for p in self.setup.list_profiles() {
+            if self.profiles.len() < 0xfa && (p.0[4] != 0) == self.setup.multiplayer {
+                self.login_insert(p);
+            }
+        }
+        if self.profiles.is_empty() {
+            self.login_timer = Some(50);
+        }
+    }
+
+    /// 0x4ed440: `p` goes before the first profile created later; its index.
+    fn login_insert(&mut self, p: Profile) -> usize {
+        let t = |p: &Profile| u32::from_le_bytes(p.0[8..12].try_into().unwrap());
+        let i = self.profiles.iter().position(|q| t(q) > t(&p)).unwrap_or(self.profiles.len());
+        self.profiles.insert(i, p);
+        i
+    }
+
+    /// The login dialog's list box (id 8).
+    fn login_list(&mut self) -> Option<&mut crate::dlg::Ctl> {
+        self.dlg.as_mut().and_then(|(d, _)| d.get_mut(8))
+    }
+
+    /// 0x418640 (on) / 0x418e00 (off) on control `id` of the screen's dialog.
+    fn disable(&mut self, id: i16, on: bool) {
+        if let Some(c) = self.dlg.as_mut().and_then(|(d, _)| d.get_mut(id)) {
+            if on {
+                c.flags |= crate::dlg::flag::DISABLED;
+            } else {
+                c.flags &= !crate::dlg::flag::DISABLED;
+            }
+        }
+    }
+
+    /// 0x4ed640 (the list's event 0): Delete and Ok off, a row per profile, the first
+    /// selected (event 0xb row 0, then 0x41a600).
+    fn login_fill(&mut self) {
+        self.disable(7, true);
+        self.disable(4, true);
+        let names: Vec<Vec<u8>> = self.profiles.iter().map(|p| p.name().to_vec()).collect();
+        let Some(c) = self.login_list() else { return };
+        c.list.as_mut().unwrap().batch = true;
+        for n in &names {
+            c.list_add(n, 0);
+        }
+        c.list.as_mut().unwrap().batch = false;
+        c.list_layout();
+        if !names.is_empty() {
+            self.list_event(8, 0);
+            if let Some(c) = self.login_list() {
+                c.list_scroll_to(0);
+            }
+        }
+    }
+
+    /// Event 0xe code 0xb to list box `id` of the top dialog (0x41baa0 selects `row`);
+    /// the login list's proc 0x4ed770 then runs 0x4ed560.
+    fn list_event(&mut self, id: i16, row: u8) {
+        let top = if self.popup.is_some() { self.popup.as_mut() } else { self.dlg.as_mut() };
+        let Some((dlg, open)) = top else { return };
+        let open = *open;
+        if let Some(c) = dlg.get_mut(id) {
+            c.list_select(row);
+        }
+        if open == Open::Login && id == 8 {
+            self.login_buttons();
+        }
+    }
+
+    /// 0x4ed560: Ok and Delete work only with a profile selected.
+    fn login_buttons(&mut self) {
+        let sel = self.login_list().and_then(|c| c.list.as_ref()).map_or(0xff, |l| l.sel);
+        let off = sel == 0xff || self.profiles.is_empty();
+        self.disable(7, off);
+        self.disable(4, off);
+    }
+
+    /// 0x4edaa0 event 0xe code 2 (an activated control in 0x6d051c): Ok (4) takes the
+    /// selected profile (0x4ed3f0) or stays, New ID (6) 0x4ed940, Delete (7) 0x4ed840,
+    /// anything else ends the dialog (0x4dd040).
+    fn login_activate(&mut self, files: &Storage, id: i16) {
+        self.activated = id;
+        match id {
+            4 if !self.login_take() => {}
+            6 => self.login_new_id(files),
+            7 => self.login_delete(files),
+            _ => {
+                self.end_dialog(id as i32);
+            }
+        }
+    }
+
+    /// 0x4ed3f0: the selected profile's name becomes the player name (0x57ee9c,
+    /// 0x66ff30 = 0). False with none.
+    fn login_take(&mut self) -> bool {
+        let sel = self.login_list().and_then(|c| c.list.as_ref()).map_or(0xff, |l| l.sel);
+        let Some(p) = self.profiles.get(sel as usize) else { return false };
+        if sel == 0xff {
+            return false;
+        }
+        let name = p.name().to_vec();
+        self.setup.local_name = [0; 0x20];
+        let n = name.len().min(0x18);
+        self.setup.local_name[..n].copy_from_slice(&name[..n]);
+        self.player_name = String::from_utf8_lossy(&name[..n]).into_owned();
+        true
+    }
+
+    /// 0x4ed940: New ID. With 0xfa profiles listed, gluAll.tbl 0x1a says to delete one;
+    /// else the name popup 0x4b6e50 (gluAll 0x17, 0x19 bytes, refusing network.tbl
+    /// string 0x10) opens; `login_new_id_done` is the part after it.
+    fn login_new_id(&mut self, files: &Storage) {
+        let n = self.login_list().and_then(|c| c.list.as_ref()).map_or(0, |l| l.items.len());
+        if n > 0xf9 {
+            let msg = self.glu_all.get(0x19).cloned().unwrap_or_default();
+            return self.open_popup(files, &msg);
+        }
+        let title = self.glu_all.get(0x16).cloned().unwrap_or_default();
+        self.edit_refuse = self.network.get(0x10).map(|s| s.as_bytes().to_vec()).unwrap_or_default();
+        self.open_edit_popup(files, &title, b"", 0x19, Open::NewId);
+    }
+
+    /// 0x4ed940 after 0x4b6e50 returned `ok` with `name`: a reserved or bad file name
+    /// (network.tbl 5), a name in use (gluAll 0x19) or a failed write (gluAll 0x1b) is
+    /// a message; else the profile is listed in its place, selected, Ok and Delete on.
+    fn login_new_id_done(&mut self, files: &Storage, ok: bool, name: Vec<u8>) {
+        if !ok {
+            return;
+        }
+        if Setup::profile_name_invalid(&name, &self.network_raw) {
+            let msg = self.network.get(5).cloned().unwrap_or_default();
+            return self.open_popup(files, &msg);
+        }
+        // 0x4ed3a0 (_mbsicmp).
+        if self.profiles.iter().any(|p| p.name().eq_ignore_ascii_case(&name)) {
+            let msg = self.glu_all.get(0x18).cloned().unwrap_or_default();
+            return self.open_popup(files, &msg);
+        }
+        let Some(p) = self.setup.new_profile(&name, &self.network_raw) else {
+            let msg = self.glu_all.get(0x1a).cloned().unwrap_or_default();
+            return self.open_popup(files, &msg);
+        };
+        let i = self.login_insert(p) as u8;
+        if let Some(c) = self.login_list() {
+            c.list_insert(i, &name, 0);
+        }
+        // 0x41a850.
+        let n = self.login_list().and_then(|c| c.list.as_ref()).map_or(0, |l| l.items.len());
+        if (i as usize) < n {
+            self.list_event(8, i);
+            if let Some(c) = self.login_list() {
+                c.list_scroll_to(i);
+            }
+        }
+        self.disable(7, false);
+        self.disable(4, false);
+    }
+
+    /// 0x4ed840: Delete asks (0x4b73b0, gluAll 0x18) about the selected profile;
+    /// `login_delete_done` is the part after it.
+    fn login_delete(&mut self, files: &Storage) {
+        let sel = self.login_list().and_then(|c| c.list.as_ref()).map_or(0xff, |l| l.sel);
+        if sel == 0xff || sel as usize >= self.profiles.len() {
+            return;
+        }
+        let msg = self.glu_all.get(0x17).cloned().unwrap_or_default();
+        self.open_ok_cancel(files, &msg, Open::DeleteChar);
+    }
+
+    /// 0x4ed840 after the question: its saved games go (0x4cf7b0), then the file; when
+    /// that worked the row and the profile go, with no rows left Delete and Ok are off,
+    /// and the selection is reported again (0x41a850, 0x4ed560).
+    fn login_delete_done(&mut self, ok: bool) {
+        if !ok {
+            return;
+        }
+        let sel = self.login_list().and_then(|c| c.list.as_ref()).map_or(0xff, |l| l.sel);
+        let Some(p) = self.profiles.get(sel as usize) else { return };
+        todo_port!("0x4cf7b0", "delete the profile's saved games");
+        if !self.setup.delete_profile(&p.name().to_vec()) {
+            return;
+        }
+        if let Some(c) = self.login_list() {
+            c.list_remove(sel);
+        }
+        self.profiles.remove(sel as usize);
+        let (n, sel) = self.login_list().and_then(|c| c.list.as_ref()).map_or((0, 0xff), |l| (l.items.len(), l.sel));
+        if n == 0 {
+            self.disable(7, true);
+            self.disable(4, true);
+        }
+        if (sel as usize) < n || sel == 0xff {
+            self.list_event(8, sel);
+            if let Some(c) = self.login_list() {
+                c.list_scroll_to(sel);
+            }
+        }
+        self.login_buttons();
     }
 
     /// 0x4edc30 (after 0x41a080): 4 (ok) goes on: single player to the campaign select
@@ -1081,7 +1323,7 @@ impl Glue {
             self.camp_select();
             if self.camp_rec != 0 && self.exe_u16(self.camp_rec + 2) != 0 {
                 let (mission, race) = (self.exe_u16(self.camp_rec + 2), self.exe_u8(self.camp_rec + 6));
-                self.setup.record_mission(mission, race, &self.network_raw, &self.glu_all_raw);
+                self.setup.record_mission(mission, race, &self.network_raw);
             }
         }
         if !done {
@@ -1315,6 +1557,52 @@ impl Glue {
         self.popup_dialog(files, "rez/gluPOk.bin", Open::Popup, msg, "");
     }
 
+    /// 0x4b73b0: the Ok / Cancel question (rez\gluPOkCancel.bin over pDPopup.pcx): the
+    /// text in the label (id 2); Ok (1) is yes.
+    fn open_ok_cancel(&mut self, files: &Storage, msg: &str, open: Open) {
+        self.popup = None;
+        self.popup_dialog_pcx(files, "rez/gluPOkCancel.bin", "pDPopup", open, msg, "");
+    }
+
+    /// 0x4b6e50: the text popup (rez\gluPEdit.bin over pEPopup.pcx). Event 0 is 0x4b6a20:
+    /// the title in the label (2), the edit (4, no outline) holds `text` with the caret
+    /// at its end (a preset text is replaced by the first key), Ok (1) is on only with a
+    /// text (0x4b68c0), the edit has the focus; `max` is the buffer size (+0x26).
+    fn open_edit_popup(&mut self, files: &Storage, title: &str, text: &[u8], max: u32, open: Open) {
+        self.popup = None;
+        self.popup_dialog_pcx(files, "rez/gluPEdit.bin", "pEPopup", open, "", "");
+        let Some((dlg, _)) = self.popup.as_mut() else { return };
+        if let Some(c) = dlg.get_mut(2) {
+            c.text = title.as_bytes().to_vec();
+        }
+        if let Some(c) = dlg.get_mut(4) {
+            c.flags |= 0x20000;
+            c.text = text.iter().copied().take(0xff).collect();
+            if let Some(e) = c.edit.as_mut() {
+                e.caret = c.text.len() as u8;
+                e.mode |= 1;
+                e.max = max;
+                e.preset = !text.is_empty();
+                // 0x418830 -> event 5: focus, the caret shows (0x416790 AL = 1).
+                e.blink = Some(500);
+            }
+            c.flags |= 0x4000_0000;
+        }
+        Self::edit_ok_state(dlg);
+    }
+
+    /// 0x4b68c0: the edit popup's Ok (1) works only with a text in the edit (4).
+    fn edit_ok_state(dlg: &mut Dialog) {
+        let empty = dlg.get(4).is_none_or(|c| c.text.is_empty());
+        if let Some(c) = dlg.get_mut(1) {
+            if empty {
+                c.flags |= crate::dlg::flag::DISABLED;
+            } else {
+                c.flags &= !crate::dlg::flag::DISABLED;
+            }
+        }
+    }
+
     /// 0x4b7a70: the popup with a title (id 2) and a text (id 5). An empty `title` is
     /// 0x4b7180.
     pub fn open_popup_split(&mut self, files: &Storage, title: &str, msg: &str) {
@@ -1329,20 +1617,27 @@ impl Glue {
     /// (0x4b6810: the texts; their fit 0x4b6660), 10 (0x4b6c70: 0x4dd9e0 with the
     /// popup's pOPopup.pcx as the background).
     fn popup_dialog(&mut self, files: &Storage, bin: &str, open: Open, first: &str, second: &str) {
+        self.popup_dialog_pcx(files, bin, "pOPopup", open, first, second);
+    }
+
+    /// `popup_dialog` with the background `<palette dir>\<pcx>.pcx` (0x4b7180 pOPopup,
+    /// 0x4b6e50 pEPopup, 0x4b73b0 pDPopup).
+    fn popup_dialog_pcx(&mut self, files: &Storage, bin: &str, pcx: &str, open: Open, first: &str, second: &str) {
         let Ok(d) = files.read(bin) else { crate::bw::fatal_error(bin) };
         let mut dlg = Dialog::parse(&d);
         dlg.this.flags |= 4;
         dlg.bind(files);
         dlg.init_lightups(files);
+        self.init_controls(files, &mut dlg);
         let p = self.palette_id();
         let dir = PALETTES[p];
-        let Ok(pcx) = files.read(&format!("{dir}/pOPopup.pcx")) else { crate::bw::fatal_error("pOPopup.pcx") };
+        let Ok(pcx) = files.read(&format!("{dir}/{pcx}.pcx")) else { crate::bw::fatal_error(pcx) };
         let (w, h, px) = crate::view::pcx(&pcx);
         if self.state == state::GLUE {
             let (x, y) = ((640 - dlg.this.rect.2) / 2, (480 - dlg.this.rect.3) / 2);
             dlg.this.rect = (x, y, dlg.this.rect.2 + x, dlg.this.rect.3 + y);
         }
-        if let Some(c) = dlg.get_mut(2) {
+        if let Some(c) = dlg.get_mut(2).filter(|_| !first.is_empty()) {
             c.text = first.as_bytes().to_vec();
             todo_port!("0x4b6660", "shrink the text's font until it fits the label");
         }
@@ -1399,11 +1694,19 @@ impl Glue {
     /// 0xe code 2 to the dialog's event proc). Runs the screen's `done_*` once the event
     /// proc ended the dialog.
     pub fn activate(&mut self, files: &Storage, id: i16) {
-        if self.popup.is_some() {
+        if let Some((dlg, open)) = self.popup.take() {
             // 0x4b6d60 / 0x4b5920 -> 0x418eb0: any control ends the popup (event 1 releases
-            // its timers: 0x4dcc00).
-            self.popup = None;
+            // its timers: 0x4dcc00) with its id; 0x4b6cc0's event 1 keeps the edit's text
+            // (0x4b65d0).
             self.error_depth = 0;
+            match open {
+                Open::NewId => {
+                    let text = dlg.get(4).map(|c| c.text.iter().copied().take(0x18).collect()).unwrap_or_default();
+                    self.login_new_id_done(files, id == 1, text);
+                }
+                Open::DeleteChar => self.login_delete_done(id == 1),
+                _ => {}
+            }
             return;
         }
         let Some((_, open)) = self.dlg.as_ref() else { return };
@@ -1429,8 +1732,7 @@ impl Glue {
                 todo_port!("0x4af5c0", "create game event proc (map list, game type, options)");
             }
             Open::Login => {
-                self.activated = id;
-                todo_port!("0x4edaa0", "login event proc (profile list, create / delete, ok / cancel)");
+                self.login_activate(files, id);
             }
             Open::Ready(_) => {
                 // The event proc's activation (event 0xe code 2) is 0x46d160.
@@ -1451,6 +1753,266 @@ impl Glue {
                 Open::Ready(race) => self.done_ready(files, r, race),
                 _ => {}
             }
+        }
+    }
+
+    /// The top dialog (the popup over the screen's).
+    fn top(&mut self) -> Option<&mut (Dialog, Open)> {
+        if self.popup.is_some() { self.popup.as_mut() } else { self.dlg.as_mut() }
+    }
+
+    /// The font of control `id` in the top dialog (0x41fb30 by its flags).
+    fn ctl_font(&mut self, files: &Storage, id: i16) -> Option<crate::ui::Font> {
+        let flags = self.top()?.0.get(id)?.flags;
+        let p = self.palette_id();
+        let skin = &self.look(files, p).skin;
+        Some(skin.fonts[match flags & 0x4c00 {
+            0x400 => 0,
+            0x800 => 2,
+            0x4000 => 3,
+            _ => 1,
+        }].clone())
+    }
+
+    /// 0x418270 (`mask`): the first control with a flag of `mask` that is shown, enabled
+    /// and (with an id >= 0) has flag 0x10 is pressed (event 3).
+    fn press_flagged(&mut self, files: &Storage, mask: u32) -> bool {
+        let Some((dlg, _)) = self.top() else { return false };
+        let Some(c) = dlg.controls.iter().find(|c| c.flags & mask != 0) else { return false };
+        let f = c.flags;
+        if f & crate::dlg::flag::VISIBLE == 0 || f & crate::dlg::flag::DISABLED != 0 || c.id == -1 || (c.id >= 0 && f & 0x10 == 0) {
+            return false;
+        }
+        let id = c.id;
+        self.glue_sound_hook(1);
+        self.activate(files, id);
+        true
+    }
+
+    /// The controls of the top dialog that take keys (0x418a10: types 0x51a17c, scroll
+    /// bars, edits, lists, combos) and are shown, enabled, flag 0x10.
+    fn key_controls(&mut self) -> Vec<(i16, u16)> {
+        let Some((dlg, _)) = self.top() else { return Vec::new() };
+        dlg.controls.iter().filter(|c| matches!(c.ty, 6 | 7 | 8 | 12 | 13) && c.flags & 0x1a == 0x18).map(|c| (c.id, c.ty)).collect()
+    }
+
+    /// A key went down (WM_KEYDOWN, event 0; `vk` the virtual key, `mods` +0xa: 8 Alt).
+    /// 0x418eb0: Alt + a hotkey letter presses its button (0x418170); else the controls
+    /// that take keys get it (0x418a10): a list moves its selection (0x41a9d0), an edit
+    /// its caret (0x416980).
+    pub fn key_down(&mut self, files: &Storage, vk: u16, mods: u8) {
+        if mods & 8 != 0 {
+            let ch = (vk as u8).to_ascii_lowercase();
+            if self.press_hotkey(files, ch) {
+                return;
+            }
+        }
+        for (id, ty) in self.key_controls() {
+            let Some((dlg, open)) = self.top() else { return };
+            let open = *open;
+            let Some(c) = dlg.get_mut(id) else { continue };
+            match ty {
+                12 => {
+                    let Some(r) = c.list_key(vk) else { continue };
+                    if let Some(r) = r {
+                        self.list_event(id, r);
+                        if let Some(c) = self.top().and_then(|(d, _)| d.get_mut(id)) {
+                            let sel = c.list.as_ref().map_or(0xff, |l| l.sel);
+                            c.list_scroll_to(sel);
+                        }
+                    }
+                    return;
+                }
+                8 => {
+                    if c.edit_key(vk, mods) {
+                        if open == Open::NewId {
+                            // 0x4b6c30 -> 0x4b68c0.
+                            Self::edit_ok_state(dlg);
+                        }
+                        return;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// 0x418510's second pass: the button whose hotkey (text byte 0, flag 0x200) is `ch`
+    /// is pressed when shown, enabled and (id >= 0) flag 0x10.
+    fn press_hotkey(&mut self, files: &Storage, ch: u8) -> bool {
+        let Some((dlg, _)) = self.top() else { return false };
+        let hit = dlg.controls.iter().find(|c| {
+            let f = c.flags;
+            f & 0x200 != 0
+                && c.text.first() == Some(&ch)
+                && f & crate::dlg::flag::VISIBLE != 0
+                && f & crate::dlg::flag::DISABLED == 0
+                && c.id != -1
+                && (c.id < 0 || f & 0x10 != 0)
+        });
+        let Some(id) = hit.map(|c| c.id) else { return false };
+        self.glue_sound_hook(1);
+        self.activate(files, id);
+        true
+    }
+
+    /// A typed character (WM_CHAR, event 0xf; 0x418ab0): Enter presses the button with
+    /// id -2 or flag 0x80000, Escape id -3 or flag 0x40, Space the active control; else
+    /// a hotkey (none while the dialog has an edit, 0x418510), else the controls that
+    /// take keys (an edit types it).
+    pub fn char_in(&mut self, files: &Storage, ch: u8) {
+        match ch {
+            9 => {
+                todo_port!("0x418a60", "Tab: the next control takes the focus");
+                return;
+            }
+            0x0d => {
+                if self.press_id(files, -2) || self.press_flagged(files, 0x80000) {
+                    return;
+                }
+            }
+            0x1b => {
+                if self.press_id(files, -3) || self.press_flagged(files, 0x40) {
+                    return;
+                }
+            }
+            0x20 => {
+                let act = self.top().and_then(|(d, _)| d.active.map(|i| &d.controls[i])).filter(|c| matches!(c.ty, 1 | 2 | 14)).map(|c| c.id);
+                if let Some(id) = act {
+                    self.glue_sound_hook(1);
+                    return self.activate(files, id);
+                }
+            }
+            _ => {}
+        }
+        // 0x417e30: an edit that takes keys turns hotkeys off.
+        let has_edit = self.top().is_some_and(|(d, _)| d.controls.iter().any(|c| c.ty == 8 && c.flags & 0x1a == 0x18));
+        if !has_edit && self.press_hotkey(files, ch.to_ascii_lowercase()) {
+            return;
+        }
+        for (id, ty) in self.key_controls() {
+            if ty != 8 {
+                continue;
+            }
+            let font = self.ctl_font(files, id);
+            let refuse = self.edit_refuse.clone();
+            let Some((dlg, open)) = self.top() else { return };
+            let open = *open;
+            let Some(c) = dlg.get_mut(id) else { continue };
+            let Some(font) = font else { continue };
+            if open == Open::NewId {
+                // 0x4b6b10: refused characters (0x51a70c and the caller's list) do
+                // nothing; a preset text goes on the first key; a full buffer takes only
+                // backspace; a space does not start a name.
+                const NEVER: &[u8] = b"*\\/:><|&+^?-";
+                if NEVER.contains(&ch) || refuse.contains(&ch) {
+                    return;
+                }
+                if let Some(e) = c.edit.as_mut().filter(|e| e.preset) {
+                    e.preset = false;
+                    e.caret = 0;
+                    e.mode |= 1;
+                    c.text.clear();
+                }
+                let max = c.edit.as_ref().map_or(0x100, |e| e.max);
+                if ((c.text.len() as u32) < max.wrapping_sub(1) || ch == 8) && !(ch == 0x20 && c.text.is_empty()) {
+                    c.edit_char(ch, &font);
+                    c.edit_rescroll(&font);
+                }
+                Self::edit_ok_state(dlg);
+                return;
+            }
+            if c.edit_char(ch, &font) {
+                c.edit_rescroll(&font);
+                return;
+            }
+        }
+    }
+
+    /// 0x4182f0: the button (type 1 / 2) with id `id` is pressed when it can be.
+    fn press_id(&mut self, files: &Storage, id: i16) -> bool {
+        let ok = self.top().and_then(|(d, _)| d.get(id)).is_some_and(|c| {
+            matches!(c.ty, 1 | 2) && c.flags & crate::dlg::flag::VISIBLE != 0 && c.flags & crate::dlg::flag::DISABLED == 0
+        });
+        if ok {
+            self.activate(files, id);
+        }
+        ok
+    }
+
+    /// The left button went down (event 4, or 6 for a second press on the same control
+    /// within 500 ms): a list highlights the row under the mouse (0x41ab20) or, on a
+    /// double click, presses the default button (0x418270 flag 0x80000); an edit takes
+    /// the focus and puts its caret under the mouse (0x416980 event 4 / 6, 0x4164d0).
+    pub fn press(&mut self, files: &Storage) {
+        let (mx, my) = self.mouse;
+        let clock = self.clock_ms;
+        let Some((dlg, _)) = self.top() else { return };
+        let Some(i) = dlg.hit(mx, my) else { return };
+        let (ox, oy) = dlg.origin();
+        let (id, ty) = (dlg.controls[i].id, dlg.controls[i].ty);
+        let dbl = self.last_press.is_some_and(|(t, last)| last == id && clock.wrapping_sub(t) < 500);
+        self.last_press = if dbl { None } else { Some((clock, id)) };
+        match ty {
+            12 => {
+                if dbl {
+                    self.press_flagged(files, 0x80000);
+                    return;
+                }
+                let Some((dlg, _)) = self.top() else { return };
+                let c = &mut dlg.controls[i];
+                if c.list_inside(mx - ox, my - oy) {
+                    let r = c.list_row_at(mx - ox, my - oy);
+                    if let Some(l) = c.list.as_mut() {
+                        l.hover = r;
+                        l.pressed = true;
+                    }
+                    c.list_scroll_to(r);
+                }
+            }
+            8 => {
+                let font = self.ctl_font(files, id);
+                let Some((dlg, _)) = self.top() else { return };
+                if let Some(font) = font {
+                    dlg.controls[i].edit_click(mx - ox, &font);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// The mouse moved with the button down (event 3 to the captured list, 0x41ae90): the
+    /// row under it is highlighted.
+    pub fn drag(&mut self) {
+        let (mx, my) = self.mouse;
+        let Some((dlg, _)) = self.top() else { return };
+        let (ox, oy) = dlg.origin();
+        for c in dlg.controls.iter_mut().filter(|c| c.list.as_ref().is_some_and(|l| l.pressed)) {
+            if c.list_inside(mx - ox, my - oy) {
+                let r = c.list_row_at(mx - ox, my - oy);
+                let l = c.list.as_mut().unwrap();
+                if l.hover != r {
+                    l.hover = r;
+                    c.list_scroll_to(r);
+                }
+            }
+        }
+    }
+
+    /// The left button went up (event 5): a list that was pressed selects the highlighted
+    /// row (0x41a490: event 0xb when it differs and is a row).
+    pub fn release(&mut self) {
+        let Some((dlg, _)) = self.top() else { return };
+        let mut ev = None;
+        for c in dlg.controls.iter_mut() {
+            let Some(l) = c.list.as_mut().filter(|l| l.pressed) else { continue };
+            l.pressed = false;
+            if l.hover != l.sel && (l.hover as usize) < l.items.len() {
+                ev = Some((c.id, l.hover));
+            }
+        }
+        if let Some((id, r)) = ev {
+            self.list_event(id, r);
         }
     }
 
@@ -1475,8 +2037,16 @@ impl Glue {
     /// `ms` pass: the dialogs' 30 ms timers (0x4e0f50) and the cursor's 50 ms timer
     /// (0x4dcea0 -> 0x4be120 advances 0x597390).
     pub fn tick(&mut self, files: &Storage, ms: u32) {
-        let _ = files;
         self.clock_ms = self.clock_ms.wrapping_add(ms);
+        // 0x4edaa0 event 8 code 0x57: the timer goes (0x416000), New ID opens.
+        if let Some(left) = self.login_timer {
+            if left > ms {
+                self.login_timer = Some(left - ms);
+            } else if self.popup.is_none() && self.dlg.as_ref().is_some_and(|(_, o)| *o == Open::Login) {
+                self.login_timer = None;
+                self.login_new_id(files);
+            }
+        }
         for (d, _) in [self.dlg.as_mut(), self.popup.as_mut()].into_iter().flatten() {
             d.tick(ms);
         }
@@ -1516,6 +2086,12 @@ impl Glue {
         };
         palette::gamma(&pal, self.gamma)
     }
+}
+
+/// Whether a click on `c` activates it (event 0xe code 2 to the dialog): buttons,
+/// option / check boxes and light-up buttons; lists, edits, images and labels do not.
+fn activates(c: &crate::dlg::Ctl) -> bool {
+    matches!(c.ty, 1..=4 | 14)
 }
 
 /// The last 768 bytes of a .pcx: its palette.
@@ -1570,8 +2146,8 @@ fn exe_resource(ty: usize, name: &str) -> Option<Vec<u8>> {
 
 /// The graphics of one glue palette: 0x4dd850 tFont.pcx (the text color rows), 0x4ddf00
 /// Dlg.grp, 0x4dd910 tEffect.pcx (the shade color), 0x4ddf90 arrow.grp, the palette and
-/// background of 0x4dd9e0 (BackGnd.pcx) and the fonts (0x4daec0: font8, font10, font16,
-/// font16x as ui.rs loads them).
+/// background of 0x4dd9e0 (BackGnd.pcx) and the fonts (0x4daec0, font set 1: font10,
+/// font14, font16, font16x in 0x6ce0f4..0x6ce100).
 struct Look {
     skin: Skin,
     pal: [[u8; 3]; 256],
@@ -1586,8 +2162,8 @@ impl Look {
         let dir = PALETTES[p];
         let tfont = files.read(&format!("{dir}/tFont.pcx"))?;
         let fonts = [
-            Font::parse(read_font(files, "font/font8.fnt")?),
             Font::parse(read_font(files, "font/font10.fnt")?),
+            Font::parse(read_font(files, "font/font14.fnt")?),
             Font::parse(read_font(files, "font/font16.fnt")?),
             Font::parse(read_font(files, "font/font16x.fnt")?),
         ];
@@ -1629,7 +2205,20 @@ pub fn run(files: &Storage, shot: Option<&str>) -> std::io::Result<()> {
         None
     };
     let mut pressed: Option<i16> = None;
+    let mut was_down = false;
+    let mut script: std::collections::VecDeque<String> = std::env::var("SCBW_GLUE_INPUT").map(|v| v.split(';').map(str::to_string).collect()).unwrap_or_default();
     let mut popped = false;
+    // Typed characters (WM_CHAR).
+    struct Typed(std::rc::Rc<std::cell::RefCell<Vec<u32>>>);
+    impl minifb::InputCallback for Typed {
+        fn add_char(&mut self, c: u32) {
+            self.0.borrow_mut().push(c);
+        }
+    }
+    let typed = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    if let Some(w) = win.as_mut() {
+        w.set_input_callback(Box::new(Typed(typed.clone())));
+    }
     let mut audio = if shot.is_none() { crate::audio::Audio::open(files) } else { None };
     let dat = crate::dat::Dat::load(files).ok();
     let mut last = std::time::Instant::now();
@@ -1674,16 +2263,96 @@ pub fn run(files: &Storage, shot: Option<&str>) -> std::io::Result<()> {
             *o = (r as u32) << 16 | (g as u32) << 8 | b as u32;
         }
         let Some(win) = win.as_mut() else {
+            // SCBW_GLUE_INPUT="c x y;k vk;t text;w ms" (screenshot mode): clicks, keys,
+            // typed text and waits, one per pass, then the shot.
+            if let Some(step) = script.pop_front() {
+                let a: Vec<&str> = step.split_whitespace().collect();
+                let num = |i: usize| a.get(i).and_then(|v| v.parse::<i32>().ok()).unwrap_or(0);
+                match a.first().copied() {
+                    Some("c") => {
+                        glue.mouse_to(num(1), num(2));
+                        glue.press(files);
+                        let top = glue.popup.as_ref().or(glue.dlg.as_ref());
+                        let hit = top.and_then(|(dlg, _)| dlg.hit(num(1), num(2)).filter(|&i| activates(&dlg.controls[i])).map(|i| dlg.controls[i].id));
+                        glue.release();
+                        if let Some(id) = hit {
+                            glue.mouse_down();
+                            glue.activate(files, id);
+                        }
+                    }
+                    Some("k") => {
+                        let vk = u16::from_str_radix(a.get(1).unwrap_or(&"0").trim_start_matches("0x"), 16).unwrap_or(0);
+                        glue.key_down(files, vk, 0);
+                        if matches!(vk, 8 | 9 | 0x0d | 0x1b) {
+                            glue.char_in(files, vk as u8);
+                        }
+                    }
+                    Some("t") => {
+                        for c in step[2..].bytes() {
+                            glue.char_in(files, c);
+                        }
+                    }
+                    Some("w") => glue.tick(files, num(1) as u32),
+                    _ => {}
+                }
+                continue;
+            }
             return crate::write_png(shot.unwrap(), w, h, &idx, &pal);
         };
         if !win.is_open() {
             return Ok(());
         }
+        // Keys (WM_KEYDOWN with repeat: virtual key codes) and characters (WM_CHAR; Enter,
+        // Escape, Backspace and Tab come as their control characters).
+        {
+            use minifb::{Key, KeyRepeat};
+            let alt = win.is_key_down(Key::LeftAlt) || win.is_key_down(Key::RightAlt);
+            for k in win.get_keys_pressed(KeyRepeat::Yes) {
+                let vk = match k {
+                    Key::PageUp => 0x21,
+                    Key::PageDown => 0x22,
+                    Key::End => 0x23,
+                    Key::Home => 0x24,
+                    Key::Left => 0x25,
+                    Key::Up => 0x26,
+                    Key::Right => 0x27,
+                    Key::Down => 0x28,
+                    Key::Insert => 0x2d,
+                    Key::Delete => 0x2e,
+                    Key::Enter | Key::NumPadEnter => 0x0d,
+                    Key::Escape => 0x1b,
+                    Key::Backspace => 8,
+                    Key::Tab => 9,
+                    _ => match format!("{k:?}").as_bytes() {
+                        [c] if c.is_ascii_uppercase() || c.is_ascii_digit() => *c as u16,
+                        _ => continue,
+                    },
+                };
+                glue.key_down(files, vk, if alt { 8 } else { 0 });
+                if matches!(vk, 8 | 9 | 0x0d | 0x1b) {
+                    glue.char_in(files, vk as u8);
+                }
+            }
+            for c in typed.borrow_mut().drain(..) {
+                if (0x20..=0xff).contains(&c) && c != 0x7f && !alt {
+                    glue.char_in(files, c as u8);
+                }
+            }
+        }
         if let Some((x, y)) = win.get_mouse_pos(MouseMode::Clamp) {
             glue.mouse_to(x as i32, y as i32);
+            let down = win.get_mouse_down(MouseButton::Left);
+            if down && !was_down {
+                glue.press(files);
+            } else if down {
+                glue.drag();
+            } else if was_down {
+                glue.release();
+            }
+            was_down = down;
             // 0x418eb0's button behavior: activate on release over the pressed control.
             let top = glue.popup.as_ref().or(glue.dlg.as_ref());
-            let hit = top.and_then(|(dlg, _)| dlg.hit(x as i32, y as i32).map(|i| dlg.controls[i].id));
+            let hit = top.and_then(|(dlg, _)| dlg.hit(x as i32, y as i32).filter(|&i| activates(&dlg.controls[i])).map(|i| dlg.controls[i].id));
             if win.get_mouse_down(MouseButton::Left) {
                 if pressed.is_none() && hit.is_some() {
                     glue.mouse_down();

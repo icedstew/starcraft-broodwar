@@ -67,6 +67,61 @@ pub struct Ctl {
     pub trect: (i32, i32, i32, i32),
     /// Light-up buttons: +0x4e, the text flags (the control flags >> 0x14).
     pub align: u8,
+    /// List boxes (type 12) once 0x41b140 ran (event 10).
+    pub list: Option<ListBox>,
+    /// Edit controls (type 8) once 0x416450 ran (event 10); the text is `text` (+0x14).
+    pub edit: Option<Edit>,
+}
+
+/// 0x41b140 +0x47: the most rows a list box holds.
+pub const LIST_MAX: usize = 0xfe;
+
+/// A list box's rows and scroll state (dlg\lbox.cpp).
+#[derive(Clone, Debug, Default)]
+pub struct ListBox {
+    /// +0x3a / +0x3e / +0x42 (+0x46 rows): per row the text, its flags (low nibble: the
+    /// text color, 0 = 3) and data.
+    pub items: Vec<(Vec<u8>, u8, u32)>,
+    /// +0x48: the selected row (0xff none).
+    pub sel: u8,
+    /// +0x49: the row height.
+    pub row_h: u8,
+    /// +0x4a: the rows shown.
+    pub rows: u8,
+    /// +0x4b: the last top row.
+    pub max_top: u8,
+    /// +0x4d: the top row.
+    pub top: u8,
+    /// +0x4e: the highlighted row (follows the mouse while the button is down).
+    pub hover: u8,
+    /// +0x18 bit 31: the layout (0x41b410) waits until the rows are added.
+    pub batch: bool,
+    /// The left button went down in the list (the dialog's capture 0x6d5e54 / 0x6d5e4c).
+    pub pressed: bool,
+}
+
+/// An edit control's state (dlg\edit.cpp, 0x416450).
+#[derive(Clone, Debug, Default)]
+pub struct Edit {
+    /// +0x36: 0x10 insert mode, 1 the shown part needs 0x416240, high nibble the text
+    /// color (0 = 2).
+    pub mode: u8,
+    /// +0x37: the first character shown.
+    pub first: u8,
+    /// +0x38 / +0x39: the text's x margin and y offset.
+    pub margin: u8,
+    pub dy: u8,
+    /// +0x3a: the width the text may use.
+    pub width: i16,
+    /// +0x3e: the caret.
+    pub caret: u8,
+    /// +0x26 (gluPEdit 0x4b6e50): the buffer size; the text keeps one byte for the end.
+    pub max: u32,
+    /// +0x24 (gluPEdit): the text is the preset one; the first character replaces it.
+    pub preset: bool,
+    /// The caret is shown (+0x18 0x40000000) and the ms to its next toggle (the 0x416600
+    /// timer: 500 on, 250 off); None when the control has no focus.
+    pub blink: Option<u32>,
 }
 
 /// An 8-bit image (0x4d27a0's out record: width, height, pixels).
@@ -128,6 +183,289 @@ pub struct Dialog {
     timer: u32,
 }
 
+impl Ctl {
+    /// 0x41b410 (list boxes): the rows shown, the bottom snapped to whole rows, the
+    /// selection and the top row kept in range.
+    pub fn list_layout(&mut self) {
+        let t = self.rect.1;
+        let b = self.rect.3;
+        let Some(l) = self.list.as_mut() else { return };
+        if l.batch {
+            return;
+        }
+        let rh = l.row_h as i32;
+        let rows = (b - t + 1) as i16 as i32 / rh.max(1);
+        l.rows = rows as u8;
+        let h = (l.row_h as i32 * rows) as i16 as i32;
+        self.rect.3 = (t + h.max(rh)) as i16 as i32;
+        l.max_top = 0;
+        let n = l.items.len() as u8;
+        if n == 0 {
+            l.sel = 0xff;
+        } else if n <= l.sel && l.sel != 0xff {
+            l.sel = n - 1;
+        }
+        l.hover = l.sel;
+        let mt = (n as i32 - l.rows as i32).max(0) as u8;
+        l.max_top = mt;
+        if mt < l.top {
+            l.top = mt;
+        }
+        if n > l.rows {
+            todo_port!("0x41b300", "list box scroll bar (0x414c90 child) shown");
+        }
+    }
+
+    /// 0x41b760: a row appended; its index (0xff when the list is full).
+    pub fn list_add(&mut self, text: &[u8], flags: u8) -> u8 {
+        let Some(l) = self.list.as_mut() else { return 0xff };
+        if l.items.len() >= LIST_MAX {
+            return 0xff;
+        }
+        l.items.push((text.to_vec(), flags, 0));
+        let i = l.items.len() as u8 - 1;
+        self.list_layout();
+        i
+    }
+
+    /// 0x41b620: a row inserted at `idx` (appended when past the end).
+    pub fn list_insert(&mut self, idx: u8, text: &[u8], flags: u8) {
+        let Some(l) = self.list.as_mut() else { return };
+        if l.items.len() >= LIST_MAX {
+            return;
+        }
+        let i = (idx as usize).min(l.items.len());
+        l.items.insert(i, (text.to_vec(), flags, 0));
+        self.list_layout();
+    }
+
+    /// 0x41b550: row `idx` removed (the event proc hears event 0xc first).
+    pub fn list_remove(&mut self, idx: u8) {
+        let Some(l) = self.list.as_mut() else { return };
+        if (idx as usize) < l.items.len() {
+            l.items.remove(idx as usize);
+        }
+        self.list_layout();
+    }
+
+    /// 0x41b890: every row removed, then one layout.
+    pub fn list_clear(&mut self) {
+        let Some(l) = self.list.as_mut() else { return };
+        let was = l.batch;
+        l.batch = true;
+        l.items.clear();
+        if !was {
+            l.batch = false;
+            self.list_layout();
+        }
+    }
+
+    /// 0x41baa0 event 0xe code 0xb: select `row`, unless the mouse holds another row.
+    pub fn list_select(&mut self, row: u8) {
+        let Some(l) = self.list.as_mut() else { return };
+        if l.hover != l.sel && l.hover != row {
+            return;
+        }
+        l.sel = row;
+        l.hover = row;
+    }
+
+    /// 0x41a600 (BL = `row`): scroll so that `row` shows.
+    pub fn list_scroll_to(&mut self, row: u8) {
+        let Some(l) = self.list.as_mut() else { return };
+        if row < l.top {
+            l.top = row;
+        } else if l.top as u32 + l.rows as u32 <= row as u32 {
+            l.top = row.wrapping_sub(l.rows).wrapping_add(1);
+        }
+    }
+
+    /// 0x41a1b0: (x, y) relative to the dialog is over the rows (a shown scroll bar is
+    /// not counted; none is ported).
+    pub fn list_inside(&self, x: i32, y: i32) -> bool {
+        let (l, t, r, b) = self.rect;
+        (l..=r).contains(&x) && (t..=b).contains(&y)
+    }
+
+    /// 0x41a2c0: the row at (x, y) relative to the dialog; above or below the list it is
+    /// the row next to the highlighted one (the drag scrolls).
+    pub fn list_row_at(&self, _x: i32, y: i32) -> u8 {
+        let Some(l) = self.list.as_ref() else { return 0xff };
+        let n = l.items.len() as u8;
+        let y0 = self.rect.1;
+        let r = if y < y0 {
+            if l.top < l.hover {
+                l.top
+            } else if l.hover == 0 {
+                0
+            } else {
+                l.hover - 1
+            }
+        } else if self.rect.3 < y {
+            if (l.hover as i32) < l.rows as i32 - 1 + l.top as i32 {
+                l.rows.wrapping_add(l.top).wrapping_sub(1)
+            } else if (l.hover as i32) < n as i32 - 1 {
+                l.hover + 1
+            } else {
+                l.hover
+            }
+        } else {
+            l.top.wrapping_add(((y - y0) as i16 as i32 / l.row_h.max(1) as i32) as u8)
+        };
+        if n <= r {
+            n.wrapping_sub(1)
+        } else {
+            r
+        }
+    }
+
+    /// 0x41a9d0: a key (virtual key `vk`) in a list box: None when it is not a list key,
+    /// else the row to select (None: none).
+    pub fn list_key(&self, vk: u16) -> Option<Option<u8>> {
+        let l = self.list.as_ref()?;
+        let (s, n, rows) = (l.sel, l.items.len() as i32, l.rows);
+        let last = n - 1;
+        Some(match vk {
+            // Page up.
+            0x21 if s != 0 && s as i32 <= last => Some(if s > rows { s - rows + 1 } else { 0 }),
+            // Page down.
+            0x22 if (s as i32) < last => Some(if (rows as i32 + s as i32) < last { (rows + s).wrapping_sub(1) } else { last as u8 }),
+            // End, Home.
+            0x23 if s as i32 != last => Some(last as u8),
+            0x24 if s != 0 => Some(0),
+            // Up, down.
+            0x26 if s != 0 && s as i32 <= last => Some(s - 1),
+            0x28 if (s as i32) < last => Some(s + 1),
+            0x21..=0x24 | 0x26 | 0x28 => None,
+            _ => return None,
+        })
+    }
+
+    /// 0x416240 (font set 1, the glue's): the edit's first shown character, so that the
+    /// caret shows.
+    pub fn edit_rescroll(&mut self, font: &Font) {
+        let (l, r) = (self.rect.0, self.rect.2);
+        let Some(e) = self.edit.as_mut() else { return };
+        let mut w = ((r - e.margin as i32 * 2) - l - font.advance(0xa6, 1) + 1) as i16;
+        e.width = w;
+        if e.caret < e.first {
+            e.first = e.caret;
+            return;
+        }
+        let t = &self.text;
+        let shown: i32 = (e.first as usize..e.caret as usize).map(|i| font.advance(t.get(i).copied().unwrap_or(0), 1)).sum();
+        if (shown as i16) < w {
+            return;
+        }
+        e.first = e.caret;
+        let mut p = e.caret as usize;
+        while p > 0 {
+            let a = font.advance(t.get(p - 1).copied().unwrap_or(0), 1) as i16;
+            p -= 1;
+            if w <= a {
+                return;
+            }
+            w -= a;
+            e.first -= 1;
+        }
+    }
+
+    /// 0x416710: `c` typed at the caret (inserted, or over the next character when not
+    /// in insert mode); the buffer holds 0xff characters.
+    fn edit_insert(&mut self, c: u8) {
+        let Some(e) = self.edit.as_mut() else { return };
+        if self.text.len() + 1 >= 0x100 {
+            return;
+        }
+        let at = e.caret as usize;
+        if at == self.text.len() {
+            self.text.push(c);
+        } else if e.mode & 0x10 != 0 {
+            self.text.insert(at, c);
+        } else {
+            self.text[at] = c;
+        }
+        e.caret += 1;
+        e.mode |= 1;
+    }
+
+    /// 0x416690: the character before the caret (`after`: at the caret) deleted.
+    fn edit_delete(&mut self, after: bool) {
+        let Some(e) = self.edit.as_mut() else { return };
+        if self.text.is_empty() {
+            return;
+        }
+        let at = if after { e.caret as usize } else {
+            e.caret -= 1;
+            e.caret as usize
+        };
+        if at < self.text.len() {
+            self.text.remove(at);
+        }
+        if e.first != 0 {
+            e.mode |= 1;
+        }
+    }
+
+    /// 0x416980 events 0 / 1 (key down): Insert toggles insert mode, End / Home / Left /
+    /// Right move the caret, Delete deletes at it. True when handled.
+    pub fn edit_key(&mut self, vk: u16, mods: u8) -> bool {
+        let len = self.text.len() as u8;
+        let Some(e) = self.edit.as_mut() else { return false };
+        match vk {
+            0x2d if mods & 0xf == 0 => e.mode ^= 0x10,
+            0x23 => e.caret = len,
+            0x24 => e.caret = 0,
+            0x25 => e.caret = e.caret.saturating_sub(1),
+            0x27 => e.caret = (e.caret + 1).min(len),
+            0x2e => {
+                if e.caret < len {
+                    self.edit_delete(true);
+                }
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    /// 0x416980 event 0xf (a character): backspace deletes before the caret, a character
+    /// the font has is typed. True when handled (0x41fcc0 says the font has it).
+    pub fn edit_char(&mut self, c: u8, font: &Font) -> bool {
+        let Some(e) = self.edit.as_mut() else { return false };
+        // 0x416790 (AL = 1): the caret shows, its 500 ms timer restarts.
+        e.blink = Some(500);
+        self.flags |= 0x4000_0000;
+        if c == 8 && e.caret != 0 {
+            self.edit_delete(false);
+            return true;
+        }
+        if !font.has_glyph(c) {
+            return false;
+        }
+        self.edit_insert(c);
+        true
+    }
+
+    /// 0x4164d0: the caret moves to the mouse at dialog x `x` (in proportion to the text
+    /// width).
+    pub fn edit_click(&mut self, x: i32, font: &Font) {
+        let w = font.width_bytes(&self.text);
+        let len = self.text.len() as i32;
+        let l = self.rect.0;
+        let Some(e) = self.edit.as_mut() else { return };
+        let dx = x - l;
+        e.caret = if dx < 1 {
+            0
+        } else if dx < w {
+            (len * dx / w) as u8
+        } else {
+            len as u8
+        };
+        e.blink = Some(500);
+        self.flags |= 0x4000_0000;
+    }
+}
+
 impl Dialog {
     pub fn parse(d: &[u8]) -> Dialog {
         let i16_at = |o: usize| d.get(o..o + 2).map_or(0, |b| i16::from_le_bytes([b[0], b[1]]));
@@ -162,6 +500,8 @@ impl Dialog {
                 hover: i16_at(o + 0x3e),
                 trect: (i16_at(o + 0x46) as i32, i16_at(o + 0x48) as i32, i16_at(o + 0x4a) as i32, i16_at(o + 0x4c) as i32),
                 align: 0,
+                list: None,
+                edit: None,
             }
         };
         let mut this = ctl(0);
@@ -269,6 +609,17 @@ impl Dialog {
     /// The 30 ms timer 0x4e0f50 of the light-up buttons, for `ms` elapsed: plays their
     /// videos (a finished one is dropped), then 0x4e0e40 moves the light levels.
     pub fn tick(&mut self, ms: u32) {
+        // 0x416600: a focused edit's caret toggles, 500 ms shown and 250 ms hidden.
+        for c in &mut self.controls {
+            let Some(left) = c.edit.as_mut().and_then(|e| e.blink.as_mut()) else { continue };
+            let mut ms = ms;
+            while ms >= *left {
+                ms -= *left;
+                c.flags ^= 0x4000_0000;
+                *left = if c.flags & 0x4000_0000 != 0 { 500 } else { 250 };
+            }
+            *left -= ms;
+        }
         self.timer += ms;
         let (ox, oy) = self.origin();
         let (mx, my) = (self.mouse.0 - ox, self.mouse.1 - oy);
@@ -461,6 +812,41 @@ impl Skin {
         self.grp.frame(f as usize).map_or((0, 0), |f| (f.w, f.h))
     }
 
+    /// The font a control's flags pick (0x41fb30 with 0x6ce0f4 / f8 / fc / 100).
+    pub fn font_of(&self, c: &Ctl) -> &Font {
+        &self.fonts[match c.flags & 0x4c00 {
+            0x400 => 0,
+            0x800 => 2,
+            0x4000 => 3,
+            _ => 1,
+        }]
+    }
+
+    /// 0x41b140 (a list box's event 10): no rows, the row height (the font's, at least
+    /// the height of frame 0x35: 0x6d0500, then flag 0x20000000), the layout.
+    pub fn list_init(&self, c: &mut Ctl) {
+        let fh = self.font_of(c).height;
+        let min = self.frame_wh(0x35).1;
+        let row_h = if fh < min {
+            c.flags |= 0x2000_0000;
+            min
+        } else {
+            c.flags &= !0x2000_0000;
+            fh
+        };
+        c.list = Some(ListBox { row_h: row_h as u8, ..Default::default() });
+        c.list_layout();
+        // 0x6d04c8 + 2 * 0x6d04f4: lists taller than a scroll bar's arrows and thumb get
+        // one (0x414c90, id - 0x8000), shown by 0x41b300 once the rows overflow.
+        todo_port!("0x414c90", "list box scroll bar child control");
+    }
+
+    /// 0x416450 (an edit's event 10): empty, caret 0, insert mode.
+    pub fn edit_init(&self, c: &mut Ctl) {
+        c.text.clear();
+        c.edit = Some(Edit { mode: 0x10, ..Default::default() });
+    }
+
     /// 0x41d160 sizes the 0x4197b0 entry keeps: max(w, h) of frame 10 (option box).
     fn option_size(&self) -> i32 {
         let (w, h) = self.frame_wh(10);
@@ -559,9 +945,13 @@ impl Skin {
         }
         let (ox, oy) = dlg.origin();
         if let Some((bw, bh, bg)) = &dlg.bg {
-            // 0x4ef590 -> 0x4ef440: the dialog bitmap; index 0 is transparent.
-            // ponytail: 0x4c90c0's translucent mode (flag 0x40000, blend table 0x6d0590 on
-            // the key color) is drawn opaque.
+            // 0x4ef590 -> 0x4ef440: the dialog bitmap; index 0 is transparent. Flag
+            // 0x40000 with the glue's effects: mode 4 (0x416f30), the shade color blends.
+            if let Some(fx) = self.fx.as_ref().filter(|_| dlg.this.flags & 0x40000 != 0) {
+                let remap = fx.shade_remap(level(fx.image_pct));
+                let r = (ox, oy, ox + bw - 1, oy + bh - 1);
+                self.blit_shade(bg, *bw, *bh, ox, oy, r, fx.shade, &remap, s);
+            } else {
             for y in 0..*bh {
                 for x in 0..*bw {
                     let c = bg[(y * bw + x) as usize];
@@ -570,6 +960,7 @@ impl Skin {
                         s.px[(py * s.w + px) as usize] = c;
                     }
                 }
+            }
             }
         }
         for (i, c) in dlg.controls.iter().enumerate() {
@@ -673,11 +1064,83 @@ impl Skin {
                 self.box_text(c, r, size, s);
             }
             5 => self.image_ctl(c, r, s),
+            8 => self.edit_ctl(c, r, s),
+            12 => self.list_ctl(c, r, s),
             6 => self.hscroll(c, r, s),
             9..=11 if !c.text.is_empty() => {
                 self.ctl_text(c, &c.text, r, 0, 0, [0x11, 0x12, 0x14][c.ty as usize - 9], s);
             }
             _ => {}
+        }
+    }
+
+    /// 0x41b950 -> 0x41af10 per row: a list box's rows from the top row, in their color
+    /// (the highlighted row 4), cut with "..." (0x51b2cc) when wider than the row.
+    fn list_ctl(&self, c: &Ctl, r: (i32, i32, i32, i32), s: &mut Surf) {
+        let Some(l) = c.list.as_ref() else { return };
+        if c.flags & 0x20000 == 0 {
+            todo_port!("0x4f02c0", "list box frame");
+        }
+        let font = self.font_of(c);
+        let rh = l.row_h as i32;
+        let mut top = r.1;
+        let mut row = l.top;
+        for _ in 0..l.rows.min(l.items.len() as u8) {
+            let color = if row == l.hover && c.flags & 0x1000_0000 == 0 {
+                4
+            } else {
+                match l.items.get(row as usize).map_or(0, |i| i.1 & 0xf) {
+                    0 => 3,
+                    x => x,
+                }
+            };
+            if c.flags & 0x20000 == 0 {
+                todo_port!("0x4ef710", "list box row background (frames 0x2000)");
+            }
+            if let Some(item) = l.items.get(row as usize) {
+                let x0 = r.0 + 2;
+                let mut t: Vec<u8> = item.0.iter().copied().take(0xff).collect();
+                let avail = r.2 - x0;
+                if avail < font.width_bytes(&t) {
+                    let lim = avail - font.width_bytes(b"...");
+                    while !t.is_empty() && lim < font.width_bytes(&t) {
+                        t.pop();
+                    }
+                    t.extend_from_slice(b"...");
+                }
+                let o = TextOpts { flags: 0x11, spacing: 1, line_gap: 3, clip: (x0, top, r.2, top + rh) };
+                font.draw_bytes(&t, x0, top, color, &o, TextDst { rows: &self.text_rows, out: s.px, w: s.w, h: s.h });
+            }
+            top += rh;
+            row = row.wrapping_add(1);
+        }
+    }
+
+    /// 0x4efa00 -> 0x4167f0: an edit's text from its first shown character, the caret
+    /// (code 4, glyph 0xa6, code 1: 0x50612c) at its place while it blinks on; the focus
+    /// outline (0x6ceb20) unless flag 0x20000, and 0x6ceb30 with flag 0x80000000.
+    fn edit_ctl(&self, c: &Ctl, r: (i32, i32, i32, i32), s: &mut Surf) {
+        let Some(e) = c.edit.as_ref() else { return };
+        let font = self.font_of(c);
+        let focus = c.flags & flag::FOCUS != 0;
+        if c.flags & 0x20000 == 0 && focus {
+            self.outline(r, self.colors.get()[0], s);
+        }
+        let first = (e.first as usize).min(c.text.len());
+        let mut t = c.text[first..].to_vec();
+        if e.blink.is_some() && c.flags & 0x4000_0000 != 0 {
+            let at = (e.caret as usize).saturating_sub(first).min(t.len());
+            t.splice(at..at, [4, 0xa6, 1]);
+        }
+        let color = match e.mode >> 4 {
+            0 => 2,
+            x => x,
+        };
+        // 0x51a0e8 = 0 (no word wrap): one line.
+        let o = TextOpts { flags: 0x11, spacing: 1, line_gap: 3, clip: r };
+        font.draw_bytes(&t, r.0 + e.margin as i32, r.1 + e.dy as i32, color, &o, TextDst { rows: &self.text_rows, out: s.px, w: s.w, h: s.h });
+        if c.flags & 0x8000_0000 != 0 && focus {
+            self.outline(r, self.colors.get()[0x10], s);
         }
     }
 
@@ -693,8 +1156,35 @@ impl Skin {
             todo_port!("0x416f30", "mode 5: the second shade 0x51a194 / level 0x6d0c50");
         }
         let Some(fx) = self.fx.as_ref() else { return };
+        // 0x416f30 through table 0x6d05a8 (0x417270: row 0 keeps the screen, row s
+        // writes s): only the shade color's row is the blend.
         let remap = fx.shade_remap(level(fx.image_pct));
-        self.blit(&img.px, img.w, img.h, r.0, r.1, r, Some(&remap), true, s);
+        self.blit_shade(&img.px, img.w, img.h, r.0, r.1, r, fx.shade, &remap, s);
+    }
+
+    /// 0x4172f0 mode 4 (0x416f30): source 0 keeps the screen, the shade color `shade`
+    /// darkens it through `remap`, any other color is drawn.
+    #[allow(clippy::too_many_arguments)]
+    fn blit_shade(&self, px: &[u8], w: i32, h: i32, x: i32, y: i32, clip: (i32, i32, i32, i32), shade: u8, remap: &[u8; 256], s: &mut Surf) {
+        for sy in 0..h {
+            let dy = y + sy;
+            if dy < clip.1 || dy > clip.3 || dy < 0 || dy >= s.h {
+                continue;
+            }
+            for sx in 0..w {
+                let dx = x + sx;
+                if dx < clip.0 || dx > clip.2 || dx < 0 || dx >= s.w {
+                    continue;
+                }
+                let Some(&c) = px.get((sy * w + sx) as usize) else { continue };
+                let d = &mut s.px[(dy * s.w + dx) as usize];
+                if c == shade {
+                    *d = remap[*d as usize];
+                } else if c != 0 {
+                    *d = c;
+                }
+            }
+        }
     }
 
     /// 0x4172f0 (modes 0, 1 and 4): `px` (w x h) at (x, y) clipped to `clip` (inclusive).

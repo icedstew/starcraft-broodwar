@@ -21,7 +21,20 @@ Read when working on the HUD, dialogs, menus or glue screens.
   activated id 0x6d051c goes to callback 0x6d1234; depth 0x6d1224. Settings 0x6cdfd4.
 - Portraits: portrait.rs + smk.rs (Smacker SMK2), statport.bin, arr\portdata.
 
+- Glue font set 1 (0x4daec0): 0x6ce0f4 font10, f8 font14, fc font16, 100 font16x (the
+  game's set 2 has font8 first). List boxes: dlg.rs `ListBox` (0x41b140 rows, 0x41b410
+  layout, 0x41af10 rows with "..."); edits: `Edit` (0x416450, caret glyph 0xa6 after
+  code 4, blink 500 / 250 ms). Event 0xf (WM_CHAR) 0x418ab0: Enter = id -2 or flag
+  0x80000, Esc = id -3 or flag 0x40, hotkeys need flag 0x200 and no edit in the dialog.
+- Shade blits (0x416f30, table 0x6d05a8 from 0x417270): source 0 keeps the screen, the
+  shade color (tEffect.pcx) blends, other colors are drawn.
+
 ## Verification
+
+- Glue screens: `SCBW_GLUE_INPUT="c x y;k vk(hex);t text;w ms" SCBW_CHARACTERS=<dir>
+  scbw glue out.png`; native with a wine + Xvfb + xdotool script like re/native_game.sh
+  (login flow: Single Player 217,120; Expansion 367,275; the New ID popup opens itself
+  with no characters).
 
 - `scbw repshot` on a copy of ~/games/.../shots/tl1412_full with chosen meta.txt lines:
   diff_full/ shows HUD vs native (replay HUD text / buttons pixel-exact).
@@ -61,7 +74,8 @@ Read when working on the HUD, dialogs, menus or glue screens.
 - Selection circles / health bars as images in their own pools (0x57d768 / 0x5244b8,
   0x4d6930; 0x4d7070, 0x4d4fa0, 0x4975d0, 0x497590): needs per-player selections
   (0x6284e8) and the local selection (0x6284b8) in State.
-- Status refresh flags 0x4c36c0, placement box (placebox.cpp 0x48e310), glue menus,
+- Status refresh flags 0x4c36c0, placement box (placebox.cpp 0x48e310), glue menus (login
+  done),
   replay UI 0x4deb90, chat 0x48d1c0, panels 0x427a80 / 0x4273e0 / 0x425ee0 / 0x426ee0.
 - Shown terrain (megatiles 0x628494) lags MTXM: creep changes reach it only for tiles
   the local player sees (0x47e2d0), every 100 frames off-screen (0x49c4c0), and every

@@ -38,6 +38,7 @@ pub fn blit_w(img: &Pcx, x: i32, y: i32, cols: i32, dst: &mut [u8], dw: i32, dh:
     }
 }
 
+#[derive(Clone)]
 pub struct Font {
     d: Vec<u8>,
     low: u8,
@@ -158,13 +159,23 @@ impl Font {
 
     /// 0x41f7c0: advance of one character (codes 0, tab a full stop, space half the
     /// widest glyph, glyph width + x offset + spacing, missing glyphs 0).
-    fn advance(&self, c: u8, spacing: i32) -> i32 {
+    pub fn advance(&self, c: u8, spacing: i32) -> i32 {
         match c {
             9 => self.max_w * 2,
             0x20 => self.max_w >> 1,
             1..=0x1f => 0,
             _ => self.glyph(c).map_or(0, |g| self.d[g] as i32 + self.d[g + 2] as i32 + spacing),
         }
+    }
+
+    /// 0x41fcc0: whether the font has a glyph for `c`.
+    pub fn has_glyph(&self, c: u8) -> bool {
+        self.glyph(c).is_some()
+    }
+
+    /// `width` of bytes as stored (0x41fc80).
+    pub fn width_bytes(&self, s: &[u8]) -> i32 {
+        s.iter().map(|&c| self.advance(c, 1)).sum()
     }
 
     /// Width of `s` in pixels with the default 1 px spacing (no tabs or line breaks).

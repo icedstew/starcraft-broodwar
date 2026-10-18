@@ -441,9 +441,9 @@ impl Setup {
 
     /// 0x45ac10: the FORC chunk (`forc`, 0x14 bytes) into the force tables: each player's
     /// force + 1, the four force names (the map's string, or the default 0x6d1220 string
-    /// 0x16..0x19 when the map has none) and flags. `glu_tbl` is the glue string table
-    /// 0x6d1220.
-    pub fn set_forces(&mut self, forc: &[u8; 0x14], glu_tbl: &[u8]) {
+    /// 0x16..0x19, "Force 1".."Force 4", when the map has none) and flags. `net_tbl` is
+    /// rez\network.tbl (0x6d1220).
+    pub fn set_forces(&mut self, forc: &[u8; 0x14], net_tbl: &[u8]) {
         self.player_force.copy_from_slice(&forc[..8]);
         for f in &mut self.player_force {
             *f = f.wrapping_add(1);
@@ -454,7 +454,7 @@ impl Setup {
                 Some(t) if id != 0 => Some(tbl_str(t, id - 1).to_vec()),
                 _ => None,
             };
-            let s = from_map.unwrap_or_else(|| tbl_str(glu_tbl, k + 1 + 0x15).to_vec());
+            let s = from_map.unwrap_or_else(|| tbl_str(net_tbl, k + 1 + 0x15).to_vec());
             sstr_copy(&mut self.force_names[k], &s, 0x1e);
         }
         self.force_flags.copy_from_slice(&forc[0x10..0x14]);
@@ -680,7 +680,7 @@ impl Setup {
     /// 0x413670 / 0x4135c0 / 0x413550 (0x413710): walk the chunks of `data` and run the
     /// handlers of `spec` on each (in table order, then chunk order). False when a required
     /// chunk is missing or a handler fails.
-    fn read_chunks(&mut self, data: &[u8], spec: &[(&[u8; 4], Chunk, bool)], hdr: &mut MapHeader, glu_tbl: &[u8]) -> bool {
+    fn read_chunks(&mut self, data: &[u8], spec: &[(&[u8; 4], Chunk, bool)], hdr: &mut MapHeader, net_tbl: &[u8]) -> bool {
         let mut chunks: Vec<([u8; 4], usize, i32)> = Vec::new();
         let end = data.len();
         if end >= 8 {
@@ -706,7 +706,7 @@ impl Setup {
             for &(_, payload, len) in chunks.iter().filter(|c| c.0 == **t) {
                 // Handlers refuse chunks reaching past the end.
                 let body = (len >= 0).then(|| data.get(payload..payload + len as usize)).flatten();
-                if !self.chunk_handler(*h, body, len, hdr, glu_tbl) {
+                if !self.chunk_handler(*h, body, len, hdr, net_tbl) {
                     return false;
                 }
             }
@@ -717,8 +717,8 @@ impl Setup {
     /// The handlers of the map header chunks: 0x4cb550 (TYPE), 0x4cb500 (VER), 0x4cb040
     /// (DIM), 0x4cb3a0 (ERA), 0x4cb420 (OWNR), 0x4cb490 (SIDE), 0x4cc650 (STR), 0x4caf40
     /// (SPRP), 0x4caee0 (FORC), 0x4cbc40 (VCOD).
-    fn chunk_handler(&mut self, h: Chunk, body: Option<&[u8]>, len: i32, hdr: &mut MapHeader, glu_tbl: &[u8]) -> bool {
-        let _ = glu_tbl;
+    fn chunk_handler(&mut self, h: Chunk, body: Option<&[u8]>, len: i32, hdr: &mut MapHeader, net_tbl: &[u8]) -> bool {
+        let _ = net_tbl;
         match h {
             Chunk::Type => true,
             Chunk::Ver => match body {
@@ -791,11 +791,11 @@ impl Setup {
     /// 0x4cc060: read the version of a chunk image (TYPE / VER) into `hdr` and return the
     /// index into the map version table 0x500560; None for an unknown version or one that
     /// needs the expansion when it is not installed.
-    fn map_version(&mut self, data: &[u8], hdr: &mut MapHeader, glu_tbl: &[u8]) -> Option<usize> {
+    fn map_version(&mut self, data: &[u8], hdr: &mut MapHeader, net_tbl: &[u8]) -> Option<usize> {
         if data.is_empty() {
             return None;
         }
-        if !self.read_chunks(data, &VERSION_CHUNKS, hdr, glu_tbl) {
+        if !self.read_chunks(data, &VERSION_CHUNKS, hdr, net_tbl) {
             return None;
         }
         let ver = u16::from_le_bytes([hdr[0x18], hdr[0x19]]) as u32;
@@ -818,7 +818,7 @@ impl Setup {
 
     /// 0x4ccac0: the map header of the map `path` (staredit\scenario.chk of its archive):
     /// version, then the header chunks. The archive is closed again.
-    pub fn map_header_from_archive(&mut self, files: &Storage, path: &str, hdr: &mut MapHeader, glu_tbl: &[u8]) -> bool {
+    pub fn map_header_from_archive(&mut self, files: &Storage, path: &str, hdr: &mut MapHeader, net_tbl: &[u8]) -> bool {
         if path.is_empty() {
             return false;
         }
@@ -835,12 +835,12 @@ impl Setup {
             self.close_map_archive();
             return false;
         };
-        let Some(_idx) = self.map_version(&chk, hdr, glu_tbl) else {
+        let Some(_idx) = self.map_version(&chk, hdr, net_tbl) else {
             self.close_map_archive();
             return false;
         };
         // Every version uses the header table 0x5001e8.
-        let ok = self.read_chunks(&chk, &HEADER_CHUNKS, hdr, glu_tbl);
+        let ok = self.read_chunks(&chk, &HEADER_CHUNKS, hdr, net_tbl);
         self.close_map_archive();
         ok
     }
@@ -858,7 +858,7 @@ impl Setup {
     /// 0x4bf5d0: load a map's (or the mission's) header for a game start: the lobby slots
     /// from the OWNR / SIDE chunks, the forces, the map path and title. `keep_dir` is the
     /// `param_3` flag (0: forget the loose-directory mode).
-    pub fn load_map(&mut self, files: &Storage, path: &str, hdr: &mut MapHeader, keep_dir: bool, glu_tbl: &[u8]) -> bool {
+    pub fn load_map(&mut self, files: &Storage, path: &str, hdr: &mut MapHeader, keep_dir: bool, net_tbl: &[u8]) -> bool {
         self.map_path[0] = 0;
         if !keep_dir {
             self.map_dir_flag = 0;
@@ -868,13 +868,13 @@ impl Setup {
         *hdr = [0; 0x20];
         if self.mission {
             let chk = self.mission_chk.clone();
-            if self.map_version(&chk, hdr, glu_tbl).is_none() {
+            if self.map_version(&chk, hdr, net_tbl).is_none() {
                 return false;
             }
-            if !self.read_chunks(&chk, &HEADER_CHUNKS, hdr, glu_tbl) {
+            if !self.read_chunks(&chk, &HEADER_CHUNKS, hdr, net_tbl) {
                 return false;
             }
-        } else if path.is_empty() || !self.map_header_from_archive(files, path, hdr, glu_tbl) {
+        } else if path.is_empty() || !self.map_header_from_archive(files, path, hdr, net_tbl) {
             return false;
         }
         for i in (0..12).rev() {
@@ -895,7 +895,7 @@ impl Setup {
         }
         self.copy_lobby_to_slots();
         let forc: [u8; 0x14] = hdr[4..0x18].try_into().unwrap();
-        self.set_forces(&forc, glu_tbl);
+        self.set_forces(&forc, net_tbl);
         self.assign_forces();
         sstr_copy(&mut self.map_path, path.as_bytes(), 0x104);
         if !keep_dir {
@@ -1001,13 +1001,43 @@ impl Setup {
         std::fs::write(self.profile_path(p.name()), out).is_ok()
     }
 
+    /// 0x4a8ab0 (characters\*.spc / .mpc, 0x4a87f0) with 0x4a8940 on each: the profiles
+    /// that load, in FindFirstFile's order (NTFS: by name, ignoring case). Hidden,
+    /// system and directory entries and names of 0x19 characters or more are skipped.
+    pub fn list_profiles(&self) -> Vec<Profile> {
+        let ext = if self.multiplayer { "mpc" } else { "spc" };
+        let mut names: Vec<Vec<u8>> = std::fs::read_dir(&self.characters_dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
+            .filter_map(|e| {
+                let n = e.file_name().into_string().ok()?;
+                let (stem, x) = n.rsplit_once('.')?;
+                (x.eq_ignore_ascii_case(ext) && !stem.starts_with('.')).then(|| stem.as_bytes().to_vec())
+            })
+            .filter(|n| n.len() < 0x19)
+            .collect();
+        names.sort_by_key(|n| n.to_ascii_lowercase());
+        names.iter().filter_map(|n| match self.load_profile(n) {
+            (p, true) => Some(p),
+            _ => None,
+        }).collect()
+    }
+
+    /// The DeleteFileA of 0x4ed840 on 0x4a8790's path.
+    pub fn delete_profile(&self, name: &[u8]) -> bool {
+        std::fs::remove_file(self.profile_path(name)).is_ok()
+    }
+
     /// 0x4f3f20 (param_1 = 0): whether the file name `name` is unusable (control
-    /// characters, a character of glue string 0x10, a reserved device name).
-    fn profile_name_invalid(name: &[u8], glu_tbl: &[u8]) -> bool {
+    /// characters, a character of rez\network.tbl string 0x10 (0x6d1220), a reserved
+    /// device name).
+    pub fn profile_name_invalid(name: &[u8], net_tbl: &[u8]) -> bool {
         if name.iter().any(|&c| c < 0x20) {
             return true;
         }
-        let bad: Vec<u8> = tbl_str(glu_tbl, 0x10).iter().copied().take(0x3f).collect();
+        let bad: Vec<u8> = tbl_str(net_tbl, 0x10).iter().copied().take(0x3f).collect();
         let n = if name.len() >= 2 && name[0].is_ascii_alphabetic() && name[1] == b':' { &name[2..] } else { name };
         if n.iter().any(|c| bad.contains(c)) {
             return true;
@@ -1025,8 +1055,8 @@ impl Setup {
 
     /// 0x4a8a40: create and save a new profile `name`; None when the name is unusable or
     /// the write fails.
-    pub fn new_profile(&self, name: &[u8], glu_tbl: &[u8]) -> Option<Profile> {
-        if Setup::profile_name_invalid(cstr(name), glu_tbl) {
+    pub fn new_profile(&self, name: &[u8], net_tbl: &[u8]) -> Option<Profile> {
+        if Setup::profile_name_invalid(cstr(name), net_tbl) {
             return None;
         }
         let p = self.default_profile(name);
@@ -1036,11 +1066,11 @@ impl Setup {
     /// 0x4dbee0: after a mission: raise the profile's best mission for the race to
     /// `reached` (`result` +2) and save. A missing profile named like glue string 0x47 (the
     /// default player, in rez\network.tbl `net_tbl`) is created. `race` is `result` +6.
-    pub fn record_mission(&mut self, reached: u16, race: u8, net_tbl: &[u8], glu_tbl: &[u8]) {
+    pub fn record_mission(&mut self, reached: u16, race: u8, net_tbl: &[u8]) {
         let name = self.local_name;
         let (mut p, ok) = self.load_profile(&name);
         if !ok {
-            let created = if cstr(&name).eq_ignore_ascii_case(tbl_str(net_tbl, 0x47)) { self.new_profile(&name, glu_tbl) } else { None };
+            let created = if cstr(&name).eq_ignore_ascii_case(tbl_str(net_tbl, 0x47)) { self.new_profile(&name, net_tbl) } else { None };
             match created {
                 Some(n) => p = n,
                 None => {
