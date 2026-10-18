@@ -504,7 +504,7 @@ impl State {
             dy += 32;
         }
         let Some(best) = lists.iter().rposition(|l| !l.is_empty()) else { return result };
-        let r = self.rng.rand(0x18) >> 4;
+        let r = self.rng.rand(0x1a) >> 4;
         let (tx, ty) = lists[best][r as usize % lists[best].len()];
         self.add_creep_tile(tx, ty);
         1

@@ -902,17 +902,17 @@ impl State {
     }
 
     /// 0x4ea4c0: InfestedCommandCenter: the command center (order target: the queen
-    /// inside it) turns into its infested type after 3 frames and joins the queen's owner.
+    /// inside it) turns into its infested type after 3 ticks of +0xac (not the order timer) and joins the queen's owner.
     fn order_infested_command_center(&mut self, d: &Data, u: u32) {
         let q = self.units[u as usize].order_target_unit;
         if q != NIL && self.damaged_6a(d, u) {
             if self.units[u as usize].order_state == 0 {
-                self.units[u as usize].main_order_timer = 3;
+                self.units[u as usize].remaining_build_time = 3;
                 self.units[u as usize].order_state = 2;
                 return;
             }
-            let t = self.units[u as usize].main_order_timer;
-            self.units[u as usize].main_order_timer = t.wrapping_sub(1);
+            let t = self.units[u as usize].remaining_build_time;
+            self.units[u as usize].remaining_build_time = t.wrapping_sub(1);
             if t != 0 {
                 return;
             }
@@ -1088,7 +1088,7 @@ impl State {
     }
 
     /// 0x4ea290: InfestingCommandCenter: the queen hides inside the command center for
-    /// 0x3c frames, then comes back out next to it.
+    /// 0x3c frames (its +0xac counter), then comes back out next to it.
     pub(super) fn order_infesting_command_center(&mut self, d: &Data, u: u32) {
         let t = self.units[u as usize].order_target_unit;
         match self.units[u as usize].order_state {
@@ -1097,7 +1097,9 @@ impl State {
                     self.hide_unit(d, u);
                     self.order_on(d, t, 0xf, u);
                     self.units[u as usize].order_state = 3;
-                    self.units[u as usize].main_order_timer = 0x3c;
+                    // +0xac (remaining build time), not the order timer the unit update
+                    // also counts down.
+                    self.units[u as usize].remaining_build_time = 0x3c;
                     return;
                 }
                 self.unit_halt(d, u);
@@ -1111,9 +1113,9 @@ impl State {
                 }
             }
             3 => {
-                let tm = self.units[u as usize].main_order_timer;
+                let tm = self.units[u as usize].remaining_build_time;
                 if tm != 0 {
-                    self.units[u as usize].main_order_timer = tm - 1;
+                    self.units[u as usize].remaining_build_time = tm - 1;
                     return;
                 }
                 let s = self.units[u as usize].sprite;

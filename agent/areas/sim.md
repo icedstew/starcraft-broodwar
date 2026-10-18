@@ -33,6 +33,12 @@ CAP_SITES=1 with a CAP_START window the per-site counters 0x51c610); `SCBW_TRACE
   resets one frame later than we had). tl1412 / 1347 / 1341 now match the real game's
   rng to the end (they diverged at f16798 / 26183 / 33015: a unit at a sight edge at a
   reset frame).
+- Fixed 2026-10-18: Infesting / InfestedCommandCenter (0x4ea290 / 0x4ea4c0) count on
+  +0xac (remaining build time), not the order timer: tl1313 matched to f62308.
+- Open: a replay's leave command 0x57 (tl1313 f62308, tl1309 f83856, tl1363 f32442):
+  ours sends the leaver's units to Guard, the real game draws far less.
+- Debug: reptrace SCBW_TYPES_AT=<f> (unit index / type / player / order, visible and
+  hidden lists), SCBW_RNGLOG_AT=<f> (each draw's site).
 
 ## Unit lists (1.16.1)
 

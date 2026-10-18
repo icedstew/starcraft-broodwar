@@ -413,6 +413,22 @@ fn main() -> std::io::Result<()> {
                     writeln!(t, "f{f} rng {:#x} {}{c}", st.rng.seed, st.rng.total)?;
                     continue;
                 }
+                // SCBW_TYPES_AT=<frame>: each listed unit's index, type, player and order to
+                // stderr (the trace has no types).
+                if std::env::var("SCBW_TYPES_AT").is_ok_and(|v| v == f.to_string()) {
+                    let mut u = st.visible_units.head;
+                    while u != bw::list::NIL {
+                        let un = &st.units[u as usize];
+                        eprintln!("f{f} u{u} type {:#x} p{} order {:#x} status {:#x}", un.unit_type, un.player, un.order, un.status);
+                        u = st.units[u as usize].link.next;
+                    }
+                    let mut u = st.hidden_units.head;
+                    while u != bw::list::NIL {
+                        let un = &st.units[u as usize];
+                        eprintln!("f{f} hidden u{u} type {:#x} p{} order {:#x} status {:#x}", un.unit_type, un.player, un.order, un.status);
+                        u = st.units[u as usize].link.next;
+                    }
+                }
                 let mut u = st.visible_units.head;
                 while u != bw::list::NIL {
                     writeln!(t, "{}", unit_trace(st, f, u))?;
