@@ -112,6 +112,8 @@ pub struct Menu {
     saved: Settings,
     /// The control the left button went down on (pressed until released).
     pressed: Option<usize>,
+    /// A button was released on itself: the click sound plays (taken by the window loop).
+    pub click: bool,
     /// A slider being dragged.
     dragging: Option<usize>,
 }
@@ -233,7 +235,7 @@ impl Menu {
                 _ => {}
             }
         }
-        Some(Menu { kind, dlg, depth, saved: *set, pressed: None, dragging: None })
+        Some(Menu { kind, dlg, depth, saved: *set, pressed: None, dragging: None, click: false })
     }
 
     /// 0x47e480: step the tip by `d` (1..=0x67 in the expansion, wrapping) and show it
@@ -319,6 +321,11 @@ impl Menu {
             }
             (false, Some(p)) => {
                 self.pressed = None;
+                // 0x4e19f0: a button (types 1 / 2) released on itself acts, then the sound
+                // hook 0x6d5eac(2) (in game 0x4ee0f0 -> 0x4bbcf0: the button click).
+                if hit == Some(p) && matches!(self.dlg.controls[p].ty, 1 | 2) {
+                    self.click = true;
+                }
                 (hit == Some(p)).then(|| self.activate(p, set)).flatten()
             }
             _ => None,

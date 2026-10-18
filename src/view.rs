@@ -113,6 +113,9 @@ pub struct Scene<'a> {
     pub card_menu: Option<u16>,
     /// Building type being placed, and whether the spot under the cursor is valid.
     pub placing: Option<(u8, u16)>,
+    /// The command card button held down (its slot): drawn pressed (control flag
+    /// 0x40000000) while the mouse stays on it; released on it, it acts (0x4e19f0).
+    pub card_held: Option<usize>,
     /// Targeting mode: orders for a ground / unit / fog click (0x641691..3).
     pub targeting: Option<(u8, u8, u8)>,
     /// Last refused button or click (stat_txt message id, 0 for none), put on the
@@ -234,7 +237,7 @@ impl<'a> Scene<'a> {
             minimap.refresh(d, &mut st)
         });
         let creep_grp = a.files.read(&format!("tileset/{}.grp", map::TILESETS[chk.tileset()])).ok().map(crate::grp::Grp::parse);
-        Ok(Scene { st, creep_grp, minimap, voices: crate::voices::Voices::new(), portrait: Default::default(), talk_left: 0, talk_unit: None, trans_left: None, sent_selection: Vec::new(), card_menu: None, placing: None, targeting: None, error: 0, msgs: Default::default(), chat: Default::default(), clock_ms: 0, gamma: 100, pause_tick: 0, pause_replay_saved: false, place_ok: false, place_tile: (0, 0), place_err: 0, drag_box: None, a, chk, ts, terrain, player_colors, local, shadow, dark, fog: crate::fog::Fog::new(), tselect, thpbar, remaps })
+        Ok(Scene { st, creep_grp, minimap, voices: crate::voices::Voices::new(), portrait: Default::default(), talk_left: 0, talk_unit: None, trans_left: None, sent_selection: Vec::new(), card_menu: None, placing: None, card_held: None, targeting: None, error: 0, msgs: Default::default(), chat: Default::default(), clock_ms: 0, gamma: 100, pause_tick: 0, pause_replay_saved: false, place_ok: false, place_tile: (0, 0), place_err: 0, drag_box: None, a, chk, ts, terrain, player_colors, local, shadow, dark, fog: crate::fog::Fog::new(), tselect, thpbar, remaps })
     }
 
     /// Send the local selection to the simulation (0x4c0860) and return the local
@@ -277,7 +280,7 @@ impl<'a> Scene<'a> {
         let sel = bw::select::selection_units(&self.st.selections[me as usize]).to_vec();
         if sel != self.st.selected {
             self.card_menu = None;
-            self.placing = None;
+            self.set_placing(None);
         }
         self.set_selected(sel);
         self.sent_selection = self.st.selected.clone();
@@ -437,7 +440,7 @@ impl<'a> Scene<'a> {
         // 0x49f7a0 / 0x4ed000 emptied the selection: placement and targeting end (0x48d9a0,
         // 0x48e310, 0x48ca10: the button set goes back to 0xe4).
         if std::mem::take(&mut self.st.selection_emptied) && (self.placing.is_some() || self.targeting.is_some()) {
-            self.placing = None;
+            self.set_placing(None);
             self.targeting = None;
             self.card_menu = None;
         }
@@ -459,6 +462,41 @@ impl<'a> Scene<'a> {
 
     pub fn local_player(&self) -> u8 {
         self.local
+    }
+
+    /// Building placement starts (0x48e730) or ends (0x48e310). Starting: the highlights of
+    /// geysers / addon spots (0x48e430 / 0x48e490 via 0x48e6e0) and, when the builder (the
+    /// status unit 0x597248) is Protoss (units.dat group flags 0x6637a0: not 1, 4), the psi
+    /// fields (0x493640). Ending: the highlights go (0x4d5b60) and the fields hide (0x494100).
+    pub fn set_placing(&mut self, p: Option<(u8, u16)>) {
+        if self.placing == p {
+            return;
+        }
+        let was = self.placing.take();
+        let st = &mut self.st;
+        with_data(self.a, |d| {
+            if was.is_some() {
+                if st.psi.hl_flag {
+                    st.free_ui_images();
+                    st.psi.hl_flag = false;
+                }
+                if st.psi.shown {
+                    st.psi_hide_fields(d);
+                }
+            }
+            if let Some((_, t)) = p {
+                let active = st.selected.first().copied().unwrap_or(NIL);
+                let terran = d.dat.units.staredit_group_flags[t as usize] & 2 != 0;
+                st.placebox_refresh(d, t, active, false, terran);
+                if active != NIL {
+                    let g = d.dat.units.staredit_group_flags[st.units[active as usize].unit_type as usize];
+                    if g & 1 == 0 && g & 4 != 0 {
+                        st.psi_show_fields(d);
+                    }
+                }
+            }
+        });
+        self.placing = p;
     }
 
     /// Local player's race (0 zerg, 1 terran, 2 protoss): 0x57f1e2, which 0x4ee180 sets
@@ -809,13 +847,13 @@ impl<'a> Scene<'a> {
                 with_data(self.a, |d| st.execute_command(d, me, &sel, &p));
             }
             Target { ground, unit, fog } => self.targeting = Some((ground, unit, fog)),
-            Place { order, unit_type } => self.placing = Some((order, unit_type)),
+            Place { order, unit_type } => self.set_placing(Some((order, unit_type))),
             // 0x459af0 / 0x4599a0: set 0xe4 means the selected unit's own button set.
             Menu(m) => self.card_menu = (m != 0xe4).then_some(m),
             CancelTargeting => {
                 self.end_targeting();
             }
-            CancelPlacement => self.placing = Option::None,
+            CancelPlacement => self.set_placing(Option::None),
             SelectLarvae(l) => self.set_selected(l),
             Error(Option::None) => self.show_error(btn.disabled_str),
             Error(Some((sound, msg))) => {
@@ -952,7 +990,7 @@ impl<'a> Scene<'a> {
             }
             return;
         }
-        self.placing = Option::None;
+        self.set_placing(None);
         let mut pkt = vec![0x0c, order];
         pkt.extend_from_slice(&(tx as u16).to_le_bytes());
         pkt.extend_from_slice(&(ty as u16).to_le_bytes());
@@ -1088,7 +1126,7 @@ impl<'a> Scene<'a> {
                         };
                         self.set_selected(sel);
                         self.card_menu = None;
-                        self.placing = None;
+                        self.set_placing(None);
                         self.voice_what();
                         return true;
                     }
@@ -1485,6 +1523,10 @@ pub fn card_rect(ui: &crate::ui::Ui, pos: u16) -> (i32, i32, i32, i32) {
     ui.statbtn.screen_rect(pos as i16).unwrap_or((0, 0, -1, -1))
 }
 
+/// The button click (0x4bbcf0 plays the buffer 0x6d1268 loaded by 0x4bcb20 from
+/// sound\Misc\Button.wav, read from the running game); sfxdata.dat entry 15 is that file.
+const BUTTON_CLICK_SFX: u16 = 15;
+
 /// 0x458900: a command button: the race's cmdbtns.grp frame (1 pressed, else 0; not
 /// while watching a replay), then the icon centered, through the ticon.pcx row for
 /// its state (1 disabled, 2 pressed or the highlighted icon 0x68c1bc, else 0).
@@ -1723,7 +1765,7 @@ fn draw_hud(scene: &Scene, ui: &crate::ui::Ui, vx: i32, vy: i32, cursor: Option<
     let lit = scene.card_highlight();
     for (i, slot) in scene.card().iter().enumerate() {
         if let Some((b, enabled)) = slot {
-            draw_cmd_button(ui, scene.st.replay, b.icon, !*enabled, false, lit == Some(b.icon), card_rect(ui, i as u16 + 1), out, w, h);
+            draw_cmd_button(ui, scene.st.replay, b.icon, !*enabled, scene.card_held == Some(i), lit == Some(b.icon), card_rect(ui, i as u16 + 1), out, w, h);
         }
     }
     // 0x4593a0: the hovered button's tooltip.
@@ -2120,6 +2162,7 @@ pub fn frame_loop<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Option<Re
     // rate, the game reads input every 42 ms. Key presses and button downs of the frames
     // in between are kept for the next tick (as Windows queues the messages).
     let mut pend_keys: Vec<Key> = Vec::new();
+    let mut card_down: Option<usize> = None;
     let mut pend_rep: Vec<Key> = Vec::new();
     let (mut pend_l, mut pend_r) = (false, false);
     Ok(move || {
@@ -2177,6 +2220,9 @@ pub fn frame_loop<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Option<Re
             let mut act = None;
             if let (Some(m), Some(u)) = (menu.as_mut(), ui.as_ref()) {
                 act = m.mouse(&u.skin, cx, cy, ldown, &mut settings);
+                if std::mem::take(&mut m.click) {
+                    scene.st.ui_sounds.push(BUTTON_CLICK_SFX);
+                }
                 for k in keys_no.clone() {
                     let ch = match k {
                         Key::Escape => Some(0x1b),
@@ -2266,11 +2312,29 @@ pub fn frame_loop<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Option<Re
         // Command card: click a button or press its hotkey (enabled buttons only).
         let card = scene.card();
         let mut pressed: Option<bw::buttons::Button> = None;
-        if clicked {
-            pressed = card.iter().enumerate().find_map(|(i, slot)| {
+        // 0x4e1c20 (button types 1 / 2): the button goes down under the mouse (flag
+        // 0x40000000, the pressed frame), comes up when the mouse leaves it, and acts when
+        // released on it (0x4e19f0, then the click sound through hook 0x6d5eac(2)).
+        let slot_at = |x: i32, y: i32| -> Option<usize> {
+            (0..9).find(|&i| {
                 let (bx, by, br, bb) = ui.as_ref().map_or((0, 0, -1, -1), |u| card_rect(u, i as u16 + 1));
-                ((bx..=br).contains(&cx) && (by..=bb).contains(&cy)).then_some(*slot).flatten()
-            }).and_then(|(b, enabled)| enabled.then_some(b));
+                (bx..=br).contains(&x) && (by..=bb).contains(&y)
+            })
+        };
+        let under = slot_at(cx, cy).filter(|&i| matches!(card[i], Some((_, true))));
+        if clicked {
+            card_down = under;
+        }
+        if down {
+            scene.card_held = card_down.filter(|&i| under == Some(i));
+        } else {
+            if let Some(i) = card_down.take() {
+                if under == Some(i) {
+                    pressed = card[i].map(|(b, _)| b);
+                    scene.st.ui_sounds.push(BUTTON_CLICK_SFX);
+                }
+            }
+            scene.card_held = None;
         }
         let ctrl = win.is_key_down(Key::LeftCtrl) || win.is_key_down(Key::RightCtrl);
         let alt = win.is_key_down(Key::LeftAlt) || win.is_key_down(Key::RightAlt);
@@ -2417,7 +2481,8 @@ pub fn frame_loop<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Option<Re
             }
             // Esc leaves targeting / placement, else it is the hotkey of the card's
             // cancel buttons (stat_txt hotkey byte 0x1b).
-            if k == Escape && (scene.end_targeting() || scene.placing.take().is_some()) {
+            if k == Escape && (scene.end_targeting() || scene.placing.is_some()) {
+                scene.set_placing(None);
                 continue;
             }
             let Some(c) = (k == Escape).then_some('\x1b') else { continue };
@@ -2494,7 +2559,7 @@ pub fn frame_loop<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Option<Re
                 };
                 if scene.st.selected != hits {
                     scene.card_menu = None;
-                    scene.placing = None;
+                    scene.set_placing(None);
                 }
                 let changed = scene.st.selected != hits;
                 scene.set_selected(hits);
