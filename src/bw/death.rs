@@ -3,7 +3,6 @@
 use super::finder::Axis;
 use super::list::{self, NIL};
 use super::{Data, State};
-use crate::todo_port;
 
 impl State {
     /// Still in the game: has a sprite and is not dying (0x49a850's test).
@@ -404,7 +403,8 @@ impl State {
     /// 0x49eb70(1): every unit forgets `dead` (and the UI drops it).
     fn clear_references(&mut self, d: &Data, dead: u32) {
         self.clear_references_visible(d, dead);
-        todo_port!("0x49eb70", "selection / unit portrait UI (0x68ac98)");
+        // The portrait control's unit (+0x26) is cleared and the control hidden (0x418700).
+        self.portrait_dropped.push(dead);
         let mut o = self.hidden_units.head;
         while o != NIL {
             let next = self.units[o as usize].link.next;

@@ -403,6 +403,9 @@ pub struct State {
     pub unit_sounds: Vec<(u16, u32, i32, i16, i16)>,
     /// 0x45efe0 calls this frame for the UI: (talking unit, sfx id).
     pub talked: Vec<(u32, u16)>,
+    /// 0x49eb70(1) calls this frame for the UI: dead units (the portrait control 0x68ac98
+    /// hides when its +0x26 unit is one of them).
+    pub portrait_dropped: Vec<u32>,
     /// 0x4a34c0 calls this frame for the minimap: (sprite x, sprite y, type).
     pub minimap_pings: Vec<(i32, i32, u8)>,
 }
@@ -522,6 +525,7 @@ impl State {
             speech: Vec::new(),
             unit_sounds: Vec::new(),
             talked: Vec::new(),
+            portrait_dropped: Vec::new(),
             minimap_pings: Vec::new(),
             req_error: std::cell::Cell::new(0),
             ai_spell_flag: 0,

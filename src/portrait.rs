@@ -145,6 +145,12 @@ impl Player {
         self.open(ps, files);
     }
 
+    /// 0x418700 on the portrait control: nothing shown until the next `show*`.
+    pub fn hide(&mut self) {
+        self.portrait = None;
+        self.video = None;
+    }
+
     /// Advance `ms`; `animate` false (still portraits) keeps the first frame. A video
     /// that ends is replaced by a new pick, idle or talking as before (0x45ec40 timer 1
     /// calls 0x45ea30 again for the same unit).

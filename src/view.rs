@@ -102,6 +102,9 @@ pub struct Scene<'a> {
     pub portrait: std::cell::RefCell<crate::portrait::Player>,
     /// 0x68ac4c-ish: ms left of a unit's talk (0x45efe0) holding the console portrait.
     talk_left: u32,
+    /// The portrait control's unit (0x68ac98 +0x26) while a unit talks; None for a
+    /// transmission or none.
+    talk_unit: Option<u32>,
     /// 0x45edd0: ms left on the real-time transmission timer (0x45e610).
     trans_left: Option<u32>,
     /// 0x59724c: the selection last sent to the simulation as select commands.
@@ -219,7 +222,7 @@ impl<'a> Scene<'a> {
             minimap.refresh(d, &mut st)
         });
         let creep_grp = a.files.read(&format!("tileset/{}.grp", map::TILESETS[chk.tileset()])).ok().map(crate::grp::Grp::parse);
-        Ok(Scene { st, creep_grp, minimap, voices: crate::voices::Voices::new(), portrait: Default::default(), talk_left: 0, trans_left: None, sent_selection: Vec::new(), card_menu: None, placing: None, targeting: None, error: 0, msgs: Default::default(), chat: Default::default(), clock_ms: 0, gamma: 100, pause_tick: 0, pause_replay_saved: false, place_ok: false, place_tile: (0, 0), place_err: 0, drag_box: None, a, chk, ts, terrain, player_colors, local, shadow, dark, fog: crate::fog::Fog::new(), tselect, thpbar, remaps })
+        Ok(Scene { st, creep_grp, minimap, voices: crate::voices::Voices::new(), portrait: Default::default(), talk_left: 0, talk_unit: None, trans_left: None, sent_selection: Vec::new(), card_menu: None, placing: None, targeting: None, error: 0, msgs: Default::default(), chat: Default::default(), clock_ms: 0, gamma: 100, pause_tick: 0, pause_replay_saved: false, place_ok: false, place_tile: (0, 0), place_err: 0, drag_box: None, a, chk, ts, terrain, player_colors, local, shadow, dark, fog: crate::fog::Fog::new(), tselect, thpbar, remaps })
     }
 
     /// Send the local selection to the simulation (0x4c0860) and return the local
@@ -970,6 +973,7 @@ impl<'a> Scene<'a> {
     /// video option (0 none, 1 still, 2 animating).
     pub fn portrait_tick(&mut self, ui: &crate::ui::Ui, audio: Option<&crate::audio::Audio>, ms: u32, mode: i16) {
         let talked = std::mem::take(&mut self.st.talked);
+        let dropped = std::mem::take(&mut self.st.portrait_dropped);
         // A front end with a clock drives the real-time timers of trigger waits (headless
         // runs, and the screenshot mode with ms 0, have none).
         self.st.ui_attached = ms != 0;
@@ -998,6 +1002,7 @@ impl<'a> Scene<'a> {
         if let Some(&(t, len)) = started.last() {
             if let Some(p) = Some(self.a.dat().units.portrait[t as usize]).filter(|&p| p < 110 && mode != 0) {
                 self.talk_left = len;
+                self.talk_unit = None;
                 self.portrait.borrow_mut().show_talking(ps, &self.a.files, p);
             }
         }
@@ -1016,14 +1021,23 @@ impl<'a> Scene<'a> {
                     // ponytail: the callers' duration (EDI) also adds a per-sfx extra
                     // (0x68cd38) that is not read here.
                     self.talk_left = (len / 1000 * 1000).max(1000);
+                    self.talk_unit = Some(u);
                     pl.show_talking(ps, files, p);
                 }
             }
         } else {
             self.talk_left = self.talk_left.saturating_sub(ms);
             if self.talk_left == 0 {
+                self.talk_unit = None;
                 pl.portrait = None;
             }
+        }
+        // 0x49eb70: the talking unit died; the portrait hides until the talk timer ends
+        // (0x45ec40 event 3 then shows the selection's again). The selection's own
+        // portrait goes with the selection update (0x45ebc0).
+        if self.talk_left != 0 && self.talk_unit.is_some_and(|u| dropped.contains(&u)) {
+            self.talk_unit = None;
+            pl.hide();
         }
         if self.talk_left == 0 {
             let p = self.st.selected.first().and_then(|&u| portrait(self, u));

@@ -66,7 +66,8 @@ Delegate per agents.md: Haiku triage, Sonnet porting, Opus review / hard RE / co
   (`path_region`), found by aistress.
 - AI todo_port! left: 0x434c90 / 0x404500 / 0x435700 / 0x435770 / 0x435db0 / 0x45d890
   / 0x4e78e0 non-matching AI kinds (1.16.1 reads the entry as the other struct; never
-  hit in aistress), 0x45b850 unknown script opcode. Only UI 0x49eb70 still hit.
+  hit in aistress), 0x45b850 unknown script opcode. UI 0x49eb70 ported 2026-10-18
+  (`portrait_dropped`: a talking unit that dies hides the portrait until the talk ends).
 - Glue left: dialog event procs (ready rooms 0x4f7150 / 0x4f74b0 / 0x4f7810, login
   0x4edaa0, create 0x4af5c0, score 0x4b4a30), mission list 0x4b7820, 0x4a8590, error
   popup 0x4bb300, OK/Cancel 0x4b5b20 (taken as OK; campaigns can't start yet anyway).
