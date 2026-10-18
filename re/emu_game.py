@@ -615,6 +615,9 @@ def scenario(e, units, move, frames, out):
                 e.call(0x474c30, regs={"esi": UNITS + u * 0x150}, stack=[6, (my << 16) | (mx & 0xffff), 0])
 
     # 0x4d9950 -> 0x4d9530: the game steps twice before the frame loop starts counting.
+    # 0x4d9950 first sets the 100-frame counter 0x51ce98 to 1 (the first step resets
+    # vision); found against the real game's replay traces.
+    e.w32(0x51ce98, 1)
     e.call(0x4d94b0)
     e.call(0x4d94b0)
     apply_moves(move)

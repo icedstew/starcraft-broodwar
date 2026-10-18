@@ -21,13 +21,18 @@ is in flight lives in ../status.md.
   8 restart, 0x10/0x11 pause, 0x12 cheats, 0x37 sync, 0x39 squelch, 0x55/0x56,
   0x58 minimap ping, 0x5c chat.
 
-## Open investigation: late-game divergence vs the real game
+## Replays vs the real game (not the emulator)
 
-User report "desync around f17044, goliaths?": scbw == emulator with and without the p0
-camera through f18000, but native screenshots differ from ~f17040 (unit positions; the
-factory at 2464,176 gets a solid-black shadow natively). Native vision is one frame
-later than the emulator from f16797. Next: `CAP_START=16700 CAP_END=17400
-NATIVE_MODE=trace re/native_shots.sh` and diff against the emulator's trace.
+The emulator harness (re/emu_game.py) can share our mistakes in what it sets up around
+game_step. Check against the real 1.16.1 itself: `NATIVE_MODE=trace CAP_START=999999
+CAP_END=<n> NATIVE_CAMERA=<shots>/camera.txt re/native_shots.sh <rep> <dir>` writes its
+per-frame rng ("f<n> rng <seed> <draws>"; CAP_C100=1 adds the 100-frame counter,
+CAP_SITES=1 with a CAP_START window the per-site counters 0x51c610); `SCBW_TRACE_START=
+999999 scbw reptrace <rep> <n> <out>` writes ours. First differing line = divergence.
+- Fixed 2026-10-18: 0x4d9950 sets 0x51ce98 = 1 before the two pre-loop steps (vision
+  resets one frame later than we had). tl1412 / 1347 / 1341 now match the real game's
+  rng to the end (they diverged at f16798 / 26183 / 33015: a unit at a sight edge at a
+  reset frame).
 
 ## Unit lists (1.16.1)
 

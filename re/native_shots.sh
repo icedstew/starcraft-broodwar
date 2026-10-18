@@ -32,7 +32,11 @@ GDBPY=$RE/native_shots_gdb.py
 [ "$MODE" = trace ] && GDBPY=$RE/native_trace_gdb.py
 GDBPY=${NATIVE_GDBPY:-$GDBPY}   # another gdb script (e.g. a one-off probe)
 INSTALL=${SCBW_INSTALL:-$HOME/Downloads/StarCraft-BroodWar_1.16.1}
-W=$(mktemp -d "${TMPDIR:-/tmp}/native_shots.XXXXXX")
+# The wine prefix holds a copy of the install (~1.6 GB): on disk (agent/local/scratch/tmp),
+# not a RAM /tmp, so parallel runs fit. NATIVE_TMP overrides.
+NT=${NATIVE_TMP:-$(cd "$(dirname "$0")/.." && pwd)/agent/local/scratch/tmp}
+mkdir -p "$NT"
+W=$(mktemp -d "$NT/native_shots.XXXXXX")
 # No Mono/Gecko: their install prompts stall wineboot in a fresh prefix.
 # NATIVE_DISPLAY=<n> (default 78): the Xvfb display, so several captures can run at once.
 DNUM=${NATIVE_DISPLAY:-78}

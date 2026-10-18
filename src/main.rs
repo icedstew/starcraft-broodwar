@@ -229,6 +229,9 @@ fn main() -> std::io::Result<()> {
                 }
             }
             // 0x4d9950 -> 0x4d9530: the game steps twice before the frame loop counts.
+            // 0x4d9950 first sets the 100-frame counter 0x51ce98 to 1, so the first step is a
+            // 100th frame (vision reset) and the resets come every 100 steps from there.
+            st.counter_100 = 1;
             st.game_step(&d);
             st.game_step(&d);
             if let Ok(m) = std::env::var("SCBW_MOVE") {
@@ -403,6 +406,13 @@ fn main() -> std::io::Result<()> {
                     scene.st.screen_tile = ((x >> 5) as u16, (y >> 5) as u16);
                 }
                 let st = &scene.st;
+                // SCBW_TRACE_START: before it only the rng line (as the native tracer's
+                // CAP_START), to find a divergence cheaply.
+                if std::env::var("SCBW_TRACE_START").ok().and_then(|v| v.parse::<u32>().ok()).is_some_and(|s| f < s) {
+                    let c = if std::env::var("SCBW_C100").is_ok() { format!(" c{}", st.counter_100) } else { String::new() };
+                    writeln!(t, "f{f} rng {:#x} {}{c}", st.rng.seed, st.rng.total)?;
+                    continue;
+                }
                 let mut u = st.visible_units.head;
                 while u != bw::list::NIL {
                     writeln!(t, "{}", unit_trace(st, f, u))?;

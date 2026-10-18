@@ -1009,6 +1009,9 @@ impl State {
         // 0x48ed50 (EBX = 0x3fb, ESI = the target): the flare sound.
         self.unit_sound(0x3fb, t, 0);
         self.add_spell_overlay(d, t, 0x3d0);
+        // 0x51ce98 = 1: the next game step is a 100th frame (vision reset, creep update).
+        // 0x68c1b0 / 0x68ac74 / 0x68c1f8 / 0x68c1e8 / 0x68c1ec: status panel refresh (UI).
+        self.counter_100 = 1;
     }
 
     /// 0x492ba0: EMP drains shields and energy around the bullet (not the caster or its

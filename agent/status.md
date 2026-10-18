@@ -90,6 +90,8 @@ Delegate per agents.md: Haiku triage, Sonnet porting, Opus review / hard RE / co
   replays (broodwar-reps-116 + broodwar-reps-tl) play to the end in scbw after fixes for
   out-of-range reads native tolerates (neutral medic AI slot, UNIT type 0xffff, full
   hotkey group, empty egg queue).
+- 2026-10-18 replay drift vs the real game: found with native rng traces (areas/sim.md):
+  the 100-frame counter init in 0x4d9950 (scbw and the emulator harness both lacked it).
 - Glue left: dialog event procs (ready rooms 0x4f7150 / 0x4f74b0 / 0x4f7810, score
   0x4b4a30), game creation 0x4d3fc0 -> game start, mission list 0x4b7820, 0x4a8590, error popup 0x4bb300,
   OK/Cancel 0x4b5b20 (taken as OK), the glue -> game start (glue.rs `Top::Game`), list

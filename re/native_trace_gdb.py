@@ -100,7 +100,9 @@ class Step(gdb.Breakpoint):
         if f < 0 or f > END:
             return False
         if f < START:
-            fo.write(f"f{f} rng {e.r32(0x51ca14):#x} {e.r32(0x51ca18)}\n")
+            # CAP_C100=1 adds the 100-frame counter 0x51ce98 (vision resets).
+            c = f" c{e.r32(0x51ce98)}" if os.environ.get("CAP_C100") else ""
+            fo.write(f"f{f} rng {e.r32(0x51ca14):#x} {e.r32(0x51ca18)}{c}\n")
             if f % 64 == 0:
                 fo.flush()
             return False
@@ -112,9 +114,11 @@ class Step(gdb.Breakpoint):
         fo.write(emu_game.fog_trace(e, f) + "\n")
         fo.write(f"f{f} res " + " ".join(f"{e.r32(0x57f0f0 + p * 4)},{e.r32(0x57f120 + p * 4)}" for p in range(8)) + "\n")
         fo.write(f"f{f} rng {e.r32(0x51ca14):#x} {e.r32(0x51ca18)}\n")
-        if f == 0:  # per call-site draw counts so far (0x51c610)
+        # Per call-site draw counts so far (0x51c610): at frame 0, and every traced frame
+        # with CAP_SITES=1 (to find which site differs at a divergence).
+        if f == 0 or os.environ.get("CAP_SITES"):
             sites = struct.unpack("<256I", e.read(0x51c610, 0x400))
-            fo.write("f0 rngsites " + " ".join(f"{i:#x}:{c}" for i, c in enumerate(sites) if c) + "\n")
+            fo.write(f"f{f} rngsites " + " ".join(f"{i:#x}:{c}" for i, c in enumerate(sites) if c) + "\n")
         fo.flush()
         return False
 
