@@ -72,6 +72,40 @@ impl Path {
         let o = (self.waypoint_count as i32 * 4 + i * 2) as usize;
         u16::from_le_bytes([self.data[o], self.data[o + 1]])
     }
+
+    /// The path as its 0x80 bytes in the pool (0x6d1a80 entries).
+    fn raw(&self) -> [u8; 0x80] {
+        let mut b = [0u8; 0x80];
+        let pt = |b: &mut [u8; 0x80], o: usize, p: (i16, i16)| {
+            b[o..o + 2].copy_from_slice(&p.0.to_le_bytes());
+            b[o + 2..o + 4].copy_from_slice(&p.1.to_le_bytes());
+        };
+        pt(&mut b, 0, self.start);
+        pt(&mut b, 4, self.next_waypoint);
+        pt(&mut b, 8, self.target);
+        b[0xc..0x10].copy_from_slice(&self.creation_frame.to_le_bytes());
+        b[0x10..0x14].copy_from_slice(&self.collision_unit.to_le_bytes());
+        b[0x14..0x18].copy_from_slice(&self.speed.to_le_bytes());
+        b[0x18..0x20].copy_from_slice(&[self.flags, self.wait, self.direction, self.total_regions, self.region_count as u8, self.region_index as u8, self.waypoint_count as u8, self.waypoint_index as u8]);
+        b[0x20..].copy_from_slice(&self.data);
+        b
+    }
+}
+
+impl State {
+    /// `Path::region` of path `p`; an index past its 0x60 data bytes reads on into the
+    /// next path of the pool, as 1.16.1 does (none after the last: zero).
+    pub(super) fn path_region(&self, p: u32, i: i32) -> u16 {
+        let path = &self.paths[p as usize];
+        let o = (path.waypoint_count as i32 * 4 + i * 2) as usize;
+        if o + 2 <= path.data.len() {
+            return path.region(i);
+        }
+        let mut b = path.raw().to_vec();
+        b.extend_from_slice(&self.paths.get(p as usize + 1).map_or([0; 0x80], |n| n.raw()));
+        let o = o + 0x20;
+        u16::from_le_bytes([b.get(o).copied().unwrap_or(0), b.get(o + 1).copied().unwrap_or(0)])
+    }
 }
 
 impl State {
@@ -236,7 +270,7 @@ impl State {
         if (path.waypoint_index as i32) < path.waypoint_count as i32 - 1 {
             return false;
         }
-        region_at(&self.sai, s.x as i32, s.y as i32) != path.region(path.region_index as i32)
+        region_at(&self.sai, s.x as i32, s.y as i32) != self.path_region(p, path.region_index as i32)
     }
 
     /// 0x42f700: the path's wait countdown (+0x19) ran out; otherwise count it down.

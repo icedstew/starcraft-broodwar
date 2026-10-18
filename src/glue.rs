@@ -12,7 +12,48 @@ use crate::dlg::{Dialog, Effects, Skin, Surf};
 use crate::grp::{Blend, Grp};
 use crate::setup::{slot, Setup};
 use crate::storage::Storage;
+use crate::palette::{self, Pal};
 use crate::todo_port;
+
+/// What the glue asks the sound system for (the window loop plays them: `Audio` is not
+/// the glue's).
+#[derive(Clone, Debug, PartialEq)]
+pub enum AudioCmd {
+    /// 0x4bc2c0: sound `id` at the digital volume (`Audio::play_pan(id, 99, 0, None)`).
+    Sound(u16),
+    /// 0x4a6140 (via 0x4a6310): start a music file, looped (type 1 tracks); `fade` is the
+    /// 20 ms fade-in timer 0x4a6030 (attenuation -10000 rising 400 per step).
+    Music { path: &'static str, fade: bool },
+    /// 0x4a5f50.
+    FadeOutMusic,
+}
+
+/// 0x512bb8 (8 bytes per track: path, type, fade-in): the front-end tracks 0xa .. 0x12
+/// and 0x16 (all type 1: looped).
+fn music_track(i: u32) -> Option<(&'static str, bool)> {
+    Some(match i {
+        0xa => ("music/zrdyroom.wav", true),
+        0xb => ("music/trdyroom.wav", true),
+        0xc => ("music/prdyroom.wav", true),
+        0xd => ("music/zdefeat.wav", true),
+        0xe => ("music/tdefeat.wav", false),
+        0xf => ("music/pdefeat.wav", false),
+        0x10 => ("music/zvict.wav", true),
+        0x11 => ("music/tvict.wav", true),
+        0x12 => ("music/pvict.wav", false),
+        0x16 => ("music/title.wav", false),
+        _ => return None,
+    })
+}
+
+/// A palette fade (0x41e8b0 over 0x41e5c0): 10 ms per step.
+struct Fade {
+    from: Pal,
+    /// None: the palette of the screen shown when drawn.
+    to: Option<Pal>,
+    ms: u32,
+    steps: Vec<(i32, i32)>,
+}
 
 /// 0x50e06c: the glue palettes (0x518-byte records: directory, flags +0x110, palette).
 pub const PALETTES: [&str; 12] = [
@@ -203,6 +244,18 @@ pub struct Glue {
     exe: Vec<u8>,
     /// arr\mapdata.tbl (0x59c080): the campaign map names by mission number.
     map_names: Vec<String>,
+    /// Sounds and music for the window loop to play.
+    pub cmds: Vec<AudioCmd>,
+    /// 0x6d5bac && 0x6d5bbc: a track is playing.
+    music_playing: bool,
+    /// 0x51c42c: the buttons of the exit slide (0x4dd5e0, not ported: 0).
+    exit_slide: usize,
+    /// 0x51a158: the options gamma.
+    pub gamma: i16,
+    /// The fade in progress (0x41ea30), and the palette it ends in.
+    fade: Option<Fade>,
+    /// The control the mouse is over (event 9 of the glue buttons).
+    hover: Option<i16>,
 }
 
 impl Glue {
@@ -252,6 +305,12 @@ impl Glue {
             g6d5a6c: 0,
             exe: std::fs::read(crate::install_dir().join("StarCraft.exe")).unwrap_or_default(),
             map_names: files.read("arr/mapdata.tbl").map(|d| crate::dat::parse_tbl(&d)).unwrap_or_default(),
+            cmds: Vec::new(),
+            music_playing: false,
+            exit_slide: 0,
+            gamma: 100,
+            fade: None,
+            hover: None,
         }
     }
 
@@ -399,7 +458,7 @@ impl Glue {
         let mut dlg = self.open_glue_dialog(files, "rez/gluMain.bin");
         self.main_version_label(&mut dlg);
         self.show_palette();
-        todo_port!("0x4a6310", "title music (unless 0x6d5bbc)");
+        self.music_start(0x16);
         self.dlg = Some((dlg, Open::Main));
     }
 
@@ -432,7 +491,7 @@ impl Glue {
     fn show_palette(&mut self) {
         let p = SCREEN_PALETTE.get(self.screen as usize).copied().unwrap_or(0) as i32;
         if self.shown != p {
-            todo_port!("0x41ea30", "palette fade-in");
+            self.fade_in(3);
             self.shown = p;
         }
     }
@@ -506,7 +565,7 @@ impl Glue {
         let dlg = self.open_glue_dialog(files, bin);
         todo_port!("0x4dd5e0", "slide-in of the buttons (lists 0x512b10 / 0x512a8c) and its timer 0x4dd220");
         self.show_palette();
-        todo_port!("0x4a6310", "title music (unless 0x6d5bbc)");
+        self.music_start(0x16);
         self.dlg = Some((dlg, if exp { Open::CampaignExp } else { Open::Campaign }));
     }
 
@@ -843,8 +902,8 @@ impl Glue {
     /// the ready room (mission briefing). The music of the race (0x4a6310: 0xa + race)
     /// after the previous one fades out (0x4a5f50) and the mission text (0x4d9200).
     fn open_ready(&mut self, files: &Storage, race: u8) {
-        todo_port!("0x4a5f50", "fade out the music (audio.rs)");
-        todo_port!("0x4a6310", "ready room music 0xa + race");
+        self.music_fade_out();
+        self.music_start(0xa + race as u32);
         self.mission_text(true);
         if self.state != state::GLUE {
             return;
@@ -882,8 +941,8 @@ impl Glue {
             100 => {}
             _ => self.screen = screen::MAIN,
         }
-        todo_port!("0x4a5f50", "fade out the music (audio.rs)");
-        todo_port!("0x4a6310", "music 0x16");
+        self.music_fade_out();
+        self.music_start(0x16);
         self.glue_close();
     }
 
@@ -996,7 +1055,7 @@ impl Glue {
             1
         };
         self.screen = self.exe_u32(0x512ab0 + 4 * i) as u8;
-        todo_port!("0x4a6310", "score music (0x512ac8[i])");
+        self.music_start(self.exe_u32(0x512ac8 + 4 * i));
         // iScore.grp and tminimap.pcx from the directory 0x512a98[i] (0x4d2b30 buffer,
         // SBmpAllocLoadImage), then 0x4bca80.
         todo_port!("0x4bca80", "score screen images (iScore.grp, tMinimap.pcx)");
@@ -1029,7 +1088,7 @@ impl Glue {
             self.screen = screen::MAIN;
         }
         self.glue_close();
-        todo_port!("0x4a5f50", "fade out the music (audio.rs)");
+        self.music_fade_out();
     }
 
     /// 0x4b6490 (rez\gluLoad.bin, event proc 0x4b6410), before 0x41a080: the load game
@@ -1096,31 +1155,103 @@ impl Glue {
         self.result = None;
     }
 
-    /// 0x4de0b0: the glue sounds: the list 0x6dc2ac = 0xa5 .. 0xad (once), the sound
+    /// 0x4de0b0 / 0x4bccf0: the glue sounds: the list 0x6dc2ac = 0xa5 .. 0xad (once), the sound
     /// hook 0x6d5eac = 0x4dd1d0.
     fn glue_sound_init(&mut self) {
         self.sound_list.get_or_insert([0xa5, 0xa6, 0xa7, 0xa8, 0xa9, 0xaa, 0xab, 0xac, 0xad]);
-        todo_port!("0x4bccf0", "play / preload the sound list");
+        // 0x4bccf0 preloads the list into the sound cache (Audio loads on demand).
     }
 
-    /// 0x4dd1d0: the dialogs' sound hook: event 0 (hover) is sound 0xa6 at most every
-    /// 200 ms (`now` is GetTickCount), event 1 (click) 0xa5. Returns the sound to play.
-    fn glue_sound_hook(&mut self, event: i32, now: u32) -> Option<u16> {
+    /// 0x4dd1d0: the dialogs' sound hook (0x6d5eac): event 0 (hover) is sound 0xa6 at most
+    /// every 200 ms (`clock_ms` is GetTickCount), event 1 (click) 0xa5, both through
+    /// 0x4bc2c0.
+    fn glue_sound_hook(&mut self, event: i32) {
         match event {
-            0 if now.wrapping_sub(self.sound_tick) > 199 => {
-                self.sound_tick = now;
-                Some(0xa6)
+            0 if self.clock_ms.wrapping_sub(self.sound_tick) > 199 => {
+                self.sound_tick = self.clock_ms;
+                self.cmds.push(AudioCmd::Sound(0xa6));
             }
-            1 => Some(0xa5),
-            _ => None,
+            1 => self.cmds.push(AudioCmd::Sound(0xa5)),
+            _ => {}
         }
+    }
+
+    /// The glue buttons' (types 1 and 2: 0x4e17e0 / 0x4e1560, light-ups: 0x4e1a70) mouse
+    /// entering (event 9 of 0x4e1390 / 0x4e1670, event 3 of 0x4e1970): hook 0.
+    fn hover_sound(&mut self) {
+        let top = self.popup.as_ref().or(self.dlg.as_ref());
+        let hit = top.and_then(|(d, _)| d.hit(self.mouse.0, self.mouse.1).map(|i| &d.controls[i]));
+        let id = hit.map(|c| c.id);
+        if id != self.hover {
+            self.hover = id;
+            if hit.is_some_and(|c| matches!(c.ty, 1 | 2 | 14) && c.flags & crate::dlg::flag::DISABLED == 0) {
+                self.glue_sound_hook(0);
+            }
+        }
+    }
+
+    /// The left button went down over a glue button (0x4e0d40, mouse inside, not yet
+    /// pressed): hook 0, the control becomes pressed, hook 1.
+    pub fn mouse_down(&mut self) {
+        let top = self.popup.as_ref().or(self.dlg.as_ref());
+        let hit = top.and_then(|(d, _)| d.hit(self.mouse.0, self.mouse.1).map(|i| &d.controls[i]));
+        if hit.is_some_and(|c| matches!(c.ty, 1 | 2) && c.flags & crate::dlg::flag::DISABLED == 0) {
+            self.glue_sound_hook(0);
+            self.glue_sound_hook(1);
+        }
+    }
+
+    /// 0x4a6310 / 0x4a6140 (eax = track `i`): starts the front-end track unless one plays: 0x4a6140
+    /// opens it (looped: type 1) and, for tracks with the fade flag (0x512bbd) and music on,
+    /// the 20 ms timer 0x4a6030 raises it from -10000 by 400 a step.
+    fn music_start(&mut self, i: u32) {
+        if self.music_playing {
+            return;
+        }
+        let Some((path, fade)) = music_track(i) else { return };
+        self.music_playing = true;
+        self.cmds.push(AudioCmd::Music { path, fade });
+    }
+
+    /// 0x4a5f50: the music fades out and closes (a no-op when none is open).
+    fn music_fade_out(&mut self) {
+        if std::mem::take(&mut self.music_playing) {
+            self.cmds.push(AudioCmd::FadeOutMusic);
+        }
+    }
+
+    /// 0x41ea30 (`n` steps): when the palette is blank, fade it in from black to the
+    /// screen's palette (0x5994e0 -> 0x6ceb40).
+    fn fade_in(&mut self, n: u32) {
+        if !self.pal_blank {
+            return;
+        }
+        self.pal_blank = false;
+        self.fade = Some(Fade { from: [[0; 3]; 256], to: None, ms: 0, steps: palette::fade_steps(n) });
+    }
+
+    /// 0x41e9e0 (`n` steps): when the palette is on, fade it out to black. The native call
+    /// blocks 10 ms a step; the frame after it is the next screen's, so the fade is shown
+    /// as the screen going dark (blank until `fade_in`).
+    fn fade_out(&mut self, n: u32) {
+        if self.pal_blank {
+            return;
+        }
+        self.pal_blank = true;
+        let from = self.look_pal();
+        self.fade = Some(Fade { from, to: Some([[0; 3]; 256]), ms: 0, steps: palette::fade_steps(n) });
+    }
+
+    /// The palette of the screen shown (0x50e064).
+    fn look_pal(&self) -> Pal {
+        self.looks.get(self.shown.max(0) as usize).and_then(|l| l.as_ref()).map_or([[0; 3]; 256], |l| l.pal)
     }
 
     /// 0x4dcfa0: after a glue dialog: its background cache is dropped (the next one
     /// loads its own); when the next screen has another palette the old one fades out.
     fn glue_close(&mut self) {
         if self.shown != SCREEN_PALETTE.get(self.screen as usize).copied().unwrap_or(0) as i32 {
-            todo_port!("0x41e9e0", "palette fade-out");
+            self.fade_out(3);
         }
     }
 
@@ -1164,7 +1295,9 @@ impl Glue {
     /// of the exit slide (0x51c428 list) are empty on the main menu, so the 0x4dcd00
     /// timer ends the dialog at once; every control loses flag 0x10.
     fn end_dialog(&mut self, result: i32) -> bool {
-        todo_port!("0x4bbfd0", "click sound at the sound volume (0x6d59f4)");
+        if self.exit_slide != 0 {
+            self.cmds.push(AudioCmd::Sound(0xad));
+        }
         if let Some((dlg, _)) = self.dlg.as_mut() {
             dlg.this.flags &= !0x10;
             for c in &mut dlg.controls {
@@ -1324,6 +1457,7 @@ impl Glue {
     /// The mouse moved to (x, y): the dialog's active control (0x419640) lights up.
     pub fn mouse_to(&mut self, x: i32, y: i32) {
         self.mouse = (x, y);
+        self.hover_sound();
         let top_is_popup = self.popup.is_some();
         for (n, d) in [self.dlg.as_mut(), self.popup.as_mut()].into_iter().enumerate() {
             let Some((dlg, _)) = d else { continue };
@@ -1346,6 +1480,12 @@ impl Glue {
         for (d, _) in [self.dlg.as_mut(), self.popup.as_mut()].into_iter().flatten() {
             d.tick(ms);
         }
+        if let Some(f) = self.fade.as_mut() {
+            f.ms += ms;
+            if f.ms / 10 >= f.steps.len() as u32 {
+                self.fade = None;
+            }
+        }
         self.cursor_ms += ms;
         self.cursor_frame += (self.cursor_ms / 50) as usize;
         self.cursor_ms %= 50;
@@ -1365,7 +1505,16 @@ impl Glue {
         // 0x4be120: the frame's grp box sits at the mouse minus 0x3f.
         let n = look.arrow.frame_count().max(1);
         look.arrow.draw(self.cursor_frame % n, false, self.mouse.0 - 0x3f, self.mouse.1 - 0x3f, s.px, 640, 480, Blend::Normal);
-        look.pal
+        // 0x41e5c0: the fade's blend, then the gamma (0x41dc20).
+        let pal = match &self.fade {
+            Some(f) => {
+                let (step, total) = f.steps[(f.ms / 10).min(f.steps.len() as u32 - 1) as usize];
+                palette::blend(&f.from, f.to.as_ref().unwrap_or(&look.pal), step, total)
+            }
+            None if self.pal_blank => [[0; 3]; 256],
+            None => look.pal,
+        };
+        palette::gamma(&pal, self.gamma)
     }
 }
 
@@ -1447,10 +1596,7 @@ impl Look {
         let pal = pcx_palette(&back);
         let (bw, bh, bpx) = crate::view::pcx(&back);
         // 0x4bdd60 (tileset 0, as at startup): the colors the interface colors skip.
-        let mut excluded = [false; 256];
-        for &(lo, hi) in crate::bw::minimap::cycling(0) {
-            excluded[lo as usize..=hi as usize].iter_mut().for_each(|e| *e = true);
-        }
+        let excluded = crate::bw::minimap::excluded_colors(0);
         let colors = crate::bw::minimap::UI_RGB.map(|c| crate::bw::minimap::nearest(&pal, &excluded, c));
         let shade = crate::view::pcx(&files.read(&format!("{dir}/tEffect.pcx"))?).2.get(SHADE_INDEX).copied().unwrap_or(0);
         let skin = Skin {
@@ -1484,6 +1630,8 @@ pub fn run(files: &Storage, shot: Option<&str>) -> std::io::Result<()> {
     };
     let mut pressed: Option<i16> = None;
     let mut popped = false;
+    let mut audio = if shot.is_none() { crate::audio::Audio::open(files) } else { None };
+    let dat = crate::dat::Dat::load(files).ok();
     let mut last = std::time::Instant::now();
     loop {
         match glue.top_step(files) {
@@ -1502,6 +1650,19 @@ pub fn run(files: &Storage, shot: Option<&str>) -> std::io::Result<()> {
             match t.split_once('|') {
                 Some((a, b)) => glue.open_popup_split(files, a, b),
                 None => glue.open_popup(files, &t),
+            }
+        }
+        for cmd in std::mem::take(&mut glue.cmds) {
+            let (Some(au), Some(dat)) = (audio.as_mut(), dat.as_ref()) else { continue };
+            match cmd {
+                AudioCmd::Sound(id) => au.play_pan(files, dat, id, 99, 0, None),
+                AudioCmd::Music { path, fade } => {
+                    if fade {
+                        todo_port!("0x4a6030", "music fade-in timer: needs an Audio hook");
+                    }
+                    au.play_music(files, path)
+                }
+                AudioCmd::FadeOutMusic => au.fade_out(),
             }
         }
         let now = std::time::Instant::now();
@@ -1524,6 +1685,9 @@ pub fn run(files: &Storage, shot: Option<&str>) -> std::io::Result<()> {
             let top = glue.popup.as_ref().or(glue.dlg.as_ref());
             let hit = top.and_then(|(dlg, _)| dlg.hit(x as i32, y as i32).map(|i| dlg.controls[i].id));
             if win.get_mouse_down(MouseButton::Left) {
+                if pressed.is_none() && hit.is_some() {
+                    glue.mouse_down();
+                }
                 pressed = pressed.or(hit);
             } else if let Some(id) = pressed.take() {
                 if hit == Some(id) {

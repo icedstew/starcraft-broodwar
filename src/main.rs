@@ -23,6 +23,7 @@ mod map;
 mod mpq;
 mod replay;
 mod statdata;
+mod palette;
 mod ui;
 mod view;
 mod voices;
@@ -620,6 +621,8 @@ fn main() -> std::io::Result<()> {
             eprintln!("local player {} start {:?}", scene.local_player(), scene.st.start_locations[scene.local_player() as usize]);
             let frames: usize = args.get(5).and_then(|f| f.parse().ok()).unwrap_or(24);
             let (x, y) = (args[3].parse().unwrap_or(0), args[4].parse().unwrap_or(0));
+            // 0x57f1d0: the screen position in tiles (the shown tiles refresh there).
+            scene.st.screen_tile = (((x as i32).max(0) >> 5) as u16, ((y as i32).max(0) >> 5) as u16);
             // Debug: SCBW_SPAWN="kind,owner,x,y;..." creates units before stepping.
             if let Ok(spec) = std::env::var("SCBW_SPAWN") {
                 for e in spec.split(';').filter(|e| !e.is_empty()) {

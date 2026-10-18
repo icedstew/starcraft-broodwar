@@ -164,6 +164,10 @@ impl Data<'_> {
 pub struct State {
     pub images: Vec<Image>,
     pub free_images: List,
+    /// UI image pools beside the 5000 sim images, in the same vec: 0x5244b8 (64, placement
+    /// highlights, indices MAX_IMAGES..) and 0x57d768 (80, selection circles, after those).
+    pub ui_hl_pool: List,
+    pub ui_circle_pool: List,
     pub sprites: Vec<Sprite>,
     pub free_sprites: List,
     /// Per tile-row sprite lists (heads 0x140e76c90, tails 0x140e77490).
@@ -339,6 +343,8 @@ pub struct State {
     /// Notices for the front end's message lines (0x48d0c0): a network.tbl format
     /// (0-based) and the player its %s (name) or %d (number) names.
     pub notices: Vec<(u16, u8)>,
+    /// The pause command greyed the palette (0x41e930 from 0x4c0bc0; 0x4c0b00 restores it).
+    pub palette_grey: bool,
     /// 0x48d140 requests: a unit (type, x, y) that could not be placed; the front end prints
     /// network.tbl line 0x11 with the type's name (0x47b090).
     pub unplaced: Vec<(u16, i16, i16)>,
@@ -416,7 +422,13 @@ fn pool_after_head<T: Default + Clone + list::Node>(n: usize) -> (Vec<T>, List) 
 
 impl State {
     pub fn new(map_tiles: (usize, usize), tileset: u16, max_units: u32) -> State {
-        let (images, free_images) = pool_after_head::<Image>(MAX_IMAGES);
+        let (mut images, free_images) = pool_after_head::<Image>(MAX_IMAGES);
+        images.resize(sprite::UI_HL_END, Image::default());
+        let (mut ui_hl_pool, mut ui_circle_pool) = (List::default(), List::default());
+        for i in MAX_IMAGES..sprite::UI_HL_END {
+            let l = if i < sprite::UI_HL_START + 64 { &mut ui_hl_pool } else { &mut ui_circle_pool };
+            list::insert_after_head(&mut images, i as u32, l);
+        }
         let (sprites, free_sprites) = pool_after_head(MAX_SPRITES);
         let (thingies, free_thingies) = pool_after_head(MAX_THINGIES);
         let (fog_thingies, free_fog_thingies) = pool_after_head(MAX_THINGIES);
@@ -427,6 +439,8 @@ impl State {
         let mut st = State {
             images,
             free_images,
+            ui_hl_pool,
+            ui_circle_pool,
             sprites,
             free_sprites,
             sprite_rows: vec![List::default(); map_tiles.1.max(1)],
@@ -502,6 +516,7 @@ impl State {
             center_view: None,
             ui_attached: false,
             notices: Vec::new(),
+            palette_grey: false,
             unplaced: Vec::new(),
             chat: Vec::new(),
             speech: Vec::new(),

@@ -3,7 +3,6 @@
 
 use super::list::NIL;
 use super::{Data, State};
-use crate::todo_port;
 
 impl State {
     /// 0x49fed0: turn `u` into unit type `t` where it stands.
@@ -183,9 +182,8 @@ impl State {
         if self.units[u as usize].player == player {
             return;
         }
-        if self.units[u as usize].ai != NIL {
-            todo_port!("0x4a1e50", "AI: unit leaves its town");
-        }
+        // 0x4a1e50 for every unit: the computers' regions forget it too.
+        self.ai_release_unit(d, u, false);
         // 0x45cd00: a hatchery morphing into a lair / hive (and similar) counts as done.
         let un = &self.units[u as usize];
         let morphing = un.status & 1 == 0 && matches!(un.build_queue[un.build_queue_slot as usize], 0x85 | 0x84 | 0x89 | 0x90 | 0x92);
@@ -231,7 +229,7 @@ impl State {
             self.psi.dirty = true;
         }
         if self.player_type(player) == 1 {
-            self.ai_take_unit(u);
+            self.ai_take_unit(d, u);
         }
         let sub = self.units[u as usize].subunit;
         if sub != NIL && d.dat.units.flags[self.units[sub as usize].unit_type as usize] & 0x10 != 0 {

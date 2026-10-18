@@ -3,7 +3,6 @@
 use super::ai_town::{ai_index, ai_kind, AI_MILITARY};
 use super::list::NIL;
 use super::{Data, State};
-use crate::todo_port;
 
 /// Weapon id meaning "none".
 pub const NO_WEAPON: u8 = 0x82;
@@ -522,7 +521,7 @@ impl State {
     }
 
     /// 0x442fc0: an enemy `u` can hit without moving: acquisition range only (+0x40 in
-    /// a bunker), a random one of the best priority bucket (0x4401b0).
+    /// a bunker), a random one of the best priority bucket (`pick_random_target`).
     pub fn find_target_in_range(&mut self, d: &Data, u: u32) -> u32 {
         let mut range = self.acquisition_range(u) as u8 as u32 * 32;
         if self.units[u as usize].status & 0x20 != 0 {
@@ -530,6 +529,12 @@ impl State {
         }
         let buckets = self.target_buckets(d, u, range, 0);
         let Some(list) = buckets.iter().find(|b| !b.is_empty()) else { return NIL };
+        self.pick_random_target(list)
+    }
+
+    /// 0x4401b0: a random one of a priority bucket (the first when it has one entry or
+    /// the RNG is off).
+    fn pick_random_target(&mut self, list: &[u32]) -> u32 {
         if list.len() == 1 || !self.rng.enabled {
             return list[0];
         }
@@ -1320,8 +1325,16 @@ impl State {
         false
     }
 
-    /// 0x476fc0: order `u` to attack `t` with its attack order.
-    pub(super) fn order_attack(&mut self, d: &Data, u: u32, mut t: u32, mark: bool) {
+    /// 0x476fc0 with stack argument 2 clear (see `order_attack_help`).
+    pub(super) fn order_attack(&mut self, d: &Data, u: u32, t: u32, mark: bool) {
+        self.order_attack_help(d, u, t, mark, false);
+    }
+
+    /// 0x476fc0: order `u` to attack `t` with its attack order. A computer's sieged
+    /// tank (0x1e) that cannot hit `t` from here either fights on with an enemy near
+    /// (0x442460: `help` calls for support, 0x43c580, else 0x477160 with argument 1
+    /// set) or unsieges (0x63) and queues the tank's attack on `t`.
+    pub(super) fn order_attack_help(&mut self, d: &Data, u: u32, mut t: u32, mark: bool, help: bool) {
         if self.units[t as usize].unit_type == 0x49 && self.units[t as usize].ptr_at(0xc0) != NIL {
             t = self.units[t as usize].ptr_at(0xc0);
         }
@@ -1346,8 +1359,18 @@ impl State {
                 }
             }
         }
-        if self.units[u as usize].ai != NIL && self.units[u as usize].unit_type == 0x1e && self.units[u as usize].order != 0x63 {
-            todo_port!("0x476fc0", "AI siege tank attack handling");
+        if self.units[u as usize].ai != NIL && self.units[u as usize].unit_type == 0x1e && self.units[u as usize].order != 0x63 && !self.can_hit_now(d, u, t) {
+            if self.sieged_tank_has_enemy(d, u) {
+                if help {
+                    self.ai_call_support(d, u, t);
+                } else {
+                    self.ai_choose_target_help(d, u, true, true, false);
+                }
+                return;
+            }
+            self.order_now(d, u, 0x63);
+            let p = if t != NIL { self.unit_sprite_pos(t) } else { (0, 0) };
+            self.issue_order(d, u, d.dat.units.ai_attack_unit[5], false, p, t, 0xe4);
         }
     }
 
@@ -1523,8 +1546,14 @@ impl State {
     /// 0x477160: an AI unit looks for its order / auto target (the region's target, the
     /// current ones, else the nearest enemy) and attacks the best. `p3` allows mines,
     /// scarabs and interceptors; `p4` requires the target to be reachable. True if it
-    /// has a target. (Its stack argument 1 only matters to the siege tank part of 0x476fc0.)
-    pub(super) fn ai_choose_target(&mut self, d: &Data, u: u32, p3: bool, mut p4: bool) -> bool {
+    /// has a target. Its stack argument 1 (`help`) only goes on to 0x476fc0's siege
+    /// tank part; `ai_choose_target` has it clear.
+    pub(super) fn ai_choose_target(&mut self, d: &Data, u: u32, p3: bool, p4: bool) -> bool {
+        self.ai_choose_target_help(d, u, false, p3, p4)
+    }
+
+    /// 0x477160 with its stack argument 1 (`help`).
+    pub(super) fn ai_choose_target_help(&mut self, d: &Data, u: u32, help: bool, p3: bool, mut p4: bool) -> bool {
         let un = &self.units[u as usize];
         if un.ai == NIL || !self.is_armed(d, u) {
             return false;
@@ -1599,7 +1628,7 @@ impl State {
         }
         if self.units[u as usize].order_target_unit != t {
             if self.units[u as usize].status & 0x20 == 0 {
-                self.order_attack(d, u, t, true);
+                self.order_attack_help(d, u, t, true, help);
             } else {
                 self.units[u as usize].order_target_unit = t;
             }

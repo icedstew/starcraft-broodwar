@@ -473,7 +473,7 @@ impl State {
             && cu.stasis_timer == 0
             && cu.maelstrom_timer == 0
             && cu.is_blind == 0;
-        if !det || self.sprites[self.units[u as usize].sprite as usize].visibility & (1 << (cu.player & 0x1f)) == 0 {
+        if !det || self.sprites[self.units[u as usize].sprite as usize].visibility as u32 & (1u32 << (cu.player & 0x1f)) == 0 {
             return 0;
         }
         let r = if cu.status & 2 == 0 { (self.unit_sight_range(d, c, false) as u32) << 5 } else { 0xe0 };

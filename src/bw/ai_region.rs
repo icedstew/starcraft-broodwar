@@ -11,10 +11,9 @@ use super::list::NIL;
 use super::sai::{NeighborPtr, Sai};
 use super::path::{approx_distance, region_at};
 use super::{Data, State};
-use crate::todo_port;
 
-/// Unit types that never count as real targets: mines, scarabs, interceptors and the
-/// like (0x47b450).
+/// 0x47b450: unit types that never count as real targets: mines, scarabs, interceptors
+/// and the like.
 pub(super) fn is_minor_target(t: u16) -> bool {
     matches!(t, 0x59 | 0x5a | 0x5f | 0x5e | 0x5d | 0x60)
 }
@@ -343,7 +342,7 @@ impl State {
                 let (cx, cy) = self.unit_sprite_pos(c);
                 let as_worker = matches!(t, 9 | 0x54) || (t == 0x2a && !self.has_loaded_units(c));
                 if as_worker {
-                    if cu.u8_at(0x123) == 0 && matches!(order, 0x9c | 0xa3 | 0xa0 | 0x7a | 0x9f) {
+                    if cu.is_blind == 0 && matches!(order, 0x9c | 0xa3 | 0xa0 | 0x7a | 0x9f) {
                         let dd = approx_distance(ux as i32, cx as i32, uy as i32, cy as i32);
                         if dd < dist_a {
                             dist_a = dd;
@@ -387,8 +386,7 @@ impl State {
     /// The tail of 0x43c580 for each helper: mark it (+0x93), drop its interruptible
     /// orders (and `order`), queue `order` at `pos` and start the queue.
     fn ai_support_queue(&mut self, d: &Data, c: u32, order: u8, pos: (i16, i16)) {
-        let f = self.units[c as usize].u8_at(0x93);
-        self.units[c as usize].set_u8_at(0x93, f | 1);
+        self.units[c as usize].order_flags |= 1;
         if self.units[c as usize].order != 0 {
             self.drop_queue_tail_for(d, c, order);
             self.order_queue_append(d, c, order, 0xe4, pos, NIL);
@@ -507,8 +505,7 @@ impl State {
         if found == NIL {
             return false;
         }
-        let f = self.units[u as usize].u8_at(0x93);
-        self.units[u as usize].set_u8_at(0x93, f | 1);
+        self.units[u as usize].order_flags |= 1;
         let pos = self.unit_sprite_pos(found);
         if self.units[u as usize].order != 0 {
             self.drop_queue_tail_for(d, u, 0x5c);
@@ -776,8 +773,18 @@ impl State {
             if self.units[u as usize].order == 0x63 {
                 return;
             }
+            // A sieged tank with an enemy near fights: a target (0x477160), else the
+            // best one in range (0x443080) after dropping its own (0x401da0).
             if self.sieged_tank_has_enemy(d, u) {
-                todo_port!("0x43d5d0", "AI sieged tank fights (0x477160, 0x443080, 0x401da0, 0x476fc0)");
+                if self.ai_choose_target(d, u, true, false) {
+                    return;
+                }
+                let t = self.find_auto_target(d, u);
+                if t == NIL {
+                    return;
+                }
+                self.clear_order_target(d, u);
+                self.order_attack(d, u, t, false);
                 return;
             }
             self.order_now(d, u, 0x63);
@@ -833,7 +840,7 @@ impl State {
 
     /// 0x442460 with 0x4412a0: an enemy within 0x200 that sieged tank `u` sees, can
     /// attack and can hit from where it stands.
-    fn sieged_tank_has_enemy(&mut self, d: &Data, u: u32) -> bool {
+    pub(super) fn sieged_tank_has_enemy(&mut self, d: &Data, u: u32) -> bool {
         let (x, y) = self.unit_sprite_pos(u);
         let b = [x.wrapping_sub(0x200), y.wrapping_sub(0x200), x.wrapping_add(0x200), y.wrapping_add(0x200)];
         let mut search = std::mem::replace(&mut self.search, super::collide::UnitSearch::empty());
@@ -847,7 +854,7 @@ impl State {
                 return false;
             }
             let cu = &self.units[c as usize];
-            if cu.status & 0x300 != 0 && cu.u32_at(0xe4) & (1 << p) == 0 {
+            if cu.status & 0x300 != 0 && cu.visibility & (1 << p) == 0 {
                 return false;
             }
             self.can_attack(d, u, c, true) && self.ai_can_hit_now(d, u, c)
@@ -982,7 +989,7 @@ impl State {
         if cu.status & 0x400_0000 != 0 {
             return false;
         }
-        if cu.status & 0x300 != 0 && cu.u32_at(0xe4) & (1 << p) == 0 {
+        if cu.status & 0x300 != 0 && cu.visibility & (1 << p) == 0 {
             return false;
         }
         if cu.status & 0x4000_0000 != 0 && self.life_now(d, c) < self.life_max(d, c) {
@@ -1042,7 +1049,7 @@ impl State {
             && cu.lockdown_timer == 0
             && cu.stasis_timer == 0
             && cu.maelstrom_timer == 0
-            && cu.u8_at(0x123) == 0
+            && cu.is_blind == 0
     }
 
     /// 0x476870: `u` can hit `c` from where it is (visible, in range and not inside

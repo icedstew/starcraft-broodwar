@@ -118,6 +118,8 @@ pub struct Scene<'a> {
     /// The message lines, timed by `clock_ms` (GetTickCount in the game).
     pub msgs: crate::msgs::Messages,
     pub clock_ms: u32,
+    /// The options' gamma (0x656190, 60..=140; 100 leaves the palette as it is).
+    pub gamma: i16,
     /// 0x6509c8: `clock_ms` when the game was paused; 0x6d5be8: the replay's pause flag
     /// (0x6d11b0) then.
     pub pause_tick: u32,
@@ -217,7 +219,7 @@ impl<'a> Scene<'a> {
             minimap.refresh(d, &mut st)
         });
         let creep_grp = a.files.read(&format!("tileset/{}.grp", map::TILESETS[chk.tileset()])).ok().map(crate::grp::Grp::parse);
-        Ok(Scene { st, creep_grp, minimap, voices: crate::voices::Voices::new(), portrait: Default::default(), talk_left: 0, trans_left: None, sent_selection: Vec::new(), card_menu: None, placing: None, targeting: None, error: 0, msgs: Default::default(), chat: Default::default(), clock_ms: 0, pause_tick: 0, pause_replay_saved: false, place_ok: false, place_tile: (0, 0), place_err: 0, drag_box: None, a, chk, ts, terrain, player_colors, local, shadow, dark, fog: crate::fog::Fog::new(), tselect, thpbar, remaps })
+        Ok(Scene { st, creep_grp, minimap, voices: crate::voices::Voices::new(), portrait: Default::default(), talk_left: 0, trans_left: None, sent_selection: Vec::new(), card_menu: None, placing: None, targeting: None, error: 0, msgs: Default::default(), chat: Default::default(), clock_ms: 0, gamma: 100, pause_tick: 0, pause_replay_saved: false, place_ok: false, place_tile: (0, 0), place_err: 0, drag_box: None, a, chk, ts, terrain, player_colors, local, shadow, dark, fog: crate::fog::Fog::new(), tselect, thpbar, remaps })
     }
 
     /// Send the local selection to the simulation (0x4c0860) and return the local
@@ -328,8 +330,7 @@ impl<'a> Scene<'a> {
             let f = f.split('\0').next().unwrap_or("");
             let name = self.st.player_names.get(p as usize).map_or("", String::as_str);
             let t = f.replacen("%s", name, 1).replacen("%d", &(p as u32 + 1).to_string(), 1);
-            self.msgs.print(&ui.font, t.as_bytes(), now, 0);
-            self.st.ui_sounds.push(0x17);
+            self.msgs.print(&ui.font, t.as_bytes(), now, 0, 0x17, &mut self.st.ui_sounds);
         }
         for (t, x, y) in std::mem::take(&mut self.st.unplaced) {
             // 0x41f1b0 formats network.tbl line 0x11 with the unit's name; 0x48d140 shows it
@@ -338,8 +339,7 @@ impl<'a> Scene<'a> {
             let f = f.split('\0').next().unwrap_or("");
             let name = with_data(self.a, |d| crate::statdata::unit_name(d, &ui.stat_txt, t));
             let line = f.replacen("%s", &name, 1).replacen("%d", &x.to_string(), 1).replacen("%d", &y.to_string(), 1);
-            self.msgs.print(&ui.font, line.as_bytes(), now, 0);
-            self.st.ui_sounds.push(2);
+            self.msgs.print(&ui.font, line.as_bytes(), now, 0, 2, &mut self.st.ui_sounds);
         }
         for (p, text) in std::mem::take(&mut self.st.chat) {
             let st = &self.st;
@@ -402,6 +402,9 @@ impl<'a> Scene<'a> {
             st.rng.enabled = false;
             self.minimap.update(d, st);
         });
+        // 0x4bd580: the game screen is drawn every frame, its visible tiles refreshed
+        // from MTXM first (creep).
+        self.st.refresh_screen_tiles();
         self.st.alert_tick();
         self.voices.tick();
         // 0x4a4e40 runs on a 200 ms timer: about every fifth frame at 42 ms.
@@ -671,7 +674,30 @@ impl<'a> Scene<'a> {
         let (sel, me) = (self.sim_selection(), self.local);
         let st = &mut self.st;
         with_data(self.a, |d| st.command_right_click(d, me, &sel, (p.0 as i16, p.1 as i16), t, 0xe4, queued));
-        self.voice_yes();
+        let (active, selected) = (self.client_selection().active, self.st.selected.clone());
+        let st = &mut self.st;
+        if with_data(self.a, |d| st.right_click_accepted(d, &selected, active, t)) {
+            self.voice_yes();
+        }
+    }
+
+    /// 0x458d50 (cached by 0x458e90 / 0x459a30): the icon of the card button drawn lit
+    /// (0x68c1bc, state 2 in 0x458900): orders.dat highlight of the active unit's order,
+    /// or of its subunit's order when that has none (or the former is 0xe5).
+    pub fn card_highlight(&self) -> Option<u16> {
+        let a = self.client_selection().active;
+        if a == NIL {
+            return None;
+        }
+        let un = &self.st.units[a as usize];
+        let hl = |o: u8| with_data(self.a, |d| d.dat.orders.highlight[o as usize]);
+        let sub = (un.subunit != NIL).then(|| hl(self.st.units[un.subunit as usize].order));
+        let s2 = sub.unwrap_or(0xffff);
+        let mut s3 = hl(un.order);
+        if s3 == 0xffff || (s2 != 0xffff && s3 == 0xe5) {
+            s3 = s2;
+        }
+        (s3 != 0xffff).then_some(s3)
     }
 
     /// 0x4563a0 / 0x48f4d0: the status unit (first selected) acknowledges an order.
@@ -893,7 +919,11 @@ impl<'a> Scene<'a> {
         let (sel, me) = (self.sim_selection(), self.local);
         if self.place_err != 0 {
             if order == 0x47 {
-                todo_port!("0x48f630", "land refused: the race's advisor voice");
+                let u = self.client_selection().active;
+                let st = &mut self.st;
+                if u != NIL {
+                    with_data(self.a, |d| st.land_refused_sound(d, u));
+                }
             } else {
                 let (u, r) = (self.client_selection().active, self.place_err);
                 let st = &mut self.st;
@@ -1070,7 +1100,8 @@ fn new_game(a: &Assets, chk: &Chk, rep: Option<&crate::replay::Header>) -> io::R
     let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |t| t.as_secs() as u32);
     #[cfg(target_arch = "wasm32")] // std has no clock there
     let secs = (js_sys::Date::now() / 1000.0) as u32;
-    st.rng.seed = secs;
+    // Debug: SCBW_SEED fixes the seed (reproducible runs).
+    st.rng.seed = std::env::var("SCBW_SEED").ok().and_then(|s| s.parse().ok()).unwrap_or(secs);
     with_data(a, |d| {
         st.search.init(d);
         st.init_tech_defaults(d);
@@ -1382,7 +1413,7 @@ pub fn card_rect(ui: &crate::ui::Ui, pos: u16) -> (i32, i32, i32, i32) {
 /// its state (1 disabled, 2 pressed or the highlighted icon 0x68c1bc, else 0).
 /// Frames are blitted without their offsets (0x40abbe).
 #[allow(clippy::too_many_arguments)]
-fn draw_cmd_button(ui: &crate::ui::Ui, replay: bool, icon: u16, disabled: bool, pressed: bool, r: (i32, i32, i32, i32), out: &mut [u8], w: i32, h: i32) {
+fn draw_cmd_button(ui: &crate::ui::Ui, replay: bool, icon: u16, disabled: bool, pressed: bool, lit: bool, r: (i32, i32, i32, i32), out: &mut [u8], w: i32, h: i32) {
     let (l, t, rr, b) = r;
     let (cw, ch) = (rr - l + 1, b - t + 1);
     let p = pressed as i32;
@@ -1398,7 +1429,7 @@ fn draw_cmd_button(ui: &crate::ui::Ui, replay: bool, icon: u16, disabled: bool, 
             }
         }
     }
-    let state = if disabled { 1 } else if pressed { 2 } else { 0 };
+    let state = if disabled { 1 } else if pressed || lit { 2 } else { 0 };
     let Some(f) = ui.cmdicons.frame(icon as usize) else { return };
     let (dx, dy) = match (replay, icon) {
         (true, 0x182 | 0x183) => (-2, 3),
@@ -1454,7 +1485,10 @@ pub fn compose_with_cursor(
 ) {
     let (w, h) = (SCREEN_W, SCREEN_H);
     scene.draw(vx, vy, w, h, idx);
-    let pal = scene.palette();
+    // The pause command's grey (0x41e930), then the options' gamma (0x41e870), which
+    // every palette shown goes through.
+    let pal = if scene.st.palette_grey { crate::palette::grey(scene.palette()) } else { *scene.palette() };
+    let pal = crate::palette::gamma(&pal, scene.gamma);
     if let Some(ui) = ui {
         draw_hud(scene, ui, vx, vy, cursor, menu, idx);
     }
@@ -1468,6 +1502,20 @@ pub fn compose_with_cursor(
 fn draw_hud(scene: &Scene, ui: &crate::ui::Ui, vx: i32, vy: i32, cursor: Option<(usize, usize, i32, i32)>, menu: Option<&crate::menu::Menu>, out: &mut [u8]) {
     let (w, h) = (SCREEN_W, SCREEN_H);
     ui.skin.colors.set(scene.minimap.colors);
+    if let (Some((_, kind)), Some((_, _, cx, cy))) = (scene.placing, cursor) {
+        // Placement boxes are screen layers 3 / 4 (0x48d7f0), drawn into the game screen
+        // under the console dialog. 0x48ddc0: the boxes at the tile under the cursor (0x48d660); an addon's parent
+        // building (the active unit's type, slot 0) sits the addon offset (0x662538) back.
+        if let Some((_, pos)) = Scene::placement_cursor((cx, cy), (vx, vy)) {
+            placebox(scene, 1, kind, pos, out, w, h);
+            let u = scene.client_selection().active;
+            let dat = scene.a.dat();
+            if dat.units.flags[kind as usize] & 2 != 0 && u != NIL {
+                let v = dat.units.addon_position[kind as usize];
+                placebox(scene, 0, scene.st.units[u as usize].unit_type, (pos.0 - v as u16 as i16 as i32, pos.1 - (v >> 16) as u16 as i16 as i32), out, w, h);
+            }
+        }
+    }
     crate::ui::blit(&ui.console, 0, h - ui.console.h as i32, out, w, h);
     let (ox, oy, scale) = minimap_geom(scene);
     let mm = &scene.minimap;
@@ -1595,22 +1643,10 @@ fn draw_hud(scene: &Scene, ui: &crate::ui::Ui, vx: i32, vy: i32, cursor: Option<
     if let Some(b) = scene.drag_box {
         rect(out, w, h, b, scene.minimap.colors[0x12]);
     }
-    if let (Some((_, kind)), Some((_, _, cx, cy))) = (scene.placing, cursor) {
-        // 0x48ddc0: the boxes at the tile under the cursor (0x48d660); an addon's parent
-        // building (the active unit's type, slot 0) sits the addon offset (0x662538) back.
-        if let Some((_, pos)) = Scene::placement_cursor((cx, cy), (vx, vy)) {
-            placebox(scene, 1, kind, pos, out, w, h);
-            let u = scene.client_selection().active;
-            let dat = scene.a.dat();
-            if dat.units.flags[kind as usize] & 2 != 0 && u != NIL {
-                let v = dat.units.addon_position[kind as usize];
-                placebox(scene, 0, scene.st.units[u as usize].unit_type, (pos.0 - v as u16 as i16 as i32, pos.1 - (v >> 16) as u16 as i16 as i32), out, w, h);
-            }
-        }
-    }
+    let lit = scene.card_highlight();
     for (i, slot) in scene.card().iter().enumerate() {
         if let Some((b, enabled)) = slot {
-            draw_cmd_button(ui, scene.st.replay, b.icon, !*enabled, false, card_rect(ui, i as u16 + 1), out, w, h);
+            draw_cmd_button(ui, scene.st.replay, b.icon, !*enabled, false, lit == Some(b.icon), card_rect(ui, i as u16 + 1), out, w, h);
         }
     }
     // 0x4593a0: the hovered button's tooltip.
@@ -1803,7 +1839,7 @@ fn placebox(scene: &Scene, slot: usize, t: u16, pos: (i32, i32), out: &mut [u8],
     let (sx, sy) = (pos.0 - ox, pos.1 - oy);
     for (i, &c) in surf.iter().enumerate() {
         let (px, py) = (sx + i as i32 % sw, sy + i as i32 / sw);
-        if c != 0 && (0..w).contains(&px) && (0..h - 120).contains(&py) {
+        if c != 0 && (0..w).contains(&px) && (0..h).contains(&py) {
             out[(py * w + px) as usize] = c;
         }
     }
@@ -1813,16 +1849,17 @@ fn on_minimap_pt(x: i32, y: i32) -> bool {
     (MINIMAP.0..MINIMAP.0 + MINIMAP.2).contains(&x) && (MINIMAP.1..MINIMAP.1 + MINIMAP.2).contains(&y)
 }
 
-/// The hotkey of a button: the first character of its stat_txt string.
-fn hotkey(ui: Option<&crate::ui::Ui>, b: &bw::buttons::Button) -> Option<char> {
-    let s = ui?.stat_txt.get((b.enabled_str as usize).checked_sub(1)?)?;
-    s.chars().next().map(|c| c.to_ascii_lowercase())
-}
-
 fn key_char(k: minifb::Key) -> Option<char> {
     use minifb::Key::*;
     let keys = [A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, R, S, T, U, V, W, X, Y, Z];
     keys.iter().position(|&x| x == k).map(|i| (b'a' + i as u8) as char)
+}
+
+/// 0x418220: the hotkey of a button: the first byte of its stat_txt string, compared as
+/// is against the lowercased typed character.
+fn hotkey(ui: Option<&crate::ui::Ui>, b: &bw::buttons::Button) -> Option<char> {
+    let s = ui?.stat_txt.get((b.enabled_str as usize).checked_sub(1)?)?;
+    s.chars().next()
 }
 
 /// Where a replay viewer's camera looks for one player. 1.16.1 replays don't record
@@ -2006,6 +2043,7 @@ pub fn frame_loop<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Option<Re
             if now < next_tick {
                 // Between ticks: only the cursor moves.
                 let kind = if menu.is_some() { 0 } else { scene.cursor_kind(cx, cy, vx, vy, drag_start.is_some()) };
+                scene.gamma = settings.gamma;
                 compose_with_cursor(&scene, ui.as_ref(), vx, vy, Some((kind, tick * 42 / 100, cx, cy)), menu.as_ref(), &mut idx, &mut rgb);
                 present(&mut win, &rgb, vw as usize, vh as usize)?;
                 return Ok(true);
@@ -2034,6 +2072,7 @@ pub fn frame_loop<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Option<Re
             Some(m)
         };
         if menu.is_some() {
+            typed.borrow_mut().clear();
             let ldown = win.get_mouse_down(minifb::MouseButton::Left);
             let mut act = None;
             if let (Some(m), Some(u)) = (menu.as_mut(), ui.as_ref()) {
@@ -2079,6 +2118,7 @@ pub fn frame_loop<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Option<Re
                 }
             }
             let counter = tick * 42 / 100;
+            scene.gamma = settings.gamma;
             compose_with_cursor(&scene, ui.as_ref(), vx, vy, Some((0, counter, cx, cy)), menu.as_ref(), &mut idx, &mut rgb);
             present(&mut win, &rgb, vw as usize, vh as usize)?;
             return Ok(true);
@@ -2138,6 +2178,16 @@ pub fn frame_loop<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Option<Re
         // Chat line: Enter opens it (0x4f32d0), then the edit control (0x416980) takes the
         // keys; Enter submits and Esc cancels (0x4f36fa).
         let typed_chars: Vec<u32> = typed.borrow_mut().drain(..).collect();
+        // 0x4d1d70 WM_CHAR -> 0x418510 -> 0x418220: the typed character, lowercased, is
+        // matched against the first byte of each visible, enabled hotkey button of the
+        // card (letters, digits, symbols; Ctrl makes control codes, Alt sends no WM_CHAR).
+        // Not while the chat edit box has the keys.
+        let hot_chars: Vec<u8> = if scene.chat.open || ctrl || alt { Vec::new() } else { typed_chars.iter().filter(|&&c| c < 0x80).map(|&c| (c as u8).to_ascii_lowercase()).collect() };
+        for c in hot_chars {
+            if let Some((b, _)) = card.iter().flatten().find(|(b, en)| *en && hotkey(ui.as_ref(), b) == Some(c as char)) {
+                pressed = Some(*b);
+            }
+        }
         let mut chat_keys = Vec::new();
         if scene.chat.open {
             for c in typed_chars {
@@ -2270,7 +2320,7 @@ pub fn frame_loop<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Option<Re
             if k == Escape && (scene.end_targeting() || scene.placing.take().is_some()) {
                 continue;
             }
-            let Some(c) = (if k == Escape { Some('\x1b') } else { key_char(k) }) else { continue };
+            let Some(c) = (k == Escape).then_some('\x1b') else { continue };
             if let Some((b, _)) = card.iter().flatten().find(|(b, en)| *en && hotkey(ui.as_ref(), b) == Some(c)) {
                 pressed = Some(*b);
             }
@@ -2474,6 +2524,7 @@ pub fn frame_loop<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Option<Re
         }
         let kind = scene.cursor_kind(cx, cy, vx, vy, drag_start.is_some());
         let counter = tick * 42 / 100;
+        scene.gamma = settings.gamma;
         compose_with_cursor(&scene, ui.as_ref(), vx, vy, Some((kind, counter, cx, cy)), None, &mut idx, &mut rgb);
         present(&mut win, &rgb, vw as usize, vh as usize)?;
         Ok(true)

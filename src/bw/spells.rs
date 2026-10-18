@@ -3,7 +3,6 @@
 
 use super::list::NIL;
 use super::{Data, State};
-use crate::todo_port;
 
 impl State {
     /// 0x401210: `u` is a real (not hallucinated) spellcaster.
@@ -291,17 +290,23 @@ impl State {
         self.sprite_images_run_anim(d, s, anim);
         self.units[u as usize].order_state = 2;
         if self.units[u as usize].ai != NIL {
-            todo_port!("0x492850", "AI: player AI cast flag (0x690115)");
+            let p = self.units[u as usize].player as usize;
+            self.ai.players[p].spell_cooldown = 1;
         }
     }
 
     /// 0x4d74c0 op 0x27 `castspell`: fire the order's weapon when its target is valid
-    /// (0x479d40: twice for two-bullet weapons).
+    /// (`fire_weapon_shots`).
     pub(super) fn iscript_cast_spell(&mut self, d: &Data, u: u32) {
         let w = d.dat.orders.weapon[self.units[u as usize].order as usize];
         if w >= 0x82 || self.spell_target_invalid(d, u) {
             return;
         }
+        self.fire_weapon_shots(d, u, w);
+    }
+
+    /// 0x479d40 (EBX = weapon `w`): fire it, twice for two-bullet weapons (0x6564e0 = 2).
+    fn fire_weapon_shots(&mut self, d: &Data, u: u32, w: u8) {
         self.fire_projectile(d, u, w);
         if d.dat.weapons.damage_factor[w as usize] == 2 {
             self.fire_projectile(d, u, w);

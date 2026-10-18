@@ -1303,12 +1303,11 @@ impl State {
         let mut u = self.player_units[pi];
         while u != NIL {
             if self.units[u as usize].sprite != NIL && self.units[u as usize].order != 0 {
-                // 0x439d60, 0x432760, then 0x434c90 / guard post / 0x4477c0 inline.
+                // 0x439d60, 0x432760, then 0x434c90 / guard post / 0x4477c0.
                 self.ai_forget_unit(d, u, false);
                 self.ai_resource_forget(d, u);
                 self.ai_release_unit_rest(d, u);
-                let f = self.units[u as usize].u8_at(0x93);
-                self.units[u as usize].set_u8_at(0x93, f | 1);
+                self.units[u as usize].order_flags |= 1;
                 if self.units[u as usize].order != 0 {
                     loop {
                         let h = self.units[u as usize].order_queue_head;

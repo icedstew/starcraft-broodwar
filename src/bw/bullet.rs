@@ -3,7 +3,6 @@
 use super::list::{self, Link, List, Node, NIL};
 use super::{Data, State};
 use crate::game::flingy::{direction_table, Flingy};
-use crate::todo_port;
 
 /// 0x64b2e8: 100 bullets of 0x70 bytes.
 pub const MAX_BULLETS: usize = 100;
@@ -698,7 +697,9 @@ impl State {
                     }
                     self.weapon_hit(d, b, bu.target, mult as u8);
                 } else if self.units[bu.target as usize].ai != NIL && bu.source != NIL {
-                    todo_port!("0x4795d0", "AI notified of a miss");
+                    // A miss still tells a computer's unit who attacked it.
+                    let (t, src) = (bu.target, bu.source);
+                    self.attacked_by(d, t, src, true);
                 }
             }
             0xf => {

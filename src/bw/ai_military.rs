@@ -224,7 +224,7 @@ impl State {
             return false;
         }
         let ut = un.unit_type;
-        if ut == 0x23 || (ut == 0x67 && un.u8_at(0x118) != 0) {
+        if ut == 0x23 || (ut == 0x67 && un.irradiate_timer != 0) {
             return false;
         }
         if (self.is_spellcaster(d, u) || ut == 0x2a) && self.ai_ghost_to_enemy_region(d, u) {
@@ -542,6 +542,12 @@ impl State {
         }
     }
 
+    /// 0x436e40 (EAX = the unit): returns 0 (false) when the unit is finished and not
+    /// busy with order 0x6a / 0x96, else 1.
+    fn ai_unit_busy_check(un: &super::unit::Unit) -> bool {
+        !(un.status & 1 != 0 && un.order != 0x6a && un.order != 0x96)
+    }
+
     /// 0x43b6d0 (ECX = `ty`, ESI = `u`, stack `in_transport_blocks`): `u` is a finished
     /// unit of type `ty` (a sieged tank counts for 5) with an AI, not busy with order
     /// 0x6a / 0x96 (0x436e40), not threatened by its target (0x476930), and healthy
@@ -555,8 +561,7 @@ impl State {
         if t != ty && !(ty == 5 && t == 0x1e) {
             return false;
         }
-        // 0x436e40
-        if !(un.status & 1 != 0 && un.order != 0x6a && un.order != 0x96) {
+        if Self::ai_unit_busy_check(un) {
             return false;
         }
         let target = un.order_target_unit;
@@ -987,7 +992,7 @@ impl State {
     }
 
     /// 0x448630 (EAX = guard post `g`, ECX = `player`): request the guard's unit (2, 0x32)
-    /// unless a building was hit in the last 30 seconds; its home region is the value.
+    /// unless a building was hit in the last 30 seconds; the value is the guard post (`g`).
     fn ai_guard_request(&mut self, d: &Data, player: u8, g: u32) {
         let hit = self.ai.players[player as usize].previous_building_hit_second;
         if hit != 0 && self.trig.elapsed.wrapping_sub(hit) <= 0x1d {
@@ -997,7 +1002,7 @@ impl State {
         let id = if gd.unit_id == 0x1e { 5 } else { gd.unit_id };
         let home = gd.home;
         self.ai_add_need(d, player, REQ_UNIT, id);
-        self.ai_push_request(player, 2, id, 0x32, ai_ref(AI_GUARD, g));
+        self.ai_push_request(player, 2, id, 0x32, g);
         let r = region_at(&self.sai, home.0 as i32, home.1 as i32);
         self.ai_request_morph_parts(d, player, id, 0x32, ai_region_ref(player, r));
     }

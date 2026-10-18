@@ -44,11 +44,29 @@ Delegate per agents.md: Haiku triage, Sonnet porting, Opus review / hard RE / co
   ready rooms, login / create / score open-close (event procs todo), 0x6d1220 is
   network.tbl; unit names from the map's STR (0x47b090), "unit unplaceable" line
   0x48d140. Review fixes: 0x4a2450 arbiter returns 1; 0x4a2130 calls 0x432760.
-- In progress: the ~40 functions the coverage fix exposed (inline equivalents to
-  extract, UI plumbing to bucket, 0x43cd40 random target, 0x4d8df0 credits screen).
-- AI todo_port! left: 0x43cd40, 0x476fc0 / 0x43d5d0 siege tank parts, 0x4355c0 (opcode
-  0x3b), 0x434c90 non-town-AI branches, 0x404500, 0x435700 / 0x435770 / 0x435db0 parent
-  cases (grep `todo_port!("0x4` in src/bw/ai*.rs attack.rs).
+- Coverage-fix list done (left: 0x4a6250 music end check only).
+- 2026-10-17 late: user's crash (protoss vs 7 computers) fixed: three panics, all
+  reproduced with `agent/tools/aistress.sh` (guard request value was an `ai_ref`;
+  `u8_at(0x93)` outside the union; probe's empty queue slot 0xe4 indexing the cost
+  tables). 20 x 30k and 10 x 60k frames now clean. Hot todo_port! sites the stress
+  (debug build) showed are ported: 0x4548b0 / 0x4546a0 AI tail, 0x463900 medic,
+  0x4f39a0 AI budget, 0x4e9f90 AI larva, 0x475b90 guard post, 0x45d890 drone,
+  0x4e6790 addon, 0x463040 take unit; 0x4355c0 (opcode 0x3b / town workers). Second
+  round: 0x4e78e0 SCV loaded, 0x477b0e tank turret sieges, 0x476fc0 / 0x43d5d0 siege
+  tank parts (0x477160's stack arg 1 = `help`, set only from 0x43cd40 and 0x476fc0),
+  0x4795d0 on a miss, 0x4a1e50 on owner change (unconditional), 0x4e7700 early unload,
+  0x492850 spell cooldown, 0x4c779c guard post from triggers. Bugs the stress found:
+  `town_add_unit` cleared only the low byte of +0xc8 (stale harvest target), more
+  `u8_at` / `u32_at` outside the union, cloak detector bit as a u8 shift.
+- Creep (user report 2026-10-17, "too small"): the sim was right; the shown terrain
+  missed 0x49c780 (on-screen refresh each draw). Fixed (areas/ui.md); tl1354 frames
+  10..130 vs native now match the creep extent. Left: creep tile variants differ from
+  native (CRT rand seed for creep variations), top-left fog shading.
+- path_req: `Path::region` past the 0x60 data bytes reads the next pool entry
+  (`path_region`), found by aistress.
+- AI todo_port! left: 0x434c90 / 0x404500 / 0x435700 / 0x435770 / 0x435db0 / 0x45d890
+  / 0x4e78e0 non-matching AI kinds (1.16.1 reads the entry as the other struct; never
+  hit in aistress), 0x45b850 unknown script opcode. Only UI 0x49eb70 still hit.
 - Glue left: dialog event procs (ready rooms 0x4f7150 / 0x4f74b0 / 0x4f7810, login
   0x4edaa0, create 0x4af5c0, score 0x4b4a30), mission list 0x4b7820, 0x4a8590, error
   popup 0x4bb300, OK/Cancel 0x4b5b20 (taken as OK; campaigns can't start yet anyway).
@@ -56,7 +74,8 @@ Delegate per agents.md: Haiku triage, Sonnet porting, Opus review / hard RE / co
 
 ## Next steps
 
-1. Finish the coverage-fix list, then the AI todo_port! list above (0x43cd40 first).
+1. Re-run `agent/tools/aistress.sh 25000 <seed> agent/local/tgt/debug/scbw` with new
+   seeds / longer; fix what it finds. Then 0x4a6250 and the glue event procs.
 2. Glue event procs, so the ready rooms / login / create / score dialogs work.
 3. Unported non-AI frontier (`--missing both`), triage then port.
 4. Run tl1341 / 1349 / 1354 / 1356 replays on the current binary (areas/sim.md).

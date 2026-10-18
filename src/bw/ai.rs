@@ -783,19 +783,11 @@ impl State {
         self.ai_town_requests(d, p as u8);
     }
 
-    /// 0x448890: start a new round of spending: no requests or needs, flag 1, and what
-    /// is available is the bank minus the buildings workers are about to place
-    /// (0x434480) and the free supply of the race's worker.
-    fn ai_reset_budget(&mut self, d: &Data, player: u8) {
+    /// 0x434480: the minerals and gas of `player` once the buildings its workers are
+    /// about to place (orders 0x1e / 0x1f / 0x46 / 0x1a / 0x19) are paid.
+    fn ai_pending_build_costs(&mut self, d: &Data, player: u8) -> (i32, i32) {
         let p = player as usize;
-        let pa = &mut self.ai.players[p];
-        pa.flags |= 1;
-        pa.mineral_need = 0;
-        pa.gas_need = 0;
-        pa.supply_need = 0;
-        pa.request_count = 0;
         let (mut m, mut g) = (self.players.minerals[p], self.players.gas[p]);
-        // 0x434480
         let mut town = self.ai.town_lists[p];
         while town != NIL {
             let mut w = self.ai.towns.items[town as usize].workers;
@@ -804,8 +796,17 @@ impl State {
                 let un = &self.units[u as usize];
                 if matches!(un.order, 0x1e | 0x1f | 0x46 | 0x1a | 0x19) {
                     let t = un.build_queue[un.build_queue_slot as usize % 5];
-                    let (bm, bg) = (d.dat.units.mineral_cost[t as usize] as i32, d.dat.units.gas_cost[t as usize] as i32);
-                    if self.supply_ok_show(d, p, t) {
+                    // A probe's slot is already empty (0xe4) in PlaceProtossBuilding's last
+                    // state: the u16 reads land past mineral_cost (0x663a50) in the
+                    // ai_attack_move bytes and past gas_cost (0x65fec8) in the armor
+                    // bytes; supply_required[0xe4] is padding (0), so supply passes.
+                    let (bm, bg, supply_ok) = if (t as usize) < d.dat.units.mineral_cost.len() {
+                        (d.dat.units.mineral_cost[t as usize] as i32, d.dat.units.gas_cost[t as usize] as i32, self.supply_ok_show(d, p, t))
+                    } else {
+                        let lo = |a: &[u8]| a[0] as i32 | (a[1] as i32) << 8;
+                        (lo(&d.dat.units.ai_attack_move), lo(&d.dat.units.armor), true)
+                    };
+                    if supply_ok {
                         let race = self.player_races[self.local_player as usize] as u16;
                         if self.players.minerals[p] < bm {
                             self.local_error(player, 0x93 + race, 0x352);
@@ -821,6 +822,21 @@ impl State {
             }
             town = self.ai.towns.items[town as usize].link.next;
         }
+        (m, g)
+    }
+
+    /// 0x448890: start a new round of spending: no requests or needs, flag 1, and what
+    /// is available is the bank minus the buildings workers are about to place
+    /// (`ai_pending_build_costs`) and the free supply of the race's worker.
+    fn ai_reset_budget(&mut self, d: &Data, player: u8) {
+        let p = player as usize;
+        let pa = &mut self.ai.players[p];
+        pa.flags |= 1;
+        pa.mineral_need = 0;
+        pa.gas_need = 0;
+        pa.supply_need = 0;
+        pa.request_count = 0;
+        let (m, g) = self.ai_pending_build_costs(d, player);
         let worker = match self.player_races[p] {
             1 => 7,
             0 => 0x29,
@@ -877,12 +893,18 @@ impl State {
         };
         let expand = low || (self.ai_rich(p as u8) && self.player_mining_spots(p as u8) < 0x18);
         if expand {
-            let first = self.ai.town_lists[p];
-            if first != NIL && self.ai.players[p].panic_script_pos != 0 {
-                // 0x45b590: the first town stands in for a script thread.
-                let v = self.ai.players[p].panic_script_pos;
-                self.expand_from(d, p as u8, first, false, v, 2);
-            }
+            self.ai_town_expand(d, p as u8);
+        }
+    }
+
+    /// 0x45b590 (EDX = the player): when the player has a panic script position
+    /// (0x690102), 0x45b530 runs for it with n = 2; the first town stands in for the
+    /// script thread.
+    fn ai_town_expand(&mut self, d: &Data, p: u8) {
+        let first = self.ai.town_lists[p as usize];
+        if first != NIL && self.ai.players[p as usize].panic_script_pos != 0 {
+            let v = self.ai.players[p as usize].panic_script_pos;
+            self.expand_from(d, p, first, false, v, 2);
         }
     }
 

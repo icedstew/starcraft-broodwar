@@ -63,3 +63,8 @@ Read when working on the HUD, dialogs, menus or glue screens.
   (0x6284e8) and the local selection (0x6284b8) in State.
 - Status refresh flags 0x4c36c0, placement box (placebox.cpp 0x48e310), glue menus,
   replay UI 0x4deb90, chat 0x48d1c0, panels 0x427a80 / 0x4273e0 / 0x425ee0 / 0x426ee0.
+- Shown terrain (megatiles 0x628494) lags MTXM: creep changes reach it only for tiles
+  the local player sees (0x47e2d0), every 100 frames off-screen (0x49c4c0), and every
+  draw on-screen (0x49c780 from the map callback 0x4bd580; `refresh_screen_tiles`, run
+  at the end of `Scene::step`). Without the last, start creep looked small (user report
+  2026-10-17). Native check: tl1354 frames 10..130 in the real game show full creep.

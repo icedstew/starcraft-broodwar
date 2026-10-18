@@ -4,7 +4,6 @@
 
 use super::list::NIL;
 use super::{Data, State};
-use crate::todo_port;
 
 /// C's (v + ((v >> 31) & 0x1f)) >> 5: pixels to tiles, rounding toward zero.
 fn tile(v: i32) -> i16 {
@@ -30,9 +29,84 @@ impl State {
         let y = (-(puh / 2) as i16).wrapping_sub(ay).wrapping_add((pth / 2) as i16);
         let fl = d.dat.units.flingy[t as usize] as usize;
         let image = d.dat.sprites.image[d.dat.flingy.sprite[fl] as usize];
-        let _args = (self.units[u as usize].sprite, image, x, y, t);
-        todo_port!("0x4d6f90", "UI image allocator: the footprint sprite on the unit's sprite");
-        false
+        let s = self.units[u as usize].sprite;
+        self.ui_image_at_tail(d, s, image, x as i8, y as i8).is_some()
+    }
+
+    /// 0x48e1e0 (EAX = geyser `u`; `placing` = 0x64088a): while placing a Refinery /
+    /// Assimilator / Extractor the geyser gets its footprint highlight (flag 0x6d5be4).
+    pub fn placebox_geyser(&mut self, d: &Data, placing: u16, u: u32) {
+        if matches!(placing, 0x6e | 0x9d | 0x95) && self.footprint_sprite(d, u, placing) {
+            self.psi.hl_flag = true;
+        }
+    }
+
+    /// 0x48e210: while placing `placing`, an addon `u` whose parent type (0x46e170) is
+    /// `placing` gets the highlight when `placing` fits beside it for the active unit
+    /// `active` (0x597248; the 0x473ef0 check).
+    pub fn placebox_addon(&mut self, d: &Data, placing: u16, active: u32, u: u32) {
+        let ut = self.units[u as usize].unit_type;
+        if super::requirements::addon_parent_type(ut) != placing {
+            return;
+        }
+        let (puw, puh) = super::build::placement(d, ut);
+        let (ax, ay) = addon_pos(d, ut);
+        let (sx, sy) = self.unit_sprite_pos(u);
+        let x = (sx as i16).wrapping_sub((puw / 2) as i16).wrapping_sub(ax);
+        let y = (sy as i16).wrapping_sub((puh / 2) as i16).wrapping_sub(ay);
+        let player = self.units[active as usize].player;
+        if self.placement_check_highlight(d, active, player, tile(x as i32), tile(y as i32), placing) == 0 && self.footprint_sprite(d, u, placing) {
+            self.psi.hl_flag = true;
+        }
+    }
+
+    /// The units of player 11's list (0x628424 = player_units[11], linked by +0x6c).
+    fn neutral_units(&self) -> Vec<u32> {
+        let mut out = Vec::new();
+        let mut u = self.player_units[11];
+        while u != NIL {
+            out.push(u);
+            u = self.units[u as usize].player_next;
+        }
+        out
+    }
+
+    /// 0x48e430: highlight every neutral geyser (0xbc) for a gas building being placed.
+    pub fn placebox_geysers(&mut self, d: &Data, placing: u16) {
+        for u in self.neutral_units() {
+            if self.units[u as usize].unit_type == 0xbc {
+                self.placebox_geyser(d, placing, u);
+            }
+        }
+    }
+
+    /// 0x48e490: for a Terran building being placed, offer every neutral building that has a
+    /// sprite and a running order as the addon of the building (0x48e210).
+    pub fn placebox_addons(&mut self, d: &Data, placing: u16, active: u32) {
+        for u in self.neutral_units() {
+            let un = &self.units[u as usize];
+            if d.dat.units.flags[un.unit_type as usize] & 2 != 0 && un.sprite != NIL && un.order != 0 {
+                self.placebox_addon(d, placing, active, u);
+            }
+        }
+    }
+
+    /// 0x48e6e0 (placement 0x64088a = `placing`, `started` = 0x640884 clear): redraw the
+    /// highlights: free the old images, make them again for the placing type.
+    /// `terran` = 0x6637a0[placing] & 2.
+    pub fn placebox_refresh(&mut self, d: &Data, placing: u16, active: u32, started: bool, terran: bool) {
+        if started {
+            return;
+        }
+        if self.psi.hl_flag {
+            self.free_ui_images();
+            self.psi.hl_flag = false;
+        }
+        if matches!(placing, 0x6e | 0x9d | 0x95) {
+            self.placebox_geysers(d, placing);
+        } else if terran {
+            self.placebox_addons(d, placing, active);
+        }
     }
 
     /// 0x48e0a0: build command for addon `t` at tile (tx, ty): the addon's spot and the
@@ -185,7 +259,8 @@ impl State {
         }
         self.units[u as usize].set_u16_at(0xc4, 0xe4);
         if self.units[u as usize].ai != NIL {
-            todo_port!("0x4e6790", "AI building idles after its addon (0x475310)");
+            let idle = d.dat.units.ai_computer_idle[self.units[u as usize].unit_type as usize];
+            self.order_now(d, u, idle);
         }
         self.set_secondary_order(u, 0x17);
     }

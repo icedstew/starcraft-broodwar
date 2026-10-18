@@ -74,12 +74,18 @@ impl State {
     }
 
     /// iscript `uflunstable`: a free flingy of type `id` at (x, y) flies off in a
-    /// random direction (0x4955f0).
+    /// random direction (`free_flingy_random_flight`).
     pub(super) fn spawn_unstable_flingy(&mut self, d: &Data, id: u16, x: i16, y: i16) {
         let n = self.create_free_flingy(d, id, x, y);
         if n == NIL {
             return;
         }
+        self.free_flingy_random_flight(n);
+    }
+
+    /// 0x4955f0 (EAX = the free flingy `n`): a random direction (site 2); it heads for
+    /// the point one table step away.
+    fn free_flingy_random_flight(&mut self, n: u32) {
         let r = self.rng.rand(2) as u8;
         let s = self.free_flingies[n as usize].sprite;
         let (sx, sy) = (self.sprites[s as usize].x as i32, self.sprites[s as usize].y as i32);

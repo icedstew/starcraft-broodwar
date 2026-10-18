@@ -24,8 +24,18 @@ pub fn cycling(tileset: u16) -> &'static [(u8, u8)] {
     }
 }
 
+/// 0x4bdd60: the table 0x6d125c for `tileset`: true for the palette indexes inside one
+/// of its cycling ranges (`cycling`).
+pub fn excluded_colors(tileset: u16) -> [bool; 256] {
+    let mut excluded = [false; 256];
+    for &(lo, hi) in cycling(tileset) {
+        excluded[lo as usize..=hi as usize].iter_mut().for_each(|e| *e = true);
+    }
+    excluded
+}
+
 /// 0x4bdb30: nearest palette index to an 0x00bbggrr color, skipping cycling entries
-/// (0x6d125c, filled by 0x4bdd60) and index 0.
+/// (0x6d125c, `excluded_colors`) and index 0.
 pub fn nearest(palette: &[[u8; 3]; 256], excluded: &[bool; 256], rgb: u32) -> u8 {
     let (r, g, b) = ((rgb & 0xff) as i32, (rgb >> 8 & 0xff) as i32, (rgb >> 16 & 0xff) as i32);
     let mut best = (u32::MAX, 0u8);
@@ -107,10 +117,7 @@ impl Minimap {
             0xc0 | 0x100 => (w, h, scale, tile_px) = (map_w >> 1, map_h >> 1, 2, 0x40),
             _ => todo_port!("0x4a4400", "minimap for a non-standard map size"),
         }
-        let mut excluded = [false; 256];
-        for &(lo, hi) in cycling(tileset) {
-            excluded[lo as usize..=hi as usize].iter_mut().for_each(|e| *e = true);
-        }
+        let excluded = excluded_colors(tileset);
         let mut remap = [0u8; 256];
         for (i, r) in remap.iter_mut().enumerate() {
             *r = if excluded[i] { nearest(palette, &excluded, u32::from_le_bytes([palette[i][0], palette[i][1], palette[i][2], 0])) } else { i as u8 };

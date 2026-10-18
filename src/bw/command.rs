@@ -482,6 +482,68 @@ impl State {
         self.rc_normal(d, u, t, ty)
     }
 
+    /// 0x455a00: whether the right-click on `target` (NIL: none) is accepted for the
+    /// selection `sel` (`active` = 0x597248, the status unit). A refusal plays the
+    /// last refusing unit's race buzz (sfx 0x8a + race) and shows its stat_txt line:
+    /// 0x36f can't attack, 0x378 out of reach, 0x379 too close, 0x37d + race for a geyser
+    /// without a refinery.
+    pub fn right_click_accepted(&mut self, d: &Data, sel: &[u32], active: u32, target: u32) -> bool {
+        let (mut sound, mut msg) = (None, 0u16);
+        let fl = |t: u32| d.dat.units.flags[self.units[t as usize].unit_type as usize];
+        let neutral = |t: u32| {
+            let ty = self.units[t as usize].unit_type;
+            (0xc2..=0xc7).contains(&ty) || fl(t) & 0x800 != 0
+        };
+        for &u in sel.iter().rev() {
+            if u == NIL {
+                continue;
+            }
+            let race = self.race_of(d, u) as u16;
+            let mut action = self.right_click_action(d, u);
+            if action == 4 || action == 5 {
+                if target == NIL || fl(target) & 0x800 != 0 {
+                    return true;
+                }
+                if self.units[target as usize].unit_type == 0xbc {
+                    (sound, msg) = (Some(race + 1), 0x37d + race);
+                    continue;
+                }
+                action = 1;
+            }
+            match action {
+                0 => {}
+                1 => {
+                    if target == NIL || !self.is_enemy(active, target) || neutral(target) || self.can_attack(d, u, target, true) {
+                        return true;
+                    }
+                    (sound, msg) = (Some(0x8a + race), 0x36f);
+                }
+                3 => {
+                    if target == NIL || neutral(target) {
+                        continue;
+                    }
+                    if !self.can_attack(d, u, target, true) {
+                        (sound, msg) = (Some(0x8a + race), 0x36f);
+                    } else if self.cannot_hit_now(d, u, target) {
+                        (sound, msg) = (Some(0x8a + race), 0x378);
+                    } else if self.target_too_close(d, u, target) {
+                        (sound, msg) = (Some(0x8a + race), 0x379);
+                    } else {
+                        return true;
+                    }
+                }
+                _ => return true,
+            }
+        }
+        if let Some(s) = sound {
+            self.ui_sounds.push(s);
+        }
+        if msg != 0 && !self.replay {
+            self.shown_error = msg;
+        }
+        false
+    }
+
     /// 0x455760: `u`'s right-click action (units.dat, with the burrowed-lurker,
     /// rally-building and hallucination cases).
     fn right_click_action(&self, d: &Data, u: u32) -> u8 {
@@ -1153,7 +1215,7 @@ impl State {
     }
 
     /// 0x4764d0: `t` is inside `u`'s minimum weapon range.
-    fn target_too_close(&self, d: &Data, u: u32, t: u32) -> bool {
+    pub(super) fn target_too_close(&self, d: &Data, u: u32, t: u32) -> bool {
         let sub = self.units[u as usize].subunit;
         let wu = if sub != NIL && d.dat.units.flags[self.units[sub as usize].unit_type as usize] & 0x10 != 0 { sub } else { u };
         let wt = self.units[wu as usize].unit_type as usize;
@@ -1445,6 +1507,7 @@ impl State {
     fn command_pause(&mut self, player: u8) {
         if !self.trig.paused {
             self.trig.paused = true;
+            self.palette_grey = true;
             self.notices.push((0x38, player));
         }
     }
@@ -1455,6 +1518,7 @@ impl State {
     fn command_resume(&mut self, player: u8) {
         if self.trig.paused {
             self.trig.paused = false;
+            self.palette_grey = false;
             self.notices.push((0x39, player));
         }
     }

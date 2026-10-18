@@ -300,11 +300,24 @@ impl State {
 }
 
 impl State {
-    /// 0x463040: a computer player's AI takes over `u` (towns, the medic list).
-    pub(super) fn ai_take_unit(&mut self, u: u32) {
+    /// 0x463040: a computer player's AI takes over `u`: a medic may become the free
+    /// medic; a unit with `ai_internal` bit 2 joins the player's first town (0x433dd0),
+    /// any other gets a guard post (0x462960).
+    pub(super) fn ai_take_unit(&mut self, d: &Data, u: u32) {
         let p = self.units[u as usize].player;
-        if p < 8 && self.player_type(p) == 1 {
-            crate::todo_port!("0x463040", "AI: computer player takes the unit");
+        if p >= 8 {
+            return;
+        }
+        let t = self.units[u as usize].unit_type;
+        let computer = self.player_type(p) == 1;
+        if computer && t == 0x22 && self.ai.players[p as usize].free_medic == NIL {
+            self.ai.players[p as usize].free_medic = u;
+        }
+        if d.dat.units.ai_internal[t as usize] & 2 == 0 {
+            self.ai_guard_register(d, u);
+        } else if computer && self.ai.town_lists[p as usize] != NIL {
+            let town = self.ai.town_lists[p as usize];
+            self.town_add_unit(d, u, town);
         }
     }
 
@@ -335,7 +348,7 @@ impl State {
                 let o = d.dat.units.ai_return_to_idle[self.units[u as usize].unit_type as usize];
                 self.order_now(d, u, o);
             }
-            self.ai_take_unit(u);
+            self.ai_take_unit(d, u);
             let mut c = self.player_units[p as usize];
             while c != NIL {
                 let next = self.units[c as usize].player_next;
@@ -354,7 +367,7 @@ impl State {
                         let o = d.dat.units.ai_attack_unit[self.units[sub as usize].unit_type as usize];
                         self.order_on(d, sub, o, a);
                     }
-                    self.ai_take_unit(c);
+                    self.ai_take_unit(d, c);
                 }
                 c = next;
             }

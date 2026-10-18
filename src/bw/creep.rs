@@ -520,17 +520,42 @@ impl State {
                 continue;
             }
             let near_screen = x.wrapping_sub(self.screen_tile.0 as u32) <= 0x14 && y.wrapping_sub(self.screen_tile.1 as u32) <= 0xd;
-            let raw = self.terrain.mtxm[i];
-            let mega = self.terrain.tileset.megatile(raw);
-            if near_screen || mega == self.terrain.megatiles[i] & 0x7fff {
-                continue;
+            if !near_screen {
+                self.refresh_shown_tile(i, x, y);
             }
-            self.terrain.megatiles[i] = mega;
-            let f = &mut self.terrain.tile_flags[i];
-            *f = if raw & 0x7ff0 == 0x10 { *f | 0x4000_0000 } else { *f & !0x4000_0000 };
-            self.creep_edges_around(x as i32, y as i32);
-            // 0x59cb58: redraw (UI).
         }
+    }
+
+    /// 0x49c780 (each map draw, from the game screen's callback 0x4bd580): the screen's
+    /// 0xe rows of up to 0x15 tiles from its top-left tile, the area 0x49c4c0 leaves
+    /// out, brought up to date the same way (0x49c620 per row).
+    pub fn refresh_screen_tiles(&mut self) {
+        let (w, h) = (self.terrain.width as u32, self.terrain.height as u32);
+        let (sx, sy) = (self.screen_tile.0 as u32, self.screen_tile.1 as u32);
+        let n = w.saturating_sub(sx).min(0x15);
+        for y in sy..(sy + 0xe).min(h) {
+            for x in sx..sx + n {
+                let i = (y * w + x) as usize;
+                if self.tile_seen_locally(i) {
+                    self.refresh_shown_tile(i, x, y);
+                }
+            }
+        }
+    }
+
+    /// The shared step of 0x49c4c0 / 0x49c620: a tile whose shown megatile differs from
+    /// MTXM's takes it, with the creep flag and the edges around it (0x413b30).
+    fn refresh_shown_tile(&mut self, i: usize, x: u32, y: u32) {
+        let raw = self.terrain.mtxm[i];
+        let mega = self.terrain.tileset.megatile(raw);
+        if mega == self.terrain.megatiles[i] & 0x7fff {
+            return;
+        }
+        self.terrain.megatiles[i] = mega;
+        let f = &mut self.terrain.tile_flags[i];
+        *f = if raw & 0x7ff0 == 0x10 { *f | 0x4000_0000 } else { *f & !0x4000_0000 };
+        self.creep_edges_around(x as i32, y as i32);
+        // 0x59cb58: redraw (UI).
     }
 }
 

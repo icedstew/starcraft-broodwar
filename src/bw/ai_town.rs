@@ -76,7 +76,7 @@ impl State {
                 parent: u,
                 town,
             };
-            self.units[u as usize].set_u8_at(0xc8, 0);
+            self.units[u as usize].set_ptr_at(0xc8, NIL);
             self.units[u as usize].ai = ai_ref(AI_WORKER, w);
             let tw = &mut self.ai.towns.items[town as usize];
             tw.worker_count = tw.worker_count.wrapping_add(1);
@@ -658,7 +658,13 @@ impl State {
                 g.times_died += 1;
             }
         }
-        // 0x4477c0
+        self.ai_replace_free_medic(u);
+        self.units[u as usize].ai = NIL;
+    }
+
+    /// 0x4477c0: when medic `u` was its player's free medic, the player's first medic
+    /// (if any) takes over.
+    pub(super) fn ai_replace_free_medic(&mut self, u: u32) {
         if self.units[u as usize].unit_type == 0x22 {
             let p = self.units[u as usize].player as usize;
             if self.ai.players[p].free_medic == u {
@@ -673,7 +679,6 @@ impl State {
                 }
             }
         }
-        self.units[u as usize].ai = NIL;
     }
 
     /// 0x439d60: computers forget `u` as a region's target, slowest unit or detector;
@@ -1042,14 +1047,62 @@ impl State {
         n
     }
 
-    /// 0x4355c0: town `town` takes up to `n` idle finished workers from the player's
-    /// other towns with more than one worker (from the last town backwards).
-    pub(super) fn town_take_workers(&mut self, _d: &Data, town: u32, _n: u32) {
+    /// 0x4355c0: town `town` takes up to `n` finished workers not building or carrying
+    /// (orders 0x53 / 0x57 / 0x58 / 0x1e / 0x21 / 0x1f / 0x46 / 0x1a / 0x19) from the
+    /// player's other towns with more than one worker and a drop-off main building
+    /// (0x401cf0), from the last town backwards; once `town` has workers, only from
+    /// towns over their limit, and never past its own limit.
+    pub(super) fn town_take_workers(&mut self, d: &Data, town: u32, mut n: u32) {
         let tw = &self.ai.towns.items[town as usize];
-        if tw.in_battle != 0 || (tw.worker_count != 0 && tw.worker_limit <= tw.worker_count) {
+        if tw.in_battle != 0 {
             return;
         }
-        todo_port!("0x4355c0", "AI town takes workers from other towns");
+        let (wc, limit) = (tw.worker_count as u32, tw.worker_limit as u32);
+        if wc != 0 {
+            if limit <= wc {
+                return;
+            }
+            if n + wc > limit {
+                n = limit - wc;
+            }
+        }
+        let mut other = self.ai.town_lists[tw.player as usize];
+        if n == 0 || other == NIL {
+            return;
+        }
+        while self.ai.towns.items[other as usize].link.next != NIL {
+            other = self.ai.towns.items[other as usize].link.next;
+        }
+        while other != NIL {
+            let o = &self.ai.towns.items[other as usize];
+            let (owc, olimit, main) = (o.worker_count, o.worker_limit, o.main_building);
+            if other != town
+                && owc > 1
+                && main != NIL
+                && self.is_drop_off(d, main)
+                && (self.ai.towns.items[town as usize].worker_count == 0 || owc > olimit)
+            {
+                let mut w = self.ai.towns.items[other as usize].workers;
+                while w != NIL {
+                    let u = self.ai.workers.items[w as usize].parent;
+                    let next = self.ai.workers.items[w as usize].link.next;
+                    let un = &self.units[u as usize];
+                    if !matches!(un.order, 0x53 | 0x57 | 0x58 | 0x1e | 0x21 | 0x1f | 0x46 | 0x1a | 0x19) && un.status & 1 != 0 {
+                        self.town_remove_unit(d, u);
+                        self.town_add_unit(d, u, town);
+                        n -= 1;
+                        if n == 0 {
+                            return;
+                        }
+                    }
+                    if self.ai.towns.items[other as usize].workers == NIL {
+                        break;
+                    }
+                    w = next;
+                }
+            }
+            other = self.ai.towns.items[other as usize].link.prev;
+        }
     }
 
     /// 0x431f90: the town's next free request slot (count 0) gets (kind 0 unit / 1
@@ -2134,8 +2187,15 @@ impl State {
         best
     }
 
+    /// 0x4368c0: `u` becomes the next of the pair (`taken` holds the first); true once
+    /// the pair is complete.
+    fn ai_pair_take(taken: &mut Vec<u32>, u: u32) -> bool {
+        taken.push(u);
+        taken.len() == 2
+    }
+
     /// 0x437410 (high templar, 0x43) / 0x437320 (dark templar, 0x3d): two finished
-    /// units of `player`'s that can merge (not already merging) as an archon. The 0x4368c0
+    /// units of `player`'s that can merge (not already merging) as an archon. The
     /// pairs: a guard AI unit, or a military AI one in region state 0 / 4 / 5 / 8 / 9 (for
     /// high templar: with energy 0x4b+), are taken in order. Else (`ht`: the two of lowest
     /// energy) the first and the last military AI ones.
@@ -2153,8 +2213,7 @@ impl State {
             }
             match ai_kind(un.ai) {
                 AI_GUARD => {
-                    taken.push(cur);
-                    if taken.len() == 2 {
+                    if Self::ai_pair_take(&mut taken, cur) {
                         return Some((taken[0], taken[1]));
                     }
                 }
@@ -2174,8 +2233,7 @@ impl State {
                         second = cur;
                     }
                     if (!ht || e >= 0x4b) && matches!(self.ai_military_region_state(un.ai), 0 | 5 | 4 | 8 | 9) {
-                        taken.push(cur);
-                        if taken.len() == 2 {
+                        if Self::ai_pair_take(&mut taken, cur) {
                             return Some((taken[0], taken[1]));
                         }
                     }
@@ -2574,7 +2632,7 @@ impl State {
 /// Units joining a computer player's forces (0x4a2830 and its callees).
 impl State {
     /// The town of a worker or building AI entry (`+0x14`).
-    fn ai_entry_town(&self, r: u32) -> Option<u32> {
+    pub(super) fn ai_entry_town(&self, r: u32) -> Option<u32> {
         match ai_kind(r) {
             AI_WORKER => Some(self.ai.workers.items[ai_index(r) as usize].town),
             AI_BUILDING => Some(self.ai.buildings.items[ai_index(r) as usize].town),

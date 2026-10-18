@@ -469,7 +469,7 @@ impl State {
 
     /// 0x492370: a disabling spell wears off: its overlay (image ids lo..=hi, on the unit
     /// or its turret) plays its death animation, the turret works again, and a worker
-    /// that was waiting at a mineral field resumes (0x468db0).
+    /// that was waiting at a mineral field resumes (`worker_resume_mining`).
     pub(super) fn spell_overlay_ends(&mut self, d: &Data, u: u32, lo: u16, hi: u16) {
         let find = |st: &State, x: u32| {
             let s = st.units[x as usize].sprite;
@@ -499,23 +499,28 @@ impl State {
             self.image_run_anim(d, img, 1);
         }
         if d.dat.units.flags[self.units[u as usize].unit_type as usize] & 8 != 0 {
-            // 0x468db0
-            let un = &self.units[u as usize];
-            let m = un.ptr_at(0xd0);
-            if !self.disabled(u)
-                && m != NIL
-                && d.dat.units.flags[self.units[m as usize].unit_type as usize] & 0x2000 != 0
-                && un.u8_at(0xce) == 0
-                && self.units[m as usize].u8_at(0xd3) == 0
-                && matches!(un.order, 0x56 | 0x52)
-                && un.order_state == 2
-            {
-                self.leave_wait_list(u, m);
-                self.remove_queued(d, u, 0x59);
-                self.try_take_mineral(d, u, m);
-            }
+            self.worker_resume_mining(d, u);
         }
         self.units[u as usize].order_process_timer = 0xf;
+    }
+
+    /// 0x468db0 (ESI = `u`): a worker that is not disabled and waits (order 0x56 / 0x52,
+    /// state 2) at a mineral field leaves the wait list and takes the field.
+    fn worker_resume_mining(&mut self, d: &Data, u: u32) {
+        let un = &self.units[u as usize];
+        let m = un.ptr_at(0xd0);
+        if !self.disabled(u)
+            && m != NIL
+            && d.dat.units.flags[self.units[m as usize].unit_type as usize] & 0x2000 != 0
+            && un.u8_at(0xce) == 0
+            && self.units[m as usize].u8_at(0xd3) == 0
+            && matches!(un.order, 0x56 | 0x52)
+            && un.order_state == 2
+        {
+            self.leave_wait_list(u, m);
+            self.remove_queued(d, u, 0x59);
+            self.try_take_mineral(d, u, m);
+        }
     }
 
     /// 0x4ec170 execute_secondary_order.

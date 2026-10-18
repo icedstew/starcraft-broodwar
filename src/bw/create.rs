@@ -720,6 +720,16 @@ impl State {
         }
     }
 
+    /// 0x48f630: the local player's unit `u` cannot land here: advisor line (0x8d + race)
+    /// and the unit speaks (0x48f5a0 with base 0x90 is the build twin).
+    pub fn land_refused_sound(&mut self, d: &Data, u: u32) {
+        let race = Self::supply_race_of(d, self.units[u as usize].unit_type);
+        if self.is_local_unit(u) {
+            self.speech.push((0x8d + race, 0, u, 0x63));
+            self.unit_talk(u, 0x8d + race);
+        }
+    }
+
     /// 0x48f7b0: the local player's unit `u` cannot be placed: advisor line (0x9f + race),
     /// the unit speaks, then stat_txt line `msg` (1-based) on the error line.
     pub fn placement_blocked_sound(&mut self, d: &Data, u: u32, msg: u16) {
@@ -797,7 +807,7 @@ impl State {
 
     /// 0x48f230: the local player's unit `u` was hit: it blinks red on the minimap and,
     /// unless an alert played lately (0x640870) or nearby, or the unit is on screen
-    /// (0x4e5ad0), the advisor warns (building or forces sound by the local race).
+    /// (`unit_off_screen`), the advisor warns (building or forces sound by the local race).
     pub fn under_attack_alert(&mut self, u: u32) {
         if !self.is_local_unit(u) {
             return;
@@ -809,11 +819,7 @@ impl State {
         if self.alert_cooldown != 0 {
             return;
         }
-        let (x, y) = self.unit_sprite_pos(u);
-        let (tx, ty) = ((x as i32) >> 5, (y as i32) >> 5);
-        let (sx, sy) = (self.screen_tile.0 as i32, self.screen_tile.1 as i32);
-        let on_screen = sx <= tx + 2 && sy <= ty + 2 && tx <= sx + 0x16 && ty <= sy + 0xf;
-        if on_screen || self.units[u as usize].attack_notify_timer != 0 {
+        if !self.unit_off_screen(u) || self.units[u as usize].attack_notify_timer != 0 {
             return;
         }
         self.alert_nearby_units(u);
@@ -821,6 +827,15 @@ impl State {
         let race = self.player_races[self.local_player as usize] as u16;
         let building = self.units[u as usize].status & 2 != 0;
         self.speech.push((if building { 0x75 } else { 0x78 } + race, 1, NIL, 0));
+    }
+
+    /// 0x4e5ad0 (EAX = `u`): false when the unit's tile is on screen (with a margin of 2
+    /// tiles left / up, 0x16 wide, 0xf high), else true.
+    fn unit_off_screen(&self, u: u32) -> bool {
+        let (x, y) = self.unit_sprite_pos(u);
+        let (tx, ty) = (x as i32 / 32, y as i32 / 32);
+        let (sx, sy) = (self.screen_tile.0 as i32, self.screen_tile.1 as i32);
+        !(sx <= tx + 2 && sy <= ty + 2 && tx <= sx + 0x16 && ty <= sy + 0xf)
     }
 
     /// 0x48eae0 (EAX = `u`): every unit within 0x160 of `u`'s sprite (finder 0x4e8280, callback

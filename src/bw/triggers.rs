@@ -1624,7 +1624,7 @@ impl State {
         if self.units[u as usize].status & 2 != 0 && self.race_of(d, u) == 1 {
             self.take_adjacent_addon(d, u);
         }
-        self.ai_take_unit(u);
+        self.ai_take_unit(d, u);
         self.trig.unit_created = true;
         let ut = self.units[u as usize].unit_type;
         let gas_done = self.units[u as usize].status & 1 != 0 && matches!(ut, 0x6e | 0x9d | 0x95);
@@ -1856,8 +1856,10 @@ impl State {
             }
             self.order_at(d, u, order, dest);
         }
-        if self.units[u as usize].ai != NIL && matches!(order, 6 | 0xe) {
-            todo_port!("0x4c779c", "a computer's unit keeps the trigger's destination");
+        // A guard's unit moved or attack-moved by a trigger gets `dest` as its post.
+        let r = self.units[u as usize].ai;
+        if r != NIL && matches!(order, 6 | 0xe) && super::ai_town::ai_kind(r) == super::ai_town::AI_GUARD {
+            self.ai.guards.items[super::ai_town::ai_index(r) as usize].home = dest;
         }
     }
 

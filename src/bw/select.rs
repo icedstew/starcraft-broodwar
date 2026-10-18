@@ -684,7 +684,34 @@ impl State {
             }
         }
         if super::players::MULTIPLAYER && self.template[0x10] != 0 {
-            crate::todo_port!("0x49b870", "team games: the other team members' selections (0x6284e8) get their ally-selection images (0x23a..0x244)");
+            // Other members of the local player's force (0x57eeea): each selected unit not the
+            // local player's (or any, in a replay) takes one more ally-selection mark.
+            let me = self.local_player as usize;
+            for p in 0..8 {
+                if p == me || self.player_force[me] != self.player_force[p] {
+                    continue;
+                }
+                for i in 0..12 {
+                    let u = self.selections[p][i];
+                    if u == NIL {
+                        break;
+                    }
+                    if !self.replay && self.units[u as usize].player == self.local_player {
+                        continue;
+                    }
+                    let s = self.units[u as usize].sprite;
+                    let b = self.sprites[s as usize].flags;
+                    if (b >> 1) & 3 != 0 {
+                        let b = (((b >> 1).wrapping_sub(1)).wrapping_mul(2) ^ b) & 6 ^ b;
+                        self.sprites[s as usize].flags = b;
+                        if b & 6 == 0 {
+                            self.ally_selection_image_remove(s);
+                        }
+                    }
+                    let c = self.circle_color[self.units[u as usize].player as usize];
+                    self.ally_selection_add(d, s, c);
+                }
+            }
         }
     }
 }
@@ -717,6 +744,9 @@ impl State {
             if *f & 8 != 0 {
                 *f &= !9;
             }
+            if self.own_finished_pylon(u) {
+                self.psi_hide_fields(d);
+            }
         } else {
             // 0x4975d0
             *f &= !9;
@@ -738,6 +768,59 @@ impl State {
             sp.selection_index = slot;
             sp.flags |= 8;
         }
+        if d.dat.units.flags[self.units[u as usize].unit_type as usize] & 0x2000_0000 == 0 && self.own_finished_pylon(u) {
+            self.psi_show_fields(d);
+        }
+    }
+
+    /// The test of 0x4e6180 / 0x4e6290 before 0x493640 / 0x494100: not a replay, the local
+    /// player's, finished (status bit 0) Pylon (0x9c).
+    fn own_finished_pylon(&self, u: u32) -> bool {
+        let un = &self.units[u as usize];
+        !self.replay && un.player == self.local_player && un.status & 1 != 0 && un.unit_type == 0x9c
+    }
+
+    /// 0x497590: free a teammate's ally-selection image (0x23b..=0x244) of the sprite.
+    pub fn ally_selection_image_remove(&mut self, s: u32) -> u8 {
+        self.ui_image_remove(s, 0x23b, 0x244)
+    }
+
+    /// 0x485710: the most teammates that can select a unit at once + 1 (template teams byte
+    /// 0x596875: 2 -> 4, 3 -> 3, 4 -> 2), 0 otherwise.
+    fn ally_selection_limit(&self) -> u8 {
+        match self.template[0x10] {
+            2 => 4,
+            3 => 3,
+            4 => 2,
+            _ => {
+                crate::todo_port!("0x485710", "teams byte other than 2..4: one-time init (0x4c3d20, 0x4bb300, 0x4dcc50)");
+                0
+            }
+        }
+    }
+
+    /// 0x499a10 (ESI = sprite, stack = color; 0x4e65c0 gives the owner's 0x581d6a color):
+    /// one more teammate selects the sprite (count in flag bits 1..2); below 3 it gets the
+    /// ally-selection image 0x23b (0x4d7070), undone if none is free.
+    pub fn ally_selection_add(&mut self, d: &Data, s: u32, color: u8) {
+        let lim = self.ally_selection_limit();
+        let b = self.sprites[s as usize].flags;
+        if (b >> 1) & 3 != lim.wrapping_sub(1) {
+            let b = ((b & 0xfe).wrapping_add(2) ^ b) & 6 ^ b;
+            self.sprites[s as usize].flags = b;
+            if b & 6 < 3 && self.ui_circle_image(d, s, color, 0x23b).is_none() {
+                self.sprites[s as usize].flags &= 0xf9;
+            }
+        }
+    }
+
+    /// 0x4e65c0 (from the tail of 0x49af80): after the unit entered another team member's selection (0x6284e8,
+    /// 0x49a110 true) its sprite takes the ally-selection image (0x4e65c0). Hook: call it
+    /// where a network game puts a unit in a player's selection (scbw has none, 0x57f0b4 = 0).
+    pub fn ally_selection_unit(&mut self, d: &Data, u: u32) {
+        let c = self.circle_color[self.units[u as usize].player as usize];
+        let s = self.units[u as usize].sprite;
+        self.ally_selection_add(d, s, c);
     }
 
     /// 0x49ae40 (EAX = array, stack = count): make the first `count` units of `units`

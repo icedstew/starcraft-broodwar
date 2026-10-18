@@ -4,7 +4,6 @@
 
 use super::list::NIL;
 use super::{Data, State};
-use crate::todo_port;
 
 /// Healing.
 const TECH_HEALING: u16 = 0x22;
@@ -331,8 +330,17 @@ impl State {
             self.move_to_unit(d, u, h);
             return;
         }
-        if self.units[u as usize].ai != NIL {
-            todo_port!("0x463900", "AI medic: back to its guard position (0xa3 via 0x475260)");
+        // A computer's medic with no one to heal: a guard goes back to its post (0xa3),
+        // any other AI unit takes ComputerAI (0x9c).
+        let r = self.units[u as usize].ai;
+        if r != NIL {
+            if super::ai_town::ai_kind(r) != super::ai_town::AI_GUARD {
+                return self.order_now(d, u, 0x9c);
+            }
+            let home = self.ai.guards.items[super::ai_town::ai_index(r) as usize].home;
+            if self.unit_sprite_pos(u) != home {
+                self.order_at(d, u, 0xa3, home);
+            }
         }
     }
 }

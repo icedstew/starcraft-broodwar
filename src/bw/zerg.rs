@@ -230,8 +230,21 @@ impl State {
         self.modify_completed_counters(d, u, -1, false);
         self.units[u as usize].status &= !1;
         self.transform_unit(d, u, t);
-        if self.player_type(self.units[u as usize].player) == 1 && self.units[u as usize].ai != NIL {
-            todo_port!("0x45d890", "AI: drone leaves its town (0x404470 / 0x433dd0)");
+        // A computer's drone: its worker entry goes back to the pool (0x404470), the
+        // town counts one worker less and takes the building (0x433dd0).
+        let r = self.units[u as usize].ai;
+        if self.player_type(self.units[u as usize].player) == 1 && r != NIL && super::ai_town::ai_kind(r) != super::ai_town::AI_WORKER {
+            todo_port!("0x45d890", "a drone with a non-worker AI");
+        } else if self.player_type(self.units[u as usize].player) == 1 && r != NIL {
+            let w = super::ai_town::ai_index(r);
+            let town = self.ai.workers.items[w as usize].town;
+            self.units[u as usize].ai = NIL;
+            let mut head = self.ai.towns.items[town as usize].workers;
+            self.ai.workers.release(&mut head, w);
+            let tw = &mut self.ai.towns.items[town as usize];
+            tw.workers = head;
+            tw.worker_count = tw.worker_count.wrapping_sub(1);
+            self.town_add_unit(d, u, town);
         }
         self.start_zerg_building(d, u);
     }

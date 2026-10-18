@@ -21,6 +21,9 @@ agent/
                     files in $W (md/cur, a, b, emu_trace...): never run two at once (they
                     corrupt each other and report false diffs). repcmp.sh takes OUT=<dir>.
     repcmp.sh       replay playback: emulator vs scbw trace diff
+    aistress.sh     [frames] [seed] [bin]: all (8) maps, you + 7 computers, headless via
+                    `shot` (SCBW_SEED fixes the seed): panics; with a debug bin, the
+                    todo_port! sites hit (the AI paths still missing, by count)
   local/            GITIGNORED (Blizzard-derived or large)
     scratch/        the whole former session scratchpad (5.8 GB), see below
 re/                 committed reverse-engineering harness (emu.py, emu_game.py, ...)
@@ -90,4 +93,6 @@ dumps the 8-bit game screen buffer after each draw. `NATIVE_SHOTS_KEEP=1` keeps 
 dir with a screenshot per menu step. ptrace_scope is 1 on this machine, so gdb cannot
 attach to a running wine process; winedbg's gdb proxy (Windows debug API) works.
 The same breakpoint mechanism can read any game state at an exact frame (frame counter
-0x57f23c) — useful for checks the emulator cannot do.
+0x57f23c) — useful for checks the emulator cannot do. `NATIVE_GDBPY=<script.py>` runs
+your own gdb script instead (gdb.Breakpoint subclasses whose `stop` logs memory and
+returns False); `CAP_END=<frame>` with `every` limits a shots run.

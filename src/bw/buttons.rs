@@ -786,7 +786,9 @@ impl State {
         card
     }
 
-    /// Run a button's action routine (`queued`: Shift held).
+    /// Run a button's action routine (`queued`: Shift held). One arm per routine:
+    /// 0x4234d0 stim (refusal 0x48ef30), 0x423730 cloak and 0x423f70 tech (0x423660,
+    /// refusal 0x48ee30), 0x423790 / 0x423860 train and research (0x42cf70 errors).
     pub fn button_action(&self, d: &Data, btn: &Button, player: u8, s: &Selection, queued: bool) -> ButtonAction {
         use ButtonAction::*;
         let q = queued as u8;
@@ -820,9 +822,14 @@ impl State {
             0x4234b0 => Send(vec![0x1f, v as u8, (v >> 8) as u8]),
             0x4234d0 => {
                 // Stim: some selected unit has more than 10 hp.
-                if self.any_sel(s, |u| self.units[u as usize].hp > 0xa00) { Send(vec![0x36]) } else { Error(Option::None) }
+                if self.any_sel(s, |u| self.units[u as usize].hp > 0xa00) {
+                    Send(vec![0x36])
+                } else {
+                    // 0x48ef30: stat_txt 0x36a and the race beep.
+                    Error(Some((self.race_of(d, a) as u16 + 1, 0x36a)))
+                }
             }
-            0x423730 => if self.cloak_energy(d, s) { Send(vec![0x21, q]) } else { Error(Option::None) },
+            0x423730 => if self.cloak_energy(d, s) { Send(vec![0x21, q]) } else { self.energy_refusal(d, a) },
             // 0x48f4d0 plays the acknowledgement sound.
             0x423760 => Send(vec![0x1e, q]),
             0x423790 | 0x423860 => {
@@ -858,7 +865,7 @@ impl State {
                 // 0x423660: some selected unit has the tech's energy.
                 let cost = (d.dat.techdata.energy_cost.get(v as usize).copied().unwrap_or(0) as u32) << 8;
                 if self.game_options & 0x800 == 0 && !self.any_sel(s, |u| self.units[u as usize].energy as u32 >= cost) {
-                    return Error(Option::None);
+                    return self.energy_refusal(d, a);
                 }
                 let o = |x: u8| target(x, x, x);
                 match v {
@@ -939,6 +946,13 @@ impl State {
             return Some((0x96 + race, 0x353));
         }
         None
+    }
+
+    /// 0x423540 / 0x423660 failing: 0x48ee30 with the active unit's race: advisor sound
+    /// 0x9c + race and "Not enough energy." (stat_txt 0x360 + race).
+    fn energy_refusal(&self, d: &Data, active: u32) -> ButtonAction {
+        let race = self.race_of(d, active) as u16;
+        ButtonAction::Error(Some((0x9c + race, 0x360 + race)))
     }
 
     /// 0x423540: some selected unit has energy for its cloak.

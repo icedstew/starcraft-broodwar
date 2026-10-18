@@ -393,7 +393,7 @@ impl Menu {
                 None => {}
             },
             Kind::Video => {
-                set.gamma = v(1).unwrap_or(set.gamma);
+                set.gamma = v(1).map_or(set.gamma, |g| crate::palette::set_gamma(g as i32));
                 set.color_cycling = ck(2).unwrap_or(set.color_cycling);
                 if let Some(p) = (3..=5).find(|&id| ck(id) == Some(true)) {
                     set.portraits = p - 3;

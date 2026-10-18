@@ -9,7 +9,6 @@
 
 use super::list::NIL;
 use super::{Data, State};
-use crate::todo_port;
 
 fn is_mineral(t: u16) -> bool {
     (0xb0..=0xb2).contains(&t)
@@ -77,7 +76,7 @@ impl State {
         self.queue_front(d, u, 0x97, (0, 0), NIL);
     }
 
-    /// 0x474540 / 0x4745f0: queue in front of the queue, or append when it is empty.
+    /// 0x474af0 (0x474540 / 0x4745f0): queue in front of the queue, or append when it is empty.
     pub(super) fn queue_front(&mut self, d: &Data, u: u32, order: u8, pos: (i16, i16), target: u32) {
         let head = self.units[u as usize].order_queue_head;
         if head != NIL {
@@ -654,15 +653,17 @@ impl State {
         self.remove_carried_image(u);
         let un = &self.units[u as usize];
         let (p, amount, r) = (un.player as usize, un.u8_at(0xcf) as i32, un.resource_type);
+        // Every player's AI budget (0x68fef4 / 0x68fef8) grows with the delivery too.
         if r & 2 != 0 {
             self.players.minerals[p] += amount;
             self.players.minerals_gathered[p] += amount;
+            let a = &mut self.ai.players[p].minerals_available;
+            *a = a.wrapping_add(amount as u32);
         } else if r & 1 != 0 {
             self.players.gas[p] += amount;
             self.players.gas_gathered[p] += amount;
-        }
-        if r & 3 != 0 && self.units[u as usize].ai != NIL {
-            todo_port!("0x4f39a0", "AI resource stats");
+            let a = &mut self.ai.players[p].gas_available;
+            *a = a.wrapping_add(amount as u32);
         }
         let un = &mut self.units[u as usize];
         un.resource_type = 0;

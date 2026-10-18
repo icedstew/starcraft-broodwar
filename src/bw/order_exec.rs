@@ -6,7 +6,6 @@
 use super::ai_town::{ai_index, ai_kind, AI_GUARD, AI_MILITARY};
 use super::list::NIL;
 use super::{Data, State};
-use crate::todo_port;
 
 /// 0x6577ec: the suicide orders' reach; in .bss and never written by 1.16.1, so 0.
 const SUICIDE_RANGE: u32 = 0;
@@ -275,8 +274,28 @@ impl State {
             return;
         }
         let base = self.units[u as usize].subunit;
-        if self.units[u as usize].unit_type == 6 && self.units[base as usize].ai != NIL {
-            todo_port!("0x477b0e", "AI siege tank sieges up for its turret's target");
+        // 0x477b0e: a computer's tank (with Siege Mode, its target seen) whose target is
+        // in sieged range (turret 0x1f's weapon) but not tank range (6's) and is a real
+        // target sieges: the turret stops (0x17) and queues the sieged turret's attack,
+        // the tank sieges (0x62) and queues the sieged tank's attack on the target.
+        if self.units[u as usize].unit_type == 6
+            && self.units[base as usize].ai != NIL
+            && self.can_use_tech(d, base, 5, self.units[u as usize].player) == Ok(1)
+            && self.order_target_visible(u)
+        {
+            let (sieged, unsieged) = (d.dat.units.ground_weapon[0x1f], d.dat.units.ground_weapon[6]);
+            let r = self.weapon_range(d, u, sieged);
+            if self.in_attack_range(d, base, r, t) {
+                let r = self.weapon_range(d, u, unsieged);
+                if !self.in_attack_range(d, base, r, t) && !super::ai_region::is_minor_target(self.units[t as usize].unit_type) {
+                    self.order_now(d, u, 0x17);
+                    self.queue_order(d, u, d.dat.units.ai_attack_unit[0x1f], false);
+                    self.order_now(d, base, 0x62);
+                    let p = self.unit_sprite_pos(t);
+                    self.issue_order(d, base, d.dat.units.ai_attack_unit[0x1e], false, p, t, 0xe4);
+                    return;
+                }
+            }
         }
         if !self.target_in_reach(d, u, t) {
             let bt = self.units[base as usize].unit_type as usize;
@@ -688,8 +707,9 @@ impl State {
                     return;
                 }
             } else {
-                self.units[u as usize].order = 0x9c;
-                todo_port!("0x475b90", "AI unit type 1 -> GuardPost (0xa0) (needs AI structs)");
+                // A guard's unit goes to GuardPost (0xa0), any other AI's to ComputerAI.
+                let guard = super::ai_town::ai_kind(un.ai) == super::ai_town::AI_GUARD;
+                self.units[u as usize].order = if guard { 0xa0 } else { 0x9c };
                 return;
             }
         }
@@ -1781,7 +1801,7 @@ impl State {
         self.units[u as usize].main_order_timer = 0xf;
         let t = self.units[u as usize].unit_type;
         if t == 0x23 {
-            todo_port!("0x4e9f90", "AI larva");
+            self.order_larva(d, u);
             let un = &self.units[u as usize];
             if un.is_dead() {
                 return;
@@ -1825,8 +1845,8 @@ impl State {
             && !self.ai_region_gathering(u, 0)
             && ((self.units[u as usize].hp + 0xff) >> 8) != self.max_hp_points(d, u)
             && st & 0x20000 != 0
-            && self.units[u as usize].u8_at(0x11a) == 0
-            && self.units[u as usize].u8_at(0x118) == 0
+            && self.units[u as usize].plague_timer == 0
+            && self.units[u as usize].irradiate_timer == 0
             && flags & 8 == 0
         {
             let site = self.ai_building_scv_near(d, u);

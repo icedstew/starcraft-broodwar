@@ -10,11 +10,151 @@ use super::ai_town::{ai_index, ai_kind, AI_GUARD, AI_MILITARY};
 use super::list::NIL;
 use super::path::{approx_distance, region_at};
 use super::{Data, State};
-use crate::todo_port;
 
 const REGIONS: usize = 0x9c4;
 
 impl State {
+    /// 0x43cd40 (EAX = `u`): a flying / ground unit of an AI sends itself at the nearest
+    /// enemy it can use: its order target if that is an enemy, else one random player's
+    /// (of those with an enemy first unit) units. An armed unit attacks (and its turret
+    /// too; a sieged tank first checks it can hit from where it is), an unarmed one
+    /// moves there. Then the unit leaves the AI.
+    pub(super) fn ai_unit_attack_nearest(&mut self, d: &Data, u: u32) {
+        if self.units[u as usize].status & 0x2_0010 == 0 {
+            return;
+        }
+        let me = self.units[u as usize].player as usize;
+        let mut lists: Vec<u32> = Vec::new();
+        let t = self.units[u as usize].order_target_unit;
+        if t != NIL && self.alliances[me][self.attack_owner(t) as usize] == 0 {
+            lists.push(t);
+        } else {
+            for p in 0..8 {
+                let h = self.player_units[p];
+                if h != NIL && self.alliances[me][self.attack_owner(h) as usize] == 0 {
+                    lists.push(h);
+                }
+            }
+            if lists.is_empty() {
+                return;
+            }
+        }
+        let n = lists.len() as u32;
+        let mut idx = self.rng.rand(0x36) % n;
+        let armed = self.is_armed_pub(d, u);
+        let utype = self.units[u as usize].unit_type;
+        for _ in 0..n {
+            if idx >= n {
+                idx = 0;
+            }
+            let (mut best, mut best_d) = (NIL, u32::MAX);
+            let mut c = lists[idx as usize];
+            while c != NIL {
+                if self.units[c as usize].sprite != NIL && self.units[c as usize].order != 0 && self.ai_nearest_candidate(d, u, c, armed, utype) {
+                    let (cp, up) = (self.unit_sprite_pos(c), self.unit_sprite_pos(u));
+                    let (dx, dy) = ((cp.0 as i32).wrapping_sub(up.0 as i32), (cp.1 as i32).wrapping_sub(up.1 as i32));
+                    let dist = (dy.wrapping_mul(dy)).wrapping_add(dx.wrapping_mul(dx)) as u32;
+                    if dist < best_d {
+                        best = c;
+                        best_d = dist;
+                    }
+                }
+                c = self.units[c as usize].player_next;
+            }
+            if best != NIL {
+                self.ai_unit_go_to(d, u, best, armed);
+                break;
+            }
+            idx += 1;
+        }
+    }
+
+    /// The test 0x43cd40 makes on every unit `c` of the list: an unarmed `u` takes any;
+    /// an armed, enabled one takes visible, attackable (hidden / invincible units and
+    /// cloaked ones it cannot see not), by type: carriers any, reavers a ground unit in
+    /// its region group, 0x2d / 0x31 damaged 0x6a only (0x402210), the AI's 0x47 none,
+    /// else one it has a weapon against (0x475ad0, the air weapon).
+    fn ai_nearest_candidate(&self, d: &Data, u: u32, c: u32, armed: bool, utype: u16) -> bool {
+        if !armed {
+            return true;
+        }
+        let cu = &self.units[c as usize];
+        if self.disabled(u)
+            || cu.status & 0x400_0000 != 0
+            || self.sprites[cu.sprite as usize].flags & super::sprite::sflag::HIDDEN != 0
+            || self.cloaked_from(c, u)
+        {
+            return false;
+        }
+        match utype {
+            0x48 | 0x52 => true,
+            0x53 | 0x51 => cu.status & 4 == 0 && self.units_same_group(u, c),
+            0x2d | 0x31 => self.damaged_6a(d, c),
+            0x47 if self.units[u as usize].ai != NIL => false,
+            _ => self.weapon_against(d, u, c) != super::attack::NO_WEAPON,
+        }
+    }
+
+    /// 0x43cd40 after the choice (`best`): an armed `u` (and its turret) attacks it (an
+    /// interceptor counts as its carrier); an AI sieged tank (0x1e) that cannot hit it
+    /// from here fights on (0x477160) when an enemy is near (0x442460), else tank-modes
+    /// (order 0x63) and attacks as tank type 5. An unarmed `u` moves to its position.
+    /// At the end the unit leaves the AI (0x439d60, 0x432760, 0x434c90, guard post,
+    /// free medic).
+    fn ai_unit_go_to(&mut self, d: &Data, u: u32, best: u32, armed: bool) {
+        if armed {
+            let mut tgt = best;
+            if self.units[best as usize].unit_type == 0x49 && self.units[best as usize].ptr_at(0xc0) != NIL {
+                tgt = self.units[best as usize].ptr_at(0xc0);
+            }
+            let pos = if tgt != NIL { self.unit_sprite_pos(tgt) } else { (0, 0) };
+            let sub = self.units[u as usize].subunit;
+            let mut who = vec![u];
+            if sub != NIL && d.dat.units.flags[self.units[sub as usize].unit_type as usize] & 0x10 != 0 {
+                who.push(sub);
+            }
+            for w in who {
+                let order = d.dat.units.ai_attack_unit[self.units[w as usize].unit_type as usize];
+                self.units[w as usize].order_flags |= 1;
+                self.issue_order(d, w, order, true, pos, tgt, 0xe4);
+                self.prepare_next_order(d, w);
+            }
+            let un = &self.units[u as usize];
+            if un.ai != NIL && un.unit_type == 0x1e && un.order != 0x63 && !self.can_hit_now(d, u, tgt) {
+                if self.sieged_tank_has_enemy(d, u) {
+                    self.ai_choose_target_help(d, u, true, true, false);
+                } else {
+                    self.order_now(d, u, 0x63);
+                    // 0x474d10 (EAX = the target, no clearing): attack as tank type 5.
+                    let order = d.dat.units.ai_attack_unit[5];
+                    self.issue_order(d, u, order, false, pos, tgt, 0xe4);
+                }
+            }
+        } else {
+            let pos = self.unit_sprite_pos(best);
+            self.units[u as usize].order_flags |= 1;
+            if self.units[u as usize].order != 0 {
+                loop {
+                    let tail = self.units[u as usize].order_queue_tail;
+                    if tail == NIL {
+                        break;
+                    }
+                    let o = self.orders[tail as usize].order;
+                    if d.dat.orders.interruptible[o as usize] != 0 || o == 6 {
+                        self.order_remove(d, u, tail);
+                    } else {
+                        break;
+                    }
+                }
+                self.order_queue_append(d, u, 6, 0xe4, pos, NIL);
+            }
+            self.prepare_next_order(d, u);
+        }
+        self.ai_forget_unit(d, u, false);
+        self.ai_resource_forget(d, u);
+        self.ai_release_unit_rest(d, u);
+    }
+
     /// The player a unit counts for in the alliance table (a neutral unit's sprite owner).
     fn attack_owner(&self, u: u32) -> u8 {
         let un = &self.units[u as usize];
@@ -453,7 +593,7 @@ impl State {
     /// 0x43e050 (AL = `mode`, stack = player): with `mode` 0 every military or guard unit
     /// of `p` not carrying units that is not in an attacking region joins the attack: the
     /// first one fixes the attack region (cleared, then 0x43abb0 toward the unit, suicide
-    /// timer 0x18). With `mode` nonzero each idle unit gets a target (0x43cd40).
+    /// timer 0x18). With `mode` nonzero each idle unit gets a target (`ai_unit_attack_nearest`).
     pub(super) fn ai_attack_all_in(&mut self, d: &Data, p: u8, mode: u8) {
         let pi = p as usize;
         if mode != 0 {
@@ -468,7 +608,7 @@ impl State {
                     && self.sprites[un.sprite as usize].flags & 0x20 == 0
                     && !self.threatened_by_target(d, u)
                 {
-                    todo_port!("0x43cd40", "AI: a target for the unit");
+                    self.ai_unit_attack_nearest(d, u);
                 }
                 u = self.units[u as usize].player_next;
             }

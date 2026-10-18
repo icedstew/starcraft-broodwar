@@ -11,6 +11,15 @@ replaced 0x4f7b17-0x4fffff   # CRT tail (0x4f7000..0x4f7ae0 are glue ready rooms
 
 # UI engine plumbing: dialog dirty rects, DirectDraw blits, palette fades, error logs,
 # window placement. scbw redraws the whole frame with its own renderer.
+# The palette pipeline (gamma, fades, pause grey) is ported in palette.rs / glue.rs.
+left 0x41dc20
+left 0x41dcf0
+left 0x41e5c0
+left 0x41e870
+left 0x41e8b0
+left 0x41e930
+left 0x41e9e0
+left 0x41ea30
 replaced 0x416000-0x421fff
 
 # Win32 shell: message pump, accelerator / window helpers, fatal-error exits, Storm
@@ -52,38 +61,24 @@ replaced 0x4d4e80
 replaced 0x4d4f10
 replaced 0x4d4fa0
 replaced 0x4d5030
-replaced 0x4d5b60
 replaced 0x4d5bb0
 replaced 0x4d6740
 replaced 0x4d6810
 replaced 0x4d6f00
-replaced 0x4d6f90
-replaced 0x4d7070
 replaced 0x497430
 replaced 0x497530
-replaced 0x497590
 replaced 0x497620
 replaced 0x4983a0
-replaced 0x4e65c0
 replaced 0x497c30
 replaced 0x4982d0
 replaced 0x4bd3a0
 replaced 0x42d280
-replaced 0x493640
-replaced 0x494100
-replaced 0x499a10
 
 # Redraw / widget-state plumbing for the HUD (the frame is rebuilt each draw).
 replaced 0x481480   # tooltip hide
 replaced 0x4813d0   # tooltip show
 replaced 0x459360   # tooltip + cost slots clear
-replaced 0x458d50   # active card panel
 replaced 0x459770   # hovered control
-replaced 0x48e1e0   # placebox redraw
-replaced 0x48e210
-replaced 0x48e430
-replaced 0x48e490
-replaced 0x48e6e0
 replaced 0x48d560   # placebox buffer free
 replaced 0x457200   # widget param + redraw
 replaced 0x4258b0   # status text widget setter
@@ -225,9 +220,6 @@ replaced 0x404b70
 replaced 0x452900   # Storm registry: multiplayer name / race
 replaced 0x453b20-0x453c60   # 'SIGN' signature check (SHA-1, CryptoAPI)
 replaced 0x4a5e40-0x4a5ef0   # Miles music stream close / CD probe / volume
-replaced 0x4a6140   # Miles music track start
-replaced 0x4a6250   # music end check
-replaced 0x4a6310   # DirectSound music start
 replaced 0x4a8790   # GetModuleFileName dir
 replaced 0x4bb890   # DirectSound buffer position
 replaced 0x4bb9b0   # RIFF chunk walker
@@ -235,7 +227,6 @@ replaced 0x4bbd80   # WAV parser
 replaced 0x4bc8c0   # DirectSound buffer create
 replaced 0x4bca30   # sound file play
 replaced 0x4bca80   # sound cache load
-replaced 0x4bccf0   # sound preload list
 replaced 0x4beed0   # bounded string copy
 replaced 0x4bef80   # archive signature check
 replaced 0x4c3190   # PKWare explode streaming wrapper (explode crate)
@@ -261,3 +252,16 @@ deferred 0x438240   # unit AI record: pointers -> indices (save)
 # modes are its own state).
 replaced 0x484cc0   # install the game screen's handlers
 deferred 0x4513f0   # gluChat lobby chat init (multiplayer)
+
+# Coverage-fix pass: UI redraw / front-end state that the Rust renderer replaces.
+replaced 0x4c36c0   # sets the command card / status redraw flags (0x68c1b0, 0x68ac74, 0x68c1f8)
+replaced 0x48d9a0   # closes the placement / targeting boxes' surfaces (redraw only)
+replaced 0x48e310   # ends placement and targeting in the UI (view.rs resets its own state)
+replaced 0x48dda0   # wrapper of 0x48dbd0 (command card button refresh)
+replaced 0x4970a0   # redraws a sprite's screen area (render only)
+replaced 0x4be120   # advances the cursor frame and positions its grp box (Ui::draw_cursor)
+replaced 0x458850   # places the tooltip above its button (view.rs tooltip_with_costs)
+replaced 0x458ef0   # draws the tooltip's cost line (view.rs tooltip_with_costs)
+replaced 0x4daec0   # loads the glue fonts (Look::load in glue.rs)
+replaced 0x4dd910   # loads tEffect.pcx per glue palette (Look::load in glue.rs)
+replaced 0x4ddf00   # loads Dlg.grp per glue palette (Look::load in glue.rs)

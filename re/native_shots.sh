@@ -30,6 +30,7 @@ fi
 [ "$NATIVE_CAMERA" = none ] && NATIVE_CAMERA=
 GDBPY=$RE/native_shots_gdb.py
 [ "$MODE" = trace ] && GDBPY=$RE/native_trace_gdb.py
+GDBPY=${NATIVE_GDBPY:-$GDBPY}   # another gdb script (e.g. a one-off probe)
 INSTALL=${SCBW_INSTALL:-$HOME/Downloads/StarCraft-BroodWar_1.16.1}
 W=$(mktemp -d "${TMPDIR:-/tmp}/native_shots.XXXXXX")
 # No Mono/Gecko: their install prompts stall wineboot in a fresh prefix.

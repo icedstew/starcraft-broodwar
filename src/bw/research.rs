@@ -6,7 +6,6 @@
 
 use super::list::NIL;
 use super::{Data, State};
-use crate::todo_port;
 
 const NO_TECH: u8 = 0x2c;
 const NO_UPGRADE: u8 = 0x3d;
@@ -294,8 +293,13 @@ impl State {
             self.units[u as usize].set_u8_at(0xcd, 0);
         }
         if self.units[u as usize].ai != NIL {
-            todo_port!("0x4548b0", "AI buildings: drop interruptible queued orders, queue 0x9c");
+            // A computer's building queues ComputerAI (0x9c) after its interruptible
+            // queued orders (and older 0x9c ones) are dropped.
             self.units[u as usize].order_flags |= 1;
+            if self.units[u as usize].order != 0 {
+                self.drop_queue_tail_for(d, u, 0x9c);
+                self.order_queue_append(d, u, 0x9c, 0xe4, (0, 0), NIL);
+            }
             self.order_nothing(d, u);
             return;
         }

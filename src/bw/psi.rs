@@ -22,6 +22,10 @@ pub struct Psi {
     pub dirty: bool,
     /// 0x63ff48: fields are being shown (UI).
     pub shown: bool,
+    /// UI images made by the placement highlight (0x4d6f90), freed by 0x4d5b60.
+    pub hl_images: Vec<(u32, u16)>,
+    /// 0x6d5be4: some highlight image exists.
+    pub hl_flag: bool,
 }
 
 /// 0x4d4db0: the frame pixel at (x, y) is opaque. `frame` is the GRP frame header
@@ -74,7 +78,7 @@ impl State {
                 shape[mirror - c - 1] = v;
             }
         }
-        self.psi = Psi { providers: NIL, shape, w: ws as i32 * 32, h: hs as i32 * 32, dirty: false, shown: false };
+        self.psi = Psi { providers: NIL, shape, w: ws as i32 * 32, h: hs as i32 * 32, dirty: false, shown: false, ..Default::default() };
     }
 
     /// 0x4936b0: a unit type `t` placed at (x, y) by `player` is powered (types that
@@ -142,6 +146,46 @@ impl State {
             self.sprite_set_visibility(s, 0);
         }
         true
+    }
+
+    /// 0x493640: show the field sprite of every own provider (not while watching a
+    /// replay), making the sprite first if it has none.
+    pub fn psi_show_fields(&mut self, d: &Data) {
+        let mut p = self.psi.providers;
+        while p != NIL {
+            let next = self.units[p as usize].psi_next;
+            if !self.replay && self.units[p as usize].player == self.local_player {
+                let mut s = self.units[p as usize].ptr_at(0xd0);
+                if s == NIL && self.create_psi_sprite(d, p) {
+                    s = self.units[p as usize].ptr_at(0xd0);
+                }
+                if s != NIL {
+                    self.sprites[s as usize].flags &= !super::sprite::sflag::HIDDEN;
+                    let m = self.local_vision_mask;
+                    self.sprite_set_visibility(s, m);
+                }
+            }
+            p = next;
+        }
+        self.psi.shown = true;
+    }
+
+    /// 0x494100: hide every provider's field sprite.
+    pub fn psi_hide_fields(&mut self, d: &Data) {
+        let mut p = self.psi.providers;
+        while p != NIL {
+            let next = self.units[p as usize].psi_next;
+            let mut s = self.units[p as usize].ptr_at(0xd0);
+            if s == NIL && self.create_psi_sprite(d, p) {
+                s = self.units[p as usize].ptr_at(0xd0);
+            }
+            if s != NIL {
+                self.sprites[s as usize].flags |= super::sprite::sflag::HIDDEN;
+                self.sprite_set_visibility(s, 0);
+            }
+            p = next;
+        }
+        self.psi.shown = false;
     }
 
     /// 0x493100: leave the provider list.

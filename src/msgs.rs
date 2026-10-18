@@ -64,11 +64,12 @@ impl Messages {
         }
     }
 
-    /// 0x48d0c0: a message for `ms` milliseconds (7000 when 0) in color 3; the caller
-    /// plays sound 0x17.
-    pub fn print(&mut self, font10: &Font, s: &[u8], now: u32, ms: u32) {
+    /// 0x48d0c0: a message for `ms` milliseconds (7000 when 0) in color 3 and sound 0x17
+    /// (Transmission) in `sounds`; 0x48d140 is the same for 7 s with sound 2.
+    pub fn print(&mut self, font10: &Font, s: &[u8], now: u32, ms: u32, sound: u16, sounds: &mut Vec<u16>) {
         let ms = if ms == 0 { 7000 } else { ms };
         self.add(font10, s, 3, now.wrapping_add(ms), 0);
+        sounds.push(sound);
     }
 
     /// 0x48cf20: a trigger's text in color 2 for `ms` (cleared by 0x48ccf0).

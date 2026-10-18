@@ -253,8 +253,17 @@ impl State {
         // 0x48ed50 (EBX = 0x28 + the transport's race, ESI = the transport): the load sound.
         let race = Self::supply_race_of(d, self.units[tr as usize].unit_type);
         self.unit_sound(0x28 + race, tr, 0);
-        if self.units[u as usize].unit_type == 7 && self.units[u as usize].ai != NIL {
-            todo_port!("0x4e78e0", "AI town builder SCV loaded");
+        // A computer's SCV stops being its town's builder (+0x28).
+        let r = self.units[u as usize].ai;
+        if self.units[u as usize].unit_type == 7 && r != NIL {
+            match self.ai_entry_town(r) {
+                Some(town) => {
+                    if self.ai.towns.items[town as usize].building_scv == u {
+                        self.ai.towns.items[town as usize].building_scv = NIL;
+                    }
+                }
+                None => todo_port!("0x4e78e0", "an SCV with a guard / military AI loaded"),
+            }
         }
         self.units[u as usize].connected_unit = tr;
         let h = if u + 1 < 0x6a5 { self.unit_handle(u) as u16 } else { 0 };
@@ -446,9 +455,9 @@ impl State {
         true
     }
 
-    /// 0x4e7e10: `u` leaves its transport's slot. Unloaded (`dying` false) it shows on
-    /// the map; when it or the transport dies (0x401ea0, argument 1) it is only moved
-    /// to the transport's position.
+    /// 0x4e7e10 / 0x401ea0 (`dying`): `u` leaves its transport's slot. Unloaded (`dying`
+    /// false, 0x4e7e10) it shows on the map; when it or the transport dies (0x401ea0) it
+    /// is only moved to the transport's position.
     pub(super) fn leave_transport(&mut self, d: &Data, u: u32, dying: bool) {
         if self.units[u as usize].status & 0x40 == 0 {
             return;
@@ -542,8 +551,31 @@ impl State {
             if f.next_target_waypoint != p {
                 f.next_target_waypoint = p;
             }
+            // A computer's transport unloads early when the spot is on its elevation,
+            // within 0xca0 pixels, reachable, it carries no worker, every passenger has
+            // room to get out and a reaver only within 0x200 of the spot.
             if self.units[u as usize].ai != NIL {
-                todo_port!("0x4e7700", "AI transport unloads early near its target");
+                let (x, y) = self.unit_sprite_pos(u);
+                if self.los_elevation(x as i32, y as i32) != self.los_elevation(p.0 as i32, p.1 as i32)
+                    || dist & !0xff > 0xca000
+                    || !self.region_reachable(d, u, p)
+                    || self.has_passenger_with_flag8(d, u)
+                {
+                    return;
+                }
+                let near = self.within(u, p, 0x200);
+                for i in 0..8 {
+                    if let Some(c) = self.loaded_unit(u, i) {
+                        if self.units[c as usize].unit_type == 0x53 && !near {
+                            return;
+                        }
+                        if self.unload_spot(d, u, c).is_none() {
+                            return;
+                        }
+                    }
+                }
+                self.order_queue_front(d, u, 0x6f, (0, 0));
+                self.order_nothing(d, u);
             }
             return;
         }

@@ -195,39 +195,46 @@ impl State {
     }
 
     /// 0x499820 (lift-off, overlay kind 4) / 0x4997e0 (landing, kind 3): dust sprites
-    /// 0x143.. at overlay points 0..=8 and, mirrored, 0x10..=0x18 (0x499660).
+    /// 0x143.. at overlay points 0..=8 and, mirrored, 0x10..=0x18 (`dust_row`).
     fn dust(&mut self, d: &Data, s: u32, kind: usize) {
         let main = self.sprites[s as usize].main_image;
         if main == NIL || d.lo.get(kind).and_then(|v| v.get(self.images[main as usize].image_id as usize)).map_or(true, |l| l.is_none()) {
             return;
         }
-        for (first, last, mirror) in [(0i8, 8i8, false), (0x10, 0x18, true)] {
-            let mut sprite_id = 0x143u16;
-            for idx in first..=last {
-                let img = &self.images[main as usize];
-                let Some((mut lx, ly)) = d.lo_offset(kind, img.image_id, img.frame, idx) else {
-                    sprite_id += 1;
-                    continue;
-                };
-                if img.flags & super::sprite::iflag::FLIPPED != 0 {
-                    lx = lx.wrapping_neg();
-                }
-                if lx != 0x7f || ly != 0x7f {
-                    let sp = &self.sprites[s as usize];
-                    let (x, y, elev) = (sp.x + lx as i16, sp.y + ly as i16, sp.elevation);
-                    if let Some(th) = self.create_thingy(d, sprite_id, x, y, 0) {
-                        let ts = self.thingies[th as usize].sprite;
-                        self.sprites[ts as usize].elevation = elev.wrapping_add(1);
-                        self.sprite_fog_visibility(ts);
-                        if mirror {
-                            self.sprite_set_flip(d, ts, true);
-                        }
+        self.dust_row(d, s, kind, 0, 8, 0x143, false);
+        self.dust_row(d, s, kind, 0x10, 0x18, 0x143, true);
+    }
+
+    /// 0x499660 (EAX = `first`, EBX = sprite `s`): for overlay points `first..=last` of
+    /// the main image's lo file `kind`, a thingy of sprite `sprite_id` (+1 per point) one
+    /// elevation above `s`; flipped when `mirror`.
+    #[allow(clippy::too_many_arguments)]
+    fn dust_row(&mut self, d: &Data, s: u32, kind: usize, first: i8, last: i8, mut sprite_id: u16, mirror: bool) {
+        let main = self.sprites[s as usize].main_image;
+        for idx in first..=last {
+            let img = &self.images[main as usize];
+            let Some((mut lx, ly)) = d.lo_offset(kind, img.image_id, img.frame, idx) else {
+                sprite_id += 1;
+                continue;
+            };
+            if img.flags & super::sprite::iflag::FLIPPED != 0 {
+                lx = lx.wrapping_neg();
+            }
+            if lx != 0x7f || ly != 0x7f {
+                let sp = &self.sprites[s as usize];
+                let (x, y, elev) = (sp.x + lx as i16, sp.y + ly as i16, sp.elevation);
+                if let Some(th) = self.create_thingy(d, sprite_id, x, y, 0) {
+                    let ts = self.thingies[th as usize].sprite;
+                    self.sprites[ts as usize].elevation = elev.wrapping_add(1);
+                    self.sprite_fog_visibility(ts);
+                    if mirror {
+                        self.sprite_set_flip(d, ts, true);
                     }
                 }
-                sprite_id += 1;
             }
+            sprite_id += 1;
         }
-    }
+}
 
     /// 0x4878f0: a sprite's visibility from the fog at its tile.
     pub fn sprite_fog_visibility(&mut self, s: u32) {

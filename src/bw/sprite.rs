@@ -6,6 +6,9 @@ use super::list::{self, Link, List, Node, NIL};
 use super::{Data, State};
 
 pub const MAX_IMAGES: usize = 5000;
+pub const UI_HL_START: usize = MAX_IMAGES;
+/// End of both UI pools: 64 highlight images, then 80 selection-circle images.
+pub const UI_HL_END: usize = MAX_IMAGES + 64 + 80;
 pub const MAX_SPRITES: usize = 2500;
 pub const MAX_THINGIES: usize = 500;
 
@@ -698,6 +701,100 @@ impl State {
         list::remove(&mut self.images, img, &mut l);
         self.sprites[s as usize].images = l;
         self.images[img as usize].in_use = false;
-        list::insert_after_head(&mut self.images, img, &mut self.free_images);
+        // UI images return to their own pools (0x4d4f10 / 0x4d4fa0), after the pool head.
+        let pool = if (img as usize) < MAX_IMAGES {
+            &mut self.free_images
+        } else if (img as usize) < UI_HL_START + 64 {
+            &mut self.ui_hl_pool
+        } else {
+            &mut self.ui_circle_pool
+        };
+        list::insert_after_head(&mut self.images, img, pool);
+    }
+}
+
+impl State {
+    /// 0x4d6f90 (EAX = sprite; image id, packed offsets x / y bytes): a UI image added at the
+    /// tail of the sprite's image list (drawn first, under the others): 0x4d5a50 init and
+    /// 0x4d66b0 post-init (the Init animation); 0x4d6f00 only adds its render node.
+    /// It comes from the UI pool 0x5244b8 (`ui_hl_pool`, 64 images stored after the sim's
+    /// in the same vec, so the draw loop finds them in the sprite's list) and is remembered
+    /// in `psi.hl_images` for 0x4d5b60.
+    pub fn ui_image_at_tail(&mut self, d: &Data, s: u32, image_id: u16, x: i8, y: i8) -> Option<u32> {
+        let mut pool = self.ui_hl_pool;
+        let img = pop(&mut self.images, &mut pool);
+        self.ui_hl_pool = pool;
+        let img = img?;
+        let mut l = self.sprites[s as usize].images;
+        if l.tail == NIL {
+            list::insert_after_head(&mut self.images, img, &mut l);
+        } else {
+            list::insert_after(&mut self.images, l.tail, img, &mut l);
+        }
+        self.sprites[s as usize].images = l;
+        self.image_init(d, img, image_id, s, x, y);
+        self.psi.hl_images.push((img, image_id));
+        Some(img)
+    }
+
+    /// 0x4d5b60: free every UI image made by 0x4d6f90 (0x4d4f10).
+    pub fn free_ui_images(&mut self) {
+        for (img, id) in std::mem::take(&mut self.psi.hl_images) {
+            let i = &self.images[img as usize];
+            if i.in_use && i.image_id == id {
+                self.destroy_image(img);
+            }
+        }
+    }
+
+    /// 0x4d7070 (EAX = sprite; color, base image id): a selection-colored UI image (draw
+    /// function 0xd, from UI pool 0x57d768 `ui_circle_pool`; 0x4d6810: image `base` + the sprite's circle size, y = its circle
+    /// offset, `color` kept in the image's data) next to the head of the sprite's list: after it
+    /// when the head is a shadow (draw function 10), else before it. View: draw modifier 0xd with
+    /// tselect.pcx row `coloring`.
+    pub fn ui_circle_image(&mut self, d: &Data, s: u32, color: u8, base: u16) -> Option<u32> {
+        let mut pool = self.ui_circle_pool;
+        let img = pop(&mut self.images, &mut pool);
+        self.ui_circle_pool = pool;
+        let img = img?;
+        let id = self.sprites[s as usize].sprite_id as usize;
+        let mut l = self.sprites[s as usize].images;
+        if l.head == NIL {
+            list::insert_after_head(&mut self.images, img, &mut l);
+        } else if self.images[l.head as usize].modifier == 10 {
+            list::insert_after(&mut self.images, l.head, img, &mut l);
+        } else {
+            list::insert_before(&mut self.images, l.head, img, &mut l);
+        }
+        self.sprites[s as usize].images = l;
+        let i = &mut self.images[img as usize];
+        i.image_id = base + d.dat.sprites.selection_circle[id] as u16;
+        i.in_use = true;
+        i.sprite = s;
+        i.y = d.dat.sprites.selection_offset[id] as i8;
+        i.x = 0;
+        i.frameset = 0;
+        i.frame = 0;
+        i.direction = 0;
+        i.coloring = color as u64;
+        i.modifier = 0xd;
+        i.flags = iflag::REDRAW;
+        Some(img)
+    }
+
+    /// 0x4975d0 / 0x497590 / 0x49b870 (image part): the first image of the sprite whose id is
+    /// in `lo..=hi` is freed (0x4d4fa0); returns its color (0 if none).
+    pub fn ui_image_remove(&mut self, s: u32, lo: u16, hi: u16) -> u8 {
+        let mut i = self.sprites[s as usize].images.head;
+        while i != NIL {
+            let im = &self.images[i as usize];
+            if (lo..=hi).contains(&im.image_id) {
+                let c = im.coloring as u8;
+                self.destroy_image(i);
+                return c;
+            }
+            i = im.link.next;
+        }
+        0
     }
 }
