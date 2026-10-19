@@ -76,6 +76,22 @@ pub struct Ctl {
     pub icons: Vec<Icon>,
     /// The score screen's custom draws (`Update::Score`, glue_score.rs).
     pub score: Option<ScoreCtl>,
+    /// The ready room's own picture (`Update::BriefText` / `Update::Portrait`, glue_ready.rs).
+    pub pic: Option<Pic>,
+}
+
+/// An off-screen picture a control's own draw shows: the briefing message (0x66ff68) or a
+/// portrait's video buffer (0x44ef00).
+#[derive(Clone, Debug, Default)]
+pub struct Pic {
+    pub w: i32,
+    pub h: i32,
+    pub px: Vec<u8>,
+    /// The first row shown (the message's scroll, [control + 0x24]).
+    pub scroll: i32,
+    /// Where it sits in the control (a portrait's bytes +0x11 / +0x12).
+    pub dx: i32,
+    pub dy: i32,
 }
 
 /// What a gluScore.bin control draws (its +0x2e draw function and the row data it reads).
@@ -215,6 +231,10 @@ pub enum Update {
     /// 0x4d8930: a credits text area: the label with these text flags (0x6ce110) and flag
     /// 0x80000000.
     Credits(u8),
+    /// 0x46c6e0: the ready room's message buffer from its scroll row, over the control.
+    BriefText,
+    /// 0x44e9e0: a ready room portrait's video buffer, copied into the control.
+    Portrait,
 }
 
 #[derive(Clone, Debug)]
@@ -601,6 +621,7 @@ impl Dialog {
                 edit: None,
                 icons: Vec::new(),
                 score: None,
+                pic: None,
             }
         };
         let mut this = ctl(0);
@@ -657,7 +678,8 @@ impl Dialog {
                     && (t..=b).contains(&(y - oy));
             }
             let (l, t, r, b) = self.abs(c);
-            c.flags & flag::VISIBLE != 0 && c.ty != 9 && c.ty != 10 && c.ty != 11 && (l..=r).contains(&x) && (t..=b).contains(&y)
+            // A picture (type 5) takes the mouse only with flag 0x10 (the ready room's pictures lie over its buttons).
+            c.flags & flag::VISIBLE != 0 && c.ty != 9 && c.ty != 10 && c.ty != 11 && (c.ty != 5 || c.flags & 0x10 != 0) && (l..=r).contains(&x) && (t..=b).contains(&y)
         })
     }
 
@@ -1166,6 +1188,20 @@ impl Skin {
             (Update::MapList, 12) => return self.map_list_ctl(c, r, s),
             (Update::DirLabel, _) => return self.dir_label_ctl(c, r, s),
             (Update::Score, _) => return self.score_ctl(c, r, s),
+            (Update::BriefText, _) => {
+                if let Some(p) = c.pic.as_ref() {
+                    let rows = (p.h - p.scroll).min(b - t + 1).max(0);
+                    let from = (p.scroll.max(0) * p.w) as usize;
+                    self.blit(p.px.get(from..).unwrap_or(&[]), p.w, rows, l, t, r, None, true, s);
+                }
+                return;
+            }
+            (Update::Portrait, _) => {
+                if let Some(p) = c.pic.as_ref() {
+                    self.blit(&p.px, p.w, p.h, l + p.dx, t + p.dy, r, None, false, s);
+                }
+                return;
+            }
             (Update::Credits(align), _) => {
                 let mut c = c.clone();
                 c.flags |= 0x8000_0000;

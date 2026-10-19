@@ -65,7 +65,11 @@ enum Chunk {
     Sprp,
     Forc,
     Vcod,
+    Mbrf,
 }
+
+/// 0x500254: the chunks the ready room reads (0x4cc990): the strings and the briefing.
+const BRIEFING_CHUNKS: [(&[u8; 4], Chunk, bool); 2] = [(b"STR ", Chunk::Str, true), (b"MBRF", Chunk::Mbrf, true)];
 
 /// 0x5001cc: the chunks 0x4cc060 reads first (tag, handler, required).
 const VERSION_CHUNKS: [(&[u8; 4], Chunk, bool); 2] = [(b"TYPE", Chunk::Type, false), (b"VER ", Chunk::Ver, true)];
@@ -156,6 +160,9 @@ pub struct Setup {
     pub next_map: Vec<u8>,
     /// 0x596bc4: the map archive.
     pub map_archive: Option<Mpq>,
+    /// 0x51a310: the briefing triggers of the local player (MBRF records, 0x960 bytes each; the
+    /// list's nodes add 8 bytes of links).
+    pub briefing: Vec<Box<[u8; 0x960]>>,
     /// 0x57fd3c: the map path; 0x57fe40: the map title.
     pub map_path: [u8; 0x104],
     pub map_title: [u8; 0x20],
@@ -218,6 +225,7 @@ impl Default for Setup {
             map_dir_flag: 0,
             next_map: Vec::new(),
             map_archive: None,
+            briefing: Vec::new(),
             map_path: [0; 0x104],
             map_title: [0; 0x20],
             map_loaded: 0,
@@ -801,11 +809,102 @@ impl Setup {
                 }
                 _ => false,
             },
+            Chunk::Mbrf => self.chunk_mbrf(body, len),
             Chunk::Vcod => {
                 todo_port!("0x4cbc40", "VCOD chunk hash check against the exe's VCOD resource (treated as passing)");
                 true
             }
         }
+    }
+
+    /// 0x4cc1f0 (MBRF): the briefing's triggers, each through 0x46c790; false when the chunk
+    /// is not a whole number of records.
+    fn chunk_mbrf(&mut self, body: Option<&[u8]>, len: i32) -> bool {
+        let Some(b) = body else { return false };
+        if len % 0x960 != 0 {
+            return false;
+        }
+        for rec in b.chunks_exact(0x960) {
+            self.briefing_add(rec);
+        }
+        true
+    }
+
+    /// 0x46c790: a briefing trigger joins the list (at its end) when it is for the local
+    /// player's slot (0x512684) or everyone (player 0x11), or for the force (0x12 ..= 0x15:
+    /// force + 0x11) the local player belongs to and 0x484ff0 yields.
+    fn briefing_add(&mut self, rec: &[u8]) {
+        let local = self.local_slot[0];
+        for p in 0..0x1bu32 {
+            if rec[0x944 + p as usize] == 0 {
+                continue;
+            }
+            let take = if p == local || p == 0x11 {
+                true
+            } else if (0x12..=0x15).contains(&p) {
+                // 0x484ff0 (edi = -1 at the start; each call is the next player).
+                let mut it = u32::MAX;
+                let mut hit = false;
+                loop {
+                    let u = self.next_player(&mut it);
+                    if u >= 8 {
+                        break;
+                    }
+                    if self.slots[u as usize][slot::FORCE] as u32 == p - 0x11 && u == local {
+                        hit = true;
+                    }
+                }
+                hit
+            } else {
+                false
+            };
+            if take {
+                let mut t = Box::new([0u8; 0x960]);
+                t.copy_from_slice(rec);
+                self.briefing.push(t);
+            }
+        }
+    }
+
+    /// 0x484ff0 (`it` = EDI, the iterator): the next player of the game: a slot of type 1, 2,
+    /// 3, 4 or 7 that is not a computer / human already defeated (0x58d700 1 / 2); 8 at the
+    /// end. In a network game with teams (0x596875) it walks the force table 0x57f1cc.
+    fn next_player(&mut self, it: &mut u32) -> u32 {
+        if self.multiplayer && self.template[0x10] != 0 {
+            todo_port!("0x484ff0", "team game iteration through 0x57f1cc");
+            return 8;
+        }
+        *it = it.wrapping_add(1);
+        while *it < 8 {
+            let ty = self.slots[*it as usize][slot::TYPE];
+            if matches!(ty, 1 | 2 | 3 | 4 | 7) {
+                let r = self.results[*it as usize];
+                if (ty != 2 && ty != 1) || (r != 2 && r != 1) {
+                    return *it;
+                }
+            }
+            *it += 1;
+        }
+        8
+    }
+
+    /// 0x4cc990 (the ready room's map load, from 0x46d220): the map's strings and briefing
+    /// from staredit\scenario.chk of the map archive (kept open until 0x46cfd0), or of the
+    /// campaign mission's directory (0x57f244). False when it cannot be read.
+    pub fn load_briefing(&mut self, files: &Storage, net_tbl: &[u8]) -> bool {
+        let n = self.map_path.iter().position(|&c| c == 0).unwrap_or(0x104);
+        let path = String::from_utf8_lossy(&self.map_path[..n]).into_owned();
+        let mut dir = String::new();
+        if !self.open_map(&path, &mut dir, None) {
+            return false;
+        }
+        let name = if dir.is_empty() { "staredit\\scenario.chk".to_string() } else { format!("{dir}\\staredit\\scenario.chk") };
+        let Some(chk) = self.read_map_file(&name, files) else { return false };
+        let mut hdr = [0u8; 0x20];
+        if self.map_version(&chk, &mut hdr, net_tbl).is_none() {
+            return false;
+        }
+        self.read_chunks(&chk, &BRIEFING_CHUNKS, &mut hdr, net_tbl)
     }
 
     /// 0x4cc060: read the version of a chunk image (TYPE / VER) into `hdr` and return the

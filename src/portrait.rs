@@ -11,7 +11,7 @@ pub struct Portraits {
     names: Vec<String>,
     /// portdata.dat sections 2..5 (0x68ac50..0x68ac5c): per portrait the percent weight of
     /// idle variant 0..3.
-    weights: [Vec<u8>; 4],
+    pub(crate) weights: [Vec<u8>; 4],
     /// 0x51acb0..0x51acb8 as StarCraft.exe starts them (read from the install's exe).
     rng: [u32; 3],
 }
@@ -31,7 +31,7 @@ impl Portraits {
     }
 
     /// "portrait\<name><variant>.smk" for portrait `p`, idle or talking.
-    fn path(&self, p: u16, talking: bool, variant: u32) -> Option<String> {
+    pub(crate) fn path(&self, p: u16, talking: bool, variant: u32) -> Option<String> {
         let id = *self.files.get(p as usize + if talking { 110 } else { 0 })?;
         let name = self.names.get((id as usize).checked_sub(1)?)?.split('\0').next()?.to_string();
         Some(format!("portrait\\{name}{variant}.smk"))

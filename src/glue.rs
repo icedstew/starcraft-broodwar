@@ -21,6 +21,8 @@ mod create;
 mod score;
 #[path = "glue_credits.rs"]
 mod credits;
+#[path = "glue_ready.rs"]
+mod ready;
 
 /// What the glue asks the sound system for (the window loop plays them: `Audio` is not
 /// the glue's).
@@ -37,6 +39,8 @@ pub enum AudioCmd {
     FadeOutMusic,
     /// 0x4bbf50: the playing sounds stop.
     StopSounds,
+    /// 0x4bc490: a whole wav file (the briefing's) plays once.
+    Wav(Vec<u8>),
 }
 
 /// 0x512bb8 (8 bytes per track: path, type, fade-in): the front-end tracks 0xa .. 0x12
@@ -296,6 +300,8 @@ pub struct Glue {
     score: score::Score,
     /// The credits and mission text screens' globals (glue_credits.rs).
     credits: credits::Credits,
+    /// The ready room's globals (glue_ready.rs).
+    ready: ready::Ready,
 }
 
 impl Glue {
@@ -361,6 +367,7 @@ impl Glue {
             create: create::Create::default(),
             score: score::Score::default(),
             credits: credits::Credits::default(),
+            ready: ready::Ready::default(),
         }
     }
 
@@ -1127,12 +1134,11 @@ impl Glue {
         self.shown = -1;
         let bin = ["rez/glurdyz.bin", "rez/glurdyt.bin", "rez/glurdyp.bin"][race as usize];
         let dlg = self.open_glue_dialog(files, bin);
-        // The event proc's case 10: 0x46d3c0 (briefing init), the slide-in 0x4dd5e0 (list
-        // 0x512a70 / 0x512a54 / 0x512a14) and 0x4dd9e0; case 0: 0x4de150.
-        todo_port!("0x46d3c0", "briefing init; 0x4f70f0 / 0x4f7450 / 0x4f77b0 frame images on event 0x405");
-        todo_port!("0x4dd5e0", "slide-in of the buttons and its timer 0x4dd220");
-        self.show_palette();
+        // The event proc's case 10 (0x46d3c0, the slide-in 0x4dd5e0, 0x4dd9e0), 0x405 when
+        // the buttons are in and case 0: 0x4de150.
         self.dlg = Some((dlg, Open::Ready(race)));
+        self.ready_open(files, race);
+        self.show_palette();
     }
 
     /// 0x4f71f0 / 0x4f7550 / 0x4f78b0 (after 0x41a080): 0xe (back) goes to the campaign
@@ -1141,6 +1147,8 @@ impl Glue {
     /// anything else goes to the main menu. All but 0x13 / 0x65 then fade the music
     /// (0x4a5f50) and play 0x16 (0x4a6310).
     fn done_ready(&mut self, files: &Storage, result: i32, _race: u8) {
+        // The dialog's event 1 (0x46cfd0).
+        self.ready_46cfd0();
         match result {
             0x13 => {
                 self.campaign_next(files, true);
@@ -1954,7 +1962,7 @@ impl Glue {
             Open::Ready(_) => {
                 // The event proc's activation (event 0xe code 2) is 0x46d160.
                 self.activated = id;
-                todo_port!("0x46d160", "ready room button events (briefing / start / cancel)");
+                self.ready_46d160();
             }
             _ => {}
         }
@@ -2321,6 +2329,14 @@ impl Glue {
             }
         }
         self.credits_tick(files, ms);
+        self.ready_tick(files, ms);
+        if let (Some(r), true) = (self.result, matches!(self.dlg, Some((_, Open::Ready(_))))) {
+            // The idle proc 0x46d340 ended the ready room.
+            self.result = None;
+            if let Some((_, Open::Ready(race))) = self.dlg.take() {
+                self.done_ready(files, r, race);
+            }
+        }
         self.cursor_ms += ms;
         self.cursor_frame += (self.cursor_ms / 50) as usize;
         self.cursor_ms %= 50;
@@ -2546,6 +2562,7 @@ pub fn run(files: &Storage, shot: Option<&str>) -> std::io::Result<()> {
                 AudioCmd::Track(i) => au.start_track(files, i),
                 AudioCmd::FadeOutMusic => au.fade_out(),
                 AudioCmd::StopSounds => au.stop_sounds(),
+                AudioCmd::Wav(d) => au.play_file(d),
             }
         }
         let now = std::time::Instant::now();
