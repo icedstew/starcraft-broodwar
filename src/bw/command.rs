@@ -1231,6 +1231,24 @@ impl State {
         w != 0x82 && d.dat.weapons.min_range[w as usize] != 0 && self.box_distance_within(d, wu, d.dat.weapons.min_range[w as usize], t)
     }
 
+    /// 0x46efe0: the stat_txt id shown when the targeting click is refused (`err` = the
+    /// out value, None = 0xffff). An invincible target answers 900 when stasised, else
+    /// 0x36c / 0x36d (its status bit 1); otherwise 0x36f if unset, replaced by the
+    /// weapon's target error message unless the weapon is 0x82.
+    fn target_error_msg(&self, d: &Data, target: u32, weapon: u8, err: Option<u16>) -> u16 {
+        if target != NIL {
+            let t = &self.units[target as usize];
+            if t.status & 0x400_0000 != 0 {
+                return if t.stasis_timer != 0 { 900 } else { ((t.status as u8 & 2) as u16 | 0x6d8) >> 1 };
+            }
+        }
+        let mut out = err.unwrap_or(0x36f);
+        if weapon != 0x82 {
+            out = d.dat.weapons.target_error_msg[weapon as usize];
+        }
+        out
+    }
+
     /// 0x46f5b0: a map click while targeting. Picks the order for what was clicked
     /// (`target` unit, a fog unit of type `ty`, or ground), checks it client side and
     /// sends the targeted-order command. Err holds the message shown instead.
@@ -1305,8 +1323,13 @@ impl State {
         } else {
             if !any_ok || err.is_some() {
                 // 0x46efe0 / 0x48ee30: error, but a plain attack is sent anyway.
+                let msg = self.target_error_msg(d, target, weapon, err);
                 if weapon != 0x82 {
-                    return Err(err.unwrap_or(0));
+                    return Err(msg);
+                }
+                // 0x48ee30 shows it before the attack goes out.
+                if msg != 0 && !self.replay {
+                    self.shown_error = msg;
                 }
                 let handle = if target != NIL { self.unit_handle(target) } else { 0 };
                 self.command_targeted_packet(d, player, sel, pos, handle, ty, order, queued);

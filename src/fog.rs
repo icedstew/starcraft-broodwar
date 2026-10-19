@@ -59,7 +59,10 @@ impl Fog {
             for c in 0..LW {
                 let f = st.terrain.tile_flags.get(tile as usize).copied().unwrap_or(0);
                 raw[r * LW + c] = if st.replay {
-                    if !f & (mask << 8) == 0 {
+                    // 0x6d0f1c (see everything): full brightness.
+                    if st.reveal_all {
+                        FULL
+                    } else if !f & (mask << 8) == 0 {
                         0
                     } else if mask & !f == 0 {
                         FULL >> 1
@@ -124,6 +127,11 @@ impl Fog {
 
     /// 0x4808e0 / 0x4805f0: shade the terrain in `out` (`w` wide, the top 400 rows at
     /// most) for the screen at map position (vx, vy).
+    /// 0x480000: remap an 8x8 block of one level through dark.pcx (0x5973a0), the `l =>`
+    /// arm (inline here). 0x4800a0: zero an 8x8 block, the `0 =>` arm (inline here).
+    /// 0x4804d0: compares the blurred levels 0x6d5c0c with the previous frame's 0x6d5c10
+    /// to mark dirty 32-pixel runs (0x41e0d0); with a full redraw it has no pixel
+    /// effect, so it is not ported.
     pub fn shade(&self, st: &State, dark: &[u8], vx: i32, vy: i32, out: &mut [u8], w: usize, h: usize) {
         let lv = Fog::tile_levels(st, vx >> 5, vy >> 5);
         let g = self.corner_grid(&lv);

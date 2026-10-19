@@ -271,6 +271,7 @@ fn unit_morph_name(st: &State, d: &Data, strings: &[String], u: u32) -> String {
 /// None hides the tooltip (0x481480); outside replays only (0x6d0f14 is the replay flag,
 /// which allows just the info buttons).
 /// 0x4575a0: the research / upgrade cancel tooltip (inline here).
+/// 0x4576a0: the info button tooltips, damage / armor / shield lines (inline here, in `unit_panel`).
 /// 0x457c20: the passenger tooltip (inline here).
 pub fn tooltip(st: &State, d: &Data, strings: &[String], panel: Panel, id: i16, show: &Show) -> Option<String> {
     let su = *st.selected.first()?;

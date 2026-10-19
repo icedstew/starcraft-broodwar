@@ -15,7 +15,7 @@ use crate::bw::sai::{self, ContourEntry, Contours, NeighborPtr, Region, Sai, Spl
 use crate::bw::{Data, State};
 
 // Save version 3 only (see gamedata.rs); the older formats' fix-ups (0x447e20, script
-// positions + 0xb0 of 0x45b310) are not ported.
+// positions; 0x45b310's version-0 +0xb0 fixup) are not ported.
 
 /// 0x46ec40's value for a null split cursor: native computes (0 - base - 0x2000c) / 6 from a
 /// heap base; the null never happens after the regions are made, so use base 0.
@@ -119,7 +119,7 @@ impl State {
         }
     }
 
-    /// The unit slot of a handle as the loaders compute it (`0x59cb58 + (h & 0x7ff) * 0x150`).
+    /// 0x47b210: the unit slot of a handle as the loaders compute it (`0x59cb58 + (h & 0x7ff) * 0x150`).
     fn ai_unit(&self, h: u32) -> u32 {
         let s = h & 0x7ff;
         if s == 0 || s as usize > self.units.len() {
@@ -827,7 +827,8 @@ impl State {
         // 0x448230
         let Some(pb) = i.packed(0x2740) else { return false };
         let players: Vec<PlayerAi> = (0..8).map(|p| self.player_dec(&pb[p * 0x4e8..(p + 1) * 0x4e8])).collect();
-        // 0x45b310
+        // 0x45b310 (its argument is the save version 0x596bb8 via 0x4a1180; only version 0 adds
+        // 0xb0 to each active script's +8, never for version 3)
         let Some(sb) = i.packed(0x1454) else { return false };
         let Some(scripts) = pool_load(&sb, 100, 0x34, Self::script_dec) else { return false };
         let Some(h) = i.packed(8) else { return false };

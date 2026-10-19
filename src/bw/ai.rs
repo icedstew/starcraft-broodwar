@@ -601,6 +601,13 @@ impl Default for Ai {
 }
 
 impl State {
+    /// 0x462a50: the guard pool (0x402c60) reset and the 8 per-player guard lists (0x685108..)
+    /// emptied.
+    pub fn init_ai_guards(&mut self) {
+        self.ai.guards = AiPool::new(1000);
+        self.ai.guard_lists = [NIL; 8];
+    }
+
     /// 0x447680: every player's AI data cleared; resources from the players' start.
     pub fn init_player_ai(&mut self) {
         let ai = &mut self.ai;

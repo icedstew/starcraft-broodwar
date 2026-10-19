@@ -147,6 +147,10 @@ pub struct Setup {
     pub g6554b0: u8,
     pub g6556e0: u32,
     pub g57eebc: u32,
+    /// 0x57f1cb: per force (1..4) the slot 0x485160 put its players on (0xff none).
+    pub team_leaders: [u8; 5],
+    /// 0x66ff3c: per slot the type 0x485160 gives the lobby copy (a network game's).
+    pub net_types: [u8; 12],
     /// 0x596814.
     pub g596814: u32,
     /// 0x58f440: the expansion is installed.
@@ -219,6 +223,8 @@ impl Default for Setup {
             g6554b0: 0,
             g6556e0: 0,
             g57eebc: 0,
+            team_leaders: [0xff; 5],
+            net_types: [0; 12],
             g596814: 0,
             expansion: false,
             league_id: 0,
@@ -824,6 +830,28 @@ impl Setup {
                 self.briefing.push(t);
             }
         }
+    }
+
+    /// 0x470150: the lobby copy's types (0x59bdb8 + 0x24 * k) are kept in 0x66ff3c + k.
+    pub fn snapshot_types(&mut self) {
+        for k in 0..12 {
+            self.net_types[k] = self.lobby[k][slot::TYPE];
+        }
+    }
+
+    /// 0x484f70: the slot of type 1 / 2 in `force` with the lowest storm id (the last of equal
+    /// ones); 0xff with none.
+    pub fn force_leader(&self, force: u8) -> u8 {
+        let (mut r, mut best) = (0xffu8, u32::MAX);
+        for i in (0..8).rev() {
+            let s = &self.slots[i];
+            let id = u32::from_le_bytes(s[slot::STORM..slot::STORM + 4].try_into().unwrap());
+            if matches!(s[slot::TYPE], 1 | 2) && s[slot::FORCE] == force && id <= best {
+                r = i as u8;
+                best = id;
+            }
+        }
+        r
     }
 
     /// 0x484ff0 (`it` = EDI, the iterator): the next player of the game: a slot of type 1, 2,

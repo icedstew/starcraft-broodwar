@@ -317,6 +317,9 @@ pub enum Kind {
     Sound,
     Video,
     Help,
+    /// Opened by 0x47ea30 (0x658ae0 = eax; dialog 0x5045f8, init 0x47e9a0) at the start of a
+    /// single player game by 0x4d9950 when 0x6cdfec & 0x100 (not wired: that flag is not
+    /// kept in `Settings`, whose default has it off).
     Tips,
     Objectives,
     EndMission,
@@ -1028,6 +1031,8 @@ impl Menu {
     }
 
     /// 0x462510 (save) / 0x461a30 (load) with the dialog's destroy event 0x461ae0.
+    /// 0x462310: delete the selected save (inline here): copies its id (0x68516c) and name
+    /// (0x685148) from the list entry (0x4617c0), asks with string 3 of 0x6d1220 (okcancel.bin).
     fn save_activate(&self, id: i16) -> (Option<(Kind, u8)>, Action) {
         let save = self.kind == Kind::SaveGame;
         let list = self.dlg.get(1).and_then(|c| c.list.as_ref());
@@ -1184,7 +1189,7 @@ impl Menu {
                     return (None, Action::Closed);
                 }
                 Self::clear_choice();
-                // 0x461e50 (when 0x596904 == 4, i.e. a save was chosen): pump messages and
+                // 0x461e50 (inline: not needed here; when 0x596904 == 4, i.e. a save was chosen): pump messages and
                 // redraw (0x41ca00, 0x4d1bf0(3)) until the open-dialog count (0x6d5eb4)
                 // drops below its entry value. This menu is event-driven: the pump runs in
                 // the front end's loop, and the load action is only taken once the dialog

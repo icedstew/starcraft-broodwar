@@ -28,6 +28,7 @@ mod replay;
 mod replay_rec;
 mod statdata;
 mod palette;
+mod parallax;
 mod ui;
 mod view;
 mod voices;

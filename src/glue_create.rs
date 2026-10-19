@@ -10,7 +10,7 @@
 use super::{Glue, Open};
 use crate::dlg::{flag, Ctl, Dialog, Icon, Update};
 use crate::grp::Grp;
-use crate::setup::{slot, MapHeader, Setup};
+use crate::setup::{slot, MapHeader, Setup, Slot};
 use crate::storage::Storage;
 use crate::todo_port;
 use std::collections::HashMap;
@@ -1888,7 +1888,7 @@ impl Glue {
         }
         let t = self.setup.template;
         if self.setup.multiplayer && t[0x10] != 0 {
-            todo_port!("0x485160", "team melee: put the forces on shared start locations");
+            self.team_places();
             return false;
         }
         if t[8] == 0 && t[0xc] == 0 && t[0x12] == 0 {
@@ -1901,6 +1901,92 @@ impl Glue {
         self.shuffle_players([true; 8]);
         // 0x49b360 gets [ebp-0x18], still 0 on this path.
         false
+    }
+
+    /// 0x485160: team game setup. The lobby copy takes the types 0x66ff3c; the leader of each
+    /// force (0x484f70) and the human / computer / reserved slots are lifted out of the slot
+    /// table, which is restored from the lobby copy; the leaders go to random start slots
+    /// of types 6 / 5 / 3 / 4 / 7 (the first with 0x596872), the others to the first free one;
+    /// then the storm id tables follow the leaders (0x57f1cb).
+    fn team_places(&mut self) {
+        let n = &mut self.setup;
+        for k in 0..12 {
+            n.lobby[k][slot::TYPE] = n.net_types[k];
+        }
+        let leads: Vec<u8> = (0..4u8).map(|f| n.force_leader(f + 1)).collect();
+        let mut lifted: Vec<Slot> = Vec::new();
+        for &l in leads.iter().filter(|&&l| l != 0xff) {
+            lifted.push(n.slots[l as usize]);
+            n.slots[l as usize] = n.lobby[l as usize];
+        }
+        let mut rest: Vec<Slot> = Vec::new();
+        for s in n.slots[..8].iter_mut() {
+            match s[slot::TYPE] {
+                1 => s[slot::TYPE] = 0,
+                2 | 3 | 4 | 7 => rest.push(*s),
+                _ => {}
+            }
+        }
+        n.team_leaders[1..].fill(0xff);
+        n.slots = n.lobby;
+        for s in lifted {
+            let list: Vec<u8> = (0..8u8).filter(|&i| matches!(self.setup.slots[i as usize][slot::TYPE], 3 | 4 | 5 | 6 | 7)).collect();
+            let p = if self.setup.template[0xd] == 0 && self.create.rand_on {
+                // 0x51c690 / 0x51ca18 (counters nothing reads) are bumped too.
+                let r = self.create_lcg();
+                list.get((r as usize * list.len()) >> 15).copied().unwrap_or(0)
+            } else {
+                list.first().copied().unwrap_or(0)
+            };
+            let n = &mut self.setup;
+            n.slots[p as usize] = s;
+            n.slots[p as usize][..4].copy_from_slice(&(p as u32).to_le_bytes());
+            let f = s[slot::FORCE] as usize;
+            if let Some(l) = n.team_leaders.get_mut(f) {
+                *l = p;
+            }
+        }
+        let n = &mut self.setup;
+        for s in rest {
+            let p = (0..8).find(|&i| !matches!(n.slots[i][slot::TYPE], 1 | 2 | 3 | 4 | 7)).unwrap_or(0);
+            n.slots[p] = s;
+            n.slots[p][..4].copy_from_slice(&(p as u32).to_le_bytes());
+        }
+        n.slot_by_storm = [8; 8];
+        let mut local = n.local_slot[0];
+        for i in (0..8).rev() {
+            let st = u32::from_le_bytes(n.slots[i][slot::STORM..slot::STORM + 4].try_into().unwrap());
+            if n.slots[i][slot::TYPE] == 2 {
+                if let Some(e) = n.slot_by_storm.get_mut(st as usize) {
+                    *e = i as u32;
+                }
+            }
+            if st == n.local_storm_id {
+                local = i as u32;
+            }
+        }
+        n.slot_by_storm2 = n.slot_by_storm;
+        n.local_slot = [local; 2];
+        for s in n.slots[..8].iter_mut() {
+            if !matches!(s[slot::TYPE], 1 | 2 | 3 | 4 | 7) {
+                s[slot::TYPE] = 0;
+            }
+        }
+        let me = n.slots[local as usize];
+        if me[slot::TYPE] == 2 {
+            n.local_slot[0] = n.team_leaders.get(me[slot::FORCE] as usize).copied().unwrap_or(0) as u32;
+        }
+        n.slot_by_storm = [8; 8];
+        for j in (0..8).rev() {
+            let s = n.slot_by_storm2[j];
+            let c = n.slots[s as usize];
+            if c[slot::TYPE] == 2 {
+                n.slot_by_storm[j] = n.team_leaders.get(c[slot::FORCE] as usize).copied().unwrap_or(0) as u32;
+            }
+            if c[slot::TYPE] == 9 {
+                n.slot_by_storm[j] = s;
+            }
+        }
     }
 
     /// 0x4a9c90: Use Map Settings: per force (1..4) with its flag set, the slots of the force
@@ -2019,6 +2105,10 @@ impl Glue {
             });
         }
         self.race_picks_apply();
+        // 0x4d4130 (0x6d1218 off): 0x470150 keeps the lobby types before the slots are placed.
+        if !self.setup.preset_slot_used {
+            self.setup.snapshot_types();
+        }
         // 0x51ca10 = time (a debug seed from SCBW_SEED); 0x51ca14 = 0x51ca10.
         let seed = std::env::var("SCBW_SEED").ok().and_then(|s| s.parse().ok()).unwrap_or_else(|| {
             std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |t| t.as_secs() as u32)

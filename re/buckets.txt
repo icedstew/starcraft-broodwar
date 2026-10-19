@@ -283,3 +283,13 @@ replaced 0x42b8a0   # grow the contour arrays (sai.rs Contours are Vecs)
 replaced 0x4531a0   # turn-angle tables (movement.rs computes the angle)
 replaced 0x4dcb00   # path absolutizer (paths are built absolute)
 deferred 0x447e20   # pre-v3 save AI fix-up (old save formats)
+# Status panel change-detection caches: written only to be compared by the panel-changed checks (0x424660, 0x424980, 0x424780, 0x424a..); scbw rebuilds the panel every frame.
+replaced 0x424540   # copies the 12 selection slots into 0x6ca94c.. cache (read only by 0x424660 "group changed")
+replaced 0x4246d0   # supply cache 0x6ca93e (read only by the supply "changed" check)
+replaced 0x4248f0   # unit panel cache 0x6ca93c (read only by 0x424780 "changed")
+replaced 0x457250   # redraw/flag controls in an id range (dirty-rect redraw)
+replaced 0x457310   # hide controls after id -7 (panel rebuilt each frame)
+replaced 0x4804d0   # fog dirty compare (0x6d5c0c vs 0x6d5c10): dirty-rect only, we redraw fully; fog.rs shade
+replaced 0x470040   # drag-box save-under restore/redraw (0x66ff5c, 0x6cf4ac): scene.drag_box is redrawn each frame
+replaced 0x46eeb0   # frees the drag-box save-under buffer (0x41e0d0) and clears 0x66ff5c
+replaced 0x4843f0   # cursor / input handler set index: scbw computes the cursor each frame (view.rs cursor_kind)

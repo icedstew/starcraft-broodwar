@@ -162,6 +162,8 @@ pub struct Scene<'a> {
     /// The tileset's dark.pcx: 32 darkness levels x 256 colors (0x5973a0).
     dark: Vec<u8>,
     fog: crate::fog::Fog,
+    /// 0x47f2c0: parallax\star.spk, read at every game init (0x4bd6f0).
+    parallax: Option<std::cell::RefCell<crate::parallax::Parallax>>,
     /// game/tselect.pcx: selection circle colors, 8 per color (0x5240b8).
     tselect: Vec<u8>,
     /// game/thpbar.pcx: health bar colors (0x66fbe4).
@@ -316,8 +318,9 @@ impl<'a> Scene<'a> {
             }
             minimap.refresh(d, &mut st)
         });
+        let parallax = a.files.read("parallax/star.spk").ok().and_then(|f| crate::parallax::Parallax::load(&f)).map(std::cell::RefCell::new);
         let creep_grp = a.files.read(&format!("tileset/{}.grp", map::TILESETS[chk.tileset()])).ok().map(crate::grp::Grp::parse);
-        let mut scene = Scene { st, creep_grp, minimap, voices: crate::voices::Voices::new(), portrait: Default::default(), talk_left: 0, talk_unit: None, trans_left: None, sent_selection: Vec::new(), card_menu: None, placing: None, card_held: None, targeting: None, error: 0, msgs: Default::default(), chat: Default::default(), clock_ms: 0, timer_running: false, timer_base: 0, timer_start: 0, from_save: false, gamma: 100, pause_tick: 0, pause_replay_saved: false, place_ok: false, place_tile: (0, 0), place_err: 0, drag_box: None, a, chk, ts, terrain, player_colors, colors: std::array::from_fn(|p| colr.get(p).copied().unwrap_or(p as u8)), end_at: std::env::var("SCBW_END_AT").ok().and_then(|v| Some((v.trim_end_matches('d').parse().ok()?, if v.ends_with('d') { 0x40 } else { 0x80 }))), local, shadow, dark, fog: crate::fog::Fog::new(), tselect, thpbar, remaps };
+        let mut scene = Scene { st, creep_grp, minimap, voices: crate::voices::Voices::new(), portrait: Default::default(), talk_left: 0, talk_unit: None, trans_left: None, sent_selection: Vec::new(), card_menu: None, placing: None, card_held: None, targeting: None, error: 0, msgs: Default::default(), chat: Default::default(), clock_ms: 0, timer_running: false, timer_base: 0, timer_start: 0, from_save: false, gamma: 100, pause_tick: 0, pause_replay_saved: false, place_ok: false, place_tile: (0, 0), place_err: 0, drag_box: None, a, chk, ts, terrain, player_colors, colors: std::array::from_fn(|p| colr.get(p).copied().unwrap_or(p as u8)), end_at: std::env::var("SCBW_END_AT").ok().and_then(|v| Some((v.trim_end_matches('d').parse().ok()?, if v.ends_with('d') { 0x40 } else { 0x80 }))), local, shadow, dark, fog: crate::fog::Fog::new(), parallax, tselect, thpbar, remaps };
         scene.timer_running = timer_running;
         if let Ok(d) = scene.a.files.read(&format!("rez/{}textbox.bin", ["z", "t", "p"][scene.local_race()])) {
             scene.chat.load(crate::dlg::Dialog::parse(&d));
@@ -714,6 +717,16 @@ impl<'a> Scene<'a> {
     }
 
     /// Draw the view at (vx, vy) into an indexed buffer of vw*vh.
+    /// 0x4bd580 between the sprites and the fog: on the space platform (tileset 1,
+    /// 0x57f1dc) the parallax stars, moved for the screen position first (0x49c440 ->
+    /// 0x49bfd0: clamped to the map, 8-pixel aligned).
+    fn draw_stars(&self, vx: i32, vy: i32, out: &mut [u8], w: usize) {
+        let Some(p) = self.parallax.as_ref().filter(|_| self.st.tileset == 1) else { return };
+        let mut p = p.borrow_mut();
+        p.scroll_to(vx.max(0) & !7, vy.max(0) & !7);
+        p.draw(out, w);
+    }
+
     pub fn draw(&self, vx: i32, vy: i32, vw: i32, vh: i32, out: &mut [u8]) {
         // Terrain from the live megatile map (0x628494), which creep changes update.
         let (tw, th) = (self.terrain.0 as i32, self.terrain.1 as i32);
@@ -800,6 +813,7 @@ impl<'a> Scene<'a> {
         let lum = crate::grp::luminance(&self.ts.palette);
                 for (k, s) in order.into_iter().enumerate() {
             if k == fogged {
+                self.draw_stars(vx, vy, out, vw as usize);
                 self.fog.shade(&self.st, &self.dark, vx, vy, out, vw as usize, vh as usize);
             }
             let sp = &self.st.sprites[s as usize];
@@ -882,6 +896,7 @@ impl<'a> Scene<'a> {
             }
         }
         if total == fogged {
+            self.draw_stars(vx, vy, out, vw as usize);
             self.fog.shade(&self.st, &self.dark, vx, vy, out, vw as usize, vh as usize);
         }
     }
@@ -1488,7 +1503,7 @@ fn new_game(a: &Assets, chk: &Chk, rep: Option<&crate::replay::Header>, gs: Opti
         }
         // Debug: SCBW_TEAMS=<game type> (11 Team Melee, 12 Team FFA, 13 Team CTF, 15 Top vs
         // Bottom) plays a team game (0x57f0b4 on): the active slots are dealt over the forces
-        // in turn; the glue's 0x485160 would set the seat races 0x57f1c0 and leaders 0x57f1cb.
+        // in turn; the glue's 0x485160 (ported, glue_create.rs) sets the leaders 0x57f1cb of a real lobby.
         if rep.is_none() && std::env::var("SCBW_TEAMS").is_ok() && st.template[0x10] != 0 {
             st.multiplayer = true;
             let forces = if st.template[0] == 0x0f { 2 } else { st.template[0x10] };
@@ -1512,6 +1527,8 @@ fn new_game(a: &Assets, chk: &Chk, rep: Option<&crate::replay::Header>, gs: Opti
         st.init_alliances(modes);
         // 0x4eed10 -> 0x49b870: the selection circle colors.
         st.selection_circle_colors(d);
+        // 0x4eee00: 0x462a50, the guard AI lists.
+        st.init_ai_guards();
         // 0x4eee00: the AI's player data (0x447680) before the scenario loads.
         st.init_player_ai();
         // 0x4eee00: 0x488f90 (when 0x6d1218 is 0; a new game here) resets the score counters
@@ -2203,6 +2220,7 @@ fn tooltip_with_costs(ui: &crate::ui::Ui, text: &str, slots: &[i32; 8], race: i3
 }
 
 /// 0x48daf0: build the placement box `slot` for unit type `t`.
+/// 0x48d750: the surface size, max(image frame, placement box) (inline here).
 /// 0x48d7f0: show it. 0x48d750 sizes the surface: the surface is
 /// the larger of the type's first image frame (0x48da30, in the local player's color)
 /// and its placement box, rounded up to whole tiles; the box shows with its tile
