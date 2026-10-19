@@ -263,6 +263,25 @@ impl Chat {
             .unwrap_or([b'_', 0, 0]);
     }
 
+    /// Creation of the textbox dialog 0x68c140 at game start: kept loaded so the
+    /// prompt (control 5) can be drawn while the line is closed.
+    pub fn load(&mut self, dlg: Dialog) {
+        self.dlg = Some(dlg);
+    }
+
+    /// 0x4f31d0: the placement / targeting prompt, control 5 of the textbox dialog 0x68c140
+    /// with its text set (stat_txt 0x3e targeting / 0x3f placement; shown only while the line
+    /// is closed, 0x68c144 == 0). Drawn like the label in `draw` (`up`: replays 24 px higher).
+    pub fn draw_prompt(&self, skin: &crate::dlg::Skin, text: &[u8], up: bool, out: &mut [u8], w: i32, h: i32) {
+        let Some(d) = self.dlg.as_ref().filter(|_| !self.open) else { return };
+        let Some(c) = d.get(5) else { return };
+        let dy = if up { -24 } else { 0 };
+        let (ox, oy) = d.origin();
+        let mut s = crate::dlg::Surf { px: out, w, h };
+        let r = (ox + c.rect.0, oy + c.rect.1 + dy, ox + c.rect.2, oy + c.rect.3 + dy);
+        skin.ctl_text(c, text, r, 0, 0, 0x11, &mut s);
+    }
+
     /// 0x4f32d0 (open): close; the text is cleared (0x501b7d is "").
     pub fn close(&mut self) {
         self.open = false;

@@ -1071,6 +1071,7 @@ impl State {
 
 impl State {
     /// 0x474d90: `target` suits `order` given by `u` (Err holds the stat_txt message).
+    /// 0x4688e0: mineral field or geyser (inline here).
     pub(super) fn order_target_valid(&self, d: &Data, u: u32, order: u8, target: u32) -> Result<(), u16> {
         let un = &self.units[u as usize];
         match order {

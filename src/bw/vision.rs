@@ -40,6 +40,7 @@ const DX: [i32; 4] = [1, 0, -1, 0];
 const DY: [i32; 4] = [0, 1, 0, -1];
 
 /// 0x42ad60: build the 12 sight shapes for a map of width `map_w`.
+/// 0x42acb0: mark the inner box and the circle, count the cells (inline here).
 pub fn build_sights(map_w: i32) -> Vec<Sight> {
     (0..12)
         .map(|r| {

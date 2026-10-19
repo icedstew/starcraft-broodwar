@@ -24,6 +24,7 @@ pub mod archon;
 pub mod burrow;
 pub mod fighters;
 pub mod chk_load;
+pub mod leaderboard;
 pub mod cloak;
 pub mod command;
 pub mod collide;

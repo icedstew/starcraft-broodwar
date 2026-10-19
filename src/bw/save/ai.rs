@@ -819,6 +819,7 @@ impl State {
     }
 
     /// 0x4a1180: the AI after the paths (save version 3).
+    /// 0x4452f0: the resource areas block of 0x2ee8 bytes (inline here).
     fn load_ai_rest(&mut self, i: &mut In) -> bool {
         if !(self.load_ai_regions(i) && self.load_ai_guards(i) && self.load_ai_towns(i)) {
             return false;

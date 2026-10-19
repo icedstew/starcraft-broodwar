@@ -319,6 +319,9 @@ impl<'a> Scene<'a> {
         let creep_grp = a.files.read(&format!("tileset/{}.grp", map::TILESETS[chk.tileset()])).ok().map(crate::grp::Grp::parse);
         let mut scene = Scene { st, creep_grp, minimap, voices: crate::voices::Voices::new(), portrait: Default::default(), talk_left: 0, talk_unit: None, trans_left: None, sent_selection: Vec::new(), card_menu: None, placing: None, card_held: None, targeting: None, error: 0, msgs: Default::default(), chat: Default::default(), clock_ms: 0, timer_running: false, timer_base: 0, timer_start: 0, from_save: false, gamma: 100, pause_tick: 0, pause_replay_saved: false, place_ok: false, place_tile: (0, 0), place_err: 0, drag_box: None, a, chk, ts, terrain, player_colors, colors: std::array::from_fn(|p| colr.get(p).copied().unwrap_or(p as u8)), end_at: std::env::var("SCBW_END_AT").ok().and_then(|v| Some((v.trim_end_matches('d').parse().ok()?, if v.ends_with('d') { 0x40 } else { 0x80 }))), local, shadow, dark, fog: crate::fog::Fog::new(), tselect, thpbar, remaps };
         scene.timer_running = timer_running;
+        if let Ok(d) = scene.a.files.read(&format!("rez/{}textbox.bin", ["z", "t", "p"][scene.local_race()])) {
+            scene.chat.load(crate::dlg::Dialog::parse(&d));
+        }
         scene.timer_base = timer_base;
         scene.from_save = save.is_some();
         Ok(scene)
@@ -1697,6 +1700,7 @@ fn heap_sift_up(h: &mut [(u32, u32)]) {
 /// The draw order 0x498d40 gets from the sprite heap: entries pushed in row-list order
 /// (0x42d4c0 / 0x42d400, max-heap), popped largest first (0x42d460 / 0x42d370) into
 /// 0x6c2318 and drawn from the last popped back to the first.
+/// 0x42d460: pop the sprite heap, largest first (inline here).
 fn heap_draw_order(entries: Vec<(u32, u32)>) -> Vec<u32> {
     // 1-based heap as at 0x6c4a30.
     let mut h: Vec<(u32, u32)> = vec![(0, 0)];
@@ -1740,7 +1744,7 @@ const MINIMAP: (i32, i32, i32) = (6, 348, 128); // x, y, size
 /// A grp frame blitted without its offsets (0x40abbe) at (x, y), at most cw x ch,
 /// through `colors`.
 #[allow(clippy::too_many_arguments)]
-fn blit_frame(g: &crate::grp::Grp, frame: usize, x: i32, y: i32, cw: i32, ch: i32, colors: Option<&[u8; 256]>, out: &mut [u8], w: i32, h: i32) {
+pub(crate) fn blit_frame(g: &crate::grp::Grp, frame: usize, x: i32, y: i32, cw: i32, ch: i32, colors: Option<&[u8; 256]>, out: &mut [u8], w: i32, h: i32) {
     let Some(f) = g.frame(frame) else { return };
     let mut tmp = vec![0u8; (g.w * g.h) as usize];
     g.draw(frame, false, -f.x, -f.y, &mut tmp, g.w, g.h, Blend::Normal);
@@ -1914,6 +1918,7 @@ fn draw_hud(scene: &Scene, ui: &crate::ui::Ui, vx: i32, vy: i32, cursor: Option<
     let (rx, ry, rw, rh) = (ox + vx / scale, oy + vy / scale, w / scale, (h - 120) / scale);
     rect(out, w, h, (rx, ry, rx + rw, ry + rh), scene.minimap.colors[0]);
     draw_resources(scene, ui, out);
+    crate::leaderboard::draw(scene, ui, out);
     if let Some((l, t, r, b)) = ui.statport.screen_rect(1) {
         // 0x45e650: the video, then conover.pcx over it (index 0 clear).
         // ponytail: the static shown while a new portrait loads (0x45e570) is not ported.
@@ -2027,6 +2032,11 @@ fn draw_hud(scene: &Scene, ui: &crate::ui::Ui, vx: i32, vy: i32, cursor: Option<
     }
     scene.msgs.draw(&ui.font, crate::ui::TextDst { rows: &ui.text_colors, out, w, h });
     scene.chat.draw(&ui.skin, scene.clock_ms, scene.st.replay, out, w, h);
+    // 0x4f31d0: the prompt of targeting (0x48caf0: stat_txt 0x3e) / placement (0x48e730: 0x3f),
+    // hidden when they end (0x48ca10 / 0x48e310).
+    if let Some(t) = [(scene.targeting.is_some(), 0x3e), (scene.placing.is_some(), 0x3f)].iter().find(|p| p.0).and_then(|p| ui.stat_txt.get(p.1)) {
+        scene.chat.draw_prompt(&ui.skin, t.split('\0').next().unwrap_or("").as_bytes(), scene.st.replay, out, w, h);
+    }
     if let Some(b) = scene.drag_box {
         rect(out, w, h, b, scene.minimap.colors[0x12]);
     }
@@ -3206,6 +3216,7 @@ fn draw_coded(ui: &crate::ui::Ui, s: &str, x: i32, y: i32, out: &mut [u8], w: i3
 /// color 6 when over), gas (1 + race) and minerals (0). The shown amounts step toward
 /// the real ones by 1/16 of the difference (0x4e52e0). A replay shows the first
 /// selected unit's owner, nothing for none or neutral.
+/// 0x488900: supplies available, min(provided, cap) (inline here).
 fn draw_resources(scene: &Scene, ui: &crate::ui::Ui, out: &mut [u8]) {
     let (w, h) = (SCREEN_W, SCREEN_H);
     let st = &scene.st;

@@ -1306,6 +1306,7 @@ impl Glue {
     }
 
     /// 0x418640 (on) / 0x418e00 (off) on control `id` of the screen's dialog.
+    /// 0x4ed530: enable a control of the screen's dialog by id (inline here).
     fn disable(&mut self, id: i16, on: bool) {
         if let Some(c) = self.dlg.as_mut().and_then(|(d, _)| d.get_mut(id)) {
             if on {
@@ -1799,6 +1800,14 @@ impl Glue {
         if let Some(n) = rec {
             self.save_name = n;
         }
+    }
+
+    /// 0x4be060: a notice is pending: flags bit 0 set, 0x6cef50 = 1 (and 0x41e0d0 gets the
+    /// rectangle: redraw plumbing). Called by 0x4d9950 (the game wrapper), 0x4165c0 (edit
+    /// destroy), 0x4c5810 (the unpause trigger action); those two have no `Glue` here.
+    fn set_notice(&mut self) {
+        self.notice.0 = true;
+        self.notice.1 |= 1;
     }
 
     /// 0x4be0b0: flush the pending notice: flags bit 0 is set and 0x41e0d0 (the UI engine,
@@ -3049,6 +3058,8 @@ pub fn run(files: &Storage, shot: Option<&str>) -> std::io::Result<()> {
                     }
                     return Ok(());
                 }
+                // 0x4d9950 (the game wrapper) starts with 0x4be060.
+                glue.set_notice();
                 let Some(g) = glue.begin_game(files) else { return Ok(()) };
                 // Where the in-game save / load dialogs keep the saves (0x4ce5b0's inputs).
                 crate::menu::set_save_env(crate::menu::SaveEnv {
@@ -3085,6 +3096,8 @@ pub fn run(files: &Storage, shot: Option<&str>) -> std::io::Result<()> {
                 // the victory / defeat dialog's OK (the score screen), 4 after quitting the
                 // mission (0x4c9280: the campaign screen 6, or 0x16 with Brood War 0x58f440).
                 glue.game_end = crate::view::run_setup(&mut a, g)?;
+                // 0x4d9950 ends with 0x4be0b0.
+                glue.flush_notice();
                 glue.objectives = glue.game_end.as_ref().map_or(glue.objectives, |e| e.objectives);
                 // 0x4dbc00 (a loaded game): 0x51ca1c = 0x57f1e3.
                 if let (false, Some(e)) = (glue.multiplayer, glue.game_end.as_ref()) {

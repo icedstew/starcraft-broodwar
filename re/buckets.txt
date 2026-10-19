@@ -265,3 +265,21 @@ replaced 0x458ef0   # draws the tooltip's cost line (view.rs tooltip_with_costs)
 replaced 0x4daec0   # loads the glue fonts (Look::load in glue.rs)
 replaced 0x4dd910   # loads tEffect.pcx per glue palette (Look::load in glue.rs)
 replaced 0x4ddf00   # loads Dlg.grp per glue palette (Look::load in glue.rs)
+
+# Storm-style intrusive list plumbing (free all / unlink / move); the Rust lists are Vecs
+# (triaged 2026-10-19).
+replaced 0x4012c0   # free every node (saves list, 0x4cfd90)
+replaced 0x401310   # unlink a node (0x4cfb00)
+replaced 0x4016f0   # free every node (login list, 0x4edaa0)
+replaced 0x401740   # unlink + free, return count (0x4ed840)
+replaced 0x4017b0   # move a node (sorted inserts 0x4a66c0 / 0x4a6b60 / 0x4ed440)
+replaced 0x4019b0   # unlink, free on flag
+replaced 0x401ca0   # free every node (0x4a6770 / 0x4a73c0)
+# Heap allocation of growable arrays: Vecs in Rust.
+replaced 0x436a40   # free the 8 AI region arrays
+replaced 0x436a80   # allocate the 8 AI region arrays
+replaced 0x42b8a0   # grow the contour arrays (sai.rs Contours are Vecs)
+# Tables the Rust computes directly.
+replaced 0x4531a0   # turn-angle tables (movement.rs computes the angle)
+replaced 0x4dcb00   # path absolutizer (paths are built absolute)
+deferred 0x447e20   # pre-v3 save AI fix-up (old save formats)

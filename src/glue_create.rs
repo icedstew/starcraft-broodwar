@@ -1264,6 +1264,7 @@ impl Glue {
     /// 0x4adfe0 (the timer 5 and after a selection; single player only): one owner / race row
     /// per player of the map (Melee, Free For All) or per computer slot (Use Map Settings),
     /// the others hidden; a map still being read waits for the timer.
+    /// 0x4a8b90: a slot's user selectable flag, 0 past slot 7 (inline here).
     fn create_slot_fill(&mut self) {
         if self.setup.multiplayer {
             return;

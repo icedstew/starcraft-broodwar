@@ -165,6 +165,7 @@ impl State {
     }
 
     /// 0x4cd7a0: UNIT section: start locations and map-placed units.
+    /// 0x4a8b90: a player's map units setting, 0 past player 7 (inline here).
     pub fn chk_units(&mut self, d: &Data, data: &[u8], modes: ScenarioModes) -> bool {
         if data.len() % 0x24 != 0 {
             return false;

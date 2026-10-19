@@ -195,8 +195,14 @@ Delegate per agents.md: Haiku triage, Sonnet porting, Opus review / hard RE / co
   `press_release` (not yet used by glue.rs hover_sound, menu.rs ~685, view.rs card_held),
   voice gate 0x4563a0 / 0x4556d0 / 0x455660 (voices.rs; 0x4564e0 `hover_cursor` ported
   but no mouse-move hook yet). Triage C: most of 0x4012c0..0x4566b0 equivalent.
-  Next: leaderboard 0x4538b0 (skipped as UI at triggers.rs ~575: large), 0x4f31d0
-  placement prompt (needs a Scene prompt field), 0x4be060 notice (glue.rs), 0x4246d0 /
+  Then: leaderboard (src/bw/leaderboard.rs 0x4538b0 values / sort every 16 frames,
+  src/leaderboard.rs draw statlb.bin; checked only by a forced shot, no native capture;
+  countdown text 0x489c30 / 0x4e5600 not drawn; rows refresh per frame, native 1000 ms),
+  placement / targeting prompt 0x4f31d0 (chat.rs, stat_txt 0x3e / 0x3f: confirmed fixed;
+  rect / font unverified), notice 0x4be060 (game start / end only), 28 inline
+  equivalents annotated after checking (2 panel fixes 0x425b50 / 0x4263e0), list / Vec
+  replacements added to re/buckets.txt. In scope 2440 / 4494.
+  Next: 0x4246d0 /
   0x4248f0 panel globals (find readers), 0x402a70, 0x498c50, 0x432610, 0x4b5e80, 0x4d1460,
   0x457250 / 0x457310 (status control list), 0x4dcc00 (check slide-out reading).
 - Never run two suites at once: agent/tools/suite.sh / cmp.sh share output files in $W

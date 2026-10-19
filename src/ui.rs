@@ -479,6 +479,8 @@ pub struct Ui {
     pub portraits: Option<crate::portrait::Portraits>,
     /// rez\statres.bin: the resource bar (0x4e5a80).
     pub statres: crate::dlg::Dialog,
+    /// rez\statlb.bin: the trigger leaderboard (0x4bed70, `crate::leaderboard`).
+    pub statlb: crate::dlg::Dialog,
     /// 0x68c230 / 0x68c22c: the minerals and gas the bar shows (they count toward the
     /// real amounts, 0x4e52e0), and the player shown in a replay (0x5153f8).
     pub res_shown: std::cell::Cell<(i32, i32, u8)>,
@@ -551,6 +553,7 @@ impl Ui {
             c.update = crate::dlg::Update::MenuButton;
         }
         let statres = crate::dlg::Dialog::parse(&files.read("rez/statres.bin")?);
+        let statlb = crate::dlg::Dialog::parse(&files.read("rez/statlb.bin")?);
         let statport = crate::dlg::Dialog::parse(&files.read("rez/statport.bin")?);
         let portraits = crate::portrait::Portraits::load(files);
         let mut minimap = crate::dlg::Dialog::parse(&files.read("rez/minimap.bin")?);
@@ -571,7 +574,7 @@ impl Ui {
         if let Some(c) = minimap.get_mut(1) {
             c.flags &= !crate::dlg::flag::VISIBLE;
         }
-        Ok(Ui { console, conover, font, font8, icons, cursors, wireframe, grpwire, tranwire, twire, cmdicons, ticon, stat_txt, stat_raw, tips, network, glu_all, statbtn, text_colors, statdata, cmdbtns, pbar_empty, pbar_full, skin, stat_f10, statport, portraits, statres, res_shown: std::cell::Cell::new((0, 0, 0xff)), minimap })
+        Ok(Ui { console, conover, font, font8, icons, cursors, wireframe, grpwire, tranwire, twire, cmdicons, ticon, stat_txt, stat_raw, tips, network, glu_all, statbtn, text_colors, statdata, cmdbtns, pbar_empty, pbar_full, skin, stat_f10, statport, portraits, statres, statlb, res_shown: std::cell::Cell::new((0, 0, 0xff)), minimap })
     }
 
     pub fn text_color(&self, c: usize) -> &[u8] {
@@ -622,6 +625,7 @@ impl Ui {
 /// statwire.cpp 0x4568f0: the selected unit's wireframe colors. Wireframe pixels 0xc0 /
 /// 0xc1 show shields (0x4566b0), 0xd0..0xd3 hp with the unit's random damage pattern
 /// (0x4567c0), 0xd8..0xdb hp (0x456730); all from twire.pcx.
+/// 0x4566b0: the shield colors of pixels 0xc0 / 0xc1 (inline here).
 pub fn wireframe_colors(st: &crate::bw::State, d: &crate::bw::Data, u: u32, twire: &[u8]) -> [u8; 256] {
     const HP_ODD: [u8; 40] = [10, 10, 10, 10, 10, 10, 10, 0, 10, 10, 0, 0, 10, 10, 0, 1, 10, 10, 1, 1, 10, 0, 1, 1, 10, 1, 1, 1, 0, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1];
     const HP_EVEN: [u8; 40] = [10, 10, 10, 10, 10, 10, 10, 0, 10, 10, 0, 0, 10, 0, 0, 0, 10, 0, 0, 1, 0, 0, 0, 1, 0, 0, 1, 1, 0, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1];

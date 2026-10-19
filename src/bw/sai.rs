@@ -945,6 +945,7 @@ fn next_edge(m: &[u8], mw: i32, mh: i32, y: &mut i32, x: &mut i32) -> bool {
 
 /// 0x42c060: walk every walkability boundary of the minitile map (consuming its edge
 /// bits), emitting one entry per straight edge into the list for its side, then sort.
+/// 0x42b9f0: when a list is full all four lists grow by 0x9c4 (inline here).
 fn trace_contours(c: &mut Contours, map: &mut GameMap) {
     let mw = (map.width as i32 * 32) >> 3;
     let mh = (map.height as i32 * 32) >> 3;

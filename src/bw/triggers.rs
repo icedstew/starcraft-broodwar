@@ -231,6 +231,8 @@ pub struct Triggers {
     /// action, location, type, goal and string.
     pub leaderboard_computers: u32,
     pub leaderboard: (u8, u8, u16, u32, u32),
+    /// 0x68c308: the leaderboard's rows (player or u32::MAX, value), sorted by 0x4538b0.
+    pub leaderboard_table: [(u32, u32); 8],
     /// 0x685180: which snapshot 0x685188.. holds (1 live counts, 2 a location's);
     /// 0x68ac48: that location.
     pub snapshot_kind: u8,
@@ -271,6 +273,7 @@ impl Default for Triggers {
             objectives: [0; 8],
             leaderboard_computers: 1,
             leaderboard: (0, 0, 0, 0, 0),
+            leaderboard_table: [(u32::MAX, u32::MAX); 8],
             snapshot_kind: 0,
             snapshot_location: 0,
             snap: CountSnapshot::default(),
@@ -293,7 +296,7 @@ fn compare(value: u32, comparison: u8, amount: u32) -> bool {
 
 /// Which per-player counter a group sum uses.
 #[derive(Clone, Copy)]
-enum Count {
+pub(super) enum Count {
     /// 0x4606b0: units of a type (true: completed only).
     Units(u16, bool),
     /// 0x4605c0: resources (0 ore, 1 gas, 2 both).
@@ -504,7 +507,7 @@ impl State {
             return;
         }
         self.end_screen_countdown();
-        self.trigger_timers(ms);
+        self.trigger_timers(d, ms);
         let t = self.trig.check_timer;
         self.trig.check_timer = t.wrapping_sub(1);
         if t != 0 {
@@ -551,8 +554,9 @@ impl State {
         }
     }
 
-    /// 0x489cc0: wait timers, the game clock and the countdown timer.
-    fn trigger_timers(&mut self, ms: u32) {
+    /// 0x489cc0: wait timers, the leaderboard refresh (0x4538b0), the game clock and the
+    /// countdown timer.
+    fn trigger_timers(&mut self, d: &Data, ms: u32) {
         let tr = &mut self.trig;
         for p in 0..8 {
             if tr.waiting[p] != 0 && tr.wait_ms[p] != u32::MAX {
@@ -572,9 +576,9 @@ impl State {
         tr.leaderboard_timer = t.wrapping_sub(1);
         if t == 0 {
             tr.leaderboard_timer = 0xf;
-            // 0x4538b0: leaderboard values (UI; its count snapshots are refreshed on the
-            // next condition that needs them).
+            self.leaderboard_update(d);
         }
+        let tr = &mut self.trig;
         let t = tr.second_timer;
         tr.second_timer = t.wrapping_sub(1);
         if t == 0 {
@@ -832,7 +836,7 @@ impl State {
         }
     }
 
-    fn player_count(&self, p: u32, what: Count) -> u32 {
+    pub(super) fn player_count(&self, p: u32, what: Count) -> u32 {
         // ponytail: player ids past 11 read past the 1.16.1 arrays; they count as 0 here.
         if p >= 12 {
             return 0;
@@ -930,7 +934,7 @@ impl State {
     }
 
     /// 0x45f7a0: copy the live counts once per trigger pass.
-    fn snapshot_counts(&mut self) {
+    pub(super) fn snapshot_counts(&mut self) {
         if self.trig.snapshot_kind == 1 {
             return;
         }
@@ -948,7 +952,7 @@ impl State {
     }
 
     /// 0x4609d0: count the units in location `loc` instead.
-    fn snapshot_location(&mut self, d: &Data, loc: u8) {
+    pub(super) fn snapshot_location(&mut self, d: &Data, loc: u8) {
         if self.trig.snapshot_kind == 2 && self.trig.snapshot_location == loc {
             return;
         }
@@ -1029,6 +1033,8 @@ impl State {
     }
 
     /// 0x460860: count a completed unit, with its passengers, hangar and carried items.
+    /// 0x45f870: each loaded unit is counted too (inline here).
+    /// 0x45fe80: a carrier / reaver counts its hangar interceptors / scarabs (inline here).
     fn count_completed_unit(&mut self, d: &Data, u: u32) {
         let un = &self.units[u as usize];
         let (t, p) = (un.unit_type as usize, un.player as usize);
@@ -1907,6 +1913,8 @@ impl State {
     }
 
     /// 0x4c8700: move `u` to the middle of location `dst`. True once `left` is used up.
+    /// 0x4688e0: mineral fields and geysers excluded (inline here).
+    /// 0x401430: unit types 0xcb..=0xd5 excluded (inline here).
     #[allow(clippy::too_many_arguments)]
     fn trigger_move_unit(&mut self, d: &Data, u: u32, group: u32, t: u16, flags: u16, dst: u8, left: &mut u32) -> bool {
         if self.location_excludes(u, flags) || !self.trigger_unit_alive(u) || !self.unit_in_group(group, u) {
@@ -2037,6 +2045,7 @@ impl State {
     }
 
     /// 0x4c6aa0: energy to `pct` percent of the maximum (casters, not hallucinations).
+    /// 0x4013b0: the energy field is min(maximum, value) << 8 (inline here).
     fn trigger_set_energy(&mut self, d: &Data, u: u32, pct: u32) -> bool {
         let ty = self.units[u as usize].unit_type as usize;
         if d.dat.units.flags[ty] & 0x20_0000 == 0 || self.units[u as usize].status & 0x4000_0000 != 0 {

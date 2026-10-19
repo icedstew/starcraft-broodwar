@@ -109,6 +109,7 @@ impl Minimap {
     /// 0x4a4400 + 0x4a3720 (size by map size), the remap of 0x4a5a80, 0x41e450 and the
     /// fog tables of 0x4a3a00. `dark` is the tileset's dark.pcx (0x5973a0); vx4 holds
     /// the low 16 bits of each minitile reference.
+    /// 0x4a3a00: the four fog tables (inline here).
     pub fn new(
         map_w: u16, map_h: u16, tileset: u16, palette: &[[u8; 3]; 256], dark: &[u8], vx4: Vec<u16>, vr4: Vec<u8>,
         player_colors: [u8; 12],

@@ -270,6 +270,8 @@ fn unit_morph_name(st: &State, d: &Data, strings: &[String], u: u32) -> String {
 /// (33..44: stat_txt 0x329). The info buttons 9..12 are 0x4576a0 (`Show::Info::tip`).
 /// None hides the tooltip (0x481480); outside replays only (0x6d0f14 is the replay flag,
 /// which allows just the info buttons).
+/// 0x4575a0: the research / upgrade cancel tooltip (inline here).
+/// 0x457c20: the passenger tooltip (inline here).
 pub fn tooltip(st: &State, d: &Data, strings: &[String], panel: Panel, id: i16, show: &Show) -> Option<String> {
     let su = *st.selected.first()?;
     if st.replay {
@@ -308,6 +310,7 @@ pub fn tooltip(st: &State, d: &Data, strings: &[String], panel: Panel, id: i16, 
 
 /// 0x4573a0: clicking a panel button: queue slot `id - 2` is cancelled (command 0x20);
 /// the research / upgrade icon cancels it (0x423330 / 0x4232f0: commands 0x31 / 0x33).
+/// 0x4232f0 / 0x423330: the cancel commands 0x33 / 0x31 (inline here).
 pub fn click(panel: Panel, id: i16) -> Option<Vec<u8>> {
     match (panel, id) {
         (Panel::Training, 2..=6) => Some(vec![0x20, (id - 2) as u8, 0]),
@@ -319,6 +322,13 @@ pub fn click(panel: Panel, id: i16) -> Option<Vec<u8>> {
 
 /// 0x426f50: a selected unit's panel: wireframe (1), name (-5), hit points (-7),
 /// energy (-8), status line (-20), kills (-21) and the info buttons (9..12).
+/// 0x425510: the Plasma Shields info button (inline here).
+/// 0x425b50: the status line (inline here).
+/// 0x425dd0: the kills line (inline here).
+/// 0x4263e0: the hit points line (inline here).
+/// 0x402270: the yellow hit point band, 34..66% (inline here).
+/// 0x4022c0: the red hit point band, under 34% (inline here).
+/// 0x426c60: the info buttons (inline here).
 pub fn unit_panel(st: &State, d: &Data, strings: &[String], u: u32) -> Vec<(i16, Show)> {
     let un = &st.units[u as usize];
     let t = un.unit_type;
@@ -402,7 +412,7 @@ pub fn unit_panel(st: &State, d: &Data, strings: &[String], u: u32) -> Vec<(i16,
     // 0x425b50: the status line.
     let status = if halluc_own {
         Some(stat(strings, 0x340))
-    } else if flags & 1 != 0 && un.status & 1 != 0 && disabled(st, u) && un.u8_at(0xc8) == 0x2c && un.u8_at(0xc9) == 0x3d {
+    } else if flags & 1 != 0 && un.status & 1 != 0 && disabled(st, u) && !st.busy_building(u) && un.u8_at(0xc8) == 0x2c && un.u8_at(0xc9) == 0x3d {
         Some(stat(strings, 0x33c + race_index(d, t)))
     } else if un.status & 1 != 0 && un.acid_spore_count != 0 {
         Some(format!("{} ({})", stat(strings, 0x514), un.acid_spore_count))
@@ -437,18 +447,19 @@ pub fn unit_panel(st: &State, d: &Data, strings: &[String], u: u32) -> Vec<(i16,
     if !(t == 0x2f || t == 0x32 || halluc_own) && (can_fight(st, d, u) || un.kill_count != 0) {
         out.push((-21, Show::Text(format!("{} {}", stat(strings, 0x2fc), un.kill_count))));
     }
-    // 0x4263e0: hit points (red under 34%, yellow under 67%), shields first.
+    // 0x4263e0: hit points (red under 34%, yellow under 67%), shields first (0x402270, 0x4022c0: the colour
+    // bands, 0x401400: the maximum).
     let max_hp = d.dat.units.hit_points[ts] as i32 >> 8;
     let max_sh = d.dat.units.shields[shown as usize] as i32;
-    if max_hp < 10000 && max_sh < 10000 && un.status & 0x400_0000 == 0 {
-        let hp = (un.hp + 0xff) >> 8;
+    let hp = (un.hp + 0xff) >> 8;
+    if (if max_hp == 0 { hp } else { max_hp }) < 10000 && d.dat.units.shields[ts] < 10000 && un.status & 0x400_0000 == 0 {
         let m = if max_hp == 0 { hp.max(1) } else { max_hp };
         let pct = hp * 100 / m;
         let c = if pct < 0x22 { '\x06' } else if pct < 0x43 { '\x03' } else { '\x07' };
         let s = if d.dat.units.shield_enable[ts] == 0 {
-            format!("{c}{hp}/{max_hp}")
+            format!("{c}{hp}/{m}")
         } else {
-            format!("{}/{} {c}{hp}/{max_hp}", un.shields >> 8, max_sh)
+            format!("{}/{} {c}{hp}/{m}", un.shields >> 8, max_sh)
         };
         out.push((-7, Show::Text(s)));
     }

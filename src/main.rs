@@ -20,6 +20,7 @@ mod glue;
 mod grid;
 mod grp;
 mod hpbar;
+mod leaderboard;
 mod iscript;
 mod map;
 mod mpq;

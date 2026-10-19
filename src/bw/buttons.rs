@@ -788,6 +788,7 @@ impl State {
     /// Run a button's action routine (`queued`: Shift held). One arm per routine:
     /// 0x4234d0 stim (refusal 0x48ef30), 0x423730 cloak and 0x423f70 tech (0x423660,
     /// refusal 0x48ee30), 0x423790 / 0x423860 train and research (0x42cf70 errors).
+    /// 0x4232d0 (command 0x34), 0x4232f0 (0x33), 0x423330 (0x31) and 0x423430 (0x18): one command byte (inline here).
     pub fn button_action(&self, d: &Data, btn: &Button, player: u8, s: &Selection, queued: bool) -> ButtonAction {
         use ButtonAction::*;
         let q = queued as u8;

@@ -721,6 +721,7 @@ impl Menu {
                     self.drag(skin, i, x, set);
                 } else {
                     self.pressed = Some(i);
+                    self.dlg.controls[i].flags |= flag::PRESSED;
                 }
                 None
             }
@@ -728,7 +729,8 @@ impl Menu {
                 self.pressed = None;
                 // 0x4e19f0: a button (types 1 / 2) released on itself acts, then the sound
                 // hook 0x6d5eac(2) (in game 0x4ee0f0 -> 0x4bbcf0: the button click).
-                if hit == Some(p) && matches!(self.dlg.controls[p].ty, 1 | 2) {
+                let was_pressed = self.dlg.controls[p].press_release();
+                if was_pressed && hit == Some(p) && matches!(self.dlg.controls[p].ty, 1 | 2) {
                     self.click = true;
                 }
                 (hit == Some(p)).then(|| self.activate(p, set)).flatten()

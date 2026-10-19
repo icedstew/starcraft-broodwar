@@ -232,7 +232,7 @@ impl State {
     }
 
     /// 0x401500: a building still constructing / morphing what it is making.
-    pub(super) fn busy_building(&self, u: u32) -> bool {
+    pub fn busy_building(&self, u: u32) -> bool {
         let un = &self.units[u as usize];
         let incomplete = |c: u32| c != NIL && self.units[c as usize].status & 1 == 0;
         un.build_queue[un.build_queue_slot as usize % 5] != 0xe4
