@@ -4,6 +4,7 @@
 //! units outside replays.
 
 use crate::bw::{self, Data};
+use crate::todo_port;
 
 #[derive(Default)]
 pub struct Voices {
@@ -147,6 +148,85 @@ impl Voices {
         }
         self.pick(d.dat.units.what_sound_start[t] as u32, d.dat.units.what_sound_end[t] as u32)
     }
+}
+
+/// 0x4556d0: `u` can take part in an acknowledged order (not disabled, status 0x10 only for
+/// type 0x67, not in the busy order states of a few types, right-click kind != 0).
+pub fn can_order(st: &bw::State, d: &Data, u: u32) -> bool {
+    let un = &st.units[u as usize];
+    let (t, o) = (un.unit_type, un.order);
+    !disabled(un)
+        && (un.status & 0x10 == 0 || t == 0x67)
+        && !(t == 7 && o == 0x21)
+        && !(matches!(t, 1 | 0x10 | 100 | 99 | 0x68) && o == 0x81)
+        && !(t == 0x44 && o == 0x6a)
+        && st.right_click_kind(d, u) != 0
+}
+
+/// 0x455660: `u` has a right-click kind of 1, 2, 4, 5 or 6 (0x4e5ea0 kind).
+pub fn can_right_click(st: &bw::State, d: &Data, u: u32) -> bool {
+    matches!(st.right_click_kind(d, u), 1 | 2 | 4 | 5 | 6)
+}
+
+/// The two selection searches shared by 0x4563a0 and 0x4564e0: some selected unit
+/// passes 0x4556d0 and (a later search) some passes 0x455660.
+fn order_gate(st: &bw::State, d: &Data, sel: &bw::buttons::Selection, right_click: bool) -> bool {
+    let any = |f: &dyn Fn(u32) -> bool| sel.units.iter().any(|&u| u != bw::list::NIL && f(u));
+    any(&|u| can_order(st, d, u)) && (!right_click || any(&|u| can_right_click(st, d, u)))
+}
+
+/// 0x4563a0 (the voice part): the active unit (0x597248) acknowledges the order
+/// when it is the local player's and the selection passes both searches. The click
+/// marker (0x485bd0 / 0x488660) is the caller's.
+pub fn order_ack_gate(st: &bw::State, d: &Data, sel: &bw::buttons::Selection) -> bool {
+    sel.active != bw::list::NIL
+        && st.units[sel.active as usize].player == st.local_player
+        && order_gate(st, d, sel, true)
+}
+
+impl bw::State {
+    /// 0x4564e0: the mouse moved over the map at map-screen point `p` (event x, y; `screen`
+    /// = 0x62848c / 0x6284a8; `over_hud` = 0x4d1140). `sent0` is the first unit of the
+    /// selection sent to the sim (0x59724c). Returns the cursor to show (0x4c0380 with
+    /// x, y, sprite id) and whether 0x48f4d0 voices the active unit.
+    #[allow(dead_code)]
+    pub fn hover_cursor(&mut self, d: &Data, sel: &bw::buttons::Selection, sent0: u32, p: (i32, i32), screen: (i32, i32), over_hud: bool) -> Option<((i32, i32), u16, bool)> {
+        let nil = bw::list::NIL;
+        if over_hud {
+            return None;
+        }
+        let owner = if sent0 == nil { 0xff } else { self.units[sent0 as usize].player };
+        let active = sel.active;
+        if owner != self.local_player || active == nil || !self.is_local_unit(active) || !order_gate(self, d, sel, false) {
+            return None;
+        }
+        let (x, y) = (p.0 + screen.0, p.1 + screen.1);
+        let t = self.unit_at_point(d, x as i16, y as i16);
+        let rally_self = t != nil && self.units[t as usize].status & 2 != 0 && bw::command::has_rally(self.units[t as usize].unit_type);
+        if sel.count == 1 && active == t && !rally_self {
+            return None;
+        }
+        if t == nil && !order_gate_rc(self, d, sel) {
+            return None;
+        }
+        // 0x456490: the fog sprite under the point (0x487a10) is not ported; else the
+        // unit's circle flashes or the marker shows at the point.
+        todo_port!("0x487a10", "fog sprite at point");
+        if t != nil {
+            let s = self.units[t as usize].sprite;
+            self.sprites[s as usize].selection_timer = 0x1f;
+        } else {
+            self.show_marker(d, x as i16, y as i16);
+        }
+        // 0x4c0380 (set the cursor) is not ported; the caller gets its arguments.
+        todo_port!("0x4c0380", "set cursor");
+        let ack = self.right_click_accepted(d, &self.selected.clone(), active, t);
+        Some(((x, y), 0xe4, ack))
+    }
+}
+
+fn order_gate_rc(st: &bw::State, d: &Data, sel: &bw::buttons::Selection) -> bool {
+    sel.units.iter().any(|&u| u != bw::list::NIL && can_right_click(st, d, u))
 }
 
 /// 0x4020b0

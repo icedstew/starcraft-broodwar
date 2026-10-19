@@ -190,8 +190,15 @@ Delegate per agents.md: Haiku triage, Sonnet porting, Opus review / hard RE / co
   morphs), selection 0x496d30 / 0x46fa00 (Alt one-unit shortcut) / 0x468670 rally marker.
   Triaged as equivalent or not needed: 0x4017b0, 0x436a40/80, 0x4688e0, 0x4a3a00,
   0x4a8b90, 0x4dcb00, 0x42b8a0, 0x42d460, 0x4452f0, 0x447e20 (pre-v3 saves), 0x488900.
-  Next from triage: 0x4be060 notice, 0x4ef6d0, 0x4f31d0, 0x4dcc00, 0x4e1a70, 0x498c50,
-  0x432610, 0x4b5e80, 0x4d1460, 0x457250 / 0x457310 (status control list).
+  Then: in-game error dialog 0x4e4a10 (`menu::Kind::Fatal`, `SCBW_MENU=fatal`; no native
+  capture yet), scroll focus 0x4ef6d0, 0x4e1970 / 0x4e19f0 as `Ctl::press_follow` /
+  `press_release` (not yet used by glue.rs hover_sound, menu.rs ~685, view.rs card_held),
+  voice gate 0x4563a0 / 0x4556d0 / 0x455660 (voices.rs; 0x4564e0 `hover_cursor` ported
+  but no mouse-move hook yet). Triage C: most of 0x4012c0..0x4566b0 equivalent.
+  Next: leaderboard 0x4538b0 (skipped as UI at triggers.rs ~575: large), 0x4f31d0
+  placement prompt (needs a Scene prompt field), 0x4be060 notice (glue.rs), 0x4246d0 /
+  0x4248f0 panel globals (find readers), 0x402a70, 0x498c50, 0x432610, 0x4b5e80, 0x4d1460,
+  0x457250 / 0x457310 (status control list), 0x4dcc00 (check slide-out reading).
 - Never run two suites at once: agent/tools/suite.sh / cmp.sh share output files in $W
   (concurrent runs gave false diffs 2026-10-19).
 - Background runs (suite, repcmp, native captures) with a copied binary

@@ -927,11 +927,12 @@ impl<'a> Scene<'a> {
         (s3 != 0xffff).then_some(s3)
     }
 
-    /// 0x4563a0 / 0x48f4d0: the status unit (first selected) acknowledges an order.
+    /// 0x4563a0 / 0x48f4d0: the active unit acknowledges an order.
     pub fn voice_yes(&mut self) {
-        let Some(&u) = self.st.selected.first() else { return };
+        let sel = self.client_selection();
+        let u = sel.active;
         let (st, v) = (&self.st, &mut self.voices);
-        if let Some(id) = with_data(self.a, |d| v.yes(st, d, u)) {
+        if let Some(id) = with_data(self.a, |d| (crate::voices::order_ack_gate(st, d, &sel)).then(|| v.yes(st, d, u)).flatten()) {
             self.st.ui_sounds.push(id);
             self.st.talked.push((u, id));
         }
@@ -2494,6 +2495,17 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
             }
             Some(m)
         };
+        // 0x4e4a10 posted from outside (glue 0x4bb300 in a game): 0x48e310 / 0x48ca10, then
+        // the dialog (the game pauses under it as under any menu).
+        if crate::menu::take_fatal_pending() {
+            scene.set_placing(None);
+            scene.end_targeting();
+            menu = open_menu(&scene, crate::menu::Kind::Fatal, 0, &mut settings);
+            menu_paused = menu.is_some();
+            if menu_paused {
+                scene.pause_game();
+            }
+        }
         if menu.is_some() {
             let chars = std::mem::take(&mut *typed.borrow_mut());
             let ldown = lmb;
@@ -2569,7 +2581,13 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
                             .and_then(|p| Some((p, scene.save_file(name.as_bytes(), env.multi)?)))
                             .is_some_and(|(p, f)| std::fs::write(crate::saveload::host(&p), f).is_ok());
                         if !ok {
-                            todo_port!("0x4bb300", "the save failed message (gluAll 0x65)");
+                            // 0x4bb300 -> 0x4e4a10 (in a game): network.tbl string 0x65
+                            // (0x4bb3a8: "" past the table).
+                            scene.set_placing(None);
+                            scene.end_targeting();
+                            let text = ui.as_ref().and_then(|u| u.network.get(0x64)).map_or(Vec::new(), |s| s.split('\0').next().unwrap_or("").as_bytes().to_vec());
+                            crate::menu::set_fatal(Some(text));
+                            menu = open_menu(&scene, crate::menu::Kind::Fatal, 0, &mut settings);
                         }
                     }
                     // 0x4619a0 (command 7): the chosen save replaces the game (0x4cf950, then

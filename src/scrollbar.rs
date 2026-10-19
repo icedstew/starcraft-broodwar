@@ -250,7 +250,7 @@ impl Skin {
         }
     }
 
-    /// 0x415760 (type 7): the bar's arrows (0x10 + enabled + pressed), its track (frame
+    /// 0x415760 (type 7; ends with 0x4ef6d0): the bar's arrows (0x10 + enabled + pressed), its track (frame
     /// 0x1d, 0x1e repeated, 0x1f) and the thumb (0x1c, not when disabled). `r` is the
     /// list's screen rect (the bar's rect moves with it).
     pub fn list_scroll_draw(&self, c: &Ctl, r: (i32, i32, i32, i32), s: &mut Surf) {
@@ -308,6 +308,9 @@ impl Skin {
         self.frame(en + if b.flags & flag::WIDE != 0 { 0x14 } else { 0x13 }, x, y + m.s + 2 + m.s + top, clip, s);
         if b.flags & flag::DISABLED == 0 {
             self.frame(0x1c, ((m.w - m.tw) >> 1) - 1 + x, b.thumb_off() as i16 as i32 + m.a + 2 + top, clip, s);
+        }
+        if b.flags & flag::NO_OUTLINE == 0 {
+            self.scroll_focus(b.flags, clip, self.colors.get()[0x10], s);
         }
     }
 }

@@ -461,7 +461,7 @@ impl State {
     }
 
     /// 0x4e5ea0: right-click behaviour (3 = can't move).
-    pub(super) fn right_click_kind(&self, d: &Data, u: u32) -> u8 {
+    pub fn right_click_kind(&self, d: &Data, u: u32) -> u8 {
         let un = &self.units[u as usize];
         if un.unit_type == 0x67 && un.status & 0x10 != 0 {
             return 3;

@@ -83,6 +83,10 @@ struct Sg {
     cb: Option<Cb>,
     /// 0x685164: when the last save was made (multiplayer allows one per 2 minutes).
     saved_at: Option<std::time::Instant>,
+    /// 0x68ec88: the error text of the in-game error message (None = null pointer).
+    fatal: Option<Vec<u8>>,
+    /// An error was posted from outside the game loop and its dialog is still to open.
+    fatal_pending: bool,
 }
 
 static SG: Mutex<Sg> = Mutex::new(Sg {
@@ -95,10 +99,28 @@ static SG: Mutex<Sg> = Mutex::new(Sg {
     msg: Vec::new(),
     cb: None,
     saved_at: None,
+    fatal: None,
+    fatal_pending: false,
 });
 
 fn sg() -> MutexGuard<'static, Sg> {
     SG.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// 0x4e4a10 (ECX = the message, None = null; EAX = the debug text, "" at the callers): the
+/// in-game error message to open (`Kind::Fatal`). `msg` is network.tbl string `id` as
+/// 0x4bb300 picks it: None for id 0, "" past the table. The caller opens the dialog (the
+/// game loop does it at the next frame when `take_fatal_pending`).
+/// 0x51a0e9 (set: no message) is never set here.
+pub fn set_fatal(msg: Option<Vec<u8>>) {
+    let mut g = sg();
+    g.fatal = msg;
+    g.fatal_pending = true;
+}
+
+/// Whether `set_fatal` posted a message not opened yet (taken).
+pub fn take_fatal_pending() -> bool {
+    std::mem::take(&mut sg().fatal_pending)
 }
 
 /// Where the saves are (what `set_save_env` gave).
@@ -314,6 +336,8 @@ pub enum Kind {
     OkCancel,
     /// 0x4f6050 with rez\ok.bin.
     Ok,
+    /// 0x4e4a10: the in-game error message, rez\dlgFatal.bin (event proc 0x4e4980).
+    Fatal,
 }
 
 impl Kind {
@@ -341,6 +365,7 @@ impl Kind {
             Kind::LoadGame => "rez/loadgame.bin",
             Kind::OkCancel => "rez/okcancel.bin",
             Kind::Ok => "rez/ok.bin",
+            Kind::Fatal => "rez/dlgFatal.bin",
         }
     }
 }
@@ -570,6 +595,25 @@ impl Menu {
                 if let Some(c) = find(&mut dlg, 1) {
                     c.text = msg;
                     c.update = crate::dlg::Update::Align(0x28);
+                }
+            }
+            Kind::Fatal => {
+                dlg.bg = None;
+                // 0x4e4820 (event 0xe user 0 of 0x4e4980): the dialog's draw is 0x4e46a0.
+                dlg.this.update = crate::dlg::Update::Fatal;
+                // Label -2 (the button) is drawn by 0x4e4770; labels -10 (the message) and
+                // -0x14 (the debug text, empty at the callers) by 0x4e4750 when given.
+                if let Some(c) = find(&mut dlg, -2) {
+                    c.update = crate::dlg::Update::Fatal;
+                }
+                let msg = sg().fatal.clone();
+                if let Some(c) = msg.and_then(|m| find(&mut dlg, -10).map(|c| (c, m))) {
+                    c.0.text = c.1;
+                    c.0.update = crate::dlg::Update::Align(0x22);
+                }
+                if let Some(c) = find(&mut dlg, -0x14) {
+                    c.text = Vec::new();
+                    c.update = crate::dlg::Update::Align(0x22);
                 }
             }
             _ => {}
@@ -1105,6 +1149,11 @@ impl Menu {
         match (self.kind, id) {
             (Kind::SaveGame | Kind::LoadGame, _) => return self.save_activate(id),
             (Kind::OkCancel | Kind::Ok, _) => return Self::popup_activate(id),
+            // 0x4e4980 event 0xe code 2 (0x419ea0): the dialog closes.
+            (Kind::Fatal, _) => {
+                sg().fatal = None;
+                return (None, Action::Closed);
+            }
             // 0x4ca450
             (Kind::Game, -3) => (None, Action::Closed),
             (Kind::Game, 3) => (Some((Kind::Options, self.depth)), Action::None),

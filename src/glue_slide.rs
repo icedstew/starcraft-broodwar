@@ -194,7 +194,10 @@ impl Glue {
     }
 
     /// 0x4dcd00: each active control moves out by its step, which doubles; when all are off
-    /// the screen the timer ends (0x4dcc00) and the dialog is destroyed (0x419ea0).
+    /// the screen the timer ends and the dialog is destroyed (0x419ea0). 0x4dcc00 (kills the
+    /// type 0xe children's timers 0x48, and at the last count 0x51c4b8 the dialog's 0x18, clears
+    /// 0x51c418) is the `slide.timer = None` below plus `dialog_done`: the light-ups' animation
+    /// runs from `Dialog::tick`, and the single open dialog is `self.dlg`.
     fn slide_out_step(&mut self, files: &Storage) {
         let mut done = true;
         for i in 0..self.slide.list.len() {

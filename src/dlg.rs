@@ -233,6 +233,9 @@ pub enum Update {
     Credits(u8),
     /// 0x4f59c0: a message label: its text (if any) with these text flags (0x4ef870).
     Align(u8),
+    /// 0x4e4770: the in-game error message's button: two outlines (0x6ceb20 pressed, else
+    /// 0x6ceb30) and its text (flags 0x22).
+    Fatal,
     /// 0x46c6e0: the ready room's message buffer from its scroll row, over the control.
     BriefText,
     /// 0x44e9e0: a ready room portrait's video buffer, copied into the control.
@@ -255,6 +258,31 @@ pub struct Dialog {
 }
 
 impl Ctl {
+    /// 0x4e1970 (ESI = the button, ECX = the mouse event; `inside` = the mouse, taken from the
+    /// dialog's origin, is in the control's rect), the mouse-move part of the default
+    /// dispatcher 0x4e1a70 (events 3, 4, 5, 6): the pressed flag 0x40000000 follows the mouse.
+    /// Returns true when the sound hook 0x6d5eac(0) must run (the mouse came onto a button
+    /// that was not pressed). The redraw (0x41c400) is the caller's.
+    pub fn press_follow(&mut self, inside: bool) -> bool {
+        let pressed = self.flags & flag::PRESSED != 0;
+        if inside == pressed {
+            return false;
+        }
+        self.flags ^= flag::PRESSED;
+        inside
+    }
+
+    /// 0x4e19f0 (ESI = the button; the mouse-up part of 0x4e1a70, after the capture 0x419640 is
+    /// released): a pressed button is released. Returns true when the control's own update
+    /// (+0x2a) must get event 2 (activate) and the hook 0x6d5eac(2) (click sound) must run.
+    /// The other cases of 0x4e1a70 (the capture table 0x6d5e40, the tooltip table 0x6d5e90 of
+    /// 0x4196f0, the focus 0x418900 / 0x418c40) have no state here: the callers keep them.
+    pub fn press_release(&mut self) -> bool {
+        let pressed = self.flags & flag::PRESSED != 0;
+        self.flags &= !flag::PRESSED;
+        pressed
+    }
+
     /// 0x41b410 (list boxes, combo boxes): the rows shown, the bottom snapped to whole
     /// rows, the selection and the top row kept in range. A combo box is laid out with its
     /// drop-down rows added (0x41b410 grows the rect down, or up when it does not fit) and
@@ -1114,6 +1142,18 @@ impl Skin {
             return;
         }
         let (ox, oy) = dlg.origin();
+        if dlg.this.update == Update::Fatal {
+            // 0x4e46a0: filled with 0x6ceb2f, outlined (and again one inside) with 0x6ceb30.
+            let col = self.colors.get();
+            let (l, t, r, b) = dlg.this.rect;
+            for y in t.max(0)..=b.min(s.h - 1) {
+                for x in l.max(0)..=r.min(s.w - 1) {
+                    s.px[(y * s.w + x) as usize] = col[0xf];
+                }
+            }
+            self.outline((l, t, r, b), col[0x10], s);
+            self.outline((l + 1, t + 1, r - 1, b - 1), col[0x10], s);
+        }
         if let Some((bw, bh, bg)) = &dlg.bg {
             // 0x4ef590 -> 0x4ef440: the dialog bitmap; index 0 is transparent. Flag
             // 0x40000 with the glue's effects: mode 4 (0x416f30), the shade color blends.
@@ -1201,6 +1241,15 @@ impl Skin {
             (Update::Align(align), _) => {
                 if !c.text.is_empty() {
                     self.ctl_text(c, &c.text, r, 0, 0, align, s);
+                }
+                return;
+            }
+            (Update::Fatal, _) => {
+                let col = self.colors.get()[if f & flag::PRESSED != 0 { 0 } else { 0x10 }];
+                self.outline(r, col, s);
+                self.outline((l + 1, t + 1, rr - 1, b - 1), col, s);
+                if !c.text.is_empty() {
+                    self.ctl_text(c, &c.text, r, 0, 0, 0x22, s);
                 }
                 return;
             }
@@ -1831,8 +1880,16 @@ impl Skin {
             let range = rr - arrow * 2 - l - tw - 1;
             self.frame(0x1c, Self::thumb_pos(c, range) + arrow + l, y, r, s);
         }
-        if f & flag::NO_OUTLINE == 0 && f & flag::FOCUS != 0 {
-            self.outline(r, self.colors.get()[0x10], s);
+        if f & flag::NO_OUTLINE == 0 {
+            self.scroll_focus(f, r, self.colors.get()[0x10], s);
+        }
+    }
+
+    /// 0x4ef6d0 (ECX = the bar, EAX = its rect, stack = `color`, 0x6cf4ac): a bar with the
+    /// focus flag (0x1000, `flags`) gets the one-pixel outline (0x4e1c70) in `color`.
+    pub fn scroll_focus(&self, flags: u32, r: (i32, i32, i32, i32), color: u8, s: &mut Surf) {
+        if flags & flag::FOCUS != 0 {
+            self.outline(r, color, s);
         }
     }
 

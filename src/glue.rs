@@ -2163,7 +2163,9 @@ impl Glue {
             return;
         }
         if self.state == state::GAME {
-            todo_port!("0x4e4a10", "the in-game error message");
+            // 0x4e4a10 with ECX = the string (0x4bb3a8: none for id 0, "" past the table)
+            // and EAX = "" (the debug text); the game loop opens rez\dlgFatal.bin.
+            crate::menu::set_fatal((id != 0).then(|| self.network.get(id - 1).cloned().unwrap_or_default().into_bytes()));
             return;
         }
         if self.screen == 4 {
