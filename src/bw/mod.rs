@@ -326,6 +326,9 @@ pub struct State {
     pub last_error: u16,
     /// Error the front end should show the local player (stat_txt id + 1), set by 0x49e530.
     pub shown_error: u16,
+    /// 0x51267c: the player whose command runs (0x487100 sets it from the sender); None =
+    /// the local player (0x512688), as outside commands.
+    pub cmd_player: Option<u8>,
     /// Trigger texts for the front end (0x4c5770): map string id and the action's
     /// "always display" flag (else shown only with subtitles on, 0x6cdfec 0x400).
     /// The third field is the least time in ms it stays (0 = the text's reading time).
@@ -514,6 +517,7 @@ impl State {
             repulse: vec![0; 0xab * 0xab],
             last_error: 0,
             shown_error: 0,
+            cmd_player: None,
             shown_text: Vec::new(),
             transmissions: Vec::new(),
             center_view: None,

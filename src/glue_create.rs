@@ -129,7 +129,7 @@ pub(super) struct Create {
     /// 0x6d5a78: the players of the selected map.
     players: u32,
     /// 0x59bb6c: the game speed.
-    speed: u8,
+    pub(super) speed: u8,
     /// 0x59b848: the slot rows follow a map selection (not Ok).
     slot_poll: bool,
     /// The 100 ms timers: 0xc loads the selected node's information (0x59bf70 its node),

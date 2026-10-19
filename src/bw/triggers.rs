@@ -202,6 +202,13 @@ pub struct Triggers {
     pub in_game: [u8; 8],
     /// 0x650970: frames until the victory / defeat screen.
     pub end_screen_timer: u16,
+    /// 0x685178: the victory / defeat dialog is open.
+    pub end_open: bool,
+    /// 0x68517c: an end dialog button was used; the dialog does not open again.
+    pub end_done: bool,
+    /// The front end opens the victory / defeat dialog (0x4615b0 / 0x461640): the local
+    /// player's result 2 (defeat), 3 (victory) or 5 (draw), 0 for none.
+    pub end_request: u8,
     /// 0x6509b4: the game was paused by a trigger.
     pub trigger_paused: bool,
     /// 0x6509c4: the game is paused.
@@ -247,6 +254,9 @@ impl Default for Triggers {
             result: [0; 8],
             in_game: [0; 8],
             end_screen_timer: 0,
+            end_open: false,
+            end_done: false,
+            end_request: 0,
             trigger_paused: false,
             paused: false,
             second_timer: 0xf,
@@ -385,13 +395,37 @@ impl State {
         true
     }
 
+    /// 0x48a410: counts the frames to the victory / defeat dialog (not in a replay); when it
+    /// runs out it restarts at 0x2d and the local player's result opens the dialog:
+    /// 0x4615b0 for defeat, 0x461640 for victory and draw (the same but for the dialog).
+    fn end_screen_countdown(&mut self) {
+        if self.replay {
+            return;
+        }
+        let t = self.trig.end_screen_timer;
+        self.trig.end_screen_timer = t.wrapping_sub(1);
+        if t != 0 {
+            return;
+        }
+        self.trig.end_screen_timer = 0x2d;
+        let r = self.player_left[self.local_player as usize];
+        if matches!(r, 2 | 3 | 5) && !self.trig.end_open && !self.trig.end_done {
+            // 0x4c4790 (a Battle.net game reports its end once, 0x685174) is not ported.
+            todo_port!("0x4c4790", "Battle.net: report the game result once (0x57f0b4, 0x59688c == 'NETB')");
+            self.trig.end_open = true;
+            // 0x48e310 / 0x48ca10 / 0x484cc0 / 0x4f57a0: the front end ends placement and
+            // targeting and opens the dialog (rez\lmission.bin / wmission.bin).
+            self.trig.end_request = r;
+        }
+    }
+
     /// 0x48a460: the trigger pass after each game step; `ms` is the frame time of the
     /// game speed (0x5124d8).
     pub fn run_triggers(&mut self, d: &Data, ms: u32) {
         if self.trig.paused && !self.trig.trigger_paused {
             return;
         }
-        // 0x48a410: the victory / defeat screen countdown (UI).
+        self.end_screen_countdown();
         self.trigger_timers(ms);
         let t = self.trig.check_timer;
         self.trig.check_timer = t.wrapping_sub(1);

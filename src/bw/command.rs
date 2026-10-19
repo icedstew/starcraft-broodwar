@@ -1389,7 +1389,9 @@ impl State {
     pub fn execute_command(&mut self, d: &Data, player: u8, sel: &[u32], p: &[u8]) {
         let was = self.rng.enabled;
         self.rng.enabled = true;
+        self.cmd_player = Some(player);
         self.receive_command(d, player, sel, p);
+        self.cmd_player = None;
         self.rng.enabled = was;
     }
 

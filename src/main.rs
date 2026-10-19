@@ -592,6 +592,10 @@ fn main() -> std::io::Result<()> {
                     ci += 1;
                 }
                 scene.step();
+                // 0x4deb90: the message lines' clock runs at the replay's frame time.
+                if let Some(u) = ui.as_ref() {
+                    scene.text_tick(u, bw::triggers::replay_frame_ms(scene.st.replay_speed as usize, scene.st.replay_mult as u32), true);
+                }
                 if let Some(&(x, y)) = camera.get(&frame) {
                     scene.st.screen_tile = ((x >> 5) as u16, (y >> 5) as u16);
                 }
@@ -1163,13 +1167,29 @@ pub(crate) fn shot_setup(a: &mut view::Assets, mut g: view::GameSetup, out: &str
     for _ in 0..frames {
         scene.step();
     }
+    // SCBW_END_AT=<frame>[d]: run on to the victory (defeat) dialog and show it.
+    let mut end = 0;
+    if std::env::var_os("SCBW_END_AT").is_some() {
+        for _ in 0..3000 {
+            end = std::mem::take(&mut scene.st.trig.end_request);
+            if end != 0 {
+                break;
+            }
+            scene.step();
+        }
+    }
     let (sx, sy) = scene.st.start_locations[scene.local_player() as usize];
     let (x, y) = ((sx as i32 - 320).max(0), (sy as i32 - 180).max(0));
     scene.st.screen_tile = ((x >> 5) as u16, (y >> 5) as u16);
     let ui = ui::Ui::load(&a.files, ["zerg", "terran", "protoss"][scene.local_race()]).ok();
     let (w, h) = (view::SCREEN_W as usize, view::SCREEN_H as usize);
     let (mut idx, mut rgb) = (vec![0u8; w * h], vec![0u32; w * h]);
-    view::compose_with_cursor(&scene, ui.as_ref(), x, y, None, None, &mut idx, &mut rgb);
+    let menu = ui.as_ref().filter(|_| end != 0).and_then(|u| {
+        let ctx = menu::Ctx { replay: false, multiplayer: false, replay_speed: 0 };
+        let kind = if end == 2 { menu::Kind::Defeat } else { menu::Kind::Victory };
+        menu::Menu::open(kind, 0, &a.files, &u.skin, ctx, &menu::Settings::default())
+    });
+    view::compose_with_cursor(&scene, ui.as_ref(), x, y, None, menu.as_ref(), &mut idx, &mut rgb);
     write_png_rgb(out, w, h, &rgb)
 }
 

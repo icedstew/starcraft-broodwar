@@ -74,6 +74,23 @@ pub struct Ctl {
     /// The create game screen's list and folder label: the frames of glue\create\iCreate.grp
     /// (0x59ba60) their draws (`Update::MapList` / `DirLabel`) use.
     pub icons: Vec<Icon>,
+    /// The score screen's custom draws (`Update::Score`, glue_score.rs).
+    pub score: Option<ScoreCtl>,
+}
+
+/// What a gluScore.bin control draws (its +0x2e draw function and the row data it reads).
+#[derive(Clone, Debug)]
+pub enum ScoreCtl {
+    /// 0x4b3820: a tab button (the selected one, flag bit 31, shows only its text).
+    Tab,
+    /// 0x4b3b80: the total score's box (its picture) and the text.
+    Box,
+    /// 0x4b38a0: a row's name label: the race icon framed in the player's color
+    /// (`color`), the name, and `aux` (the force / team name) beside the icon.
+    Name { gfx: Rc<Vec<Icon>>, race: u8, color: u8, aux: Vec<u8> },
+    /// 0x4b3a40: a row's bar: `value` out of `max` over the control's width, in the frames
+    /// of the player's color slot `color`; then the number.
+    Bar { gfx: Rc<Vec<Icon>>, value: i32, max: i32, color: u8 },
 }
 
 /// A frame of a grp: its offset in the box, size and pixels (0 transparent).
@@ -193,6 +210,8 @@ pub enum Update {
     MapList,
     /// 0x4ad980: the create game screen's folder label (the folder icon, then the text).
     DirLabel,
+    /// The score screen's controls (`Ctl::score`).
+    Score,
 }
 
 #[derive(Clone, Debug)]
@@ -578,6 +597,7 @@ impl Dialog {
                 list: None,
                 edit: None,
                 icons: Vec::new(),
+                score: None,
             }
         };
         let mut this = ctl(0);
@@ -1142,6 +1162,7 @@ impl Skin {
         match (c.update, c.ty) {
             (Update::MapList, 12) => return self.map_list_ctl(c, r, s),
             (Update::DirLabel, _) => return self.dir_label_ctl(c, r, s),
+            (Update::Score, _) => return self.score_ctl(c, r, s),
             _ => {}
         }
         match c.ty {
@@ -1267,6 +1288,88 @@ impl Skin {
         }
         if !c.text.is_empty() {
             self.ctl_text(c, &c.text, r, dx, 0, 0x11, s);
+        }
+    }
+
+    /// The score screen's controls (glue_score.rs). 0x4b3820 (a tab: its picture unless it
+    /// is the selected one, which is lit instead, then the centered text), 0x4b3b80 (the
+    /// total's box and its text 2 px down), 0x4b38a0 (the race icon 8 px in and 0x14 down,
+    /// framed in the player's color, the name, and the team name beside the icon in
+    /// font 0 color 6) and 0x4b3a40 (the bar and its number).
+    fn score_ctl(&self, c: &Ctl, r: (i32, i32, i32, i32), s: &mut Surf) {
+        let Some(k) = c.score.as_ref() else { return };
+        match k {
+            ScoreCtl::Tab => {
+                let mut t = c.clone();
+                t.flags &= !0x80;
+                if t.flags & 0x8000_0000 != 0 {
+                    t.flags |= 0x80;
+                } else if let Some(img) = c.image.as_ref() {
+                    self.blit(&img.px, img.w, img.h, r.0, r.1, r, None, true, s);
+                }
+                if !c.text.is_empty() {
+                    self.ctl_text(&t, &t.text, r, 0, 0, 0x22, s);
+                }
+            }
+            ScoreCtl::Box => {
+                if let Some(img) = c.image.as_ref() {
+                    self.blit(&img.px, img.w, img.h, r.0, r.1, r, None, true, s);
+                }
+                if !c.text.is_empty() {
+                    self.ctl_text(c, &c.text, r, 0, 2, 0x12, s);
+                }
+            }
+            ScoreCtl::Name { gfx, race, color, aux } => {
+                let Some(icon) = gfx.get(*race as usize + 3) else { return };
+                self.icon(icon, r.0 + 8, r.1 + 0x14, r, s);
+                self.outline((r.0 + 8, r.1 + 0x14, r.0 + 8 + icon.w - 1, r.1 + 0x14 + icon.h - 1), *color, s);
+                // 0x51a0e8 = 0: no word wrap; the rect's right edge is 0xb8.
+                if !c.text.is_empty() {
+                    self.ctl_text(c, &c.text, (r.0, r.1, 0xb8, r.3), 0, 0, 0x11, s);
+                }
+                if !aux.is_empty() {
+                    let o = TextOpts { flags: 0x11, spacing: 1, line_gap: 3, clip: r };
+                    self.fonts[0].draw_bytes(aux, icon.w + r.0 + 0x28, r.1 + 0x14, 6, &o, TextDst { rows: &self.text_rows, out: s.px, w: s.w, h: s.h });
+                }
+            }
+            ScoreCtl::Bar { gfx, value, max, color } => {
+                // The width the bar fills: width * value / max, at most the width, at least 1
+                // for a value.
+                let width = (r.2 - r.0 + 1) as u32;
+                let fill = if *max == 0 { 0 } else { (width * *value as u32 / *max as u32).min(width) };
+                let fill = if *value != 0 && fill == 0 { 1 } else { fill } as i32;
+                let (back, front) = (*color as usize * 6 + 9, *color as usize * 6 + 6);
+                let pw = self.frame_wh(0x85).0;
+                if width != 0 {
+                    self.score_wide(gfx, back, pw, r.0, r.1, width as i32, r, s);
+                }
+                if fill != 0 {
+                    self.score_wide(gfx, front, pw, r.0, r.1, fill, r, s);
+                }
+                if !c.text.is_empty() {
+                    self.ctl_text(c, &c.text, r, 0, 2, 0x12, s);
+                }
+            }
+        }
+    }
+
+    /// 0x4ef710 with iScore.grp's frames (`gfx`) and the piece width `pw`: `wide_pw`.
+    #[allow(clippy::too_many_arguments)]
+    fn score_wide(&self, gfx: &[Icon], base: usize, pw: i32, x: i32, y: i32, width: i32, clip: (i32, i32, i32, i32), s: &mut Surf) {
+        let pw = pw.max(1);
+        let right = x + width - 1;
+        let mut f = |k: usize, fx: i32, c: (i32, i32, i32, i32)| {
+            if let Some(i) = gfx.get(k) {
+                self.icon(i, fx + i.x, y + i.y, c, s);
+            }
+        };
+        let mid = (clip.0, clip.1, clip.2.min(right - pw), clip.3);
+        f(base, x, mid);
+        for k in 1..=(width - pw - 1) / pw {
+            f(base + 1, x + k * pw, mid);
+        }
+        if pw <= width {
+            f(base + 2, x - pw + width, (clip.0.max(x + pw), clip.1, clip.2, clip.3));
         }
     }
 

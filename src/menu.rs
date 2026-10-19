@@ -62,6 +62,10 @@ pub enum Kind {
     Restart,
     QuitMission,
     Quit,
+    /// 0x461430: the defeat dialog (0x4615b0).
+    Defeat,
+    /// 0x461510: the victory (and draw) dialog (0x461640).
+    Victory,
 }
 
 impl Kind {
@@ -81,6 +85,9 @@ impl Kind {
             Kind::QuitMission if replay => "rez/quitrepl.bin",
             Kind::QuitMission => "rez/quit2mnu.bin",
             Kind::Quit => "rez/quit.bin",
+            // 0x504880 / 0x504894
+            Kind::Defeat => "rez/lmission.bin",
+            Kind::Victory => "rez/wmission.bin",
         }
     }
 }
@@ -100,6 +107,9 @@ pub enum Action {
     /// Quit the mission / replay.
     QuitMission,
     ExitProgram,
+    /// OK in the defeat / victory dialog (0x460f30 / 0x460fa0): the game ends and the
+    /// score screen follows (0x51ce90 = 7 / 6).
+    EndGame,
 }
 
 /// The open menu (0x6d5bf4) and the depth counter 0x6d1224.
@@ -214,6 +224,17 @@ impl Menu {
                         c.checked = id == set.portraits + 3;
                     }
                 }
+            }
+            Kind::Defeat | Kind::Victory => {
+                // 0x461020 / 0x461160: button 1 (continue observing / playing) only in a
+                // multiplayer game (4c4220's state is not modelled: not shown); -20 shows in
+                // single player, -21 and -23 (the multiplayer / replay lines) are hidden.
+                // The tail of 0x461020 sets a 20 s dialog timer (0x416090).
+                show(&mut dlg, 1, kind == Kind::Victory && ctx.multiplayer && !ctx.replay);
+                show(&mut dlg, -0x14, !ctx.multiplayer);
+                show(&mut dlg, -0x15, false);
+                show(&mut dlg, -0x17, false);
+                crate::todo_port!("0x416090", "end dialog 20 s timer");
             }
             Kind::Tips => {
                 if let Some(c) = find(&mut dlg, 2) {
@@ -467,6 +488,14 @@ impl Menu {
             (Kind::Restart, -2) => (None, Action::Restart),
             (Kind::QuitMission, -2) => (None, Action::QuitMission),
             (Kind::Quit, -2) => (None, Action::ExitProgram),
+            // 0x460f30 (defeat; every activation sets 0x68517c) / 0x460fa0 (victory).
+            (Kind::Defeat | Kind::Victory, -2) => (None, Action::EndGame),
+            (Kind::Defeat | Kind::Victory, 1) => {
+                if self.kind == Kind::Victory {
+                    crate::todo_port!("0x48d0c0", "victory dialog button 1: clear the message line");
+                }
+                (None, Action::Closed)
+            }
             (Kind::Restart | Kind::QuitMission | Kind::Quit, -3) => back(Kind::EndMission),
             (_, -3) => (None, Action::Closed),
             // ponytail: save / load (0x462600 / 0x462100), keystroke help, tips and the

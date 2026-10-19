@@ -17,6 +17,8 @@ use crate::todo_port;
 
 #[path = "glue_create.rs"]
 mod create;
+#[path = "glue_score.rs"]
+mod score;
 
 /// What the glue asks the sound system for (the window loop plays them: `Audio` is not
 /// the glue's).
@@ -29,6 +31,8 @@ pub enum AudioCmd {
     Music { path: &'static str, fade: bool },
     /// 0x4a5f50.
     FadeOutMusic,
+    /// 0x4bbf50: the playing sounds stop.
+    StopSounds,
 }
 
 /// 0x512bb8 (8 bytes per track: path, type, fade-in): the front-end tracks 0xa .. 0x12
@@ -178,6 +182,8 @@ pub struct Glue {
     pub screen: u8,
     /// 0x51bff8: 1 until the glue loop's first pass picked its start screen.
     first: bool,
+    /// The game that just ended in victory / defeat (state 6 / 7), for the score screen.
+    pub game_end: Option<crate::view::GameEnd>,
     /// 0x57f0b4: a multiplayer game.
     pub multiplayer: bool,
     /// 0x58f440: Brood War (expansion) chosen.
@@ -274,6 +280,8 @@ pub struct Glue {
     last_press: Option<(u32, i16)>,
     /// The create game screen's globals (glue_create.rs).
     create: create::Create,
+    /// The score screen's globals (glue_score.rs).
+    score: score::Score,
 }
 
 impl Glue {
@@ -288,6 +296,7 @@ impl Glue {
             state: state::GLUE,
             screen: screen::MAIN,
             first: true,
+            game_end: None,
             multiplayer: false,
             expansion: false,
             expansion_installed: files.read("rez/gluexpcmpgn.bin").is_ok(),
@@ -334,6 +343,7 @@ impl Glue {
             edit_refuse: Vec::new(),
             last_press: None,
             create: create::Create::default(),
+            score: score::Score::default(),
         }
     }
 
@@ -1304,7 +1314,11 @@ impl Glue {
     /// image directory (0x512a98: glue\score{Z,T,P}{d,v}\) and the music (0x512ac8) are
     /// picked by the local slot's race and victory (index 1 with 0x6d5a60 set).
     fn open_score(&mut self, files: &Storage) {
-        let (_, local) = self.setup.player_outcomes(self.clock_ms);
+        // 0x58d700: the game's results (the score screen reads the game's globals).
+        if let Some(g) = self.game_end.as_ref() {
+            self.setup.results = g.results;
+        }
+        let (outcomes, local) = self.setup.player_outcomes(self.clock_ms);
         let won = local == 1;
         let i = if self.g6d5a60 == 0 {
             let race = self.setup.slots[self.setup.local_slot[0] as usize % 12][slot::RACE] as u32;
@@ -1316,10 +1330,13 @@ impl Glue {
         self.music_start(self.exe_u32(0x512ac8 + 4 * i));
         // iScore.grp and tminimap.pcx from the directory 0x512a98[i] (0x4d2b30 buffer,
         // SBmpAllocLoadImage), then 0x4bca80.
-        todo_port!("0x4bca80", "score screen images (iScore.grp, tMinimap.pcx)");
-        let dlg = self.open_glue_dialog(files, "rez/gluScore.bin");
-        self.show_palette();
+        self.score_begin(files, i, outcomes, local);
+        let mut dlg = self.open_glue_dialog(files, "rez/gluScore.bin");
+        self.score_controls(files, &mut dlg);
         self.dlg = Some((dlg, Open::Score(won)));
+        // The event proc's slide-in (0x4b4a00: 0x4dd5e0 over list 0x51a844, 500 ms) is not ported.
+        todo_port!("0x4dd5e0", "slide-in of the score screen's picture (list 0x51a844) and its timer 0x4dd220");
+        self.score_init(files);
     }
 
     /// 0x4b4af0 (after 0x41a080): 7 (continue) goes to the provider's screen in a network
@@ -1327,6 +1344,9 @@ impl Glue {
     /// (or a campaign that cannot go on) records the progress (0x4dbee0) of a single-player
     /// game that is not a continued map and goes to the main menu. Then the music fades.
     fn done_score(&mut self, files: &Storage, result: i32, won: bool) {
+        // 0x4b4a30 event 1 (0x4b30a0, after a Sleep(1000)): the images go, 0x6d5a60 = 0.
+        self.g6d5a60 = 0;
+        self.score_end();
         let mut done = false;
         if result == 7 {
             if self.setup.multiplayer {
@@ -1741,7 +1761,7 @@ impl Glue {
             }
             Open::Score(_) => {
                 self.activated = id;
-                todo_port!("0x4b4a30", "score screen event proc (tabs, 0x4b4600 / 0x4b4a00 init, continue)");
+                self.score_activate(id);
             }
             Open::Create(_) => {
                 self.create_activate(files, id);
@@ -2093,6 +2113,7 @@ impl Glue {
     pub fn tick(&mut self, files: &Storage, ms: u32) {
         self.clock_ms = self.clock_ms.wrapping_add(ms);
         self.create_tick(files, ms);
+        self.score_tick(ms);
         // 0x4edaa0 event 8 code 0x57: the timer goes (0x416000), New ID opens.
         if let Some(left) = self.login_timer {
             if left > ms {
@@ -2249,6 +2270,10 @@ pub fn run(files: &Storage, shot: Option<&str>) -> std::io::Result<()> {
     use minifb::{MouseButton, MouseMode, Scale, Window, WindowOptions};
     let (w, h) = (640usize, 480usize);
     let mut glue = Glue::new(files);
+    // SCBW_SCORE_TEST=1: the score screen of a finished two player game (no game played).
+    if std::env::var_os("SCBW_SCORE_TEST").is_some() {
+        glue.score_test_game();
+    }
     let mut idx = vec![0u8; w * h];
     let mut rgb = vec![0u32; w * h];
     let mut win = if shot.is_none() {
@@ -2288,10 +2313,21 @@ pub fn run(files: &Storage, shot: Option<&str>) -> std::io::Result<()> {
                 // result in 0x596904) are not ported.
                 let Some(g) = glue.begin_game(files) else { return Ok(()) };
                 let mut a = crate::view::Assets::load(crate::storage::Storage::open(&crate::install_dir())?)?;
-                return match shot {
-                    Some(out) => crate::shot_setup(&mut a, g, out),
-                    None => crate::view::run_setup(&mut a, g),
-                };
+                if let Some(out) = shot {
+                    return crate::shot_setup(&mut a, g, out);
+                }
+                // 0x4e0710: the next state is the game's result 0x51ce90 (0x4d9950): 6 / 7 after
+                // the victory / defeat dialog's OK (the score screen), 4 after quitting the
+                // mission (0x4c9280: the campaign screen 6, or 0x16 with Brood War 0x58f440).
+                glue.game_end = crate::view::run_setup(&mut a, g)?;
+                match &glue.game_end {
+                    Some(e) => glue.state = if e.results[e.local as usize] == 2 { 7 } else { 6 },
+                    None => {
+                        glue.state = state::GLUE;
+                        glue.screen = 6 + if glue.expansion { 0x10 } else { 0 };
+                    }
+                }
+                continue;
             }
         }
         // SCBW_GLUE_POPUP="text" (or "title|text"): shows a popup over the screen.
@@ -2314,6 +2350,7 @@ pub fn run(files: &Storage, shot: Option<&str>) -> std::io::Result<()> {
                     au.play_music(files, path)
                 }
                 AudioCmd::FadeOutMusic => au.fade_out(),
+                AudioCmd::StopSounds => au.stop_sounds(),
             }
         }
         let now = std::time::Instant::now();

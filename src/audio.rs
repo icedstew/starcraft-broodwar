@@ -13,6 +13,10 @@ pub struct Audio {
     names: Vec<String>,
     cache: RefCell<HashMap<u16, Option<Arc<[u8]>>>>,
     music: Option<rodio::Player>,
+    /// 0x6d5bb0: the track playing (index into the 0x512bb8 table).
+    music_track: u32,
+    /// When 0x4a6250 last ran (`now_ms`); 0x4d1c90 runs it once a second.
+    music_checked: u128,
     /// The sound options' volumes, 0..=100 (0x6cdfe0 music, 0x6cdfe4 digital).
     volumes: (i16, i16),
     /// 0x5008f0: DirectSound attenuations (hundredths of a dB) by volume 0..=99, read from
@@ -61,13 +65,54 @@ fn volume_table() -> [i32; 100] {
     })
 }
 
+/// 0x512bb8 entries 1..=9 (path, next track = byte +6; all type 2): zerg 1-3, terran
+/// 4-6, protoss 7-9, each cycling through its race's three.
+fn game_track(i: u32) -> Option<(&'static str, u32)> {
+    Some(match i {
+        1 => ("music/zerg1.wav", 2),
+        2 => ("music/zerg2.wav", 3),
+        3 => ("music/zerg3.wav", 1),
+        4 => ("music/terran1.wav", 5),
+        5 => ("music/terran2.wav", 6),
+        6 => ("music/terran3.wav", 4),
+        7 => ("music/protoss1.wav", 8),
+        8 => ("music/protoss2.wav", 9),
+        9 => ("music/protoss3.wav", 7),
+        _ => return None,
+    })
+}
+
+/// 0x51a3b4: the music variant of the last game (-1 until the process's first game).
+static MUSIC_VARIANT: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(-1);
+
+/// 0x4ee2d0 (outside campaigns): advances the music variant 0x51a3b4 0, 1, 2, 0, ...; the
+/// first game of the process starts it from `rand() % 3` (`rand` is the CRT rand
+/// 0x40c7bd, drawn only then). The game's track is `game_start_track(race)`.
+pub fn next_music_variant(rand: impl FnOnce() -> u32) {
+    use std::sync::atomic::Ordering::Relaxed;
+    let mut v = MUSIC_VARIANT.load(Relaxed);
+    if v == -1 {
+        v = (rand() % 3) as i32;
+    }
+    v += 1;
+    if v > 2 {
+        v = 0;
+    }
+    MUSIC_VARIANT.store(v, Relaxed);
+}
+
+/// 0x4ee2d0: the in-game track (0x57f1de) for `race` (0x57f1e2): 1 / 4 / 7 plus the variant.
+pub fn game_start_track(race: usize) -> u32 {
+    [1, 4, 7][race] + MUSIC_VARIANT.load(std::sync::atomic::Ordering::Relaxed).max(0) as u32
+}
+
 impl Audio {
     /// None when no audio device is available; the game runs silently.
     pub fn open(files: &Storage) -> Option<Audio> {
         let mut sink = rodio::DeviceSinkBuilder::open_default_sink().ok()?;
         sink.log_on_drop(false);
         let names = dat::parse_tbl(&files.read("arr/sfxdata.tbl").ok()?);
-        Some(Audio { sink, names, cache: RefCell::new(HashMap::new()), music: None, volumes: (25, 50),
+        Some(Audio { sink, names, cache: RefCell::new(HashMap::new()), music: None, music_track: 0, music_checked: 0, volumes: (25, 50),
             table: volume_table(), slots: RefCell::new(Default::default()), last: RefCell::new(HashMap::new()) })
     }
 
@@ -130,6 +175,18 @@ impl Audio {
             }
         }
         self.start(files, dat, id, atten, pan, unit, flags | 4);
+    }
+
+    /// 0x4bbf50: the playing sounds (not the ones the loader still holds, flag 8) stop and
+    /// their slots free.
+    pub fn stop_sounds(&self) {
+        for slot in self.slots.borrow_mut().iter_mut() {
+            if slot.as_ref().is_some_and(|s| s.flags & 8 == 0) {
+                if let Some(s) = slot.take() {
+                    s.player.stop();
+                }
+            }
+        }
     }
 
     /// 0x4bb740: a free slot (finished ones are freed first), else the lowest-priority slot
@@ -225,6 +282,38 @@ impl Audio {
         player.set_volume(self.volumes.0 as f32 / 50.0);
         player.append(src);
         self.music = Some(player);
+    }
+
+    /// 0x4a6140 for the in-game tracks 1..=9 of 0x512bb8 (type 2: played once; the fade-in
+    /// flag 0x512bbd is 0 for all of them): closes the playing track when `i` differs.
+    pub fn start_track(&mut self, files: &Storage, i: u32) {
+        if self.music.is_some() && i == self.music_track {
+            return;
+        }
+        self.music_track = i;
+        self.music = None; // 0x4a6140: Ordinal_257 / 253 close the old stream
+        let Some((path, _)) = game_track(i) else { return };
+        let Ok(data) = files.read(path) else { return };
+        let Ok(src) = rodio::Decoder::new(Cursor::new(Arc::<[u8]>::from(data))) else { return };
+        let player = rodio::Player::connect_new(self.sink.mixer());
+        player.set_volume(self.volumes.0 as f32 / 50.0);
+        player.append(src);
+        self.music = Some(player);
+    }
+
+    /// 0x4a6250 (run once a second by 0x4d1c90 via 0x4d1d05): when the playing type 2
+    /// track has ended (Ordinal_258: position >= length), 0x4a6140 starts the table's next
+    /// track (byte +6 of the entry).
+    pub fn music_check(&mut self, files: &Storage) {
+        let now = now_ms();
+        if now < self.music_checked + 1000 {
+            return;
+        }
+        self.music_checked = now;
+        let Some((_, next)) = game_track(self.music_track) else { return };
+        if self.music.as_ref().is_some_and(|p| p.empty()) {
+            self.start_track(files, next);
+        }
     }
 
     /// 0x4a5f50: fade the music out (attenuation falls 5, 10, 15, ... per 20 ms step

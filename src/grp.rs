@@ -34,6 +34,22 @@ pub enum Blend<'a> {
     /// Draw function 12 (0x4d5cd0 / 0x4d5c90): the image's shape filled with another GRP
     /// frame's pixels (tex, width, height; see `Grp::pixels`), through the player's colors.
     Texture(&'a [u8], i32, i32, &'a [u8; 8]),
+    /// Draw functions 2 / 3 / 4, first pass (0x40b155, flipped 0x40b9a9): each pixel is
+    /// replaced by the screen pixel `lum[src]` columns to the right (left when flipped);
+    /// `lum` is `luminance`.
+    Cloak(&'a [u8; 256]),
+    /// Draw functions 2 / 4 / 5 / 7, last pass (0x40afd5, flipped 0x40b824): the pixel (through
+    /// the player's colors) is drawn where its luminance is above the fade level.
+    CloakFade(&'a [u8; 256], i8, &'a [u8; 8]),
+    /// Draw functions 5 / 6 / 7, translucent pass (0x40b596 with the trans50 table, whose
+    /// rows 8..15 0x498470 replaces by the player's color rows): `Table` with the player's colors.
+    CloakTrans(&'a [u8], &'a [u8; 8]),
+}
+
+/// 0x4bcd70: the brightness of each palette color, `(r * 0x4d + g * 0x97 + b * 0x1c + 0x1000) >> 13`
+/// (0x5993d8), from the tileset palette 0x5994e0.
+pub fn luminance(pal: &[[u8; 3]; 256]) -> [u8; 256] {
+    pal.map(|[r, g, b]| ((r as u32 * 0x4d + g as u32 * 0x97 + b as u32 * 0x1c + 0x1000) >> 13) as u8)
 }
 
 impl Grp {
@@ -120,7 +136,17 @@ impl Grp {
             let mut put = |col: i32, c: u8| {
                 let px = if flip { fx + f.w - 1 - col } else { fx + col };
                 if px >= 0 && px < dw {
-                    let d = &mut dst[line + px as usize];
+                    let i = line + px as usize;
+                    let cloak = match blend {
+                        // 0x4b000 = the 640x480 screen buffer; reads past our buffer keep the pixel.
+                        Blend::Cloak(t) => {
+                            let o = t[c as usize] as usize;
+                            let j = if flip { i.checked_sub(o) } else { Some(i + o) };
+                            j.and_then(|j| dst.get(j).copied()).unwrap_or(dst[i])
+                        }
+                        _ => 0,
+                    };
+                    let d = &mut dst[i];
                     *d = match blend {
                         Blend::Normal => c,
                         Blend::Player(pc) if (8..16).contains(&c) => pc[c as usize - 8],
@@ -128,6 +154,15 @@ impl Grp {
                         Blend::Remap(t) => t[*d as usize],
                         Blend::Colors(t) => t[c as usize],
                         Blend::Table(t) => t.get((c as usize).wrapping_sub(1) * 256 + *d as usize).copied().unwrap_or(c),
+                        Blend::Cloak(_) => cloak,
+                        Blend::CloakFade(t, lvl, pc) => {
+                            let m = if (8..16).contains(&c) { pc[c as usize - 8] } else { c };
+                            if lvl < t[m as usize] as i8 { m } else { *d }
+                        }
+                        Blend::CloakTrans(t, pc) => {
+                            let m = if (8..16).contains(&c) { pc[c as usize - 8] } else { c };
+                            t.get((m as usize).wrapping_sub(1) * 256 + *d as usize).copied().unwrap_or(c)
+                        }
                         Blend::Texture(t, tw, th, pc) => {
                             let (r, k) = (py - fy, col);
                             match if k < tw && r < th { t[(r * tw + k) as usize] } else { 0 } {

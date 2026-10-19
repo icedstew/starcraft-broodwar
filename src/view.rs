@@ -144,6 +144,11 @@ pub struct Scene<'a> {
     pub ts: Tileset,
     pub terrain: (usize, usize, Vec<u8>),
     pub player_colors: [[u8; 8]; 12],
+    /// The tunit.pcx row of each player (after COLR).
+    colors: [u8; 8],
+    /// Test hook SCBW_END_AT=<frame>[d]: at that frame the local player gets the victory
+    /// (defeat with `d`) cheat flag 0x6d5a6c & 0x80 (0x40), settled by 0x48a200.
+    end_at: Option<(u32, u32)>,
     pub minimap: bw::minimap::Minimap,
     local: u8,
     shadow: [u8; 256],
@@ -242,7 +247,22 @@ impl<'a> Scene<'a> {
             minimap.refresh(d, &mut st)
         });
         let creep_grp = a.files.read(&format!("tileset/{}.grp", map::TILESETS[chk.tileset()])).ok().map(crate::grp::Grp::parse);
-        Ok(Scene { st, creep_grp, minimap, voices: crate::voices::Voices::new(), portrait: Default::default(), talk_left: 0, talk_unit: None, trans_left: None, sent_selection: Vec::new(), card_menu: None, placing: None, card_held: None, targeting: None, error: 0, msgs: Default::default(), chat: Default::default(), clock_ms: 0, gamma: 100, pause_tick: 0, pause_replay_saved: false, place_ok: false, place_tile: (0, 0), place_err: 0, drag_box: None, a, chk, ts, terrain, player_colors, local, shadow, dark, fog: crate::fog::Fog::new(), tselect, thpbar, remaps })
+        Ok(Scene { st, creep_grp, minimap, voices: crate::voices::Voices::new(), portrait: Default::default(), talk_left: 0, talk_unit: None, trans_left: None, sent_selection: Vec::new(), card_menu: None, placing: None, card_held: None, targeting: None, error: 0, msgs: Default::default(), chat: Default::default(), clock_ms: 0, gamma: 100, pause_tick: 0, pause_replay_saved: false, place_ok: false, place_tile: (0, 0), place_err: 0, drag_box: None, a, chk, ts, terrain, player_colors, colors: std::array::from_fn(|p| colr.get(p).copied().unwrap_or(p as u8)), end_at: std::env::var("SCBW_END_AT").ok().and_then(|v| Some((v.trim_end_matches('d').parse().ok()?, if v.ends_with('d') { 0x40 } else { 0x80 }))), local, shadow, dark, fog: crate::fog::Fog::new(), tselect, thpbar, remaps })
+    }
+
+    /// The finished game for the score screen (the glue's 0x4de200 state 6 / 7).
+    pub fn game_end(&self) -> GameEnd {
+        let st = &self.st;
+        GameEnd {
+            players: st.players.clone(),
+            results: st.player_left,
+            types: st.player_types,
+            races: st.player_races,
+            names: st.player_names.clone(),
+            colors: self.colors,
+            local: st.local_player,
+            frames: st.frame,
+        }
     }
 
     /// Send the local selection to the simulation (0x4c0860) and return the local
@@ -417,6 +437,9 @@ impl<'a> Scene<'a> {
         with_data(self.a, |d| {
             // 0x4d9670: the frame counter advances before each step.
             st.frame += 1;
+            if let Some((_, flag)) = self.end_at.filter(|&(f, _)| f == st.frame) {
+                st.game_options |= flag;
+            }
             st.game_step(d);
             // 0x4d9670: then the triggers, with the RNG on, given the frame time of the
             // game speed (0x5124d8).
@@ -639,7 +662,8 @@ impl<'a> Scene<'a> {
             })
             .collect();
         let total = order.len();
-        for (k, s) in order.into_iter().enumerate() {
+        let lum = crate::grp::luminance(&self.ts.palette);
+                for (k, s) in order.into_iter().enumerate() {
             if k == fogged {
                 self.fog.shade(&self.st, &self.dark, vx, vy, out, vw as usize, vh as usize);
             }
@@ -675,13 +699,22 @@ impl<'a> Scene<'a> {
                         None => Blend::Normal,
                     },
                     10 => Blend::Remap(&self.shadow),
+                    // 0x5125a0 table: cloaking draw functions (2..4 distort, 5..7 translucent).
+                    2..=4 => Blend::Cloak(&lum),
+                    5..=7 => Blend::CloakTrans(&self.remaps[4], &self.player_colors[(sp.owner as usize).min(11)]),
                     9 => match self.a.dat().images.remapping[img.image_id as usize] {
                         r @ 1..=7 => Blend::Table(&self.remaps[r as usize - 1]),
                         _ => Blend::Normal,
                     },
                     _ => Blend::Player(&self.player_colors[(sp.owner as usize).min(11)]),
                 };
-                g.draw(img.frame as usize, img.flags & bw::sprite::iflag::FLIPPED != 0, x, y, out, vw, vh, blend);
+                let flip = img.flags & bw::sprite::iflag::FLIPPED != 0;
+                g.draw(img.frame as usize, flip, x, y, out, vw, vh, blend);
+                if matches!(img.modifier, 2 | 4 | 5 | 7) {
+                    // 0x4d55b0 / 0x4d5530: the fade pass, level = the image's +0x30 byte.
+                    let pc = &self.player_colors[(sp.owner as usize).min(11)];
+                    g.draw(img.frame as usize, flip, x, y, out, vw, vh, Blend::CloakFade(&lum, img.coloring as u8 as i8, pc));
+                }
             }
             // Health bar (0x4d6420 / 0x4d6010), above the sprite's images.
             if let Some(&(_, u)) = circled.get(&s) {
@@ -1163,6 +1196,24 @@ impl<'a> Scene<'a> {
 
 /// What 0x4e0710 hands the game: the glue's game setup (the slot table 0x57eee0 after the
 /// races are dealt and the players placed, the template 0x596865, the colors 0x57f21c).
+/// What a finished game leaves for the glue's score screen (0x4b4af0 / 0x4b4a30 read the
+/// game's globals after it): the score counters 0x581dfc.. (`Players`), each player's
+/// result 0x58d700 (`player_left`: 1 dropped, 2 left / defeated, 3 victory, 5 draw), the
+/// slot table as it ended (types, races, names), the colors, the local player and the
+/// frame count 0x57f23c.
+#[derive(Clone)]
+pub struct GameEnd {
+    pub players: bw::players::Players,
+    pub results: [u8; 12],
+    pub types: [u8; 12],
+    pub races: [u8; 12],
+    pub names: [String; 12],
+    /// tunit.pcx row per player (after COLR).
+    pub colors: [u8; 8],
+    pub local: u8,
+    pub frames: u32,
+}
+
 pub struct GameSetup {
     /// staredit\\scenario.chk of the map.
     pub chk: Vec<u8>,
@@ -1280,7 +1331,7 @@ fn new_game(a: &Assets, chk: &Chk, rep: Option<&crate::replay::Header>, gs: Opti
         // process's first game: 0x51a3b4 starts at -1). Games here are never campaign
         // missions (0x57f244 = 0).
         st.crt_seed = st.rng.seed;
-        st.crt_rand();
+        crate::audio::next_music_variant(|| st.crt_rand());
         // 0x4eee00 loads the scenario right after 0x4ef100 seeds the RNG, with it on.
         // Handler order (table 0x5001e8): MTXM, THG2 (its unit doodads draw from the
         // RNG too), UNIT.
@@ -2074,10 +2125,17 @@ pub fn run(a: &mut Assets, chk: Chk) -> io::Result<()> {
 }
 
 /// Play the game the glue menus set up (0x4e0710).
-pub fn run_setup(a: &mut Assets, mut g: GameSetup) -> io::Result<()> {
+/// Runs the game; `Some` when it ended in victory / defeat (0x51ce90 = 6 / 7: the glue
+/// shows the score screen), `None` when the mission was quit (4) or the window closed.
+pub fn run_setup(a: &mut Assets, mut g: GameSetup) -> io::Result<Option<GameEnd>> {
     prepare_setup(a, &mut g);
     let a: &Assets = a;
-    run_with(a, Scene::from_setup(a, &g)?, None)
+    let end = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let mut frame = frame_loop_end(a, Scene::from_setup(a, &g)?, None, end.clone())?;
+    while frame()? {}
+    drop(frame);
+    let e = end.borrow_mut().take();
+    Ok(e)
 }
 
 /// Watch a replay; the camera follows a player (Tab: next player, F: follow on/off).
@@ -2103,7 +2161,13 @@ fn run_with(a: &Assets, scene: Scene, replay: Option<ReplayPlay>) -> io::Result<
 
 /// The game window's loop body: one call per displayed frame, Ok(false) once the window
 /// closes or the player quits. The browser build calls it from requestAnimationFrame.
-pub fn frame_loop<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Option<ReplayPlay>) -> io::Result<impl FnMut() -> io::Result<bool> + 'a> {
+pub fn frame_loop<'a>(a: &'a Assets, scene: Scene<'a>, replay: Option<ReplayPlay>) -> io::Result<impl FnMut() -> io::Result<bool> + 'a> {
+    frame_loop_end(a, scene, replay, Default::default())
+}
+
+/// `frame_loop` that leaves the finished game in `end` when a victory / defeat dialog's OK
+/// ended it (0x460f30 / 0x460fa0).
+pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Option<ReplayPlay>, end: std::rc::Rc<std::cell::RefCell<Option<GameEnd>>>) -> io::Result<impl FnMut() -> io::Result<bool> + 'a> {
     use minifb::{Key, Scale, Window, WindowOptions};
     let mut following = replay.is_some();
     let mut replay_acc = 0u32;
@@ -2115,7 +2179,7 @@ pub fn frame_loop<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Option<Re
     let mut audio = crate::audio::Audio::open(&a.files);
     if let Some(au) = audio.as_mut() {
         au.fade_out(); // 0x4ef100 -> 0x4a5f50: the front-end music ends as the game starts
-        au.play_music(&a.files, &format!("music/{race}1.wav"));
+        au.start_track(&a.files, crate::audio::game_start_track(scene.local_race())); // 0x4d9960 -> 0x4a6310
     }
     let (vw, vh) = (SCREEN_W, SCREEN_H);
     let opts = WindowOptions { scale: Scale::X2, ..WindowOptions::default() };
@@ -2246,10 +2310,22 @@ pub fn frame_loop<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Option<Re
             };
             if let Some(id) = act.filter(|_| !tips_step) {
                 let m = menu.take().unwrap();
+                // 0x460f30 / 0x460fa0: any button of the end dialog sets 0x68517c; closing it
+                // clears 0x685178 (event 1).
+                if matches!(m.kind, crate::menu::Kind::Defeat | crate::menu::Kind::Victory) {
+                    scene.st.trig.end_done = true;
+                    scene.st.trig.end_open = false;
+                }
                 let (next, action) = m.on_activate(id, &mut settings, ctx);
                 menu = next.and_then(|(k, depth)| open_menu(&scene, k, depth, &mut settings));
                 match action {
                     crate::menu::Action::QuitMission | crate::menu::Action::ExitProgram => return Ok(false),
+                    // 0x4e0710: the game's result 0x51ce90 (7 after the defeat dialog, else 6)
+                    // is the glue's next state; 0x4de200 then opens the score screen.
+                    crate::menu::Action::EndGame => {
+                        *end.borrow_mut() = Some(scene.game_end());
+                        return Ok(false);
+                    }
                     // ponytail: restarting rebuilds nothing yet; the menu just closes.
                     _ => {}
                 }
@@ -2640,6 +2716,19 @@ pub fn frame_loop<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Option<Re
             }
             sounds.extend(scene.step());
         }
+        // 0x4615b0 / 0x461640: the victory / defeat dialog. 0x48e310 / 0x48ca10 end placement
+        // and targeting; 0x4f57a0 opens it and pauses (0x488790).
+        let end_kind = std::mem::take(&mut scene.st.trig.end_request);
+        if end_kind != 0 {
+            scene.set_placing(None);
+            scene.end_targeting();
+            let kind = if end_kind == 2 { crate::menu::Kind::Defeat } else { crate::menu::Kind::Victory };
+            menu = open_menu(&scene, kind, 0, &mut settings);
+            menu_paused = menu.is_some();
+            if menu_paused {
+                scene.pause_game();
+            }
+        }
         for (id, x, y) in sounds {
             if let Some(au) = &audio {
                 if let Some((v, pan)) = position_sound(&scene, a.dat(), settings.digital, id, x, y, vx, vy) {
@@ -2687,6 +2776,9 @@ pub fn frame_loop<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Option<Re
         if let Some((x, y)) = scene.st.center_view.take() {
             (vx, vy) = (x, y);
             scene.st.trigger_wait_end();
+        }
+        if let Some(au) = audio.as_mut() {
+            au.music_check(&a.files); // 0x4d1d05 -> 0x4a6250
         }
         if let Some(u) = ui.as_ref() {
             scene.portrait_tick(u, audio.as_ref(), 42, settings.portraits);

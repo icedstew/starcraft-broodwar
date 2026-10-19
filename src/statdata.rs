@@ -254,6 +254,58 @@ fn upgrade_panel(st: &State, d: &Data, strings: &[String], u: u32) -> Vec<(i16, 
     ]
 }
 
+/// 0x47b5a0: the name of unit `u`: of the morph it is becoming while incomplete (queue
+/// head 0x85, 0x84, 0x89, 0x90, 0x92), else of its type.
+fn unit_morph_name(st: &State, d: &Data, strings: &[String], u: u32) -> String {
+    let un = &st.units[u as usize];
+    let q = un.build_queue[un.build_queue_slot as usize % 5];
+    let t = if un.status & 1 == 0 && matches!(q, 0x85 | 0x84 | 0x89 | 0x90 | 0x92) { q } else { un.unit_type };
+    unit_name(d, strings, t)
+}
+
+/// 0x457ce0: the tooltip of status panel control `id` (shown as `show` in `panel`), as
+/// 0x457b10 (queue slots 2..6 and the egg's unit 17: stat_txt race + 0x322 with the unit's
+/// name), 0x4575a0 (the research / upgrade icon 15: "%s\n(%s)"), 0x457c20 (passengers
+/// 18..32: stat_txt 0x328 with their name) and the multiple selection's wireframes
+/// (33..44: stat_txt 0x329). The info buttons 9..12 are 0x4576a0 (`Show::Info::tip`).
+/// None hides the tooltip (0x481480); outside replays only (0x6d0f14 is the replay flag,
+/// which allows just the info buttons).
+pub fn tooltip(st: &State, d: &Data, strings: &[String], panel: Panel, id: i16, show: &Show) -> Option<String> {
+    let su = *st.selected.first()?;
+    if st.replay {
+        return None;
+    }
+    let fmt = |f: String, name: &str| f.replacen("%s", name, 1);
+    match id {
+        2..=6 | 17 => {
+            let t = match show {
+                Show::Slot { cmdicon: true, icon, .. } | Show::Button { icon, .. } => *icon,
+                _ => return None,
+            };
+            let un = &st.units[su as usize];
+            if matches!(un.unit_type, 0x24 | 0x3b | 0x61) && disabled(st, su) {
+                return None;
+            }
+            Some(fmt(stat(strings, race_index(d, un.unit_type) + 0x322), &unit_name(d, strings, t)))
+        }
+        15 => {
+            let un = &st.units[su as usize];
+            let (cancel, label) = match panel {
+                Panel::Research => (0x326, d.dat.techdata.label[un.u8_at(0xc8) as usize]),
+                Panel::Upgrade => (0x325, d.dat.upgrades.label[un.u8_at(0xc9) as usize]),
+                _ => return None,
+            };
+            Some(format!("{}\n({})", stat(strings, cancel), stat(strings, label)))
+        }
+        0x12..=0x20 => {
+            let Show::Cargo { unit, .. } = show else { return None };
+            Some(fmt(stat(strings, 0x328), &unit_morph_name(st, d, strings, *unit)))
+        }
+        0x21..=0x2c => Some(stat(strings, 0x329)),
+        _ => None,
+    }
+}
+
 /// 0x4573a0: clicking a panel button: queue slot `id - 2` is cancelled (command 0x20);
 /// the research / upgrade icon cancels it (0x423330 / 0x4232f0: commands 0x31 / 0x33).
 pub fn click(panel: Panel, id: i16) -> Option<Vec<u8>> {
