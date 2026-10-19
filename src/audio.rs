@@ -257,12 +257,25 @@ impl Audio {
         Some(src.total_duration()?.as_millis() as u32)
     }
 
+    /// The linear gain of the digital volume's table attenuation.
+    fn digital_gain(&self) -> f32 {
+        let atten = self.table[(self.volumes.1 as i32 * 99 / 100).clamp(0, 99) as usize];
+        if atten <= -10000 { 0.0 } else { 10f32.powf(atten as f32 / 2000.0) }
+    }
+
+    /// A player at the digital volume for a cinematic's sound (Storm's SVid plays it through
+    /// DirectSound); the caller appends the decoded chunks and drops it to stop.
+    pub fn video_player(&self) -> rodio::Player {
+        let player = rodio::Player::connect_new(self.sink.mixer());
+        player.set_volume(self.digital_gain());
+        player
+    }
+
     /// 0x4bc490: plays a whole wav file (a trigger's, from the map archive) at the digital
     /// volume's table attenuation, `table[digital * 99 / 100]`; no slot or priority.
     pub fn play_file(&self, data: Vec<u8>) {
         let Ok(src) = rodio::Decoder::new(Cursor::new(Arc::<[u8]>::from(data))) else { return };
-        let atten = self.table[(self.volumes.1 as i32 * 99 / 100).clamp(0, 99) as usize];
-        let g = if atten <= -10000 { 0.0 } else { 10f32.powf(atten as f32 / 2000.0) };
+        let g = self.digital_gain();
         let player = rodio::Player::connect_new(self.sink.mixer());
         player.append(src.amplify(g));
         player.detach();

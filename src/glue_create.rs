@@ -1646,32 +1646,63 @@ impl Glue {
             return false;
         }
         if t[8] == 0 && t[0xc] == 0 && t[0x12] == 0 {
-            todo_port!("0x4a9c90", "Use Map Settings: shuffle the players within their forces");
-            return false;
+            return self.place_forces();
         }
         if t[0xd] != 0 {
             self.setup.index_human_slots();
             return false;
         }
+        self.shuffle_players([true; 8]);
+        // 0x49b360 gets [ebp-0x18], still 0 on this path.
+        false
+    }
+
+    /// 0x4a9c90: Use Map Settings: per force (1..4) with its flag set, the slots of the force
+    /// that are human / computer / open (2, 1, 6, 5) go to the list of the "user selectable
+    /// race" slots or to the other; both lists are shuffled (0x4a95d0), the first first.
+    /// True when any slot was in such a force.
+    fn place_forces(&mut self) -> bool {
+        let mut any = false;
+        for force in 1..=4u8 {
+            if self.setup.force_flags[force as usize - 1] & 1 == 0 {
+                continue;
+            }
+            let (mut sel, mut other) = ([false; 8], [false; 8]);
+            for j in (0..8).rev() {
+                if self.setup.slots[j][slot::FORCE] == force && matches!(self.setup.lobby[j][slot::TYPE], 2 | 1 | 6 | 5) {
+                    any = true;
+                    if self.setup.user_selectable[j] != 0 { sel[j] = true } else { other[j] = true }
+                }
+            }
+            self.shuffle_players(sel);
+            self.shuffle_players(other);
+        }
+        any
+    }
+
+    /// 0x4a95d0 (`list` = eax, a non-null list; 0x4a9d80 has the same code inline for the
+    /// all-1 list): the occupied slots (2, 1, 3, 4, 7) in `list` are taken out, the list's
+    /// slots restored from the lobby copy, and each taken slot (last first) put on a random
+    /// free start slot (6, 5, 3, 4, 7) of the list; slots left not occupied become open.
+    fn shuffle_players(&mut self, list: [bool; 8]) {
         let occupied = |ty: u8| matches!(ty, 2 | 1 | 3 | 4 | 7);
-        let list: Vec<_> = self.setup.slots[..8].iter().filter(|s| occupied(s[slot::TYPE])).copied().collect();
-        for i in 0..8 {
+        let taken: Vec<_> = (0..8).filter(|&i| list[i] && occupied(self.setup.slots[i][slot::TYPE])).map(|i| self.setup.slots[i]).collect();
+        for i in (0..8).filter(|&i| list[i]) {
             self.setup.slots[i] = self.setup.lobby[i];
         }
-        for entry in list.iter().rev() {
-            let cand: Vec<usize> = (0..8).filter(|&i| matches!(self.setup.slots[i][slot::TYPE], 6 | 5 | 3 | 4 | 7)).collect();
+        for entry in taken.iter().rev() {
+            let cand: Vec<usize> = (0..8).filter(|&i| list[i] && matches!(self.setup.slots[i][slot::TYPE], 6 | 5 | 3 | 4 | 7)).collect();
             let r = self.create_lcg_if_on();
             let pick = cand.get(((r * cand.len() as u32) >> 15) as usize).copied().unwrap_or(0);
             self.setup.slots[pick] = *entry;
             self.setup.slots[pick][slot::INDEX..slot::INDEX + 4].copy_from_slice(&(pick as u32).to_le_bytes());
         }
-        for s in self.setup.slots[..12].iter_mut().rev() {
+        for s in self.setup.slots[..8].iter_mut() {
             if !occupied(s[slot::TYPE]) {
                 s[slot::TYPE] = 0;
             }
         }
         self.setup.index_human_slots();
-        true
     }
 
     /// The next random number of 0x51ca14 with 0x6d11c8 on, else 0.

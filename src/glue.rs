@@ -23,6 +23,8 @@ mod score;
 mod credits;
 #[path = "glue_ready.rs"]
 mod ready;
+#[path = "glue_cine.rs"]
+mod cine;
 
 /// What the glue asks the sound system for (the window loop plays them: `Audio` is not
 /// the glue's).
@@ -129,8 +131,8 @@ pub mod screen {
 pub enum Top {
     /// Keep running the glue (a dialog is open).
     Glue,
-    /// 0x4d4470: play the intro cinematics.
-    Intro,
+    /// 0x4d4470: play these cinematics (numbers into 0x512690), then go on.
+    Cine(Vec<u8>),
     /// 0x4e0710: run the game set up by the glue.
     Game,
     /// 0x4d8fd0 / 0x4d90c0.
@@ -381,8 +383,9 @@ impl Glue {
         match self.state {
             state::INTRO => {
                 // 0x4d4470 twice (the expansion's intro when gluexpcmpgn.bin exists), then 4.
+                // (The first-start flags 0x6cdfec & 0x200 / 0x800 play them before the loop.)
                 self.state = state::GLUE;
-                Top::Intro
+                Top::Cine(vec![0, if self.expansion_installed { 0x18 } else { 1 }])
             }
             state::GAME => Top::Game,
             state::GLUE | 6 | 7 => {
@@ -406,12 +409,12 @@ impl Glue {
             state::AFTER_GAME => {
                 // 0x4e0820 case 10: 0x4f7ae0 plays the cinematic of 0x5122b8 (ESI), which is
                 // then reset to its default 0x1c (unconditionally, as natively).
-                todo_port!("0x4f7ae0", "play the scenario cinematic 0x5122b8");
+                let list = self.cine_after_game();
                 self.scenario = 0x1c;
                 if self.state == state::AFTER_GAME {
                     self.campaign_next(files, true);
                 }
-                Top::Glue
+                Top::Cine(list)
             }
             _ => Top::Quit,
         }
@@ -2513,11 +2516,26 @@ pub fn run(files: &Storage, shot: Option<&str>) -> std::io::Result<()> {
     let mut audio = if shot.is_none() { crate::audio::Audio::open(files) } else { None };
     let dat = crate::dat::Dat::load(files).ok();
     let mut last = std::time::Instant::now();
+    // SCBW_CINE=<number>: plays that cinematic first (screenshot mode: its frame
+    // SCBW_CINE_FRAME to the PNG).
+    if let Some(i) = std::env::var("SCBW_CINE").ok().and_then(|s| s.parse::<u32>().ok()) {
+        cine::play(files, i, win.as_mut(), audio.as_ref(), shot)?;
+        if win.is_none() {
+            return Ok(());
+        }
+    }
     loop {
         match glue.top_step(files) {
             Top::Glue => {}
             Top::Quit => return Ok(()),
-            Top::Intro | Top::Credits => todo_port!("0x4d4470", "cinematics / credits"),
+            Top::Cine(list) => {
+                // (Screenshot mode plays none.)
+                let shotmode = win.is_none();
+                for i in list.into_iter().filter(|_| !shotmode) {
+                    cine::play(files, i as u32, win.as_mut(), audio.as_ref(), shot)?;
+                }
+            }
+            Top::Credits => todo_port!("0x4d8fd0", "credits"),
             Top::Game => {
                 // 0x4e0710: the game; the score screen / next state after it (0x4d9950's
                 // result in 0x596904) are not ported.

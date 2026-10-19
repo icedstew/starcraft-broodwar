@@ -1,5 +1,6 @@
 //! Smacker video (SMK2 / SMK4), as Storm's SVid plays the unit portraits
-//! (portrait\*.smk). Video only: audio chunks are skipped.
+//! (portrait\*.smk) and the cinematics (smk\*.smk). Audio track 0 is decoded when
+//! `want_audio` is set, other tracks are skipped.
 
 /// Bits read least significant first.
 struct Bits<'a> {
@@ -176,6 +177,12 @@ pub struct Smk {
     pub palette: [[u8; 3]; 256],
     next: usize,
     offset: usize,
+    /// Track 0's rate word (bits 0..24 Hz; 0x80000000 packed, 0x40000000 present,
+    /// 0x20000000 16 bit, 0x10000000 stereo).
+    pub audio_rate: u32,
+    /// Decode track 0 into `audio` (interleaved 16-bit samples) with each frame.
+    pub want_audio: bool,
+    pub audio: Vec<i16>,
 }
 
 /// The 6-bit palette component scale (smacker's palmap).
@@ -216,7 +223,7 @@ impl Smk {
         let ty = Tree16::read(&mut b);
         let start = o + trees;
         let hh = if flags & 6 != 0 { h * 2 } else { h };
-        Some(Smk { w, h: hh, frames, ms, v4, flags, sizes, types, start, mmap, mclr, full, ty, pixels: vec![0; w * hh], palette: [[0; 3]; 256], next: 0, offset: start, data })
+        Some(Smk { w, h: hh, frames, ms, v4, flags, sizes, types, start, mmap, mclr, full, ty, pixels: vec![0; w * hh], palette: [[0; 3]; 256], next: 0, offset: start, audio_rate: u32_at(0x48).unwrap_or(0), want_audio: false, audio: Vec::new(), data })
     }
 
     /// Decodes the next frame; false after the last.
@@ -234,6 +241,10 @@ impl Smk {
         for track in 0..7 {
             if self.types[i] & (2 << track) != 0 {
                 let n = self.data.get(p..p + 4).map_or(0, |b| u32::from_le_bytes(b.try_into().unwrap())) as usize;
+                if track == 0 && self.want_audio && self.audio_rate & 0x40000000 != 0 {
+                    let d = self.data[p.min(end)..(p + n).min(end)].to_vec();
+                    self.audio_chunk(&d);
+                }
                 p += n.max(4);
             }
         }
@@ -250,6 +261,56 @@ impl Smk {
     pub fn rewind(&mut self) {
         self.next = 0;
         self.offset = self.start;
+    }
+
+    /// One frame's chunk of track 0 (`d` includes its size word): Smacker's packed audio is
+    /// per channel byte trees of the differences between samples.
+    fn audio_chunk(&mut self, d: &[u8]) {
+        let f = self.audio_rate;
+        if f & 0x80000000 == 0 {
+            // Unpacked: raw little-endian 16-bit (or 8-bit) samples.
+            let raw = d.get(4..).unwrap_or(&[]);
+            if f & 0x20000000 != 0 {
+                self.audio.extend(raw.chunks_exact(2).map(|c| i16::from_le_bytes([c[0], c[1]])));
+            } else {
+                self.audio.extend(raw.iter().map(|&v| (v as i16 - 128) << 8));
+            }
+            return;
+        }
+        let Some(head) = d.get(..8) else { return };
+        let unp = u32::from_le_bytes(head[4..8].try_into().unwrap()) as usize;
+        let mut b = Bits { d: &d[8..], pos: 0 };
+        if b.bit() == 0 {
+            return;
+        }
+        let (st, wide) = (b.bit() as usize, b.bit() as usize);
+        let trees: Vec<Tree8> = (0..1 << (wide + st)).map(|_| Tree8::read(&mut b)).collect();
+        let ch = 1 + st;
+        let mut pred = [0i32; 2];
+        if wide != 0 {
+            for c in (0..ch).rev() {
+                let hi = b.bits(8);
+                pred[c] = (hi << 8 | b.bits(8)) as u16 as i16 as i32;
+            }
+            self.audio.extend(pred[..ch].iter().map(|&v| v as i16));
+            for i in ch..unp / 2 {
+                let c = i & st;
+                let lo = trees[2 * c].get(&mut b);
+                let hi = trees[2 * c + 1].get(&mut b);
+                pred[c] += (lo | hi << 8) as u16 as i16 as i32;
+                self.audio.push(pred[c].clamp(-32768, 32767) as i16);
+            }
+        } else {
+            for c in (0..ch).rev() {
+                pred[c] = b.bits(8) as i32;
+            }
+            self.audio.extend(pred[..ch].iter().map(|&v| ((v as i16) - 128) << 8));
+            for i in ch..unp {
+                let c = i & st;
+                pred[c] += trees[c].get(&mut b) as u8 as i8 as i32;
+                self.audio.push((pred[c].clamp(0, 255) as i16 - 128) << 8);
+            }
+        }
     }
 
     fn palette_chunk(&mut self, p: usize) -> usize {
