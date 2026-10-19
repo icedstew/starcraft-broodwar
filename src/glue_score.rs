@@ -510,8 +510,8 @@ impl Glue {
                 c.flags |= 0x20;
             }
         }
-        if self.g6d5a60 != 0 || self.setup.map_dir_flag != 0 || self.spawn {
-            todo_port!("0x4b4960", "0x6d5a68 (a replay game) also disables Save Replay");
+        // 0x4b4960 (init): also 0x6d5a68, a game started from a saved game.
+        if self.g6d5a60 != 0 || self.g6d5a68 || self.setup.map_dir_flag != 0 || self.spawn {
             if let Some(c) = dlg.get_mut(ids::SAVE_REPLAY) {
                 c.flags |= flag::DISABLED;
             }
@@ -610,6 +610,8 @@ impl Glue {
             frames: 24 * 60 * 14 + 24 * 31,
             objectives: [0; 8],
             next_scenario: Vec::new(),
+            camp_cont: false,
+            from_save: false,
         };
         let p = &mut g.players;
         p.units_produced[0] = 61;

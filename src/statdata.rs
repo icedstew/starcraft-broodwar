@@ -335,7 +335,7 @@ pub fn unit_panel(st: &State, d: &Data, strings: &[String], u: u32) -> Vec<(i16,
             out.push((9 + *slot, Show::Info { icon, level, tip }));
             *slot += 1;
         };
-        // 0x4576a0: "<name>\n<Damage:|Armor:> base[+bonus]".
+        // 0x4576a0: "<name>\n<Damage:|Armor:> base[+bonus]" (the Lurker's weapon 0x67 appends stat_txt 0x515).
         let line = |name: String, what: u16, base: u32, bonus: u32| {
             if bonus == 0 { format!("{name}\n{} {base}", stat(strings, what)) } else { format!("{name}\n{} {base}+{bonus}", stat(strings, what)) }
         };
@@ -345,13 +345,14 @@ pub fn unit_panel(st: &State, d: &Data, strings: &[String], u: u32) -> Vec<(i16,
             0x3a => 1,
             _ => d.dat.weapons.damage_factor[w as usize] as u32,
         };
-        let weapon_tip = |w: u8, lvl: u8| {
+        let weapon_line = |name: String, w: u8, lvl: u8| {
             let wi = w as usize;
-            let name = stat(strings, d.dat.weapons.label[wi]);
             let base = d.dat.weapons.damage[wi] as u32 * factor(w);
             let bonus = d.dat.weapons.damage_bonus[wi] as u32 * lvl as u32 * factor(w);
-            line(name, 0x309, base, bonus)
+            let s = line(name, 0x309, base, bonus);
+            if w == 0x67 { format!("{s} {}", stat(strings, 0x515)) } else { s }
         };
+        let weapon_tip = |w: u8, lvl: u8| weapon_line(stat(strings, d.dat.weapons.label[w as usize]), w, lvl);
         let armor_up = d.dat.units.armor_upgrade[shown as usize];
         if armor_up != 0x3c {
             // 0x425600
@@ -383,14 +384,15 @@ pub fn unit_panel(st: &State, d: &Data, strings: &[String], u: u32) -> Vec<(i16,
         if aw != 0x82 && aw != gw_cmp {
             push(&mut slot, d.dat.weapons.icon[aw as usize], weapon_level(aw), weapon_tip(aw, weapon_level(aw)));
         }
+        // 0x4576a0 case 3: the icon is the weapon id; the name is the stat_txt string.
         match t {
-            0x48 | 0x52 => push(&mut slot, 0x49, un.u8_at(0xc9).wrapping_add(un.u8_at(0xc8)), stat(strings, 0x317)),
-            0x53 | 0x51 => push(&mut slot, 0x55, un.u8_at(0xc8), stat(strings, 0x318)),
+            0x48 | 0x52 => push(&mut slot, 0x49, un.u8_at(0xc9).wrapping_add(un.u8_at(0xc8)), weapon_line(stat(strings, 0x317), 0x49, weapon_level(0x49))),
+            0x53 | 0x51 => push(&mut slot, 0x55, un.u8_at(0xc8), weapon_line(stat(strings, 0x318), 0x55, weapon_level(0x55))),
             _ => {}
         }
         if (t == 2 || t == 0x13) && st.can_use_tech(d, u, 3, un.player) == Ok(1) {
             // 0x426300: spider mines
-            push(&mut slot, 0xd, un.u8_at(0xc0), stat(strings, 0x31a));
+            push(&mut slot, 0xd, un.u8_at(0xc0), weapon_line(stat(strings, 0x31a), 0xd, weapon_level(0xd)));
         }
         if shown == 0x6c {
             // 0x425310: a nuke in the silo

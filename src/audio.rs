@@ -85,6 +85,8 @@ fn game_track(i: u32) -> Option<(&'static str, u32)> {
         7 => ("music/protoss1.wav", 8),
         8 => ("music/protoss2.wav", 9),
         9 => ("music/protoss3.wav", 7),
+        // Radio Free Zerg (cheat 0x4a62b0), then zerg1.
+        0x18 => ("music/RadioFreeZerg.wav", 1),
         _ => return None,
     })
 }
@@ -380,6 +382,11 @@ impl Audio {
         player.set_volume(self.volumes.0 as f32 / 50.0);
         player.append(src);
         self.music = Some(player);
+    }
+
+    /// 0x6d5bb0: the track playing.
+    pub fn music_track(&self) -> u32 {
+        self.music_track
     }
 
     /// 0x4a6250 (run once a second by 0x4d1c90 via 0x4d1d05): when the playing type 2

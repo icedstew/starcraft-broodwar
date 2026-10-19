@@ -189,6 +189,8 @@ pub struct State {
     pub active_fog_thingies: List,
     /// 0x652918: placeholder sprite 0x13e made by 0x488550.
     pub marker_thingy: Option<u32>,
+    /// 0x596a2a: Alt is held (set by the front end).
+    pub key_alt: bool,
     /// 0x652920: the right-click marker is shown (drawn by 0x488180 though hidden).
     pub marker_shown: bool,
     /// 0x5993d4 / 0x5994d8: the map's CHK file (written to saved games; set by whoever loads the map).
@@ -272,6 +274,11 @@ pub struct State {
     pub template: [u8; 0x20],
     /// 0x57f0b4: a network game (set by the glue's main menu only).
     pub multiplayer: bool,
+    /// 0x57f1e3: a campaign map continues into the next (the glue's 0x51ca1c).
+    pub camp_cont: u8,
+    /// 0x57f240: the real-time seconds of the game when it was saved (0x4d02d0); loaded, they
+    /// start the timer 0x6d5bcc again (0x4ef100).
+    pub game_secs: u32,
     /// 0x57f1c0: the race of each seat, `team_size` seats per force in force order (team games).
     pub seat_races: [u8; 8],
     /// 0x57f1cb: the player that holds each force's start (index = force 1..4, 0xff = none).
@@ -474,6 +481,7 @@ impl State {
             free_fog_thingies,
             active_fog_thingies: List::default(),
             marker_thingy: None,
+            key_alt: false,
             marker_shown: false,
             chk: Vec::new(),
             units,
@@ -517,6 +525,8 @@ impl State {
             forward_offsets: Vec::new(),
             template: [0; 0x20],
             multiplayer: false,
+            camp_cont: 0,
+            game_secs: 0,
             seat_races: [0; 8],
             team_leaders: [0xff; 5],
             player_left: [0; 12],

@@ -216,8 +216,12 @@ pub struct Glue {
     pub state: u8,
     /// 0x6d11bc.
     pub screen: u8,
-    /// 0x51bff8: 1 until the glue loop's first pass picked its start screen.
+    /// 0x51bff8: 1 until the glue loop's first pass picked its start screen; 0 at the
+    /// program start, 1 after the campaign jump cheat 0x4b1dc0.
     first: bool,
+    /// 0x51c410 / 0x51c608: the mission and race the first pass starts (the cheat's).
+    start_mission_no: u16,
+    start_race: u32,
     /// The game that just ended in victory / defeat (state 6 / 7), for the score screen.
     pub game_end: Option<crate::view::GameEnd>,
     /// 0x58d6c4: the mission objectives string per player (the briefing's action 0x427ec0
@@ -267,6 +271,8 @@ pub struct Glue {
     clock_ms: u32,
     /// 0x6d5a60: when set, 0x4b4af0 uses layout 1 (zerg victory) whatever the race.
     g6d5a60: u32,
+    /// 0x6d5a68: the game just played was started from a saved game (0x4ef100).
+    pub(crate) g6d5a68: bool,
     /// 0x6cddc4 / 0x6cddc8: the mouse.
     pub mouse: (i32, i32),
     /// 0x50e064: the palette currently shown (-1 none).
@@ -359,7 +365,9 @@ impl Glue {
         Glue {
             state: state::GLUE,
             screen: screen::MAIN,
-            first: true,
+            first: false,
+            start_mission_no: 0,
+            start_race: 0,
             game_end: None,
             objectives: [0; 8],
             multiplayer: false,
@@ -383,6 +391,7 @@ impl Glue {
             sound_tick: 0,
             clock_ms: 0,
             g6d5a60: 0,
+            g6d5a68: false,
             mouse: (320, 240),
             shown: -1,
             looks: (0..PALETTES.len()).map(|_| None).collect(),
@@ -505,12 +514,23 @@ impl Glue {
         self.expansion = self.direct_map;
         self.setup.expansion = self.expansion;
         // 0x57f1e3 = 0.
-        // 0x4db200 (campaign .bin present; it returns 1, so AX = 1) and 0x4dbfc0 (start the
-        // mission) pick ready room 8 / 7 / 9 by 0x51c608 and set 0x6d11c0; 0x596904 = 1 with
-        // 0x6d5a6c & 0x20000000.
-        if (!self.direct_map || self.expansion_installed) && self.campaign_bin_present(files) && self.start_mission(files, 1) {
-            todo_port!("0x4de200", "ready room by 0x51c608, 0x6d11c0 = 1, 0x596904 = 1 (0x6d5a6c & 0x20000000)");
-            return;
+        // 0x4db200 (campaign .bin present; it returns 1, so AX = 1) and 0x4dbfc0 (AX = 0x51c410:
+        // start the mission) pick ready room 8 / 7 / 9 by 0x51c608 and set 0x6d11c0 (read by
+        // the game start 0x4eed10; not kept here); 0x596904 = 1 with 0x6d5a6c & 0x20000000.
+        if (!self.direct_map || self.expansion_installed) && self.campaign_bin_present(files) && self.start_mission(files, self.start_mission_no) {
+            let room = match self.start_race {
+                0 => Some(screen::READY_Z),
+                1 => Some(screen::READY_T),
+                2 => Some(screen::READY_P),
+                _ => None,
+            };
+            if let Some(room) = room {
+                self.screen = room;
+                if self.g6d5a6c & 0x2000_0000 != 0 {
+                    self.state = state::START;
+                }
+                return;
+            }
         }
         // Their failure path.
         self.screen = screen::MAIN;
@@ -521,7 +541,7 @@ impl Glue {
     /// One pass of 0x4de200's `while (0x596904 == 4) switch (0x6d11bc)` (the glue loop),
     /// entering it first when it was not running.
     fn glue_step(&mut self, files: &Storage) {
-        if self.state != state::GLUE {
+        if self.state != state::GLUE || self.first {
             self.glue_enter(files);
             if self.state != state::GLUE {
                 return;
@@ -3039,6 +3059,13 @@ pub fn run(files: &Storage, shot: Option<&str>) -> std::io::Result<()> {
                 if let (Some(_), Ok(spec)) = (shot, std::env::var("SCBW_GLUE_GAME")) {
                     glue.game_end = crate::headless_game(&mut a, g, &spec)?;
                     glue.objectives = glue.game_end.as_ref().map_or(glue.objectives, |e| e.objectives);
+                    // 0x4dbc00 (a loaded game): 0x51ca1c = 0x57f1e3.
+                    if let (false, Some(e)) = (glue.multiplayer, glue.game_end.as_ref()) {
+                        glue.camp_cont = e.camp_cont;
+                    }
+                    if let Some(e) = glue.game_end.as_ref() {
+                        glue.g6d5a68 = e.from_save;
+                    }
                     // 0x57f246, read by the campaign flow (0x4dc1c0) as the next map.
                     if let Some(e) = glue.game_end.as_ref().filter(|e| !e.next_scenario.is_empty()) {
                         glue.setup.next_map = e.next_scenario.clone();
@@ -3057,6 +3084,13 @@ pub fn run(files: &Storage, shot: Option<&str>) -> std::io::Result<()> {
                 // mission (0x4c9280: the campaign screen 6, or 0x16 with Brood War 0x58f440).
                 glue.game_end = crate::view::run_setup(&mut a, g)?;
                 glue.objectives = glue.game_end.as_ref().map_or(glue.objectives, |e| e.objectives);
+                // 0x4dbc00 (a loaded game): 0x51ca1c = 0x57f1e3.
+                if let (false, Some(e)) = (glue.multiplayer, glue.game_end.as_ref()) {
+                    glue.camp_cont = e.camp_cont;
+                }
+                if let Some(e) = glue.game_end.as_ref() {
+                    glue.g6d5a68 = e.from_save;
+                }
                 // 0x57f246, read by the campaign flow (0x4dc1c0) as the next map.
                 if let Some(e) = glue.game_end.as_ref().filter(|e| !e.next_scenario.is_empty()) {
                     glue.setup.next_map = e.next_scenario.clone();
@@ -3067,6 +3101,17 @@ pub fn run(files: &Storage, shot: Option<&str>) -> std::io::Result<()> {
                         glue.state = state::GLUE;
                         glue.screen = 6 + if glue.expansion { 0x10 } else { 0 };
                     }
+                }
+                // 0x4b1dc0 (the jump cheat in the game): 0x51c410 / 0x51c608 / 0x51c4bc set, the
+                // game ended (0x51ce90 = 4) and the glue loop starts at the main menu with its
+                // first pass (0x51bff8 = 1), which starts the mission.
+                if let Some(j) = crate::chat::take_jump() {
+                    glue.start_mission_no = j.mission as u16;
+                    glue.start_race = j.race;
+                    glue.direct_map = j.expansion != 0;
+                    glue.first = true;
+                    glue.state = state::GLUE;
+                    glue.screen = screen::MAIN;
                 }
                 continue;
             }

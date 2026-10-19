@@ -143,10 +143,118 @@ impl State {
         if shift && !cur.is_empty() {
             let mut sel = cur.to_vec();
             self.select_merge(d, &mut sel, &picked, NIL);
-            return Some(sel);
+            // 0x46fa00 on the merged count.
+            return if sel.len() == 1 { self.alt_group_shortcut(d, sel[0]) } else { Some(sel) };
         }
-        // ponytail: 0x596a2a (alt?) + 0x496d30 one-unit shortcut not handled.
-        Some(picked)
+        // 0x46fa00 (count 1) and the marker tail.
+        let u = picked[0];
+        let n = picked.len();
+        let sel = if n == 1 { self.alt_group_shortcut(d, u) } else { Some(picked) };
+        if n == 1 {
+            self.rally_marker_if_own(d, u);
+        }
+        sel
+    }
+
+    /// 0x46fa00's shortcut (count 1 and 0x596a2a): the unit's best recent group, else the
+    /// unit itself.
+    fn alt_group_shortcut(&mut self, d: &Data, u: u32) -> Option<Vec<u32>> {
+        if self.key_alt {
+            let h = self.unit_handle(u);
+            if let Some(g) = self.recent_group_of(h) {
+                let sel = self.select_recent_group(d, g);
+                return if sel.is_empty() { None } else { Some(sel) };
+            }
+        }
+        Some(vec![u])
+    }
+
+    /// 0x46fa40 / 0x46fb40 tail: a selected rally-capable unit of the local player
+    /// refreshes its order target marker (0x468670).
+    fn rally_marker_if_own(&mut self, d: &Data, u: u32) {
+        if self.units[u as usize].player == self.local_player && super::command::has_rally(self.units[u as usize].unit_type) {
+            self.rally_marker(d, u);
+        }
+    }
+
+    /// 0x468670: show where unit `u`'s rally point is: a fog sprite there flashes its
+    /// selection circle, else the right-click marker moves there.
+    pub fn rally_marker(&mut self, d: &Data, u: u32) {
+        let un = &self.units[u as usize];
+        let (rx, ry) = un.rally_pos;
+        if (rx != 0 || ry != 0) && (rx != un.fl.pos.0 || ry != un.fl.pos.1) {
+            match self.fog_thingy_at(d, rx as i32, ry as i32) {
+                Some(t) => {
+                    let s = self.fog_thingies[t as usize].sprite;
+                    self.sprites[s as usize].selection_timer = 0x1f;
+                }
+                None => self.show_marker(d, rx, ry),
+            }
+        }
+    }
+
+    /// 0x487a10: the fogged copy whose placement box (centered on its sprite) holds
+    /// map point (x, y), skipping the unit types of 0x46ed80.
+    fn fog_thingy_at(&self, d: &Data, x: i32, y: i32) -> Option<u32> {
+        let mut t = self.active_fog_thingies.head;
+        while t != NIL {
+            let th = &self.fog_thingies[t as usize];
+            let ty = th.hp as u16;
+            if !never_picked(ty) {
+                let sp = &self.sprites[th.sprite as usize];
+                let b = d.dat.units.placement_box.get(ty as usize).copied().unwrap_or(0);
+                let (w, h) = ((b & 0xffff) as i16 as i32, (b >> 16) as i16 as i32);
+                if ((w / 2 + sp.x as i32 - x) as u32) < sp.width as u32 && ((h / 2 + sp.y as i32 - y) as u32) < sp.height as u32 {
+                    return Some(t);
+                }
+            }
+            t = th.link.next;
+        }
+        None
+    }
+
+    /// 0x496d30 (search part): the best of the recent groups 10..=17 holding unit handle
+    /// `h`, the one used last (ties: the first found, highest group first), as g - 10.
+    /// The rank read at -1 is the previous player's group 7 (flat 0x63fe40 table).
+    pub fn recent_group_of(&self, h: u32) -> Option<u8> {
+        let p = self.local_player as usize;
+        let rank = |g: i32| {
+            let i = p as i32 * 8 + g;
+            if i < 0 { 0 } else { self.recent_used[i as usize / 8][i as usize % 8] }
+        };
+        let mut best = -1i32;
+        for g in (0..8).rev() {
+            let row = self.hotkeys.get(p * 18 + 10 + g as usize)?;
+            if row.iter().any(|&e| e != 0 && e == h) && rank(best) < rank(g) {
+                best = g;
+            }
+        }
+        (best >= 0).then_some(best as u8)
+    }
+
+    /// 0x496b40 (selection part): the live units of recent group `g` (0..8) that the local
+    /// player may select; a lone rally-capable unit refreshes its marker. Native then
+    /// sets the selection and sends it (0x49ae40, 0x4c07b0).
+    pub fn select_recent_group(&mut self, d: &Data, g: u8) -> Vec<u32> {
+        let row = self.hotkeys[self.local_player as usize * 18 + 10 + g as usize];
+        let n = row.iter().position(|&h| h == 0).unwrap_or(12);
+        let mut sel = Vec::new();
+        let mut last = None;
+        for &h in &row[..n] {
+            last = self.unit_from_handle(h).filter(|&u| {
+                let un = &self.units[u as usize];
+                self.sprites[un.sprite as usize].flags & super::sprite::sflag::HIDDEN == 0
+                    && un.player == self.local_player
+                    && (self.multi_selectable(d, u) || n <= 1)
+            });
+            if let Some(u) = last {
+                sel.push(u);
+            }
+        }
+        if let (1, Some(u)) = (sel.len(), last) {
+            self.rally_marker_if_own(d, u);
+        }
+        sel
     }
 }
 
@@ -344,7 +452,9 @@ impl State {
         }
         let dbl = double && cur.contains(&u);
         if !(ctrl || dbl || shift && !cur.is_empty()) {
-            return Some(vec![u]);
+            let sel = self.alt_group_shortcut(d, u);
+            self.rally_marker_if_own(d, u);
+            return sel;
         }
         if ctrl || dbl {
             let start = self.units_in_finder_box_now(screen);

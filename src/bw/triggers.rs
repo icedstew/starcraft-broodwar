@@ -1038,7 +1038,7 @@ impl State {
             && (t != 0x2a || self.players.upgrade_sc[p][0x18] != 0)
             && d.dat.units.space_provided[t] != 0
         {
-            // 0x45f870
+            // 0x45f870: count each loaded unit
             for i in 0..8 {
                 if let Some(c) = self.unit_from_handle(self.units[u as usize].loaded_units[i] as u32) {
                     self.count_completed_unit(d, c);
@@ -1046,7 +1046,7 @@ impl State {
             }
         }
         if super::unit::has_hangar(t as u16) {
-            // 0x45fe80: interceptors / scarabs in the hangar.
+            // 0x45fe80 (types 0x48 / 0x52 / 0x53 / 0x51): interceptors / scarabs in the hangar.
             let n = self.units[u as usize].u8_at(0xc8) as i32;
             let h = if matches!(t, 0x48 | 0x52) { 0x49 } else { 0x55 };
             self.trig.snap.completed[h][p] += n;
@@ -1582,10 +1582,10 @@ impl State {
                 }
                 false
             }
-            _ => {
-                todo_port!("0x512800", "trigger action");
-                true
-            }
+            // The table has 0x3c entries (ids 0..=0x3b) and 0x489130 indexes it with the raw
+            // byte, unchecked; later slots hold data (call 1 / call 0), so a map with such an
+            // id crashes the original. ponytail: skipped as a no-op instead.
+            _ => true,
         }
     }
 
@@ -2271,14 +2271,58 @@ impl State {
     /// Apply `f` to each player of an action's player group (13 = current, 0..7 itself).
     fn for_group(&mut self, group: u32, mut f: impl FnMut(&mut State, u32)) {
         let p = if group == 13 { self.trig.player } else { group };
-        match self.group_players(p) {
-            Some(ps) => {
-                for q in ps {
-                    f(self, q);
+        if !matches!(p, 14..=26) {
+            return f(self, p);
+        }
+        self.sum_group(p, u32::MAX, true, &mut |st, q| {
+            f(st, q);
+            0
+        });
+    }
+
+    /// 0x45fc40 / 0x45fca0 / 0x45fd00 / 0x45fd60 / 0x45fdd0 / 0x45fbe0 (`early` false) and
+    /// 0x45f9a0 / 0x45fa10 / 0x45fa80 / 0x45faf0 / 0x45f930 / 0x45fb60 (`early` true, `count`
+    /// = EBX / the stack count): the sum of `f(player)` over the players of group 14 (foes,
+    /// 0x45fd60 / 0x45faf0), 15 (allied victory, 0x45fd00 / 0x45fa80), 16 (allies,
+    /// 0x45fca0 / 0x45fa10), 17 (all: 0x484ff0 players, then 8..11, 0x45fc40 / 0x45f9a0),
+    /// 18..21 (force, 0x45fbe0 / 0x45f930) or 26 (not allied victory, 0x45fdd0 / 0x45fb60).
+    /// Players come from 0x484ff0 lazily; the early variants stop once the sum == `count`.
+    /// Groups 22..25 have no iterator (callers return 0).
+    fn sum_group(&mut self, group: u32, count: u32, early: bool, f: &mut dyn FnMut(&mut State, u32) -> u32) -> u32 {
+        let mut sum = 0u32;
+        let mut it = u32::MAX;
+        loop {
+            let p = self.next_trigger_player(&mut it);
+            if p >= 8 {
+                break;
+            }
+            let cur = self.trig.player;
+            let al = |a: u32, b: u32| self.alliances[a as usize][b as usize];
+            let hit = match group {
+                14 => p != cur && al(cur, p) == 0,
+                15 => p != cur && al(cur, p) == 2,
+                16 => p != cur && al(cur, p) == 1,
+                17 => true,
+                18..=21 => self.player_force[p as usize] as u32 == group - 17,
+                26 => p != cur && !(al(p, cur) == 2 && al(cur, p) == 2),
+                _ => return 0,
+            };
+            if hit {
+                sum = sum.wrapping_add(f(self, p));
+                if early && sum == count {
+                    return sum;
                 }
             }
-            None => f(self, p),
         }
+        if group == 17 {
+            for p in 8..12 {
+                sum = sum.wrapping_add(f(self, p));
+                if early && sum == count {
+                    break;
+                }
+            }
+        }
+        sum
     }
 
     /// 0x4c6830.. (resources), 0x4c6400.. (score), 0x4c5dd0.. (deaths): set (7), add (8)

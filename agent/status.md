@@ -55,9 +55,11 @@ Delegate per agents.md: Haiku triage, Sonnet porting, Opus review / hard RE / co
   Left: networking (Storm turns, net status, slot lookup, 0x4d3910 network create), registry
   recent maps, StarEdit; crashes / heap corruption in 1.16.1 itself (0x4cb190 player >= 8,
   0x4f2a59, 0x46b6d8, AI wrong-pool kinds 0x434c90 / 0x404500 / 0x435700 / 0x435770 /
-  0x45d890: documented at each site); in-game error dialog 0x4e4a10 (dlgFatal.bin, modal);
-  0x488790 paused timer, 0x4dbc00, 0x461e50, 0x6d5a68, 0x4db280 spawn, 0x512800 action
-  bounds, chat campaign cheats; replay start from the create list runs `view::run_replay`
+  0x45d890, trigger action ids >= 0x3c: documented at each site); in-game error dialog
+  0x4e4a10 (dlgFatal.bin, modal: needs a menu.rs Kind); 0x4db280 spawn label. Done
+  2026-10-19: 0x488790 timer in Scene, 0x4dbc00 `GameEnd.camp_cont`, 0x6d5a68 (= started
+  from a save) `from_save`, chat cheats 0x4a62b0 radio / 0x4b1dc0 mission jump (not played
+  end to end), 0x461e50 (not needed: event-driven menu); replay start from the create list runs `view::run_replay`
   (screen after it a guess: 0x4d9950 result); live replay header fields 0x4dea10 / 0x4de950
   are zeros. Untested by ear / eye: music fade-in, wheel direction, Delete button graphic.
 - Campaign (user 2026-10-18: "play through the campaign"): works end to end headless
@@ -181,6 +183,15 @@ Delegate per agents.md: Haiku triage, Sonnet porting, Opus review / hard RE / co
 
 ## Always
 
+- Frontier porting (user 2026-10-19 "port more functions"): `--missing rest` (1279 left);
+  triage in batches of ~24 top entries, port the real gaps. Done: trigger group loops
+  0x45f930..0x45fdd0 (`sum_group`; EBX = count, resolved in areas/sim.md), info button
+  tooltips 0x4576a0 (armor tip reads the wire type, native +0x64: differs for incomplete
+  morphs), selection 0x496d30 / 0x46fa00 (Alt one-unit shortcut) / 0x468670 rally marker.
+  Triaged as equivalent or not needed: 0x4017b0, 0x436a40/80, 0x4688e0, 0x4a3a00,
+  0x4a8b90, 0x4dcb00, 0x42b8a0, 0x42d460, 0x4452f0, 0x447e20 (pre-v3 saves), 0x488900.
+  Next from triage: 0x4be060 notice, 0x4ef6d0, 0x4f31d0, 0x4dcc00, 0x4e1a70, 0x498c50,
+  0x432610, 0x4b5e80, 0x4d1460, 0x457250 / 0x457310 (status control list).
 - Never run two suites at once: agent/tools/suite.sh / cmp.sh share output files in $W
   (concurrent runs gave false diffs 2026-10-19).
 - Background runs (suite, repcmp, native captures) with a copied binary

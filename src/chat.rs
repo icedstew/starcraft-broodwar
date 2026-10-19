@@ -3,7 +3,6 @@
 //! StarCraft.exe at runtime; none of them are stored here.
 
 use crate::dlg::{Ctl, Dialog};
-use crate::todo_port;
 
 /// File offset of a .rdata address (section VA 0x4fe000, raw 0xfe000).
 fn rdata(va: usize) -> usize {
@@ -73,10 +72,98 @@ fn hash(text: &[u8], k: &[u16; 52]) -> [u32; 2] {
     st
 }
 
+/// 0x51c410 / 0x51c608 / 0x51c4bc: the campaign mission the jump cheat 0x4b1dc0 chose
+/// (mission number, race, expansion); the glue's first pass 0x4de200 starts it.
+pub struct Jump {
+    pub mission: u32,
+    pub race: u32,
+    pub expansion: u32,
+}
+
+static JUMP: std::sync::Mutex<Option<Jump>> = std::sync::Mutex::new(None);
+
+/// The jump 0x4b1dc0 set (0x51bff8 = 1), taken by the glue after the game ended.
+pub fn take_jump() -> Option<Jump> {
+    JUMP.lock().unwrap().take()
+}
+
+/// What 0x4b23e0 did besides toggling `options`.
+#[derive(Default)]
+pub struct Act {
+    /// 0x500b70 (radio free zerg) matched: 0x4b2350 runs 0x4a62b0 when 0x596904 == 3,
+    /// 0x6d11e4 (Brood War installed) and 0x57f1e2 == 0 (the local race is zerg).
+    pub radio: bool,
+    /// 0x4b1dc0 chose a mission (`take_jump`): the game ends (0x51ce90 = 4).
+    pub jump: bool,
+}
+
+/// 0x4dbc60 (ECX = `rest`, the text after the race name; stack: `race`, `off`, `exp`):
+/// the mission number named by "<number><letter>" in the campaign tables 0x5122a0
+/// (`exp` 0) / 0x5122ac, read from the install's `exe`: the `number - off`th record
+/// without a scenario (+4) and byte +7, then the letter's records further on.
+fn campaign_mission(exe: &[u8], rest: &[u8], race: usize, off: u32, exp: u32) -> Option<u32> {
+    // .rdata / .data are mapped at file offset = VA - 0x400000.
+    let u8_at = |va: u32| exe.get(va as usize - 0x40_0000).copied().unwrap_or(0);
+    let u16_at = |va: u32| u16::from_le_bytes([u8_at(va), u8_at(va + 1)]);
+    let u32_at = |va: u32| u16_at(va) as u32 | (u16_at(va + 2) as u32) << 16;
+    // _strtoul(rest, &end, 10)
+    let mut i = rest.iter().take_while(|c| c.is_ascii_whitespace()).count();
+    let neg = rest.get(i) == Some(&b'-');
+    if matches!(rest.get(i), Some(b'-' | b'+')) {
+        i += 1;
+    }
+    let digits = rest[i..].iter().take_while(|c| c.is_ascii_digit()).count();
+    let (n, end) = if digits == 0 {
+        (0u32, 0)
+    } else {
+        let n = rest[i..i + digits].iter().fold(0u32, |n, &c| n.wrapping_mul(10).wrapping_add((c - b'0') as u32));
+        (if neg { n.wrapping_neg() } else { n }, i + digits)
+    };
+    if (n.wrapping_sub(off) as i32) < 0 {
+        return None;
+    }
+    let mut r = u32_at(if exp == 0 { 0x5122a0 } else { 0x5122ac } + 4 * race as u32);
+    let mut left = n.wrapping_sub(off) as i32;
+    let mut s = u16_at(r + 2);
+    loop {
+        if s == 0 {
+            return None;
+        }
+        let mut next = left;
+        if u16_at(r + 4) == 0 && u8_at(r + 7) == 0 {
+            next = left - 1;
+            if left == 0 {
+                break;
+            }
+        }
+        s = u16_at(r + 10);
+        left = next;
+        r += 8;
+    }
+    let letter = rest.get(end).copied().unwrap_or(0);
+    if letter != 0 {
+        let mut k = letter.to_ascii_lowercase() as i32 - 0x61;
+        while k != 0 {
+            k -= 1;
+            if u16_at(r + 2) == 0 {
+                return None;
+            }
+            r += 8;
+            if u8_at(r + 7) == 0 {
+                return None;
+            }
+        }
+    }
+    if u16_at(r + 2) == 0 {
+        return None;
+    }
+    Some(u16_at(r + 2) as u32)
+}
+
 /// 0x4b23e0: the single player cheat check on `text`; `options` is 0x6d5a6c, `in_game`
 /// is 0x596904 == 3, `cheats_on` is 0x596876 == 1 (template +0x11). True when a cheat
-/// matched (the game then shows nothing).
-pub fn cheat(text: &[u8], options: &mut u32, in_game: bool, cheats_on: bool) -> bool {
+/// matched (the game then shows nothing). `act`: what the caller must do (`Act`).
+pub fn cheat(text: &[u8], options: &mut u32, in_game: bool, cheats_on: bool, act: &mut Act) -> bool {
     // 0x40c7b0 / 0x40c7bd: MSVC rand seeded 0x75 gives the four key dwords.
     let mut seed = 0x75u32;
     let mut key = [0u16; 8];
@@ -114,10 +201,31 @@ pub fn cheat(text: &[u8], options: &mut u32, in_game: bool, cheats_on: bool) -> 
         return true;
     }
     if pair(0x500b70) == Some(h) {
-        todo_port!("0x4a62b0", "cheat: expansion campaign jump when 0x596904 == 3 && 0x6d11e4 && !0x57f1e2");
+        act.radio = true;
         return true;
     }
-    todo_port!("0x4b1dc0", "cheat: campaign mission jump (0x200)");
+    // 0x4b1dc0 (single player, option 0x200): "terran12b" and the like, by the 6 records of
+    // 0x503580 (name, race, number offset, expansion), compared with the start of the text.
+    if *options & 0x200 == 0 {
+        return false;
+    }
+    let u32_at = |va: usize| exe.get(rdata(va)..rdata(va) + 4).map(|b| u32::from_le_bytes(b.try_into().unwrap()));
+    for k in 0..6 {
+        let rec = 0x503580 + k * 16;
+        let (Some(name), Some(race), Some(off), Some(exp)) = (u32_at(rec), u32_at(rec + 4), u32_at(rec + 8), u32_at(rec + 12)) else { return false };
+        let name = &exe[rdata(name as usize)..];
+        let name = &name[..name.iter().position(|&c| c == 0).unwrap_or(0)];
+        if !text.get(..name.len()).is_some_and(|t| t.eq_ignore_ascii_case(name)) {
+            continue;
+        }
+        let rest = &text[name.len()..];
+        let rest = &rest[..rest.iter().position(|&c| c == 0).unwrap_or(rest.len())];
+        if let Some(mission) = campaign_mission(&exe, rest, race as usize, off, exp).filter(|&m| m != 0x3f) {
+            *JUMP.lock().unwrap() = Some(Jump { mission, race, expansion: exp });
+            act.jump = in_game;
+        }
+        return true;
+    }
     false
 }
 
@@ -229,5 +337,21 @@ impl Chat {
         }
         let er = (left, oy + edit.rect.1 + dy, ox + edit.rect.2, oy + edit.rect.3 + dy);
         skin.ctl_text(edit, &line, er, 0, 0, 0x11, &mut s);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// 0x4dbc60 on the install's tables: "terran1", "zerg2b", "xprotoss3", bad numbers.
+    #[test]
+    fn campaign_jump_lookup() {
+        let Ok(exe) = std::fs::read(crate::install_dir().join("StarCraft.exe")) else { return };
+        let m = |rest: &str, race, off, exp| super::campaign_mission(&exe, rest.as_bytes(), race, off, exp);
+        assert!(m("1", 1, 0, 0).is_some());
+        assert!(m("99", 1, 0, 0).is_none());
+        assert!(m("1", 0, 1, 0).is_some());
+        assert!(m("1", 2, 1, 1).is_some());
+        assert!(m("1a", 1, 0, 0) == m("1", 1, 0, 0));
+        eprintln!("{:?} {:?} {:?}", m("1", 1, 0, 0), m("2", 1, 0, 0), m("1b", 1, 0, 0));
     }
 }

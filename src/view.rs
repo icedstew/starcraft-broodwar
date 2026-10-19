@@ -124,6 +124,13 @@ pub struct Scene<'a> {
     /// The message lines, timed by `clock_ms` (GetTickCount in the game).
     pub msgs: crate::msgs::Messages,
     pub clock_ms: u32,
+    /// 0x6d5bc8 / 0x6d5bcc / 0x59cc7c: the real-time game timer (`clock_ms` for
+    /// GetTickCount): running, the seconds so far (less the paused ones), the start.
+    timer_running: bool,
+    timer_base: u32,
+    timer_start: u32,
+    /// 0x6d121c (-> 0x6d5a68): the game was started from a saved game.
+    pub from_save: bool,
     /// The options' gamma (0x656190, 60..=140; 100 leaves the palette as it is).
     pub gamma: i16,
     /// 0x6509c8: `clock_ms` when the game was paused; 0x6d5be8: the replay's pause flag
@@ -276,12 +283,20 @@ impl<'a> Scene<'a> {
         }
         let mut st = new_game(a, &chk, rep, gs, save.map(|s| s.2))?;
         st.chk = chk.raw.clone();
+        // 0x4dbea0 / 0x4a8590: 0x57f1e3 = the glue's campaign-continues flag.
+        if let Some(g) = gs {
+            st.camp_cont = g.camp_cont as u8;
+        }
         if let Some((f, _, _, _)) = save {
             if !load_save(a, &mut st, f) {
                 return Err(io::Error::other("bad saved game"));
             }
         }
         let local = st.local_player;
+        // 0x4ef100: a game that is not multiplayer starts the timer (0x4a2bf0); its seconds
+        // start from the saved game's 0x57f240 when one is loaded.
+        let timer_running = !st.multiplayer;
+        let timer_base = st.game_secs;
         let mut minimap = load_minimap(&a.files, &chk)?;
         // 0x581dd6: each player's minimap color is the tminimap.pcx entry of its color.
         let tm = pcx(&a.files.read("game/tminimap.pcx")?).2;
@@ -302,7 +317,11 @@ impl<'a> Scene<'a> {
             minimap.refresh(d, &mut st)
         });
         let creep_grp = a.files.read(&format!("tileset/{}.grp", map::TILESETS[chk.tileset()])).ok().map(crate::grp::Grp::parse);
-        Ok(Scene { st, creep_grp, minimap, voices: crate::voices::Voices::new(), portrait: Default::default(), talk_left: 0, talk_unit: None, trans_left: None, sent_selection: Vec::new(), card_menu: None, placing: None, card_held: None, targeting: None, error: 0, msgs: Default::default(), chat: Default::default(), clock_ms: 0, gamma: 100, pause_tick: 0, pause_replay_saved: false, place_ok: false, place_tile: (0, 0), place_err: 0, drag_box: None, a, chk, ts, terrain, player_colors, colors: std::array::from_fn(|p| colr.get(p).copied().unwrap_or(p as u8)), end_at: std::env::var("SCBW_END_AT").ok().and_then(|v| Some((v.trim_end_matches('d').parse().ok()?, if v.ends_with('d') { 0x40 } else { 0x80 }))), local, shadow, dark, fog: crate::fog::Fog::new(), tselect, thpbar, remaps })
+        let mut scene = Scene { st, creep_grp, minimap, voices: crate::voices::Voices::new(), portrait: Default::default(), talk_left: 0, talk_unit: None, trans_left: None, sent_selection: Vec::new(), card_menu: None, placing: None, card_held: None, targeting: None, error: 0, msgs: Default::default(), chat: Default::default(), clock_ms: 0, timer_running: false, timer_base: 0, timer_start: 0, from_save: false, gamma: 100, pause_tick: 0, pause_replay_saved: false, place_ok: false, place_tile: (0, 0), place_err: 0, drag_box: None, a, chk, ts, terrain, player_colors, colors: std::array::from_fn(|p| colr.get(p).copied().unwrap_or(p as u8)), end_at: std::env::var("SCBW_END_AT").ok().and_then(|v| Some((v.trim_end_matches('d').parse().ok()?, if v.ends_with('d') { 0x40 } else { 0x80 }))), local, shadow, dark, fog: crate::fog::Fog::new(), tselect, thpbar, remaps };
+        scene.timer_running = timer_running;
+        scene.timer_base = timer_base;
+        scene.from_save = save.is_some();
+        Ok(scene)
     }
 
     /// 0x4d02d0 after the header: the player table and game data (`save_head`), then the
@@ -327,6 +346,8 @@ impl<'a> Scene<'a> {
     /// 0x4d02d0: the whole saved game `name`: the text (0x4ce950), the header (0x4cf160),
     /// then `save_state`'s parts. None when the game would not save.
     pub fn save_file(&mut self, name: &[u8], multi: bool) -> Option<Vec<u8>> {
+        // 0x4d02d0: 0x57f240 = (now - 0x59cc7c) / 1000 + 0x6d5bcc, before the game data.
+        self.st.game_secs = self.clock_ms.wrapping_sub(self.timer_start) / 1000 + self.timer_base;
         let table = self.st.player_table();
         let slots: Vec<[u8; 0x24]> = table.chunks_exact(0x24).map(|c| c.try_into().unwrap()).collect();
         // not kept: the map's title (0x596845) and path (0x57fd3c), the game type name
@@ -371,6 +392,8 @@ impl<'a> Scene<'a> {
             frames: st.frame,
             objectives: st.trig.objectives,
             next_scenario: st.next_scenario.clone(),
+            camp_cont: st.camp_cont != 0,
+            from_save: self.from_save,
         }
     }
 
@@ -454,8 +477,8 @@ impl<'a> Scene<'a> {
         if !self.st.trig.paused {
             return;
         }
-        if adjust {
-            todo_port!("0x488790", "subtract the paused seconds from the real-time game timer 0x6d5bcc (0x57f240)");
+        if adjust && self.timer_running {
+            self.timer_base = self.timer_base.wrapping_sub(self.clock_ms.wrapping_sub(self.pause_tick) / 1000);
         }
         self.st.trig.paused = false;
         // 0x4deb90 (replay panel refresh when 0x6d5be8 == 0) is drawn every frame here.
@@ -1325,6 +1348,10 @@ pub struct GameEnd {
     pub objectives: [u32; 8],
     /// 0x57f246 at the end: the next scenario a trigger named (0x4c50e0), empty for none.
     pub next_scenario: Vec<u8>,
+    /// 0x57f1e3 at the end (0x51ca1c in the glue: 0x4dbc00 reads it from a loaded game).
+    pub camp_cont: bool,
+    /// 0x6d5a68 (= 0x6d121c, set by 0x4ef100): the game started from a saved game.
+    pub from_save: bool,
 }
 
 pub struct GameSetup {
@@ -1348,6 +1375,8 @@ pub struct GameSetup {
     /// 0x596904 went 4 -> 1): the file bytes. `Scene::from_save` starts the game from it;
     /// `chk`, `mpq` and the player fields are empty then (the save holds the map and players).
     pub save: Option<Vec<u8>>,
+    /// 0x51ca1c: a campaign map continues (the game's 0x57f1e3).
+    pub camp_cont: bool,
 }
 
 /// Engine state for a new game on `chk` (map load, players, melee starting units), or
@@ -2656,6 +2685,7 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
         }
         let ctrl = win.is_key_down(Key::LeftCtrl) || win.is_key_down(Key::RightCtrl);
         let alt = win.is_key_down(Key::LeftAlt) || win.is_key_down(Key::RightAlt);
+        scene.st.key_alt = alt;
         let mut want_menu = None;
         // Chat line: Enter opens it (0x4f32d0), then the edit control (0x416980) takes the
         // keys; Enter submits and Esc cancels (0x4f36fa).
@@ -2683,11 +2713,27 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
                             // sends command 0x12 with the new options.
                             let mut opt = scene.st.game_options;
                             let on = scene.st.template[0x11] == 1;
-                            if replay.is_none() && crate::chat::cheat(&t, &mut opt, true, on) && opt != scene.st.game_options {
+                            let mut act = crate::chat::Act::default();
+                            if replay.is_none() && crate::chat::cheat(&t, &mut opt, true, on, &mut act) && opt != scene.st.game_options {
                                 let me = scene.local;
                                 let mut p = vec![0x12];
                                 p.extend_from_slice(&opt.to_le_bytes());
                                 with_data(a, |d| scene.st.execute_command(d, me, &[], &p));
+                            }
+                            // 0x4b2350 -> 0x4a62b0 (0x596904 == 3, 0x6d11e4 Brood War installed, 0x57f1e2 zerg):
+                            // Radio Free Zerg on / off, with network.tbl line 0x41 / 0x42 (0x48ccb0: 7 s).
+                            if act.radio && scene.local_race() == 0 && a.files.read("rez/gluexpcmpgn.bin").is_ok() {
+                                if let (Some(u), Some(au)) = (ui.as_ref(), audio.as_mut()) {
+                                    let on = au.music_track() == 0x18;
+                                    let text = u.network.get(if on { 0x41 } else { 0x40 }).map_or("", |s| s.split('\0').next().unwrap_or(""));
+                                    scene.msgs.error(text.as_bytes(), scene.clock_ms);
+                                    au.start_track(&a.files, if on { 1 } else { 0x18 });
+                                }
+                            }
+                            // 0x4b1dc0 in a game: 0x6d11ec = 0, 0x51ce90 = 4 (the game ends; the glue's
+                            // first pass starts the mission, `chat::take_jump`).
+                            if act.jump {
+                                return Ok(false);
                             }
                         }
                     }

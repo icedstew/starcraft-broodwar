@@ -1133,7 +1133,11 @@ impl Menu {
                     return (None, Action::Closed);
                 }
                 Self::clear_choice();
-                crate::todo_port!("0x461e50", "load from the title menu (0x596904 == 4): wait for the dialog to close");
+                // 0x461e50 (when 0x596904 == 4, i.e. a save was chosen): pump messages and
+                // redraw (0x41ca00, 0x4d1bf0(3)) until the open-dialog count (0x6d5eb4)
+                // drops below its entry value. This menu is event-driven: the pump runs in
+                // the front end's loop, and the load action is only taken once the dialog
+                // has closed, so there is nothing to wait for here.
                 (Some((Kind::LoadGame, self.depth)), Action::None)
             }
             (Kind::Game, 5) => (Some((Kind::Objectives, self.depth)), Action::None),

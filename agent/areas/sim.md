@@ -21,12 +21,11 @@ is in flight lives in ../status.md.
   8 restart, 0x10/0x11 pause, 0x12 cheats, 0x37 sync, 0x39 squelch, 0x55/0x56,
   0x58 minimap ping, 0x5c chat.
 - Trigger kill / remove for player groups (0x4c8570 via 0x45f9a0 / 0x45fa10 / 0x45fa80 /
-  0x45faf0): the loop returns early when its running sum (always 0: 0x4c8570 returns 0)
-  equals EBX, which nothing sets on the way down (0x4d9670 -> 0x48a460 -> 0x48a490 ->
-  0x489450 -> 0x489130 -> action 0x4c8870). If EBX is 0 at runtime, only the group's
-  first player is hit. Unverified: needs a native breakpoint at 0x45f9a0. 0x45fb60 (group
-  26) compares with the count instead, which is never 0 (0 = 999999 at 0x4c888e).
-  `for_group` (triggers.rs) applies to all players.
+  0x45faf0 / 0x45f930): resolved 2026-10-19 from the disassembly: 0x4c8570 loads EBX with
+  its count argument ([ebp+0xc]) before each call (Ghidra shows it as unaff_EBX), and the
+  loops also pass EBX to the callback. The callback 0x4c8570 returns 0 and the count is
+  never 0 (0 -> 999999 at 0x4c888e), so the early exit never fires: every player of the
+  group is hit, as `for_group` (triggers.rs) does.
 
 ## Replays vs the real game (not the emulator)
 

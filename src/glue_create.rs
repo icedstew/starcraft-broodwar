@@ -2014,6 +2014,7 @@ impl Glue {
                 seed: 0,
                 objectives: self.objectives,
                 save: Some(save),
+                camp_cont: false,
             });
         }
         self.race_picks_apply();
@@ -2043,6 +2044,7 @@ impl Glue {
             seed,
             objectives: self.objectives,
             save: None,
+            camp_cont: self.camp_cont,
         })
     }
 }

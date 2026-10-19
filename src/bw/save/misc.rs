@@ -3,7 +3,6 @@
 use super::{In, Out};
 use crate::bw::list::NIL;
 use crate::bw::{Data, State};
-use crate::todo_port;
 
 /// The bytes of a dat column (`w` bytes per entry, the first `n` entries).
 fn col<T: Copy + Into<u64>>(v: &[T], n: usize, w: usize) -> Vec<u8> {
@@ -235,8 +234,9 @@ impl State {
         }
         self.unit_count = self.max_units - free;
         self.psi_restore(d);
-        // 0x4dbc00: 0x51ca1c (a campaign map continues) = 0x57f1e3 when not multiplayer.
-        todo_port!("0x4dbc00", "load: campaign-continues flag (glue state)");
+        // 0x4dbc00: 0x51ca1c (a campaign map continues) = 0x57f1e3 when not multiplayer. The
+        // glue's flag is `GameEnd.camp_cont`, which reads `camp_cont` (loaded with the game
+        // data) when the game ends.
         // 0x49c440 (0x658ac0, a scroll in progress, is 0): the screen position in 8-pixel
         // steps and tiles, within the map (0x628488, 0x6284b0). The parallax scroll (0x49bfd0)
         // is not kept (UI).

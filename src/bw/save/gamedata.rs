@@ -96,7 +96,9 @@ impl State {
         io.one(0x57f1dc, &mut self.tileset.clone());
         io.put(0x57f1ec, &mut self.player_vision);
         io.put(0x57f21c, &mut self.color_slot);
+        io.one(0x57f1e3, &mut self.camp_cont);
         io.one(0x57f23c, &mut self.frame);
+        io.one(0x57f240, &mut self.game_secs);
         // 0x57f27c units each player may build.
         io.rows(0x57f27c, 228, &mut pl.unit_available);
         // 0x57fe60 unit groups of the 8 players (the 4 extra Rust players have no room).
