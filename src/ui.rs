@@ -477,6 +477,10 @@ pub struct Ui {
     /// game\[tzpn]conover.pcx: the frame drawn over the portrait (0x45f0b0, 0x45e650).
     pub conover: Option<Pcx>,
     pub portraits: Option<crate::portrait::Portraits>,
+    /// The console fluff dialogs (0x4f4dc0): console pieces redrawn as dialogs of their own.
+    /// Not drawn yet: the reader is the dialog list's draw of them (their order against the
+    /// other dialogs, update 0x4f4d60, is unported).
+    pub fluff: Vec<Fluff>,
     /// rez\statres.bin: the resource bar (0x4e5a80).
     pub statres: crate::dlg::Dialog,
     /// rez\statlb.bin: the trigger leaderboard (0x4bed70, `crate::leaderboard`).
@@ -486,6 +490,43 @@ pub struct Ui {
     pub res_shown: std::cell::Cell<(i32, i32, u8)>,
     /// rez\minimap.bin: the minimap and its buttons (0x4a5a80).
     pub minimap: crate::dlg::Dialog,
+}
+
+/// One rez\statfluf.bin dialog (0x4f4dc0): rect (x, y, w, h) and the console pixels there
+/// (0x4c35f0 copies them from the console bitmap 0x597240 into the dialog's own buffer).
+pub struct Fluff {
+    pub rect: (i32, i32, i32, i32),
+    pub bg: Vec<u8>,
+}
+
+/// 0x5153e8: the fluff rects (x, y, w, h) per race (zerg, terran, protoss, replay), 0xffff-terminated
+/// in the exe.
+const FLUFF: [&[(i32, i32, i32, i32)]; 4] = [
+    &[(0, 289, 29, 26), (29, 306, 86, 9), (138, 315, 28, 73), (166, 345, 278, 43), (444, 354, 52, 34), (466, 312, 174, 42)],
+    &[(0, 293, 23, 22), (138, 315, 28, 52), (138, 367, 358, 21), (444, 354, 52, 13), (466, 325, 174, 29)],
+    &[(0, 302, 148, 13), (138, 315, 47, 39), (138, 354, 358, 34), (453, 330, 187, 24)],
+    &[(0, 293, 23, 22), (23, 312, 115, 4), (138, 315, 122, 52), (138, 367, 358, 22), (260, 352, 236, 15), (466, 325, 174, 29)],
+];
+
+/// 0x4f4dc0: loads rez\statfluf.bin (a single dialog, flags |= 4, fixups 0x4194e0, update
+/// 0x4f4d60) once per fluff rect of the race (table 0x5153e8; index 3 when watching a
+/// replay), places it at the rect (size w x h, the dialog's rect w-1 x h-1) and renders it
+/// (0x419d20 -> event 0x4f4d30 -> 0x4c35f0: the console's pixels at the rect).
+fn load_fluff(files: &Storage, race: &str, replay: bool, console: &Pcx) -> io::Result<Vec<Fluff>> {
+    let r = if replay { 3 } else { ["zerg", "terran", "protoss"].iter().position(|n| *n == race).unwrap_or(0) };
+    FLUFF[r]
+        .iter()
+        .map(|&(x, y, w, h)| {
+            files.read("rez/statfluf.bin")?;
+            let mut bg = vec![0u8; (w * h) as usize];
+            for yy in 0..h.min(console.h as i32 - y) {
+                for xx in 0..w.min(console.w as i32 - x) {
+                    bg[(yy * w + xx) as usize] = console.px[((y + yy) as usize) * console.w + (x + xx) as usize];
+                }
+            }
+            Ok(Fluff { rect: (x, y, w, h), bg })
+        })
+        .collect()
 }
 
 /// 0x4dab00: fonts are encrypted with the key in `font\font.gid` (grid.cpp).
@@ -512,6 +553,7 @@ impl Ui {
         let c = if replay { "n" } else { &race[..1] };
         let console = pcx8(&files.read(&format!("game/{c}console.pcx"))?);
         let conover = files.read(&format!("game/{c}conover.pcx")).ok().map(|d| pcx8(&d));
+        let fluff = load_fluff(files, race, replay, &console)?;
         let font = Font::parse(read_font(files, "font/font10.fnt")?);
         let font8 = Font::parse(read_font(files, "font/font8.fnt")?);
         let icons = Grp::parse(files.read("game/icons.grp")?);
@@ -576,7 +618,7 @@ impl Ui {
         if let Some(c) = minimap.get_mut(1) {
             c.flags &= !crate::dlg::flag::VISIBLE;
         }
-        Ok(Ui { console, conover, font, font8, icons, cursors, wireframe, grpwire, tranwire, twire, cmdicons, ticon, stat_txt, stat_raw, tips, network, glu_all, statbtn, text_colors, statdata, cmdbtns, pbar_empty, pbar_full, skin, stat_f10, statport, portraits, statres, statlb, res_shown: std::cell::Cell::new((0, 0, 0xff)), minimap })
+        Ok(Ui { console, conover, font, font8, icons, cursors, wireframe, grpwire, tranwire, twire, cmdicons, ticon, stat_txt, stat_raw, tips, network, glu_all, statbtn, text_colors, statdata, cmdbtns, pbar_empty, pbar_full, skin, stat_f10, statport, portraits, fluff, statres, statlb, res_shown: std::cell::Cell::new((0, 0, 0xff)), minimap })
     }
 
     pub fn text_color(&self, c: usize) -> &[u8] {

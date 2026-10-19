@@ -397,6 +397,19 @@ impl State {
             }
             self.trig.in_game[p as usize] = 1;
         }
+        self.reset_trigger_lists();
+    }
+
+    /// 0x4893c0 (last step of 0x489b30): every player's triggers start at action 0 with
+    /// flags 1 and 8 cleared.
+    pub fn reset_trigger_lists(&mut self) {
+        for l in self.trig.lists.iter_mut() {
+            for t in l.iter_mut() {
+                t.0[CUR_ACTION] = 0;
+                let f = t.flags() & !9;
+                t.set_flags(f);
+            }
+        }
     }
 
     /// 0x4894c0: give a trigger record to every player it is for (+0x944: players 0..11,

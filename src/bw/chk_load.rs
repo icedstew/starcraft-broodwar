@@ -37,11 +37,23 @@ impl State {
     /// 0x63fe40 and 0x597280 = 0xff; always 0x64dec8 / 0x64dea8 (lurker hits).
     pub fn reset_game_start(&mut self, loading: bool) {
         if !loading {
+            self.reset_resources();
             self.hotkeys.iter_mut().for_each(|g| *g = [0; 12]);
             self.recent_used = [[0; 8]; 12];
         }
         self.lurker_hits = [[0; 0x20]; 0x20];
         self.lurker_hits_count = 0;
+    }
+
+    /// 0x4aabf0: minerals and gas gathered from the game template's starting resources
+    /// (template[0x17], when template[9] is 1), else all zero.
+    pub fn reset_resources(&mut self) {
+        let v = if self.template[9] == 1 { u32::from_le_bytes(self.template[0x17..0x1b].try_into().unwrap()) as i32 } else { 0 };
+        let pl = &mut self.players;
+        pl.minerals = [v; 12];
+        pl.minerals_gathered = [v; 12];
+        pl.gas = [0; 12];
+        pl.gas_gathered = [0; 12];
     }
 
     /// 0x4c3ed0: alliances (0x58d634) and shared vision (0x57f1ec) at game start.

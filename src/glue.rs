@@ -1283,6 +1283,7 @@ impl Glue {
     /// 0x4edc30 (rez\gluLogin.bin, event proc 0x4edaa0), before 0x41a080: the profile
     /// login. Event 10: the list (8, proc 0x4ed770 from 0x51a478) gets flag 0x20000, the
     /// panels slide in (0x4ed810); event 0: 0x4ed720, 0x4de150, then the list's 0x4ed640.
+    /// 0x4ed810: the login panels' event 10, 0x4dd9e0 then the slide-in (inline here).
     fn open_login(&mut self, files: &Storage) {
         let mut dlg = self.open_glue_dialog(files, "rez/gluLogin.bin");
         if let Some(c) = dlg.get_mut(8) {
@@ -1329,6 +1330,7 @@ impl Glue {
 
     /// 0x4ed500 (`on`: 0x418640 sets flag 2, DISABLED) / 0x4ed530 (0x418e00 clears it) on
     /// control `id` of the screen's dialog (they look the control up by id; inline here).
+    /// 0x4ed530: the enable half, flag 2 cleared (`on` false).
     fn disable(&mut self, id: i16, on: bool) {
         if let Some(c) = self.dlg.as_mut().and_then(|(d, _)| d.get_mut(id)) {
             if on {
@@ -1439,6 +1441,7 @@ impl Glue {
     /// 0x4ed940 after 0x4b6e50 returned `ok` with `name`: a reserved or bad file name
     /// (network.tbl 5), a name in use (gluAll 0x19) or a failed write (gluAll 0x1b) is
     /// a message; else the profile is listed in its place, selected, Ok and Delete on.
+    /// 0x4ed3a0: an existing profile with the name, case folded (inline here; ASCII fold vs __mbsicmp).
     fn login_new_id_done(&mut self, files: &Storage, ok: bool, name: Vec<u8>) {
         if !ok {
             return;

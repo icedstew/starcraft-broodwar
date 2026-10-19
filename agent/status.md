@@ -225,6 +225,10 @@ Delegate per agents.md: Haiku triage, Sonnet porting, Opus review / hard RE / co
   (no exe reference, refs.py + whole-file dword scan) and Win32 dialogs bucketed. In scope
   2686+ / 4494. `scbw reprecord` differs on 14 of the 90 local 1.16.1 replays (output
   truncated; same before these changes).
+  2026-10-19 wave 8: start resources 0x4aabf0 (template[9] = 1: template[0x17] minerals),
+  trigger list reset 0x4893c0, statfluf dialogs 0x4f4dc0 (loaded, not drawn), map download
+  protocol bucketed as network. Wave 9 (workflow): statdata / statcmd / statport / opt_dlgs
+  / fd_user clusters.
   Open: 0x49cc40 (would fill `seat_races` 0x57f1c0 in slot order, clashes with the
   SCBW_TEAMS hack), 0x4b6810 (popup text set even when empty, proc 0x4b67f0), 0x48da30
   (placement surface from frame bytes +8/+9 vs grp size), 0x4b4a00 (0x4dd9e0 0xf4 call),

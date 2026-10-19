@@ -312,6 +312,7 @@ impl Ctl {
     /// entry opens its video (0x4e1260, inline here: the file is opened and its first frame
     /// shown, a missing file is fatal "Could not load") and the text flags are taken from
     /// the control's flags. The draw (+0x2e = 0x4e1180) is `Update`; the redraw is the caller's.
+    /// 0x4e1260: a light-up entry's video opened and its first frame shown (inline here).
     pub fn lightup_init(&mut self, files: &Storage) {
         let (l, t) = (self.rect.0, self.rect.1);
         self.hot = (self.hot.0 + l, self.hot.1 + t, self.hot.2 + l, self.hot.3 + t);

@@ -423,3 +423,19 @@ deferred 0x44c960   # Win32 network lobby dialog 0x44c960 family (networking)
 deferred 0x44cbe0   # Win32 network lobby dialog 0x44c960 family (networking)
 replaced 0x44d540   # Win32 profile dialog 0x44e1d0 family (key table / dialog run): profiles are glue.rs / setup.rs
 replaced 0x44e150   # Win32 profile dialog 0x44e1d0 family (key table / dialog run): profiles are glue.rs / setup.rs
+deferred 0x459d90   # in-game map download protocol (0x4eafe0 cases; network)
+deferred 0x459dc0   # in-game map download protocol (0x4eafe0 cases; network)
+deferred 0x459e00   # in-game map download protocol (0x4eafe0 cases; network)
+deferred 0x459f30   # in-game map download protocol (0x4eafe0 cases; network)
+deferred 0x45a010   # in-game map download protocol (0x4eafe0 cases; network)
+deferred 0x45a050   # in-game map download protocol (0x4eafe0 cases; network)
+deferred 0x45a0b0   # in-game map download protocol (0x4eafe0 cases; network)
+deferred 0x45a160   # in-game map download protocol (0x4eafe0 cases; network)
+deferred 0x45a190   # in-game map download protocol (0x4eafe0 cases; network)
+deferred 0x45a1f0   # in-game map download protocol (0x4eafe0 cases; network)
+deferred 0x45a230   # in-game map download protocol (0x4eafe0 cases; network)
+deferred 0x45a290   # in-game map download protocol (0x4eafe0 cases; network)
+deferred 0x45a390   # in-game map download protocol (0x4eafe0 cases; network)
+replaced 0x459ec0   # dead: no reference in the exe
+replaced 0x459ef0   # dead: no reference in the exe
+replaced 0x458cf0   # frees the status screen surfaces: Drop
