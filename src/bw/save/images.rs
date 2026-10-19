@@ -79,6 +79,7 @@ impl State {
     /// 0x4d6220: the images back into the pool (0x4d5600 turns the indices into pointers,
     /// +0x34 / +0x38 are rebuilt from the modifier), then 0x4d4ba0 links the unused slots
     /// (ascending) into the free list.
+    /// 0x4d4ba0: the image pool's free slots linked in order (inline here).
     pub(super) fn load_images(&mut self, _d: &Data, i: &mut In) -> bool {
         let Some(n) = i.u16() else { return false };
         for im in &mut self.images[..MAX_IMAGES] {

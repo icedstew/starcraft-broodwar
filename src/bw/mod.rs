@@ -313,6 +313,8 @@ pub struct State {
     pub alliances: [[u8; 12]; 12],
     /// 0x6284e8: each player's selection as the simulation sees it (NIL-terminated).
     pub selections: [[u32; 12]; 8],
+    /// 0x596b7c: the local player's row of `selections`, copied by 0x4eed10 (read by 0x4d0820).
+    pub start_selection: [u32; 12],
     /// 0x6284b8: the local (client) selection, at most 12 units (a unit with a subunit is
     /// held by its subunit, 0x49ae40).
     pub selected: Vec<u32>,
@@ -588,6 +590,7 @@ impl State {
             start_locations: [(0, 0); 8],
             alliances: [[0; 12]; 12],
             selections: [[NIL; 12]; 8],
+            start_selection: [NIL; 12],
             selected: Vec::new(),
             color_slot: [0, 1, 2, 3, 4, 5, 6, 7],
             circle_color: [0; 12],

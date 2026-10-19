@@ -871,6 +871,7 @@ impl State {
 
     /// 0x442260: the nearest unit to `g` that 0x440ff0 accepts (inside `b`, an enemy with
     /// 800 strength around it), else the last enemy found inside `b`.
+    /// 0x440ff0: the filter for an enemy with strength over 799 (inline here; the box comes as an argument, native globals 0x695790).
     fn script_unit_at_area(&mut self, d: &Data, g: u32, b: [i16; 4]) -> u32 {
         let mut last = NIL;
         let whole = [0, 0, self.map_px.0 as i16, self.map_px.1 as i16];

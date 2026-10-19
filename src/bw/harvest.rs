@@ -738,6 +738,7 @@ impl State {
     }
 
     /// 0x441310: nearest drop-off of `u`'s player.
+    /// 0x440fa0: the nearest search's drop-off filter (inline here).
     fn find_drop_off(&mut self, d: &Data, u: u32) -> u32 {
         let p = self.units[u as usize].player as usize;
         let c = &self.players.completed_counts;

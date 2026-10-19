@@ -10,7 +10,7 @@
 use super::{Glue, Open};
 use crate::dlg::{flag, Ctl, Dialog, Icon, Update};
 use crate::grp::Grp;
-use crate::setup::{slot, MapHeader, Setup, Slot};
+use crate::setup::{slot, sstr_copy, MapHeader, Setup, Slot};
 use crate::storage::Storage;
 use crate::todo_port;
 use std::collections::HashMap;
@@ -1567,6 +1567,7 @@ impl Glue {
     /// 0x4a8050 case 4 after the map is read: the players / slots the game type needs, the
     /// game description (0x8d bytes), 0x4a68d0 (the game type and its settings), the local
     /// slot (0x4dbea0) and the game (0x4d3fc0).
+    /// 0x4dbea0: 0x51ca1c = 1, 0x57f1e3 = 1, then 0x4dbe50 (inline here).
     fn start_map(&mut self, idx: usize, packed: u32) -> i32 {
         let n = self.create.nodes[idx].clone();
         let (gt, b1, sub) = (packed as u8, (packed >> 8) as u8, (packed >> 16) as u16);
@@ -1604,7 +1605,7 @@ impl Glue {
         if rc != 0 {
             return rc;
         }
-        // 0x4dbea0: 0x51ca1c = 1, 0x57f1e3 = 1, then 0x4dbe50.
+        // 0x4dbea0 (inline here): 0x51ca1c = 1, 0x57f1e3 = 1, then 0x4dbe50.
         self.create.race_picked = true;
         if !self.setup.local_slot_setup() {
             return -0x7fff_fff9;
@@ -2161,6 +2162,120 @@ impl Glue {
         }
     }
 
+    /// 0x4ee3d0 / 0x4ee520 / 0x4ee5b0 failure (the same code in each): once (0x6d5a10), the
+    /// turn exchange ends (0x4c3d20(3)) and the error `id` (network.tbl, 1-based) is shown
+    /// (0x4bb300); in the game state (3) the game's result is 4 (the glue loop again); then
+    /// 0x4dcc50 goes to the exit screen 0x19. Always false.
+    fn start_fail(&mut self, files: &Storage, id: usize) -> bool {
+        if self.setup.quiet {
+            return false;
+        }
+        // 0x4c3d20(3), as `net_4c3d20` (glue_ready.rs).
+        self.setup.g654a80 = [0; 8];
+        self.setup.g6556e4 = 0;
+        self.setup.g6554b0 = 0;
+        self.setup.g6556e0 = 0;
+        self.setup.g57eebc = 0;
+        self.setup.g654aa0 = 0;
+        // (`net_4c3d20` also clears the ready room's command buffer, private to glue_ready.rs.)
+        if self.setup.multiplayer {
+            todo_port!("0x4c3d20", "Sleep(1000) and Ordinal_119 (leave the network game)");
+        }
+        self.setup.quiet = true;
+        self.error_popup(files, id);
+        if self.state == super::state::GAME {
+            // 0x6d11ec = 0 and 0x6d0f31 = 0x57f23c are not kept; 0x51ce90 = 4: the glue loop.
+            // The game window never opened, so 0x4e4a10's message dialog has no loop to run in.
+            todo_port!("0x4e4a10", "the in-game error dialog before the game window opens");
+            crate::menu::take_fatal_pending();
+            self.state = super::state::GLUE;
+        }
+        if self.screen == 4 {
+            todo_port!("0x4dcc50", "EnumWindows(0x4dc6d0) closes the process's other windows");
+        }
+        self.screen = super::screen::EXIT;
+        false
+    }
+
+    /// 0x4ee5b0 (0x6d11c0, the ready room's mission pick, cleared): the player name default
+    /// (network.tbl word 0x48), the map read again (0x4bf5d0: mode 0 from 0x57fd3c, of which
+    /// only the first human stays a human; mode 1 for the campaign mission 0x57f244 =
+    /// `map_dir_flag`, map name 0x59c080[idx]), the game description and template
+    /// (0x4ab750), the local slot (0x4dbe50) and the game (0x4d3fc0). False (with the error
+    /// shown) when one fails.
+    fn start_mission_pick(&mut self, files: &Storage) -> bool {
+        if !self.start_6d11c0 {
+            return true;
+        }
+        self.start_6d11c0 = false;
+        if self.setup.local_name[0] == 0 {
+            let n = self.network.get(0x47).cloned().unwrap_or_default();
+            sstr_copy(&mut self.setup.local_name, n.as_bytes(), 0x19);
+        }
+        let mission = self.setup.map_dir_flag;
+        let mut hdr: MapHeader = [0; 0x20];
+        if mission == 0 {
+            let path = String::from_utf8_lossy(&sstr(&self.setup.map_path, 0x104)).into_owned();
+            if !self.setup.load_map(files, &path, &mut hdr, false, &self.network_raw) {
+                return self.start_fail(files, 0x61);
+            }
+            let mut humans = 0;
+            for s in self.setup.slots.iter_mut().take(8) {
+                if s[slot::TYPE] == 6 {
+                    humans += 1;
+                    if humans != 1 {
+                        s[slot::TYPE] = 5;
+                    }
+                }
+            }
+        } else {
+            let path = self.map_names.get(mission as usize).cloned().unwrap_or_default();
+            if !self.setup.load_map(files, &path, &mut hdr, true, &self.network_raw) {
+                return self.start_fail(files, 0x61);
+            }
+        }
+        let Some(d) = self.mission_desc(files) else { return self.start_fail(files, 0x66) };
+        if !self.setup.local_slot_setup() {
+            return self.start_fail(files, 0x61);
+        }
+        // 0x596888 = 0.
+        self.create_game(&d)
+    }
+
+    /// 0x4ee520 (0x6d1218, a saved game): 0x4cf5f0 reads the head (`view::load_save` does,
+    /// over the game state), then the local slot 0x596bac (0x4dbe50) and the game (0x4d3fc0).
+    fn start_saved(&mut self) -> bool {
+        if self.save.is_none() {
+            return true;
+        }
+        todo_port!("0x4cf5f0", "the save head is read by view::load_save; the slot 0x596bac, the slot setup 0x4dbe50 and the game 0x4d3fc0 of a saved game are not kept");
+        true
+    }
+
+    /// 0x4ee3d0 (0x6d0f0c, set with state 5, cleared): the map of 0x57fd3c read again
+    /// (0x4bf5d0 mode 1), the local slot (0x4dbe50; its race byte kept) and the game
+    /// 0x5967f8 created again (0x4d3fc0). False (with the error shown) when one fails.
+    fn start_map_again(&mut self, files: &Storage) -> bool {
+        if !self.start_6d0f0c {
+            return true;
+        }
+        let me = self.setup.local_slot[0] as usize;
+        let race = self.setup.slots.get(me).map(|s| s[slot::RACE]);
+        self.start_6d0f0c = false;
+        let path = String::from_utf8_lossy(&sstr(&self.setup.map_path, 0x104)).into_owned();
+        let mut hdr: MapHeader = [0; 0x20];
+        if !self.setup.load_map(files, &path, &mut hdr, true, &self.network_raw) || !self.setup.local_slot_setup() {
+            return self.start_fail(files, 0x61);
+        }
+        let me = self.setup.local_slot[0] as usize;
+        if let (Some(r), Some(s)) = (race, self.setup.slots.get_mut(me)) {
+            s[slot::RACE] = r;
+        }
+        // 0x596888 = 0; the description is 0x5967f8.
+        let d = self.create.game_desc.clone();
+        self.create_game(&d)
+    }
+
     /// 0x4e0710 (-> 0x4ef100, 0x4eee00): the game set up by the glue for the game window.
     /// With 0x6d11c8 on: the picked races go to the slots (0x4ee110), the seed 0x51ca10
     /// seeds the numbers (0x51ca14), 0x4a9a30 deals the random races, 0x4a9d80 places the
@@ -2169,6 +2284,10 @@ impl Glue {
     /// start `view` runs; 0x4d9950 (the game loop), 0x4ee8c0 and the score screen after it
     /// are not ported.
     pub fn begin_game(&mut self, files: &Storage) -> Option<crate::view::GameSetup> {
+        // 0x4ef100 (0x57f0b4 off): 0x4ee5b0, 0x4ee520, 0x4ee3d0 (then 0x4ee110, below).
+        if !self.multiplayer && !(self.start_mission_pick(files) && self.start_saved() && self.start_map_again(files)) {
+            return None;
+        }
         // A saved game (the load screen, 0x4b6490 -> 0x4cf950): 0x4ef100 reads the file's state
         // instead of setting the game up.
         if let Some(save) = self.save.take() {

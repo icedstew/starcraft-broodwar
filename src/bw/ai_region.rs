@@ -103,6 +103,7 @@ impl State {
 
     /// 0x43a390: the region's own and present military strength; what it needs grows to
     /// its enemies' (by half again for a melee AI), capped by +0x21c.
+    /// 0x438f60: the box search callback adding own units' air / ground strength in the region (inline here).
     pub(super) fn region_recount(&mut self, d: &Data, p: u8, r: u16) {
         let mut local = (0u16, 0u16);
         let mut all = (0u16, 0u16);
@@ -1405,6 +1406,7 @@ impl State {
     /// 0x43e580: region `from` hands its units to `to` (and its detector if `to` has
     /// none); detector types stay unless `all`; units in transports stay when
     /// `keep_loaded` (melee AI only); with `call_guards` guards near `to` join too.
+    /// 0x43dde0: the box search callback re-homing guards in the region (inline here).
     #[allow(clippy::too_many_arguments)]
     fn region_move_units(&mut self, d: &Data, p: u8, from: u16, to: u16, call_guards: bool, all: bool, keep_loaded: bool) {
         if self.reg(p, to).detector == NIL {

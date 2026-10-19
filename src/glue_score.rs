@@ -783,6 +783,7 @@ impl Glue {
 
     /// 0x4df9e0 event 0xb after the list selected a row: 0x4df4a0 puts the row's text in the
     /// edit (0x416650: the caret at its end) and 0x4df520 sets the delete button.
+    /// 0x4df4a0: the selected row's text into the edit (id 2) (inline here).
     pub(super) fn save_rep_list_event(&mut self) {
         let p = self.palette_id();
         let Some(look) = self.looks[p].as_ref() else { return };

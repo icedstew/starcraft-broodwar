@@ -376,3 +376,75 @@ mod tests {
         eprintln!("{:?} {:?} {:?}", m("1", 1, 0, 0), m("2", 1, 0, 0), m("1b", 1, 0, 0));
     }
 }
+
+/// 0x4ff948: the "/replay show" table (name, action id, type); 0x4df3b0 matches `rest`
+/// exactly (strcmp) against the names.
+const SHOW: [(&[u8], u8, u16); 12] = [
+    (b"kills", 0x14, 0xe6),
+    (b"razings", 0x14, 0xe7),
+    (b"slaughter", 0x14, 0xe5),
+    (b"resources", 0x28, 2),
+    (b"minerals", 0x13, 0),
+    (b"gas", 0x13, 1),
+    (b"score", 0x15, 0),
+    (b"score units", 0x15, 1),
+    (b"score buildings", 0x15, 2),
+    (b"score kills", 0x15, 4),
+    (b"score razings", 0x15, 5),
+    (b"score user", 0x15, 7),
+];
+
+/// 0x4c5520 for a trigger action with no location, string or number (id `id`, unit type
+/// `ty`): the leaderboard settings 0x58d70c.. and the refresh flag 0x65097c. The caller then
+/// refreshes the dialog 0x597284 (0x4be670 / 0x4be860 / 0x4beb40); `leaderboard::draw` draws
+/// it from these settings every frame.
+fn leaderboard_action(trig: &mut crate::bw::triggers::Triggers, id: u8, ty: u16) {
+    trig.leaderboard_timer = 1;
+    let lb = &mut trig.leaderboard;
+    if id == 0x28 {
+        lb.0 = id;
+        lb.3 = 0;
+        lb.2 = 2;
+        return;
+    }
+    lb.4 = 0;
+    lb.3 = 0;
+    lb.2 = ty;
+    lb.0 = id;
+}
+
+/// 0x4df3b0 ("/replay show <what>", ECX = `rest`): shows the leaderboard named by the
+/// table 0x4ff948. 0 when no name matches.
+fn replay_show(trig: &mut crate::bw::triggers::Triggers, rest: &[u8]) -> bool {
+    let Some(&(_, id, ty)) = SHOW.iter().find(|e| e.0 == rest) else { return false };
+    leaderboard_action(trig, id, ty);
+    true
+}
+
+/// 0x4df360 ("/replay hide"): a zeroed action, which clears the leaderboard.
+fn replay_hide(trig: &mut crate::bw::triggers::Triggers, _rest: &[u8]) -> bool {
+    leaderboard_action(trig, 0, 0);
+    true
+}
+
+/// 0x4de6a0 (EAX = `text`, the submitted line; only called in a replay, 0x6d0f14): the
+/// "/replay " command. The subcommand table 0x4ff928 (name, handler at +0xc) is "show"
+/// (0x4df3b0) and "hide" (0x4df360); the name must be followed by the end or a space.
+/// True when a handler ran (the line is then not sent as chat).
+pub fn replay_command(text: &[u8], trig: &mut crate::bw::triggers::Triggers) -> bool {
+    // C string: up to the first NUL.
+    let text = &text[..text.iter().position(|&c| c == 0).unwrap_or(text.len())];
+    let Some(cmd) = text.strip_prefix(b"/replay ") else { return false };
+    let table: [(&[u8], fn(&mut crate::bw::triggers::Triggers, &[u8]) -> bool); 2] = [(b"show", replay_show), (b"hide", replay_hide)];
+    for (name, handler) in table {
+        if cmd.starts_with(name) {
+            let rest = &cmd[name.len()..];
+            return match rest.first() {
+                None => handler(trig, rest),
+                Some(b' ') => handler(trig, &rest[1..]),
+                _ => false,
+            };
+        }
+    }
+    false
+}

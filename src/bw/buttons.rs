@@ -482,6 +482,52 @@ impl State {
             .collect()
     }
 
+    /// 0x428340: button condition (arm in button_state).
+    /// 0x4283f0: button condition (arm in button_state).
+    /// 0x428420: button condition (arm in button_state).
+    /// 0x428440: button condition (arm in button_state).
+    /// 0x428480: button condition (arm in button_state).
+    /// 0x4284b0: button condition (arm in button_state).
+    /// 0x4284e0: button condition (arm in button_state).
+    /// 0x428500: button condition (arm in button_state).
+    /// 0x428530: button condition (arm in button_state).
+    /// 0x428560: button condition (arm in button_state).
+    /// 0x4285a0: button condition (arm in button_state).
+    /// 0x428730: button condition (arm in button_state).
+    /// 0x428780: button condition (arm in button_state).
+    /// 0x4287d0: button condition (arm in button_state).
+    /// 0x428810: button condition (arm in button_state).
+    /// 0x4288e0: button condition (arm in button_state).
+    /// 0x428900: button condition (arm in button_state).
+    /// 0x428920: button condition (arm in button_state).
+    /// 0x428960: button condition (arm in button_state).
+    /// 0x428990: button condition (arm in button_state).
+    /// 0x428a10: button condition (arm in button_state).
+    /// 0x428ad0: button condition (arm in button_state).
+    /// 0x428b80: button condition (arm in button_state).
+    /// 0x428c30: button condition (arm in button_state).
+    /// 0x428cb0: button condition (arm in button_state).
+    /// 0x428e00: button condition (arm in button_state).
+    /// 0x428e60: button condition (arm in button_state).
+    /// 0x428fa0: button condition (arm in button_state).
+    /// 0x429070: button condition (arm in button_state).
+    /// 0x4290f0: button condition (arm in button_state).
+    /// 0x429170: button condition (arm in button_state).
+    /// 0x4291c0: button condition (arm in button_state).
+    /// 0x429210: button condition (arm in button_state).
+    /// 0x4292c0: button condition (arm in button_state).
+    /// 0x429370: button condition (arm in button_state).
+    /// 0x4293e0: button condition (arm in button_state).
+    /// 0x429450: button condition (arm in button_state).
+    /// 0x429470: button condition (arm in button_state).
+    /// 0x4294e0: button condition (arm in button_state).
+    /// 0x429500: button condition (arm in button_state).
+    /// 0x429640: button condition (arm in button_state).
+    /// 0x429680: button condition (arm in button_state).
+    /// 0x4296b0: button condition (arm in button_state).
+    /// 0x4296f0: button condition (arm in button_state).
+    /// 0x429720: button condition (arm in button_state).
+    /// 0x429740: button condition (arm in button_state).
     /// Run a button's condition routine: 0 hidden, 1 enabled, -1 greyed out.
     pub fn button_state(&self, d: &Data, btn: &Button, player: u8, s: &Selection) -> i32 {
         let a = s.active;
@@ -695,11 +741,11 @@ impl State {
                 }
                 b2i(want_cloaked)
             }
-            0x429450 => self.can_upgrade(d, a, v, player).unwrap_or(0),
+            0x429450 => self.can_upgrade(d, a, v & 0xff, player).unwrap_or(0),
             0x429470 => {
                 let mut best = 0;
                 for u in self.sel_units(s) {
-                    let r = tech(self, u, v);
+                    let r = tech(self, u, v & 0xff);
                     if r == 1 {
                         return 1;
                     }
@@ -707,8 +753,8 @@ impl State {
                 }
                 best
             }
-            0x4294e0 | 0x429720 => tech(self, a, if btn.cond == 0x429720 { 0x20 } else { v }),
-            0x429500 => self.can_research(d, a, v, player).unwrap_or(0),
+            0x4294e0 | 0x429720 => tech(self, a, if btn.cond == 0x429720 { 0x20 } else { v & 0xff }),
+            0x429500 => self.can_research(d, a, v & 0xff, player).unwrap_or(0),
             0x429520 => self.can_rally(d, a, player),
             0x429640 | 0x4296b0 => {
                 let t = if btn.cond == 0x429640 { 0x1c } else { 0x17 };
@@ -717,7 +763,7 @@ impl State {
                 }
                 if s.count != 1 { 1 } else { -1 }
             }
-            0x429680 | 0x4296f0 => if tech(self, a, v) == -1 { -1 } else { 0 },
+            0x429680 | 0x4296f0 => if tech(self, a, v & 0xff) == -1 { -1 } else { 0 },
             0x429740 => if matches!(self.units[a as usize].unit_type, 0x83..=0x85) { self.can_rally(d, a, player) } else { 0 },
             // Replay controls (0x6d0f14 set only while watching a replay).
             0x4deac0 => self.replay as i32,
@@ -785,6 +831,33 @@ impl State {
         card
     }
 
+    /// 0x4231d0: sends command 0x2e (match arm in button_action).
+    /// 0x4231f0: sends command 0x5a (match arm in button_action).
+    /// 0x423210: sends command 0x2a (match arm in button_action).
+    /// 0x423230: sends command 0x2f (match arm in button_action).
+    /// 0x423270: sends command 0x22 (queued flag) (match arm in button_action).
+    /// 0x423290: sends command 0x2d (queued flag) (match arm in button_action).
+    /// 0x4232b0: sends command 0x2c (queued flag) (match arm in button_action).
+    /// 0x423310: sends command 0x32 with the action var byte (match arm in button_action).
+    /// 0x423350: sends command 0x30 with the action var byte (match arm in button_action).
+    /// 0x423370: sends command 0x2b (queued flag) (match arm in button_action).
+    /// 0x423390: sends command 0x27 (match arm in button_action).
+    /// 0x4233b0: sends command 0x1c (match arm in button_action).
+    /// 0x4233d0: sends command 0x1b (match arm in button_action).
+    /// 0x4233f0: sends command 0x1a (queued flag) (match arm in button_action).
+    /// 0x423410: sends command 0x19 (match arm in button_action).
+    /// 0x423450: sends command 0x26 (queued flag) (match arm in button_action).
+    /// 0x423470: sends command 0x25 (queued flag) (match arm in button_action).
+    /// 0x423490: sends command 0x20 with the action var word (match arm in button_action).
+    /// 0x4234b0: sends command 0x1f with the action var word (match arm in button_action).
+    /// 0x423730: cloak: sends 0x21 if 0x423540 passes (match arm in button_action).
+    /// 0x423760: sends command 0x1e after the 0x48f4d0 sound (match arm in button_action).
+    /// 0x423860: research: afford checks, sends command 0x35 (match arm in button_action).
+    /// 0x423b00: burrow-flag unit: sends command 0x28, else targeting 0x48caf0 (match arm in button_action).
+    /// 0x423c50: build: afford checks, placement order 0x19 (0x48e730) (match arm in button_action).
+    /// 0x423d10: build: afford checks, placement order 0x24 (0x48e730) (match arm in button_action).
+    /// 0x423dd0: build: afford checks, placement order 0x1f (0x48e730) (match arm in button_action).
+    /// 0x423eb0: build: afford checks, placement order 0x1e (0x48e730) (match arm in button_action).
     /// Run a button's action routine (`queued`: Shift held). One arm per routine:
     /// 0x4234d0 stim (refusal 0x48ef30), 0x423730 cloak and 0x423f70 tech (0x423660,
     /// refusal 0x48ee30), 0x423790 / 0x423860 train and research (0x42cf70 errors).

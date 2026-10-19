@@ -28,6 +28,22 @@ fn u16_at(e: &[u8], o: usize) -> u16 {
 }
 
 impl State {
+    /// 0x4eec30 (from 0x4ef100): the game-start state resets. Covered elsewhere: 0x49bb90
+    /// (screen / scroll limits, UI), 0x4aabf0 (the 0x57f0f0.. resource and gathered tables
+    /// start zeroed or from `init_gamedata`), 0x4c3ed0 (`init_alliances`, called before),
+    /// 0x489b30 (`init_trigger_players`, called after); 0x48d700 / 0x48e310 / 0x48ca10 /
+    /// 0x484cc0 / 0x4c3a20 are front end (placement, targeting, handlers, stat_txt.tbl).
+    /// Here: a new game (no save, 0x6d1218 = 0) clears the hotkey groups 0x57fe60 and
+    /// 0x63fe40 and 0x597280 = 0xff; always 0x64dec8 / 0x64dea8 (lurker hits).
+    pub fn reset_game_start(&mut self, loading: bool) {
+        if !loading {
+            self.hotkeys.iter_mut().for_each(|g| *g = [0; 12]);
+            self.recent_used = [[0; 8]; 12];
+        }
+        self.lurker_hits = [[0; 0x20]; 0x20];
+        self.lurker_hits_count = 0;
+    }
+
     /// 0x4c3ed0: alliances (0x58d634) and shared vision (0x57f1ec) at game start.
     pub fn init_alliances(&mut self, modes: ScenarioModes) {
         let ty = self.player_types;
@@ -166,6 +182,12 @@ impl State {
 
     /// 0x4cd7a0: UNIT section: start locations and map-placed units.
     /// 0x4a8b90: a player's map units setting, 0 past player 7 (inline here).
+    /// 0x4cbd30: nydus canal link pass (inline here).
+    /// 0x4cbdc0: addon attach predicate, queued through 0x4cb140 (inline here).
+    /// 0x4cbe20: map-units filter (inline here).
+    /// 0x4cbef0: nydus queue (inline here).
+    /// 0x4ccf90: addon attach pass (inline here).
+    /// 0x4cd740: 0x4cd360 then 0x4cd480 (inline here).
     pub fn chk_units(&mut self, d: &Data, data: &[u8], modes: ScenarioModes) -> bool {
         if data.len() % 0x24 != 0 {
             return false;
@@ -448,6 +470,9 @@ impl State {
     }
 
     /// 0x4cd480: apply the UNIT entry's properties (`p` = entry + 0xc).
+    /// 0x4cc3b0: energy percent (inline here).
+    /// 0x4ccf20: burrow on load (inline here).
+    /// 0x4cc470: lifted building (inline here; its early-outs are those of 0x46dc20, see can_issue_order).
     pub(super) fn chk_unit_props(&mut self, d: &Data, u: u32, p: &[u8]) {
         let valid = u32::from_le_bytes([p[0], p[1], p[2], p[3]]);
         let state = p[0xe];

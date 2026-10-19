@@ -253,6 +253,19 @@ pub struct Dispatch {
     pub activate: bool,
 }
 
+/// What the caller of `Ctl::lightup_event` (0x4e1670) must still do.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct LightupAct {
+    /// The dispatcher's return value (events handled here; the others end in 0x418c40).
+    pub ret: bool,
+    /// Event 2: 0x6d051c := this id and run the control's update (+0x2a).
+    pub activate: Option<i16>,
+    /// Run the hook 0x6d5eac(0).
+    pub sound0: bool,
+    /// Run the hook 0x6d5eac(1) (event 3 pressed the button).
+    pub sound1: bool,
+}
+
 #[derive(Clone, Debug)]
 pub struct Dialog {
     /// The dialog's own entry (control 0): rect is absolute.
@@ -288,10 +301,107 @@ impl Ctl {
     /// (+0x2a) must get event 2 (activate) and the hook 0x6d5eac(2) (click sound) must run.
     /// The other cases of 0x4e1a70 (the capture table 0x6d5e40, the tooltip table 0x6d5e90 of
     /// 0x4196f0, the focus 0x418900 / 0x418c40) have no state here: the callers keep them.
+    /// 0x4e0dd0: the same release without the click hook 0x6d5eac(2) (the callers run it from the result).
     pub fn press_release(&mut self) -> bool {
         let pressed = self.flags & flag::PRESSED != 0;
         self.flags &= !flag::PRESSED;
         pressed
+    }
+
+    /// 0x4e14a0 (EDI = the control; event 10): the hot rect moves to the dialog, each list
+    /// entry opens its video (0x4e1260, inline here: the file is opened and its first frame
+    /// shown, a missing file is fatal "Could not load") and the text flags are taken from
+    /// the control's flags. The draw (+0x2e = 0x4e1180) is `Update`; the redraw is the caller's.
+    pub fn lightup_init(&mut self, files: &Storage) {
+        let (l, t) = (self.rect.0, self.rect.1);
+        self.hot = (self.hot.0 + l, self.hot.1 + t, self.hot.2 + l, self.hot.3 + t);
+        let mut extra = self.flags >> 9 & 0x10;
+        for (i, a) in self.anims.iter_mut().enumerate() {
+            if i > 0 && a.flags & 2 != 0 {
+                a.alpha = 0x1e;
+            }
+            a.flags |= extra;
+            extra = 0x10;
+            if a.path.is_empty() {
+                continue;
+            }
+            let path = String::from_utf8_lossy(&a.path).into_owned();
+            let Some(mut smk) = files.read(&path).ok().and_then(Smk::parse) else { crate::bw::fatal_error(&path) };
+            smk.next_frame();
+            a.video = Some(Rc::new(RefCell::new(smk)));
+        }
+        self.align = (self.flags >> 0x14) as u8;
+    }
+
+    /// 0x4e0b80 (EDI = the control; event 1): the videos are closed and the hot rect is
+    /// made relative to the dialog again.
+    pub fn lightup_close(&mut self) {
+        for a in &mut self.anims {
+            a.video = None;
+        }
+        self.hot = (self.hot.0 - self.rect.0, self.hot.1 - self.rect.1, self.hot.2 - self.rect.0, self.hot.3 - self.rect.1);
+    }
+
+    /// 0x4e0b30 (ECX = the control, EDX = the event record): (`x`, `y`) is the mouse relative
+    /// to the dialog (the record's +0xe / +0x10 minus the parent's origin): true when it is in
+    /// the hot rect and the control is visible, enabled and has flag 0x10.
+    pub fn lightup_hit(&self, x: i32, y: i32) -> bool {
+        let (l, t, r, b) = self.hot;
+        (l..=r).contains(&x) && (t..=b).contains(&y) && self.flags & flag::VISIBLE != 0 && self.flags & flag::DISABLED == 0 && self.flags & 0x10 != 0
+    }
+
+    /// 0x4e1670 (ESI = the control, EAX = the event record, `ev` = its number at +0): the
+    /// light-up button's event dispatcher. `x`, `y` as for `lightup_hit` (event 4). What the
+    /// caller must still run is in `LightupAct` (event 2's activation and the sounds); the
+    /// events that end in the generic handler 0x418c40 are `todo_port!` (no state here).
+    pub fn lightup_event(&mut self, ev: u32, x: i32, y: i32, files: &Storage) -> LightupAct {
+        let mut a = LightupAct::default();
+        match ev {
+            1 => {
+                self.lightup_close();
+                todo_port!("0x418c40", "generic control event handler");
+            }
+            2 => {
+                // 0x6d051c := id; the control's update (+0x2a) with event 2
+                a.activate = Some(self.id);
+                a.ret = true;
+            }
+            3 => {
+                self.flags |= 1;
+                if self.flags & flag::PRESSED != 0 {
+                    // 0x4e0dd0: released without the click hook
+                    self.flags &= !flag::PRESSED;
+                    a.ret = true;
+                    return a;
+                }
+                todo_port!("0x4196f0", "tooltip table entry for this control");
+                self.flags ^= flag::PRESSED;
+                if self.flags & flag::PRESSED != 0 {
+                    a.sound1 = true;
+                }
+                a.ret = true;
+            }
+            4 => a.ret = self.lightup_hit(x, y),
+            5 => {}
+            9 => {
+                a.sound0 = true;
+                a.ret = true;
+            }
+            10 => {
+                self.lightup_init(files);
+                todo_port!("0x418c40", "generic control event handler");
+            }
+            0xe => {
+                self.flags &= !flag::PRESSED;
+                todo_port!("0x418c40", "generic control event handler");
+            }
+            6 => {
+                self.flags &= 0xbfff_ff7f;
+                todo_port!("0x418c40", "generic control event handler");
+            }
+            _ => todo_port!("0x418c40", "generic control event handler"),
+        }
+        a
     }
 
     /// 0x4e1a70 (EAX = the control, EBX = the event record, `ev` = its number at +0, `sub` = the
@@ -784,31 +894,10 @@ impl Dialog {
         }
     }
 
-    /// Event 10 to the light-up buttons (0x4e14a0): the hot rect moves to the dialog,
-    /// each list entry opens its video (0x4e1260) and shows its first frame.
+    /// Event 10 to the light-up buttons (0x4e14a0, see `Ctl::lightup_init`).
     pub fn init_lightups(&mut self, files: &Storage) {
-        for c in &mut self.controls {
-            if c.ty != 14 {
-                continue;
-            }
-            let (l, t) = (c.rect.0, c.rect.1);
-            c.hot = (c.hot.0 + l, c.hot.1 + t, c.hot.2 + l, c.hot.3 + t);
-            let mut extra = c.flags >> 9 & 0x10;
-            for (i, a) in c.anims.iter_mut().enumerate() {
-                if i > 0 && a.flags & 2 != 0 {
-                    a.alpha = 0x1e;
-                }
-                a.flags |= extra;
-                extra = 0x10;
-                if a.path.is_empty() {
-                    continue;
-                }
-                let path = String::from_utf8_lossy(&a.path).into_owned();
-                let Some(mut smk) = files.read(&path).ok().and_then(Smk::parse) else { crate::bw::fatal_error(&path) };
-                smk.next_frame();
-                a.video = Some(Rc::new(RefCell::new(smk)));
-            }
-            c.align = (c.flags >> 0x14) as u8;
+        for c in self.controls.iter_mut().filter(|c| c.ty == 14) {
+            c.lightup_init(files);
         }
     }
 

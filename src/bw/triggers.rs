@@ -223,6 +223,9 @@ pub struct Triggers {
     pub elapsed: u32,
     pub countdown: u32,
     pub countdown_paused: bool,
+    /// The statres control -10 (0x4e5590 sets its text 0x68c23c and shows it, 0x4e5600
+    /// hides it): the countdown text while shown.
+    pub countdown_text: Option<String>,
     /// 0x58dc40: switches.
     pub switches: [u32; 8],
     /// 0x58d6c4: mission objective string per player.
@@ -269,6 +272,7 @@ impl Default for Triggers {
             elapsed: 0,
             countdown: 0,
             countdown_paused: false,
+            countdown_text: None,
             switches: [0; 8],
             objectives: [0; 8],
             leaderboard_computers: 1,
@@ -583,13 +587,15 @@ impl State {
         tr.second_timer = t.wrapping_sub(1);
         if t == 0 {
             tr.elapsed = tr.elapsed.wrapping_add(1);
-            if tr.countdown != 0 && !tr.countdown_paused {
+            let running = tr.countdown != 0;
+            if running && !tr.countdown_paused {
                 tr.countdown -= 1;
                 if tr.countdown == 0 {
                     tr.check_timer = 1;
                 }
             }
-            // 0x489c30 (`countdown_text`) / 0x4e5600: the timer text (UI).
+            // 0x489c30 (`countdown_text`, 0x4e5590 shows it) while the timer runs, else 0x4e5600.
+            tr.countdown_text = running.then(|| Self::countdown_text(tr.countdown));
             tr.second_timer = 0xf;
         }
     }
@@ -675,6 +681,23 @@ impl State {
         }
     }
 
+    /// 0x42c610: condition 11 switch (arm in condition).
+    /// 0x42c760: condition 20 least resources (arm in condition).
+    /// 0x42c7d0: condition 10 most resources (arm in condition).
+    /// 0x42c840: condition 19 lowest score (arm in condition).
+    /// 0x42c8b0: condition 9 highest score (arm in condition).
+    /// 0x42c920: condition 18 least kills (arm in condition).
+    /// 0x42c990: condition 8 most kills (arm in condition).
+    /// 0x42cae0: condition 21 score (arm in condition).
+    /// 0x42cb20: condition 14 opponents (arm in condition).
+    /// 0x42cb60: condition 15 deaths (arm in condition).
+    /// 0x42cba0: condition 5 kills (arm in condition).
+    /// 0x42cbe0: condition 4 accumulate (arm in condition).
+    /// 0x42cc20: condition 2 command (arm in condition).
+    /// 0x42cc70: condition 17 command least at (arm in condition).
+    /// 0x42cc85: condition 17 command least at (shared tail) (arm in condition).
+    /// 0x42ccf0: condition 7 command most at (arm in condition).
+    /// 0x42cd70: condition 3 bring (arm in condition).
     /// 0x515a98: condition table.
     fn condition(&mut self, d: &Data, c: &Condition) -> bool {
         let cur = self.trig.player;

@@ -384,6 +384,8 @@ impl Glue {
     }
 
     /// 0x4d8a80 (`tok` the tag): true when it ended the page.
+    /// 0x4d8660: the FADESPEED tag's value, a byte, kept when 0 (inline here).
+    /// 0x4d8620: the DISPLAYTIME tag's value, kept when 0 (inline here).
     fn credits_tag(&mut self, files: &Storage, tok: &[u8]) -> bool {
         let len = tok.len();
         let is = |tag: &[u8], n: usize| nicmp(tok, tag, n);
@@ -397,7 +399,7 @@ impl Glue {
                 return false;
             }
             if is(b"</FADESPEED ", 0xc) {
-                // 0x4d8660
+                // 0x4d8660 (inline here)
                 let v = strtoul(arg(&tok[0xc..]));
                 if v != 0 {
                     self.credits.fade_speed = v as u8;
@@ -406,7 +408,7 @@ impl Glue {
             }
         }
         if len > 0xf && is(b"</DISPLAYTIME ", 0xe) {
-            // 0x4d8620
+            // 0x4d8620 (inline here)
             let v = strtoul(arg(&tok[0xe..]));
             if v != 0 {
                 self.credits.display = v;

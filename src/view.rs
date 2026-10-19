@@ -315,8 +315,10 @@ impl<'a> Scene<'a> {
             // 100th frame (vision reset) and the resets come every 100 steps from there.
             st.counter_100 = 1;
             if !save.is_some_and(|s| !s.3) {
+                st.take_start_selection();
                 st.game_step(d);
                 st.game_step(d);
+                st.game_start_selection(d);
             }
             minimap.refresh(d, &mut st)
         });
@@ -346,8 +348,10 @@ impl<'a> Scene<'a> {
         let st = &mut self.st;
         st.counter_100 = 1;
         with_data(self.a, |d| {
+            st.take_start_selection();
             st.game_step(d);
             st.game_step(d);
+            st.game_start_selection(d);
         });
     }
 
@@ -550,11 +554,16 @@ impl<'a> Scene<'a> {
 
     /// 0x4d14d0, 0x4d1460: which cursor shows with the mouse at screen (x, y): scrolling at the
     /// screen edges (0x4d12a0), else over the minimap (0x6556fc) or the map (0x4d1460),
-    /// where units under it pick a magnifier or target color (0x4d13e0).
+    /// where units under it pick a magnifier or target color (0x4d13e0: 0 while placing,
+    /// 0x640880 = 1 from 0x48e730 to 0x48e310).
     pub fn cursor_kind(&mut self, ui: Option<&crate::ui::Ui>, x: i32, y: i32, vx: i32, vy: i32, dragging: bool) -> usize {
         let (mw, mh) = (self.st.map_px.0 as i32, self.st.map_px.1 as i32);
+        // 0x4d12a0: the scroll limits are 0x628488 = map width - 20 tiles and 0x6284b0 =
+        // (map height - 12 tiles) * 32 + 8 (0x49bb90). Native returns 0 first while 0x6d5c1c
+        // (set by 0x47f0e0 when the keys scroll the screen) holds and the mouse has not moved;
+        // scbw has no key scrolling, so the flag is never set.
         let dx = if x < 2 && vx > 0 { -1 } else if x >= 0x27e && vx < mw - SCREEN_W { 1 } else { 0 };
-        let dy = if y < 2 && vy > 0 { -1 } else if y >= 0x1de && vy < mh - (SCREEN_H - 80) { 1 } else { 0 };
+        let dy = if y < 2 && vy > 0 { -1 } else if y >= 0x1de && vy < mh - 384 + 8 { 1 } else { 0 };
         if dx != 0 || dy != 0 {
             // 0x51275c, indexed by dx + 3 * dy.
             const SCROLL: [usize; 9] = [18, 11, 12, 17, 0, 13, 16, 15, 14];
@@ -1556,6 +1565,8 @@ fn new_game(a: &Assets, chk: &Chk, rep: Option<&crate::replay::Header>, gs: Opti
         if !loading {
             st.players.init_gamedata(st.multiplayer, st.template[0x10], &st.seat_races, &team_lead);
         }
+        // 0x4eec30: the game-start resets, ending with 0x489b30 (below).
+        st.reset_game_start(loading);
         // 0x4eec30 -> 0x489b30: trigger state for a new game (0x489790: who is in it).
         st.init_trigger_players();
         // 0x4ef100: srand(0x51ca10, the game seed) for the CRT rand creep tiles use; then
@@ -2794,6 +2805,10 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
                                 let me = scene.local;
                                 with_data(a, |d| scene.st.command_cheat_packet(d, me, opt));
                             }
+                            // 0x4f32d0: in a replay (0x6d0f14) the "/replay " command (0x4de6a0).
+                            if replay.is_some() {
+                                crate::chat::replay_command(&t, &mut scene.st.trig);
+                            }
                             // 0x4b2350 -> 0x4a62b0 (0x596904 == 3, 0x6d11e4 Brood War installed, 0x57f1e2 zerg):
                             // Radio Free Zerg on / off, with network.tbl line 0x41 / 0x42 (0x48ccb0: 7 s).
                             if act.radio && scene.local_race() == 0 && a.files.read("rez/gluexpcmpgn.bin").is_ok() {
@@ -3259,45 +3274,60 @@ fn draw_coded(ui: &crate::ui::Ui, s: &str, x: i32, y: i32, out: &mut [u8], w: i3
 /// the real ones by 1/16 of the difference (0x4e52e0). A replay shows the first
 /// selected unit's owner, nothing for none or neutral.
 /// 0x488900: supplies available, min(provided, cap) (inline here).
+/// 0x4e52e0: the counter step (inline here). 0x4e5590 / 0x4e5600: the countdown timer in
+/// control -10 (`Trig::countdown_text`, set by 0x489cc0's second tick).
+/// 0x4e51c0 (+ 0x4e1d20, the color fill) is the bar of control 6, drawn by 0x4e5460 only
+/// when it is shown; 0x4e57d0, its only caller (0x4e58fe), hides it, so it never draws.
 fn draw_resources(scene: &Scene, ui: &crate::ui::Ui, out: &mut [u8]) {
     let (w, h) = (SCREEN_W, SCREEN_H);
     let st = &scene.st;
     let mut jump = false;
-    let p = if st.replay {
+    let owner = if st.replay {
         let owner = scene.st.selected.first().map(|&u| st.units[u as usize].player).filter(|&p| p != 11);
-        let Some(p) = owner else {
+        if owner.is_none() {
             ui.res_shown.set((ui.res_shown.get().0, ui.res_shown.get().1, 0xff));
-            return;
-        };
-        jump = ui.res_shown.get().2 != p;
-        p
-    } else {
-        scene.local_player()
-    } as usize;
-    let pl = &st.players;
-    let mut items: Vec<(u16, String)> = Vec::new();
-    for race in 0..3 {
-        // 0x488900: available = min(provided, cap).
-        let avail = pl.supply_provided[race][p].min(pl.supply_max[race][p]);
-        if avail as u16 != 0 {
-            let (used, avail) = ((pl.supply_used[race][p] as u16 as u32 + 1) / 2, (avail as u16 as u32 + 1) / 2);
-            items.push((4 + race as u16, format!("{}{used}\x01/{avail}", if avail < used { '\x06' } else { '\x07' })));
         }
-    }
-    // 0x4e52e0: the counters (0x68c22c gas, 0x68c230 minerals).
-    // ponytail: one step per drawn frame; the original's dialog timer runs every 20 ms
-    // (0x416090), add a real-time step count when it matters.
-    let step = |shown: i32, real: i32| {
-        let d = real - shown;
-        if d == 0 || jump { real } else { shown + ((d + (d >> 31 & 0xf)) >> 4) + if d > 0 { 1 } else { -1 } }
+        jump = owner.is_some_and(|p| ui.res_shown.get().2 != p);
+        owner
+    } else {
+        Some(scene.local_player())
     };
-    let (m0, g0, _) = ui.res_shown.get();
-    let (m, g) = (step(m0, pl.minerals[p] as i32), step(g0, pl.gas[p] as i32));
-    ui.res_shown.set((m, g, p as u8));
-    items.push((1 + scene.local_race() as u16, g.to_string()));
-    items.push((0, m.to_string()));
+    // (control id, icons.grp frame, text); a replay without an owner leaves controls 1..5 hidden.
+    let mut items: Vec<(i16, u16, String)> = Vec::new();
+    if let Some(p) = owner.map(|p| p as usize) {
+        let pl = &st.players;
+        let mut n = 1i16;
+        for race in 0..3 {
+            // 0x488900: available = min(provided, cap).
+            let avail = pl.supply_provided[race][p].min(pl.supply_max[race][p]);
+            if avail as u16 != 0 {
+                let (used, avail) = ((pl.supply_used[race][p] as u16 as u32 + 1) / 2, (avail as u16 as u32 + 1) / 2);
+                items.push((n, 4 + race as u16, format!("{}{used}\x01/{avail}", if avail < used { '\x06' } else { '\x07' })));
+                n += 1;
+            }
+        }
+        // 0x4e52e0: the counters (0x68c22c gas, 0x68c230 minerals): a shown counter steps
+        // toward the real amount by 1/16 of the difference plus 1 (rounded away from zero;
+        // at once after a change of the shown player), and the control takes its frame and
+        // text (inline here).
+        // ponytail: one step per drawn frame; the original's dialog timer runs every 20 ms
+        // (0x416090), add a real-time step count when it matters.
+        let step = |shown: i32, real: i32| {
+            let d = real - shown;
+            if d == 0 || jump { real } else { shown + ((d + (d >> 31 & 0xf)) >> 4) + if d > 0 { 1 } else { -1 } }
+        };
+        let (m0, g0, _) = ui.res_shown.get();
+        let (m, g) = (step(m0, pl.minerals[p] as i32), step(g0, pl.gas[p] as i32));
+        ui.res_shown.set((m, g, p as u8));
+        items.push((n, 1 + scene.local_race() as u16, g.to_string()));
+        items.push((n + 1, 0, m.to_string()));
+    }
+    // 0x4e5590 / 0x4e5600: the countdown timer, control -10 (frame 0 from 0x4e5870).
+    if let Some(t) = &st.trig.countdown_text {
+        items.push((-10, 0, t.clone()));
+    }
     let o = crate::ui::TextOpts { flags: 0x21, ..crate::ui::TextOpts::new() };
-    for (id, (icon, text)) in (1..=5i16).zip(items) {
+    for (id, icon, text) in items {
         let Some(r) = ui.statres.screen_rect(id) else { continue };
         let Some(f) = ui.icons.frame(icon as usize) else { continue };
         blit_frame(&ui.icons, icon as usize, r.0, r.1 + (r.3 - r.1 + 1 - f.h) / 2, f.w, f.h, None, out, w, h);

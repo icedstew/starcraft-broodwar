@@ -146,6 +146,21 @@ pub fn replay_path(exe_dir: &str, name: &str) -> Option<String> {
     crate::saveload::create_dirs(&dir).then(|| format!("{dir}{name}.rep"))
 }
 
+/// 0x4dea10 (the slot table and colors part): the player table 0x57eee0 into the header's
+/// 12 slots (+0xa1, 0x24 bytes each; the storm id at +4 is the recorded game's) and the 8 color
+/// slots 0x57f21c into +0x251. The game info part is todo_port in `live_header`.
+fn copy_to_header(st: &State, h: &mut [u8]) {
+    let storm = STORM.with(|s| *s.borrow());
+    for (i, t) in st.player_table().chunks_exact(0x24).enumerate() {
+        let o = 0xa1 + i * 0x24;
+        h[o..o + 0x24].copy_from_slice(t);
+        h[o + 4..o + 8].copy_from_slice(&(storm[i] as u32).to_le_bytes());
+    }
+    for (i, c) in st.color_slot.iter().enumerate() {
+        h[0x251 + i * 4..0x255 + i * 4].copy_from_slice(&c.to_le_bytes());
+    }
+}
+
 /// The header image 0x6d0f30 of the game that ended: the engine (0x58f440), the frame count
 /// (0x6d0f31), the game info 0x5967f8 (+0x14: the map size, the tileset and the template; the
 /// rest is not kept), the slot table (+0xa1) and the colors (+0x251).
@@ -159,13 +174,7 @@ pub fn live_header(st: &State, recorded: &[u8]) -> Vec<u8> {
     h[info + 0x22..info + 0x24].copy_from_slice(&(st.map_tiles.1 as u16).to_le_bytes());
     h[info + 0x30..info + 0x32].copy_from_slice(&st.tileset.to_le_bytes());
     h[info + 0x6d..info + 0x8d].copy_from_slice(&st.template);
-    let storm = STORM.with(|s| *s.borrow());
-    for (i, t) in st.player_table().chunks_exact(0x24).enumerate() {
-        let o = 0xa1 + i * 0x24;
-        h[o..o + 0x24].copy_from_slice(t);
-        h[o + 4..o + 8].copy_from_slice(&(storm[i] as u32).to_le_bytes());
-    }
-    todo_port!("0x4de950", "the players' color slots 0x57f21c in the header");
+    copy_to_header(st, &mut h);
     h
 }
 

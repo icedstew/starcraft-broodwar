@@ -463,8 +463,35 @@ fn disable(dlg: &mut Dialog, id: i16) {
     }
 }
 
+/// What `option_event` leaves to the caller.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum OptionAct {
+    /// Handled, return 1.
+    Done,
+    /// The option click 0x4e1900 (the box is selected, the others of its group cleared).
+    Click,
+    /// Not handled: the default dispatcher `Ctl::default_event` (0x4e1a70).
+    Default,
+}
+
+/// 0x4e1bc0 (ECX = the option box, EDX = the event record): `sub` = the record's word at +0xc,
+/// `ev` = its number at +0, `data` = its dword at +4. Event 10 raises the box's height to
+/// the option graphic's (`op` = 0x6d0520); 2 and 0xb (with `data` set) click it.
+pub fn option_event(c: &mut Ctl, sub: u16, ev: u32, data: u32, op: i32) -> OptionAct {
+    if sub == 0xe {
+        match ev {
+            2 => return OptionAct::Click,
+            10 => c.rect.3 = c.rect.3.max(c.rect.1 + op),
+            0xb => return if data == 0 { OptionAct::Done } else { OptionAct::Click },
+            _ => {}
+        }
+    }
+    OptionAct::Default
+}
+
 impl Menu {
     /// 0x4f57a0 + the dialog's init (event 0xe, user 0).
+    /// 0x4cda30: the Cancel / Previous (-3) graphic and the WIDE flag (inline here).
     pub fn open(kind: Kind, depth: u8, files: &Storage, skin: &Skin, ctx: Ctx, set: &Settings) -> Option<Menu> {
         let mut dlg = Dialog::parse(&files.read(kind.bin(ctx.replay)).ok()?);
         dlg.this.flags |= flag::VISIBLE;
@@ -627,7 +654,7 @@ impl Menu {
             }
             _ => {}
         }
-        // Check / option boxes: 0x4e1b50 / 0x4e1bc0 (user 10): graphic 0xb, at least
+        // Check / option boxes: 0x4e1b50 / 0x4e1bc0 (user 10, `option_event`): graphic 0xb, at least
         // one box tall.
         let (ck, op) = (skin_check(skin), skin_option(skin));
         for c in dlg.controls.iter_mut() {

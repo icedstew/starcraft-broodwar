@@ -138,6 +138,8 @@ impl Replay {
     }
 }
 
+/// Also the data 0x4de9a0 (the 12 slots at +0xa1 into the player table 0x57eee0) and 0x4de950
+/// (the 8 color dwords at +0x251 into 0x57f21c) copy out of a replay's header when it plays.
 fn parse_header(d: &[u8]) -> Header {
     let u16_at = |o: usize| u16::from_le_bytes([d[o], d[o + 1]]);
     let u32_at = |o: usize| u32::from_le_bytes(d[o..o + 4].try_into().unwrap());

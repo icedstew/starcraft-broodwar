@@ -310,3 +310,116 @@ deferred 0x4a3380   # blocking network wait loop (DirectPlay receive)
 deferred 0x4c4fa0   # flush per-player pending net words 0x5971e4 (network game)
 deferred 0x4a6ee0   # registry recent maps list read (glue_create.rs todo)
 deferred 0x4a7210   # registry recent maps: chosen map first
+replaced 0x4da260   # Storm file-exists probe (CD check): Storage layer
+replaced 0x4da950   # CD / MPQ presence check and insert-disc prompt: archives read from SCBW_INSTALL
+replaced 0x4db140   # Storm free of a dialog control buffer: Rust ownership
+replaced 0x4d7390   # Storm loads of iscript.bin / images.dat / tselect.pcx: dat.rs, iscript.rs, view.rs
+replaced 0x4daf30   # startup orchestrator (signals, error handler, Win32 init): main.rs startup
+replaced 0x4e05b0   # Win32 window class / main window / IME: minifb window
+deferred 0x4db490   # launches StarEdit.exe (no editor)
+replaced 0x4cdce0   # read-only replay command block walk, result unused
+replaced 0x4d13b0   # current cursor index / GRP state: the cursor is chosen per frame (ui.rs draw_cursor)
+replaced 0x4d11a0   # console bitmap row bounds cache for 0x4d1140: ui.rs hud_hit tests pixels
+replaced 0x4cc6e0   # re-reads scenario.chk for the replay file: the chk kept from game start
+replaced 0x4dca20   # install-relative path copy for the map list: scbw keeps absolute paths (glue_create.rs create_list_init)
+replaced 0x4dc9a0   # memmove helper of 0x4dca20
+replaced 0x401000   # Storm heap / intrusive list helper (alloc, unlink, free, clear): Vec / Drop
+replaced 0x401270   # Storm heap / intrusive list helper (alloc, unlink, free, clear): Vec / Drop
+replaced 0x4016a0   # Storm heap / intrusive list helper (alloc, unlink, free, clear): Vec / Drop
+replaced 0x401860   # Storm heap / intrusive list helper (alloc, unlink, free, clear): Vec / Drop
+replaced 0x401920   # Storm heap / intrusive list helper (alloc, unlink, free, clear): Vec / Drop
+replaced 0x401a60   # Storm heap / intrusive list helper (alloc, unlink, free, clear): Vec / Drop
+replaced 0x401b20   # Storm heap / intrusive list helper (alloc, unlink, free, clear): Vec / Drop
+replaced 0x4018b0   # Storm heap / intrusive list helper (alloc, unlink, free, clear): Vec / Drop
+replaced 0x401ab0   # Storm heap / intrusive list helper (alloc, unlink, free, clear): Vec / Drop
+replaced 0x401b70   # Storm heap / intrusive list helper (alloc, unlink, free, clear): Vec / Drop
+replaced 0x401be0   # Storm heap / intrusive list helper (alloc, unlink, free, clear): Vec / Drop
+replaced 0x401c30   # Storm heap / intrusive list helper (alloc, unlink, free, clear): Vec / Drop
+replaced 0x402630   # Storm heap / intrusive list helper (alloc, unlink, free, clear): Vec / Drop
+replaced 0x402870   # Storm heap / intrusive list helper (alloc, unlink, free, clear): Vec / Drop
+replaced 0x4028e0   # Storm heap / intrusive list helper (alloc, unlink, free, clear): Vec / Drop
+replaced 0x402930   # Storm heap / intrusive list helper (alloc, unlink, free, clear): Vec / Drop
+replaced 0x404a10   # Storm heap / intrusive list helper (alloc, unlink, free, clear): Vec / Drop
+replaced 0x404a60   # Storm heap / intrusive list helper (alloc, unlink, free, clear): Vec / Drop
+replaced 0x404ad0   # Storm heap / intrusive list helper (alloc, unlink, free, clear): Vec / Drop
+replaced 0x4cb0a0   # Storm heap / intrusive list helper (alloc, unlink, free, clear): Vec / Drop
+replaced 0x4cb140   # Storm heap / intrusive list helper (alloc, unlink, free, clear): Vec / Drop
+replaced 0x4beb40   # leaderboard row cache release: leaderboard.rs redraws each frame
+replaced 0x4e10f0   # registers the light-up 30 ms timer (0x416090): Dialog::tick
+replaced 0x4eff80   # batched one-row span fill with a row cache: direct pixel writes (dlg.rs outline)
+deferred 0x4f3280   # chat send to the recipients (network)
+replaced 0x424660   # "group changed" compare against the 0x6ca94c cache: panel rebuilt each frame
+replaced 0x424780   # "unit panel changed" compare against 0x6ca93c: panel rebuilt each frame
+replaced 0x424980   # panel-changed wrapper over the caches: panel rebuilt each frame
+replaced 0x425230   # supply "changed" compare against 0x6ca93e: panel rebuilt each frame
+replaced 0x4e51c0   # resource panel id 6 gauge: hidden at init (0x4e57d0 with 0) and its fraction stays 0, never drawn
+replaced 0x42d240   # cost-check slot setter: no call, jump or data reference in the exe (dead)
+replaced 0x42bbd0   # frees the 4 contour buffers: Vec drop in Contours
+replaced 0x42b570   # SHA-0 update (bit count + 0x42ae90 per block); only caller is 0x42b5d0 (ctx 0x6ca550+i*0x5c), which has no callers; grid.rs uses sha_transform directly
+replaced 0x42b5d0   # SHA-0 update+copy-out wrapper over ctx array 0x6ca550; no call sites in the exe
+replaced 0x42a8a0   # sets byte +5=1 over x0..x1 of a row in 6-byte records; no callers/references in the exe (dead code)
+replaced 0x431ce0   # dead: no call, jump or address reference in the exe (refs.py)
+replaced 0x431da0   # dead: no call, jump or address reference in the exe (refs.py)
+replaced 0x431dc0   # dead: no call, jump or address reference in the exe (refs.py)
+replaced 0x431f60   # dead: no call, jump or address reference in the exe (refs.py)
+replaced 0x431ff0   # dead: no call, jump or address reference in the exe (refs.py)
+replaced 0x432400   # dead: no call, jump or address reference in the exe (refs.py)
+replaced 0x4335f0   # dead: no call, jump or address reference in the exe (refs.py)
+replaced 0x434020   # dead: no call, jump or address reference in the exe (refs.py)
+replaced 0x434450   # dead: no call, jump or address reference in the exe (refs.py)
+replaced 0x436e10   # dead: no call, jump or address reference in the exe (refs.py)
+replaced 0x4382c0   # dead: no call, jump or address reference in the exe (refs.py)
+replaced 0x438ec0   # dead: no call, jump or address reference in the exe (refs.py)
+replaced 0x439d50   # dead: no call, jump or address reference in the exe (refs.py)
+replaced 0x43a1d0   # dead: no call, jump or address reference in the exe (refs.py)
+replaced 0x43db10   # dead: no call, jump or address reference in the exe (refs.py)
+replaced 0x440240   # dead: no call, jump or address reference in the exe (refs.py)
+replaced 0x4409d0   # dead: no call, jump or address reference in the exe (refs.py)
+replaced 0x441259   # dead: no call, jump or address reference in the exe (refs.py)
+replaced 0x444850   # dead: no call, jump or address reference in the exe (refs.py)
+replaced 0x446b80   # dead: no call, jump or address reference in the exe (refs.py)
+replaced 0x446c10   # dead: no call, jump or address reference in the exe (refs.py)
+replaced 0x446d00   # dead: no call, jump or address reference in the exe (refs.py)
+replaced 0x446ea0   # dead: no call, jump or address reference in the exe (refs.py)
+replaced 0x446ed0   # dead: no call, jump or address reference in the exe (refs.py)
+replaced 0x447010   # dead: no call, jump or address reference in the exe (refs.py)
+replaced 0x447780   # dead: no call, jump or address reference in the exe (refs.py)
+replaced 0x448160   # dead: no call, jump or address reference in the exe (refs.py)
+replaced 0x4481c0   # dead: no call, jump or address reference in the exe (refs.py)
+replaced 0x4483d0   # dead: no call, jump or address reference in the exe (refs.py)
+replaced 0x4489f0   # Win32 static text fit (GetClientRect / DrawTextA)
+replaced 0x448d60   # Win32 dialog window proc
+replaced 0x449070   # Win32 (GDI / listbox / combo / registry) create-game dialog 0x44b7e0 family: scbw draws its own (glue_create.rs)
+replaced 0x449140   # Win32 (GDI / listbox / combo / registry) create-game dialog 0x44b7e0 family: scbw draws its own (glue_create.rs)
+replaced 0x449190   # Win32 (GDI / listbox / combo / registry) create-game dialog 0x44b7e0 family: scbw draws its own (glue_create.rs)
+replaced 0x4494a0   # Win32 (GDI / listbox / combo / registry) create-game dialog 0x44b7e0 family: scbw draws its own (glue_create.rs)
+replaced 0x449650   # Win32 (GDI / listbox / combo / registry) create-game dialog 0x44b7e0 family: scbw draws its own (glue_create.rs)
+replaced 0x4499e0   # Win32 (GDI / listbox / combo / registry) create-game dialog 0x44b7e0 family: scbw draws its own (glue_create.rs)
+replaced 0x449f60   # Win32 (GDI / listbox / combo / registry) create-game dialog 0x44b7e0 family: scbw draws its own (glue_create.rs)
+replaced 0x44a000   # Win32 (GDI / listbox / combo / registry) create-game dialog 0x44b7e0 family: scbw draws its own (glue_create.rs)
+replaced 0x44a070   # Win32 (GDI / listbox / combo / registry) create-game dialog 0x44b7e0 family: scbw draws its own (glue_create.rs)
+replaced 0x44a210   # Win32 (GDI / listbox / combo / registry) create-game dialog 0x44b7e0 family: scbw draws its own (glue_create.rs)
+replaced 0x44ab40   # Win32 (GDI / listbox / combo / registry) create-game dialog 0x44b7e0 family: scbw draws its own (glue_create.rs)
+replaced 0x44abb0   # Win32 (GDI / listbox / combo / registry) create-game dialog 0x44b7e0 family: scbw draws its own (glue_create.rs)
+replaced 0x44af10   # Win32 (GDI / listbox / combo / registry) create-game dialog 0x44b7e0 family: scbw draws its own (glue_create.rs)
+replaced 0x44b030   # Win32 (GDI / listbox / combo / registry) create-game dialog 0x44b7e0 family: scbw draws its own (glue_create.rs)
+replaced 0x44b0d0   # Win32 (GDI / listbox / combo / registry) create-game dialog 0x44b7e0 family: scbw draws its own (glue_create.rs)
+replaced 0x44b150   # Win32 (GDI / listbox / combo / registry) create-game dialog 0x44b7e0 family: scbw draws its own (glue_create.rs)
+replaced 0x44b1b0   # Win32 (GDI / listbox / combo / registry) create-game dialog 0x44b7e0 family: scbw draws its own (glue_create.rs)
+replaced 0x44b240   # Win32 (GDI / listbox / combo / registry) create-game dialog 0x44b7e0 family: scbw draws its own (glue_create.rs)
+replaced 0x44b2c0   # Win32 (GDI / listbox / combo / registry) create-game dialog 0x44b7e0 family: scbw draws its own (glue_create.rs)
+replaced 0x44b4a0   # Win32 (GDI / listbox / combo / registry) create-game dialog 0x44b7e0 family: scbw draws its own (glue_create.rs)
+replaced 0x44b7e0   # Win32 (GDI / listbox / combo / registry) create-game dialog 0x44b7e0 family: scbw draws its own (glue_create.rs)
+deferred 0x449810   # create-game validity check of the Win32 create dialog (table 0x4ad190; network create)
+deferred 0x44b9c0   # Win32 network lobby dialog 0x44c960 family (networking)
+deferred 0x44bae0   # Win32 network lobby dialog 0x44c960 family (networking)
+deferred 0x44bb20   # Win32 network lobby dialog 0x44c960 family (networking)
+deferred 0x44bc40   # Win32 network lobby dialog 0x44c960 family (networking)
+deferred 0x44c030   # Win32 network lobby dialog 0x44c960 family (networking)
+deferred 0x44c170   # Win32 network lobby dialog 0x44c960 family (networking)
+deferred 0x44c400   # Win32 network lobby dialog 0x44c960 family (networking)
+deferred 0x44c620   # Win32 network lobby dialog 0x44c960 family (networking)
+deferred 0x44c960   # Win32 network lobby dialog 0x44c960 family (networking)
+deferred 0x44cbe0   # Win32 network lobby dialog 0x44c960 family (networking)
+replaced 0x44d540   # Win32 profile dialog 0x44e1d0 family (key table / dialog run): profiles are glue.rs / setup.rs
+replaced 0x44e150   # Win32 profile dialog 0x44e1d0 family (key table / dialog run): profiles are glue.rs / setup.rs

@@ -962,6 +962,54 @@ impl State {
         }
     }
 
+    /// 0x4eed10 (tail, after 0x4cfef0 / 0x4c3bb0 and 0x4d92a0): 0x596b7c = the local
+    /// player's row (0x512688) of 0x6284e8, then all rows are cleared.
+    pub fn take_start_selection(&mut self) {
+        self.start_selection = self.selections[self.local_player as usize & 7];
+        self.selections = [[NIL; 12]; 8];
+    }
+
+    /// 0x4d0820 (game start, from 0x4d9950 after the first steps): reselect what the saved
+    /// game's local player had selected. 0x4eed10 copied that row of 0x6284e8 to 0x596b7c
+    /// and zeroed all rows (nothing for a new game); the first 12 entries that have a
+    /// sprite, are alive and are seen by the local vision mask become the selection (0x49ae40,
+    /// sent by 0x4c0860 = the caller's `sim_selection`). A lone unit with Alt held (0x596a2a)
+    /// takes its best recent group instead when it is in one (0x496d30 -> 0x496b40).
+    /// The row is `start_selection`, taken by `take_start_selection` before the steps.
+    pub fn game_start_selection(&mut self, d: &Data) {
+        let row = self.start_selection;
+        let mut list: Vec<u32> = selection_units(&row)
+            .iter()
+            .copied()
+            .filter(|&u| {
+                let un = &self.units[u as usize];
+                un.sprite != NIL
+                    && (un.order != 0 || un.order_state != 1)
+                    && self.sprites[un.sprite as usize].visibility & self.local_vision_mask != 0
+            })
+            .collect();
+        if !list.is_empty() {
+            let mut done = false;
+            if list.len() == 1 && self.key_alt {
+                let h = self.unit_handle(list[0]);
+                if let Some(g) = self.recent_group_of(h) {
+                    let sel = self.select_recent_group(d, g);
+                    if !sel.is_empty() {
+                        let n = sel.len();
+                        self.selection_set(d, &mut sel.clone(), n);
+                    }
+                    done = true;
+                }
+            }
+            if !done {
+                let n = list.len();
+                self.selection_set(d, &mut list, n);
+            }
+        }
+        // 0x59723c (when selected), 0x68c1b0, 0x68ac74, 0x68c1f8 = 1; 0x68c1e8 / 0x68c1ec = 0:
+        // UI refresh flags.
+    }
+
     /// 0x49f7a0 (EAX = unit): a selected unit (sprite flag 8) leaves the selection, by
     /// the slot its sprite holds; an emptied selection ends placement and targeting.
     pub fn selection_remove_local(&mut self, d: &Data, u: u32) {

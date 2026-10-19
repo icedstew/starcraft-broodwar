@@ -275,6 +275,7 @@ impl State {
 
     /// 0x4404a0: a neutral addon of `b`'s type at the addon position next to `b`
     /// (0x4402f0 over the units in `b`'s placement box grown by 0x20 each way).
+    /// 0x4402f0: the box search filter for an adjacent free addon (inline here).
     fn find_adjacent_addon(&mut self, d: &Data, b: u32) -> Option<u32> {
         let bt = self.units[b as usize].unit_type;
         let (pw, ph) = (d.dat.units.placement_box[bt as usize] as i16, (d.dat.units.placement_box[bt as usize] >> 16) as i16);

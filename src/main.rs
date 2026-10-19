@@ -236,8 +236,10 @@ fn main() -> std::io::Result<()> {
             // 0x4d9950 first sets the 100-frame counter 0x51ce98 to 1, so the first step is a
             // 100th frame (vision reset) and the resets come every 100 steps from there.
             st.counter_100 = 1;
+            st.take_start_selection();
             st.game_step(&d);
             st.game_step(&d);
+            st.game_start_selection(&d);
             if let Ok(m) = std::env::var("SCBW_MOVE") {
                 apply_moves(&mut st, &d, &made, &m);
             }

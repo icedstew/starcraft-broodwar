@@ -543,6 +543,8 @@ impl State {
 
     /// 0x4e8280 over the finder box `range` + 0x40 around `u` with filter 0x442da0
     /// (`min` = 0x6955dc, `range` = 0x6957a4): candidates by target priority (0x440160).
+    /// 0x440160: the target bucket push, 16 per priority (inline here).
+    /// 0x442da0: the target finder's filter (inline here).
     fn target_buckets(&mut self, d: &Data, u: u32, range: u32, min: u32) -> [Vec<u32>; 6] {
         let (x, y) = self.unit_sprite_pos(u);
         let e = range as i16 + 0x40;

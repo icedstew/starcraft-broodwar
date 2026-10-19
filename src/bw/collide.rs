@@ -261,6 +261,7 @@ impl State {
         x(fa[0]) <= x(fb[1]) && x(fb[0]) <= x(fa[1]) && y(fa[2]) <= y(fb[3]) && y(fb[2]) <= y(fa[3])
     }
 
+    /// 0x42d650: overlap callback (inline in the loop below).
     /// 0x42d9a0: refresh the "overlapping another unit" status (0x40000) of the units
     /// touching `u`'s box (0x4e8830 with callback 0x42d650).
     pub fn update_unit_overlaps(&mut self, d: &Data, u: u32) {
@@ -1219,6 +1220,7 @@ impl State {
 }
 
 /// 0x42a5c0: clip segment (a, b) to `rc` (left, top, right, bottom), Cohen-Sutherland.
+/// 0x42a570: a point's outcode against the rect, 1 left / 2 right / 4 bottom / 8 top (`code`, inline here).
 pub fn clip_segment(mut a: Pt, mut b: Pt, rc: [i16; 4]) -> Option<(Pt, Pt)> {
     let code = |p: Pt| -> u8 {
         (p.0 < rc[0]) as u8 | ((p.0 > rc[2]) as u8) << 1 | ((p.1 < rc[1]) as u8) << 3 | ((p.1 > rc[3]) as u8) << 2

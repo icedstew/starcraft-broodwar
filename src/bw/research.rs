@@ -96,6 +96,7 @@ impl State {
         ud.gas_factor[i] as u32 * self.players.upgrade_level(player, i) as u32 + ud.gas_base[i] as u32
     }
 
+    /// 0x42cf20: (wrapper storing this mineral cost and upgrade_gas_cost, masked to 16 bits, via ESI / EDI).
     /// 0x453f20: mineral cost of the next level of upgrade `up` for `player`.
     pub fn upgrade_mineral_cost(&self, d: &Data, player: u8, up: u8) -> u32 {
         let ud = &d.dat.upgrades;

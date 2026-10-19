@@ -213,6 +213,18 @@ Delegate per agents.md: Haiku triage, Sonnet porting, Opus review / hard RE / co
   cheat gating 0x4b1b50 (multiplayer, mission jump), trigger kill count 0 = all 0x4c7d80,
   template parser 0x4aae20 stops on bad quotes; ~45 inline equivalents annotated, render /
   network / registry ones bucketed. In scope 2543 / 4494.
+  2026-10-19 waves 5-7: replay header copies (0x4dea10 slots / colors into LastReplay.rep;
+  game-info part todo), /replay show|hide chat commands 0x4de6a0 / 0x4df3b0 / 0x4df360,
+  game-start selection 0x4d0820 + 0x4eed10 copy (`start_selection`), game-start reset
+  0x4eec30 (`reset_game_start`), glue start branches 0x4ee3d0 / 0x4ee520 (stub) / 0x4ee5b0
+  (Zerg campaign headless flow unchanged; Terran with SCBW_GLUE_GAME exits without a PNG
+  before and after: open), countdown timer drawn in the resource panel (id -10, frame-0
+  icon: not checked vs native), light-up / option event dispatchers 0x4e1670 / 0x4e1bc0
+  (no callers yet), cursor bounds 0x4d12a0; ~150 table-dispatched functions verified and
+  annotated (button actions / conditions, trigger conditions, chk_load); dead functions
+  (no exe reference, refs.py + whole-file dword scan) and Win32 dialogs bucketed. In scope
+  2686+ / 4494. `scbw reprecord` differs on 14 of the 90 local 1.16.1 replays (output
+  truncated; same before these changes).
   Open: 0x49cc40 (would fill `seat_races` 0x57f1c0 in slot order, clashes with the
   SCBW_TEAMS hack), 0x4b6810 (popup text set even when empty, proc 0x4b67f0), 0x48da30
   (placement surface from frame bytes +8/+9 vs grp size), 0x4b4a00 (0x4dd9e0 0xf4 call),

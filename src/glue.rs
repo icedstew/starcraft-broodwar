@@ -202,13 +202,15 @@ pub enum Open {
     DeleteSave,
 }
 
-/// 0x50e06c + 0x10a: the light percentage translucent image controls use (0x6d5e24).
+/// 0x4dc750 (EAX = palette index, via 0x4ffad4): 0x50e06c + 0x10a: the light percentage
+/// translucent image controls use (0x6d5e24; the word after it, 0x6d5e28, is 75 for every
+/// palette). The redraw flag 0x51a190 it sets when 0x51a18c changes is not needed here.
 /// Every palette has 50 (0x32) but the last (PalNl) with 75.
 fn image_percent(palette: usize) -> i32 {
     if palette == 11 { 75 } else { 50 }
 }
 
-/// 0x50e06c + 0x108: the tEffect.pcx pixel the palette's shade color (0x51a18c) is.
+/// 0x4dc750: 0x50e06c + 0x108: the tEffect.pcx pixel the palette's shade color (0x51a18c) is.
 const SHADE_INDEX: usize = 1;
 
 pub struct Glue {
@@ -222,6 +224,10 @@ pub struct Glue {
     /// 0x51c410 / 0x51c608: the mission and race the first pass starts (the cheat's).
     start_mission_no: u16,
     start_race: u32,
+    /// 0x6d11c0: the ready room's mission is to be re-read at the game start (0x4ee5b0).
+    start_6d11c0: bool,
+    /// 0x6d0f0c: set with state 5; the game start re-reads the map (0x4ee3d0).
+    start_6d0f0c: bool,
     /// The game that just ended in victory / defeat (state 6 / 7), for the score screen.
     pub game_end: Option<crate::view::GameEnd>,
     /// 0x58d6c4: the mission objectives string per player (the briefing's action 0x427ec0
@@ -368,6 +374,8 @@ impl Glue {
             first: false,
             start_mission_no: 0,
             start_race: 0,
+            start_6d11c0: false,
+            start_6d0f0c: false,
             game_end: None,
             objectives: [0; 8],
             multiplayer: false,
@@ -454,6 +462,8 @@ impl Glue {
                 if self.state == state::GLUE || self.dlg.is_some() { Top::Glue } else { self.top_step(files) }
             }
             5 | state::START => {
+                // 0x4e09dc: state 5 sets 0x6d0f0c.
+                self.start_6d0f0c |= self.state == 5;
                 self.state = state::GAME;
                 Top::Game
             }
@@ -526,6 +536,7 @@ impl Glue {
             };
             if let Some(room) = room {
                 self.screen = room;
+                self.start_6d11c0 = true;
                 if self.g6d5a6c & 0x2000_0000 != 0 {
                     self.state = state::START;
                 }
@@ -589,6 +600,7 @@ impl Glue {
     /// 0x4d27a0 and event proc 0x4db7a0.
     fn open_main(&mut self, files: &Storage) {
         // 0x6d5a10 = 0 (the 0x4de200 case), 0x57f0b4 = 0.
+        self.setup.quiet = false;
         self.multiplayer = false;
         // The event proc 0x4db7a0: case 10 (0x4dd9e0), case 0 (0x4db280 + 0x4de150 + title
         // music), the dialog's init.
@@ -718,7 +730,8 @@ impl Glue {
     /// 0x4b2930 (`exp` false, rez\gluCmpgn.bin, event proc 0x4b28b0) / 0x4b52a0 (rez\
     /// gluExpCmpgn.bin, 0x4b5220), before 0x41a080: the campaign select.
     fn open_campaign(&mut self, files: &Storage, exp: bool) {
-        // 0x6d11c0 = 0, 0x57f0b4 = 0.
+        self.start_6d11c0 = false;
+        // 0x57f0b4 = 0.
         self.multiplayer = false;
         self.campaign_precheck(files, exp);
         let bin = if exp { "rez/gluExpCmpgn.bin" } else { "rez/gluCmpgn.bin" };
@@ -1175,8 +1188,18 @@ impl Glue {
         if !self.setup.load_map(files, &path, &mut hdr, true, &self.network_raw) {
             return false;
         }
-        // The game description (0x8d bytes): +4 the player name (0x18), +0x24 / +0x25 = 1,
-        // +0x26 the speed (0x6cdfd4), +0x4d the map title (0x20), +0x6d the template.
+        let Some(d) = self.mission_desc(files) else { return false };
+        if !self.setup.local_slot_setup() {
+            return false;
+        }
+        // 0x596888 = 0.
+        self.create_game(&d)
+    }
+
+    /// The game description of 0x4dbfc0 / 0x4ee5b0 (0x8d bytes): +4 the player name (0x18),
+    /// +0x24 / +0x25 = 1, +0x26 the speed (0x6cdfd4), +0x4d the map title (0x20), +0x6d the
+    /// template 0x4ab750 "Use Map Settings(1)" (None when it cannot be read).
+    fn mission_desc(&self, files: &Storage) -> Option<[u8; 0x8d]> {
         let mut d = [0u8; 0x8d];
         sstr_copy(&mut d[4..], &self.setup.local_name, 0x18);
         sstr_copy(&mut d[0x4d..], &self.setup.map_title, 0x20);
@@ -1184,13 +1207,9 @@ impl Glue {
         d[0x24] = 1;
         d[0x25] = 1;
         let (mut a, mut b) = ([0u8; 0x20], [0u8; 0x20]);
-        let Some(t) = Setup::load_got(files, "Use Map Settings(1)", &mut a, &mut b) else { return false };
+        let t = Setup::load_got(files, "Use Map Settings(1)", &mut a, &mut b)?;
         d[0x6d..0x8d].copy_from_slice(&t);
-        if !self.setup.local_slot_setup() {
-            return false;
-        }
-        // 0x596888 = 0.
-        self.create_game(&d)
+        Some(d)
     }
 
     /// 0x4f71f0 (`race` 0 zerg, rez\glurdyz.bin, event proc 0x4f7150) / 0x4f7550 (1 terran,
@@ -1270,7 +1289,10 @@ impl Glue {
             c.flags |= 0x20000;
         }
         self.dlg = Some((dlg, Open::Login));
-        // Event 10's 0x4ed810: after 0x4dd9e0, the slide-in 0x4dd5e0 (ECX = 0x512a00, AX = 3).
+        // Event 10's 0x4ed810 (ESI = the dialog): 0x4dd9e0 (EAX = the control proc table 0x51a46c,
+        // which 0x418100 gives the controls by id - 1: the Rust handlers of `Open::Login` stand
+        // for them; the stack arguments 0x24 / 0: 0x4178b0 gets 0) is `open_glue_dialog`'s, then
+        // the slide-in 0x4dd5e0 (ECX = 0x512a00, AX = 3).
         self.slide_in(0x512a00, 3, 0);
         self.login_profiles();
         self.show_palette();
@@ -1305,8 +1327,8 @@ impl Glue {
         self.dlg.as_mut().and_then(|(d, _)| d.get_mut(8))
     }
 
-    /// 0x418640 (on) / 0x418e00 (off) on control `id` of the screen's dialog.
-    /// 0x4ed530: enable a control of the screen's dialog by id (inline here).
+    /// 0x4ed500 (`on`: 0x418640 sets flag 2, DISABLED) / 0x4ed530 (0x418e00 clears it) on
+    /// control `id` of the screen's dialog (they look the control up by id; inline here).
     fn disable(&mut self, id: i16, on: bool) {
         if let Some(c) = self.dlg.as_mut().and_then(|(d, _)| d.get_mut(id)) {
             if on {
@@ -1425,7 +1447,9 @@ impl Glue {
             let msg = self.network.get(5).cloned().unwrap_or_default();
             return self.open_popup(files, &msg);
         }
-        // 0x4ed3a0 (_mbsicmp).
+        // 0x4ed3a0 (walks the profile list 0x51a228 with __mbsicmp: case folding by the CRT's
+        // code page, and double-byte pairs compared whole; the ASCII fold here differs only
+        // for non-ASCII letters, e.g. Latin-1 accents).
         if self.profiles.iter().any(|p| p.name().eq_ignore_ascii_case(&name)) {
             let msg = self.glu_all.get(0x18).cloned().unwrap_or_default();
             return self.open_popup(files, &msg);
@@ -2105,6 +2129,7 @@ impl Glue {
     }
 
     /// 0x4b6c70: the background, flags 0x40000 (inline here).
+    /// 0x4cd9c0: centered when the state is GLUE (inline here).
     /// The part of 0x4b7180 / 0x4b7a70 up to 0x41a080: event 7 (0x4cd9c0: centered), 0
     /// (0x4b6810: the texts; their fit 0x4b6660), 10 (0x4b6c70: 0x4dd9e0 with the
     /// popup's pOPopup.pcx as the background).
@@ -3062,7 +3087,13 @@ pub fn run(files: &Storage, shot: Option<&str>) -> std::io::Result<()> {
                 }
                 // 0x4d9950 (the game wrapper) starts with 0x4be060.
                 glue.set_notice();
-                let Some(g) = glue.begin_game(files) else { return Ok(()) };
+                let Some(g) = glue.begin_game(files) else {
+                    // 0x4ee3d0 / 0x4ee520 / 0x4ee5b0 failed: the error is shown, the glue loop goes on.
+                    if glue.state == state::GLUE {
+                        continue;
+                    }
+                    return Ok(());
+                };
                 // Where the in-game save / load dialogs keep the saves (0x4ce5b0's inputs).
                 crate::menu::set_save_env(crate::menu::SaveEnv {
                     exe_dir: crate::saveload::exe_dir(&glue.setup.characters_dir),

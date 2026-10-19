@@ -961,6 +961,7 @@ impl State {
         (ws.damage_bonus[w] as u32 * level + ws.damage[w] as u32) << 8
     }
 
+    /// 0x42a840: damage type / size multiplier, DAMAGE_MULT[dtype*5+size]*value >> 8 (inline here).
     /// 0x479930: defense matrix, shields, armor and the damage type / size
     /// multiplier, then hp.
     #[allow(clippy::too_many_arguments)]
