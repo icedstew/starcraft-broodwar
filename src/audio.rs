@@ -19,6 +19,11 @@ pub struct Audio {
     music_checked: u128,
     /// The sound options' volumes, 0..=100 (0x6cdfe0 music, 0x6cdfe4 digital).
     volumes: (i16, i16),
+    /// 0x4d8fd0: the music volume to restore when the credits end (it was 0).
+    credits_volume: Option<i16>,
+    /// 0x4a6030: the music fade-in: the attenuation (0x6d5bb8, hundredths of a dB) and when the
+    /// 20 ms timer last ran (`now_ms`).
+    fade_in: Option<(i32, u128)>,
     /// 0x5008f0: DirectSound attenuations (hundredths of a dB) by volume 0..=99, read from
     /// the install's StarCraft.exe (not stored in the repo).
     table: [i32; 100],
@@ -114,7 +119,7 @@ impl Audio {
         let mut sink = rodio::DeviceSinkBuilder::open_default_sink().ok()?;
         sink.log_on_drop(false);
         let names = dat::parse_tbl(&files.read("arr/sfxdata.tbl").ok()?);
-        Some(Audio { sink, names, cache: RefCell::new(HashMap::new()), music: None, music_track: 0, music_checked: 0, volumes: (25, 50),
+        Some(Audio { sink, names, cache: RefCell::new(HashMap::new()), music: None, music_track: 0, music_checked: 0, volumes: (25, 50), credits_volume: None, fade_in: None,
             table: volume_table(), slots: RefCell::new(Default::default()), last: RefCell::new(HashMap::new()), files: RefCell::new(Vec::new()) })
     }
 
@@ -299,6 +304,56 @@ impl Audio {
             p.set_volume(music as f32 / 50.0);
         }
         self.volumes = (music, digital);
+    }
+
+    /// 0x4d8fd0 / 0x4d90c0 (`on`): with the music volume 0 and the digital volume on, the music
+    /// volume is 0x32 while the credits run; false gives it back.
+    pub fn credits_volume(&mut self, on: bool) {
+        if on {
+            if self.volumes.0 == 0 && self.volumes.1 != 0 {
+                self.music = None;
+                self.credits_volume = Some(0);
+                self.volumes.0 = 0x32;
+            }
+        } else if let Some(v) = self.credits_volume.take() {
+            self.volumes.0 = v;
+        }
+    }
+
+    /// 0x4a6310 with the track's fade-in flag (0x512bbd) and the music volume on: the attenuation
+    /// starts at 0xfffff2bc (-3396), and 0x4a6030 (every 20 ms, `tick_fade`) raises it by 400
+    /// until the volume's own level.
+    pub fn start_fade_in(&mut self) {
+        if self.volumes.0 != 0 && self.music.is_some() {
+            self.fade_in = Some((-3396, now_ms()));
+            self.set_fade_volume(-3396);
+        }
+    }
+
+    /// The music volume at attenuation `level`: the volume's own level is 1.0 of it.
+    fn set_fade_volume(&self, level: i32) {
+        let own = self.table[(self.volumes.0 as i32 * 99 / 100).clamp(0, 99) as usize].max(-10000);
+        if let Some(p) = self.music.as_ref() {
+            p.set_volume(self.volumes.0 as f32 / 50.0 * 10f32.powf((level - own).min(0) as f32 / 2000.0));
+        }
+    }
+
+    /// 0x4a6030: the fade-in timer, run for the time that passed.
+    pub fn tick_fade(&mut self) {
+        let Some((mut level, mut last)) = self.fade_in else { return };
+        let now = now_ms();
+        let own = self.table[(self.volumes.0 as i32 * 99 / 100).clamp(0, 99) as usize].max(-10000);
+        while now >= last + 20 {
+            last += 20;
+            level += 400;
+            if own <= level {
+                self.fade_in = None;
+                self.set_fade_volume(own);
+                return;
+            }
+        }
+        self.fade_in = Some((level, last));
+        self.set_fade_volume(level);
     }
 
     pub fn play_music(&mut self, files: &Storage, path: &str) {

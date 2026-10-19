@@ -9,7 +9,6 @@
 
 use super::list::NIL;
 use super::{Data, State};
-use crate::todo_port;
 use std::sync::OnceLock;
 
 pub const ORDERS: &[u16] = &[
@@ -804,9 +803,8 @@ impl State {
                         }
                         count += 1;
                     }
-                    0xff00..=0xffff => {
-                        todo_port!("0x46e1c0", "unit requirement opcode not in the 1.16.1 table");
-                    }
+                    // 0x46e53e: ids outside the jump table (and the 0xff01 / 0xffff / unused ids
+                    // in its range) take the default case: a per-player count lookup.
                     x => count += self.completed_count(x, player) + cheat as i32,
                 }
                 if table[i + 1] != 0xff01 {

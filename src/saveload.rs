@@ -275,6 +275,32 @@ fn find_file_in(dir: &str, name: &str) -> Option<String> {
     ents.iter().filter(|(_, d)| *d).find_map(|(n, _)| find_file_in(&join_dir(dir, n), name))
 }
 
+/// 0x4cf7b0: delete every saved game of `profile` (0x4cf330 on the save dir 0x4ce5b0 with
+/// the pattern "*<extension>" of the game (.snx / .mlx / .sng / .mlt), files only, no
+/// subdirectories, not hidden; the callback 0x4ce8d0 makes a read-only file writable and
+/// deletes it).
+pub fn delete_all(exe_dir: &str, profile: &[u8], multi: bool, expansion: bool) {
+    let Some(dir) = save_dir(exe_dir, profile, multi, false, 0x104) else { return };
+    let ext = save_ext(expansion, multi);
+    let Ok(rd) = std::fs::read_dir(host(&dir)) else { return };
+    for e in rd.flatten() {
+        let Ok(n) = e.file_name().into_string() else { continue };
+        if n.starts_with('.') || e.path().is_dir() || !n.to_ascii_lowercase().ends_with(ext) {
+            continue;
+        }
+        let path = host(&join_dir(&dir, &n));
+        if let Ok(m) = std::fs::metadata(&path) {
+            let mut p = m.permissions();
+            if p.readonly() {
+                #[allow(clippy::permissions_set_readonly_false)]
+                p.set_readonly(false);
+                let _ = std::fs::set_permissions(&path, p);
+            }
+        }
+        let _ = std::fs::remove_file(&path);
+    }
+}
+
 /// 0x4cf5a0: the full path of the file `name` somewhere under `dir`.
 pub fn find_file(dir: &str, name: &str) -> Option<String> {
     find_file_in(dir, name)

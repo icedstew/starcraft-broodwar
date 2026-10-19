@@ -45,16 +45,21 @@ Delegate per agents.md: Haiku triage, Sonnet porting, Opus review / hard RE / co
   by the real 1.16.1 (next: make one under wine, load it in scbw; and the reverse).
   Gaps listed in save.md (old formats, fields written as 0).
 - Deferred functions (user 2026-10-19: "port other deferred functions" = the todo_port!
-  sites). Wave 1 done: implode 0x410b30, glue error popup 0x4bb300 / 0x4b59a0 / 0x4b55a0,
-  campaign advice OK/Cancel 0x4b5b20, saved game / replay info in the create list
-  (0x4a7540 / 0x4a7c30; start stops at 0x4d3910 network create; `Create.replay` set but
-  no game start reads it yet), plain scroll bar 0x415090, arrow re-press click 0x4bbcf0,
-  message label 0x4f59c0. Left, needing plumbing: dialog timers 0x416090 (end dialog 20 s,
-  scroll auto-repeat), 0x4c3db0 (multiplayer save rule: Ctx needs net slot), 0x461e50,
-  0x48d0c0 (adds a message line + sound 0x17, not "clear"), mouse wheel 0x4af5c0 (no wheel
-  input), replay recorder + writer (none exists: 0x4dffc0 Save Replay needs it; ~300
-  lines), 0x6d5a68 flag. Note: headless `SCBW_GLUE_INPUT` typing into the New ID popup
-  shows no text (also at HEAD 64c2f65): check the script / popup timing before relying on it.
+  sites). Done: implode 0x410b30 (byte-identical), replay recorder / writer
+  (src/replay_rec.rs; `scbw reprecord <in> <out>` gives byte-identical files for all 15
+  1.16.1 replays; LastReplay.rep written at game end), Save Replay dialog 0x4dffc0, glue
+  error popups / stored errors, game mode popup 0x4db6e0, Tab focus, label font fit, profile
+  save delete 0x4cf7b0, dialog timers 0x416090 (DlgTimers in dlg.rs; defeat 20 s), 0x48d0c0,
+  0x4c3db0, mouse wheel, credits volume / music fade-in, trigger next scenario 0x4c50e0
+  (-> GameEnd.next_scenario -> setup.next_map), AI opcode 0x3b, selection bar redraw.
+  Left: networking (Storm turns, net status, slot lookup, 0x4d3910 network create), registry
+  recent maps, StarEdit; crashes / heap corruption in 1.16.1 itself (0x4cb190 player >= 8,
+  0x4f2a59, 0x46b6d8, AI wrong-pool kinds 0x434c90 / 0x404500 / 0x435700 / 0x435770 /
+  0x45d890: documented at each site); in-game error dialog 0x4e4a10 (dlgFatal.bin, modal);
+  0x488790 paused timer, 0x4dbc00, 0x461e50, 0x6d5a68, 0x4db280 spawn, 0x512800 action
+  bounds, chat campaign cheats; replay start from the create list runs `view::run_replay`
+  (screen after it a guess: 0x4d9950 result); live replay header fields 0x4dea10 / 0x4de950
+  are zeros. Untested by ear / eye: music fade-in, wheel direction, Delete button graphic.
 - Campaign (user 2026-10-18: "play through the campaign"): works end to end headless
   (areas/ui.md "Campaign headless"): race click -> mission list 0x4b7820 -> mission text ->
   briefing (src/glue_ready.rs, MBRF triggers, portraits) -> Start -> game -> victory ->
@@ -176,6 +181,8 @@ Delegate per agents.md: Haiku triage, Sonnet porting, Opus review / hard RE / co
 
 ## Always
 
+- Never run two suites at once: agent/tools/suite.sh / cmp.sh share output files in $W
+  (concurrent runs gave false diffs 2026-10-19).
 - Background runs (suite, repcmp, native captures) with a copied binary
   (`SCBW=$W/x agent/tools/suite.sh`); build to `CARGO_TARGET_DIR=agent/local/tgt`.
 - Before commit: build clean, suite has no non-MATCH lines.

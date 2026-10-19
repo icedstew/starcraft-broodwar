@@ -41,6 +41,9 @@ pub enum AudioCmd {
     Track(u32),
     /// 0x4a5f50.
     FadeOutMusic,
+    /// 0x4d8fd0 / 0x4d90c0 (true) and their end (false): the music volume is 0x32 while the
+    /// credits run when it is 0 and the digital volume is on.
+    CreditsVolume(bool),
     /// 0x4bbf50: the playing sounds stop.
     StopSounds,
     /// 0x4bc490: a whole wav file (the briefing's) plays once.
@@ -179,8 +182,17 @@ pub enum Open {
     /// 0x4b5b20 from 0x4b27a0 / 0x4b5110 (campaign button `idx` with advice): the question
     /// rez\gluPOkCancel.bin (0x4b73b0); Ok starts the campaign (0x4dc0b0).
     Advice(u8),
+    /// 0x4b75e0 from 0x4db6e0: rez\gluGameMode.bin (StarCraft or Brood War), event proc
+    /// 0x4b6d60; true for the multiplayer button (0x4db7a0 id 4).
+    GameMode(bool),
     /// 0x4b6e50 from 0x4ed940 (New ID): rez\gluPEdit.bin, event proc 0x4b6cc0.
     NewId,
+    /// 0x4dffc0 from 0x4b4960: rez\savegame.bin, event proc 0x4dfef0 (glue_score.rs).
+    SaveReplay,
+    /// 0x4dfc80: the overwrite question rez\okcancel.bin (event proc 0x4f5cb0).
+    ReplayOverwrite,
+    /// 0x4f5ee0: the message rez\ok.bin.
+    ReplayMessage,
     /// 0x4b7820: rez\gluHist.bin (the campaign's mission list), event proc 0x4b6e10.
     MissionList,
     /// 0x4b73b0 from 0x4ed840 (Delete): rez\gluPOkCancel.bin, event proc 0x4b6d60.
@@ -304,6 +316,14 @@ pub struct Glue {
     profiles: Vec<Profile>,
     /// The login dialog's 50 ms timer 0x57 (no profiles: New ID opens), ms left.
     login_timer: Option<u32>,
+    /// 0x6d5a14 .. 0x6d5a20 (0x4bb1a0): the error stored while no dialog could show it: the
+    /// network.tbl id (0: none), the debug text, the file and the line.
+    /// A Shift key is down (the event's flags 0x418ab0 tests with 3 for Tab).
+    pub shift: bool,
+    stored_error: (usize, Option<Vec<u8>>, Option<Vec<u8>>, u32),
+    /// 0x4de140: the 100 ms timer 0x4de150 starts on the dialog (ms left); it shows the
+    /// stored error (0x4bb4b0).
+    error_timer: Option<u32>,
     /// 0x599a88: the characters gluPEdit's edit refuses (0x4b6b10).
     edit_refuse: Vec<u8>,
     /// The last left button press (clock, control id): a second one on the same control
@@ -385,6 +405,9 @@ impl Glue {
             hover: None,
             profiles: Vec::new(),
             login_timer: None,
+            shift: false,
+            stored_error: (0, None, None, 0),
+            error_timer: None,
             edit_refuse: Vec::new(),
             last_press: None,
             hist: None,
@@ -602,28 +625,30 @@ impl Glue {
         c.text = fmt.replace("%s", "internal version unknown").into_bytes();
     }
 
-    /// 0x4de150: shows the current screen's palette (fades it in unless it is on).
+    /// 0x4de150: shows the current screen's palette (fades it in unless it is on) and starts
+    /// the 100 ms timer 0x4de140 (a stored error shows, `show_stored_error`).
     fn show_palette(&mut self) {
         let p = SCREEN_PALETTE.get(self.screen as usize).copied().unwrap_or(0) as i32;
         if self.shown != p {
             self.fade_in(3);
             self.shown = p;
         }
+        self.error_timer = Some(100);
     }
 
     /// 0x4db930 (after 0x41a080): act on the main menu's result.
-    fn done_main(&mut self, result: i32) {
+    fn done_main(&mut self, files: &Storage, result: i32) {
         match result {
             2 => self.state = 2,
             3 => {
                 self.multiplayer = false;
                 self.screen = screen::LOGIN;
-                self.template = self.default_template();
+                self.template = Self::default_template(files);
             }
             4 => {
                 self.multiplayer = true;
                 self.screen = screen::SELCONN;
-                self.template = self.default_template();
+                self.template = Self::default_template(files);
             }
             5 | 0xfff0 => {}
             8 => self.state = state::INTRO,
@@ -1307,6 +1332,9 @@ impl Glue {
         if open == Open::Load {
             self.load_buttons();
         }
+        if open == Open::SaveReplay && id == 1 {
+            self.save_rep_list_event();
+        }
         if matches!(open, Open::Create(_)) {
             self.create_event(id, row);
         }
@@ -1421,7 +1449,8 @@ impl Glue {
         }
         let sel = self.login_list().and_then(|c| c.list.as_ref()).map_or(0xff, |l| l.sel);
         let Some(p) = self.profiles.get(sel as usize) else { return };
-        todo_port!("0x4cf7b0", "delete the profile's saved games");
+        let exe = crate::saveload::exe_dir(&self.setup.characters_dir);
+        crate::saveload::delete_all(&exe, p.name(), self.multiplayer, self.expansion);
         if !self.setup.delete_profile(&p.name().to_vec()) {
             return;
         }
@@ -1891,9 +1920,47 @@ impl Glue {
     }
 
     /// 0x4ab840: the default game type template (0x4ab750 on Templates\*.got).
-    fn default_template(&self) -> [u32; 8] {
-        todo_port!("0x4ab840", "Templates\\*.got default game type");
-        [0; 8]
+    fn default_template(files: &Storage) -> [u32; 8] {
+        let (mut a, mut b) = ([0u8; 0x20], [0u8; 0x20]);
+        // A missing or bad file is fatal / a null record natively; zeros here.
+        let t = Setup::load_got(files, "Use Map Settings(1)", &mut a, &mut b).unwrap_or([0; 0x20]);
+        std::array::from_fn(|i| u32::from_le_bytes(t[i * 4..i * 4 + 4].try_into().unwrap()))
+    }
+
+    /// 0x4db5c0 (0x4db770 keeps 0x6d051c): the CD check. The archive handle 0x51cc34 is
+    /// always valid in this install, so it passes; the prompt for the CD (0x4b73b0 over
+    /// 0x4b7180 until it is in) never shows.
+    fn cd_check(&self) -> bool {
+        true
+    }
+
+    /// 0x4b75e0 (from 0x4db6e0): the StarCraft / Brood War choice, rez\gluGameMode.bin
+    /// over retail_ex.pcx with gluAll.tbl string 0xaa; the button decides in `game_mode_done`.
+    fn open_game_mode(&mut self, files: &Storage, multi: bool) {
+        self.popup = None;
+        let msg = self.glu_all.get(0xa9).cloned().unwrap_or_default();
+        self.popup_dialog_pcx(files, "rez/gluGameMode.bin", "retail_ex", Open::GameMode(multi), &msg, "");
+    }
+
+    /// 0x4db6e0 after 0x4b75e0 returned the button `id` (6 StarCraft, 7 Brood War): the
+    /// game is chosen (0x58f440) when 0x4db5c0 allows it (StarCraft only checks it for single
+    /// player). True when the main menu ends with its activated button.
+    fn game_mode_done(&mut self, id: i16, multi: bool) -> bool {
+        let ok = match id {
+            6 if multi || self.cd_check() => {
+                self.expansion = false;
+                true
+            }
+            7 if self.cd_check() => {
+                self.expansion = true;
+                true
+            }
+            _ => false,
+        };
+        if ok {
+            self.setup.expansion = self.expansion;
+        }
+        ok
     }
 
     /// 0x4db7a0: the main menu's event proc, for an activated control (event 0xe, code 2;
@@ -1902,7 +1969,7 @@ impl Glue {
         self.activated = id;
         match id {
             3 | 4 => {
-                if self.spawn {
+                if id == 3 && self.spawn {
                     // The spawn version has no single player campaign / multiplayer: the
                     // popup with network.tbl string 0x66 (0-based), else the empty default.
                     let msg = self.network.get(0x66).cloned().unwrap_or_default();
@@ -1910,15 +1977,15 @@ impl Glue {
                     return true;
                 }
                 if self.expansion_installed {
-                    todo_port!("0x4db6e0", "StarCraft / Brood War choice (rez\\gluexpcmpgn.bin)");
-                    self.expansion = true;
-                    self.setup.expansion = self.expansion;
-                } else {
-                    todo_port!("0x4db770", "single player / multiplayer check");
+                    self.open_game_mode(files, id == 4);
+                    return true;
+                }
+                if (id == 4 && self.spawn) || self.cd_check() {
                     self.expansion = false;
                     self.setup.expansion = self.expansion;
+                    return self.end_dialog(id as i32);
                 }
-                self.end_dialog(id as i32)
+                true
             }
             5 => {
                 todo_port!("0x4db490", "campaign editor (StarEdit.exe)");
@@ -2035,17 +2102,34 @@ impl Glue {
         }
         if let Some(c) = dlg.get_mut(2).filter(|_| !first.is_empty()) {
             c.text = first.as_bytes().to_vec();
-            todo_port!("0x4b6660", "shrink the text's font until it fits the label");
+            self.fit_label(files, &mut dlg, 2, false);
         }
         if !second.is_empty() {
             if let Some(c) = dlg.get_mut(5) {
                 c.text = second.as_bytes().to_vec();
+                self.fit_label(files, &mut dlg, 5, false);
             }
         }
         self.glue_dialog_init(files, &mut dlg, false);
         dlg.this.flags |= 0x40000;
         dlg.bg = Some((w as i32, h as i32, px));
         self.popup = Some((dlg, open));
+    }
+
+    /// 0x4bb1a0 (EAX = the id, the debug text, the file, the stack = the line): keeps the
+    /// error (and copies of the texts) to show it later (`show_stored_error`).
+    fn store_error(&mut self, id: usize, text: Option<&[u8]>, file: Option<&[u8]>, line: u32) {
+        let copy = |t: Option<&[u8]>| t.filter(|t| !t.is_empty()).map(<[u8]>::to_vec);
+        self.stored_error = (id, copy(text), copy(file), line);
+    }
+
+    /// 0x4bb4b0 (from the timer proc 0x4de140): a stored error is shown (0x4bb300) and
+    /// forgotten.
+    fn show_stored_error(&mut self, files: &Storage) {
+        let (id, ..) = std::mem::replace(&mut self.stored_error, (0, None, None, 0));
+        if id != 0 {
+            self.error_popup(files, id);
+        }
     }
 
     /// 0x4bb300 (EAX = line, ECX = file, EDX = debug text, all 0 at the callers; stack =
@@ -2055,7 +2139,7 @@ impl Glue {
     /// which is 0x4b59a0.
     fn error_popup(&mut self, files: &Storage, id: usize) {
         if self.pal_blank || (self.dlg.is_none() && self.popup.is_none()) {
-            todo_port!("0x4bb1a0", "store the error text (0x6d5a14 ..)");
+            self.store_error(id, None, None, 0);
             return;
         }
         if self.state == state::GAME {
@@ -2133,7 +2217,10 @@ impl Glue {
         // Event 7 (0x4b5920): centered.
         let (x, y) = ((640 - dlg.this.rect.2) / 2, (480 - dlg.this.rect.3) / 2);
         dlg.this.rect = (x, y, dlg.this.rect.2 + x, dlg.this.rect.3 + y);
-        todo_port!("0x4b5640", "shrink the text's font until it fits the label");
+        self.fit_label(files, &mut dlg, 2, true);
+        if !b.is_empty() {
+            self.fit_label(files, &mut dlg, 5, true);
+        }
         self.popup = Some((dlg, if title.is_empty() { Open::Error } else { Open::ErrorSplit }));
     }
 
@@ -2163,6 +2250,13 @@ impl Glue {
                         }
                     }
                 }
+                Open::GameMode(multi) => {
+                    if self.game_mode_done(id, multi) {
+                        self.end_dialog(self.activated as i32);
+                    }
+                }
+                Open::SaveReplay => self.save_replay_done(files, &dlg, id),
+                Open::ReplayOverwrite => self.replay_overwrite_done(files, id),
                 Open::DeleteChar => self.login_delete_done(id == 1),
                 Open::DeleteSave => self.load_delete_done(id == 1),
                 Open::MissionList => {
@@ -2197,7 +2291,7 @@ impl Glue {
             }
             Open::Score(_) => {
                 self.activated = id;
-                self.score_activate(id);
+                self.score_activate(files, id);
             }
             Open::Create(_) => {
                 self.create_activate(files, id);
@@ -2221,7 +2315,7 @@ impl Glue {
             let Some((_, open)) = self.dlg.take() else { return };
             self.slide.tail = None;
             match open {
-                Open::Main => self.done_main(r),
+                Open::Main => self.done_main(files, r),
                 Open::Campaign | Open::CampaignExp => self.done_campaign(r),
                 Open::Load => self.done_load(r),
                 Open::Score(won) => self.done_score(files, r, won),
@@ -2249,6 +2343,56 @@ impl Glue {
             0x4000 => 3,
             _ => 1,
         }].clone())
+    }
+
+    /// 0x4b6660 (`edit_loop` false, the popups) / 0x4b5640 (true, the error box): while the
+    /// text of label `id` needs more lines than its rect has (0x41fc80 width * 10 / rect
+    /// width + 10 against rect height * 10 / (font height + 1)) its font gets smaller:
+    /// font16x, font16, font14, font10. 0x4b5640 never gives up at the smallest font (an
+    /// endless loop natively; here it stops).
+    fn fit_label(&mut self, files: &Storage, dlg: &mut Dialog, id: i16, edit_loop: bool) {
+        let p = self.palette_id();
+        let fonts = &self.look(files, p).skin.fonts;
+        let Some(c) = dlg.get_mut(id).filter(|c| !c.text.is_empty()) else { return };
+        let font = |f: u32| &fonts[match f & 0x4c00 {
+            0x400 => 0,
+            0x800 => 2,
+            0x4000 => 3,
+            _ => 1,
+        }];
+        let w = match c.rect.2 - c.rect.0 + 1 {
+            0 => 1,
+            w => w,
+        };
+        let h10 = (c.rect.3 - c.rect.1 + 1) * 10;
+        // 0x41fc80: the widest line.
+        let width = |f: &crate::ui::Font, t: &[u8]| t.split(|&b| b == b'\n').map(|l| l.iter().map(|&b| f.advance(b, 1)).sum::<i32>()).max().unwrap_or(0);
+        let fits = |c: &crate::dlg::Ctl| {
+            let f = font(c.flags);
+            (width(f, &c.text) * 10) / w + 10 < h10 / (f.height + 1)
+        };
+        if fits(c) {
+            return;
+        }
+        loop {
+            let old = c.flags & 0x4c00;
+            c.flags &= !old;
+            if edit_loop {
+                match old {
+                    0x800 => {}
+                    0x4000 => c.flags |= 0x800,
+                    _ => c.flags |= 0x400,
+                }
+            } else if old == 0x4000 {
+                c.flags |= 0x800;
+            } else if old != 0x800 && (old == 0 || old == 0x400) {
+                c.flags |= 0x400;
+                return;
+            }
+            if fits(c) || (edit_loop && old == 0x400) {
+                return;
+            }
+        }
     }
 
     /// 0x418270 (`mask`): the first control with a flag of `mask` that is shown, enabled
@@ -2304,6 +2448,14 @@ impl Glue {
                     return;
                 }
                 8 => {
+                    if open == Open::SaveReplay && vk == 0x2e {
+                        self.save_rep_delete_key();
+                        let Some(c) = self.top().and_then(|(d, _)| d.get_mut(id)) else { return };
+                        if c.edit_key(vk, mods) {
+                            return;
+                        }
+                        continue;
+                    }
                     if c.edit_key(vk, mods) {
                         if open == Open::NewId {
                             // 0x4b6c30 -> 0x4b68c0.
@@ -2343,7 +2495,7 @@ impl Glue {
     pub fn char_in(&mut self, files: &Storage, ch: u8) {
         match ch {
             9 => {
-                todo_port!("0x418a60", "Tab: the next control takes the focus");
+                self.tab_focus();
                 return;
             }
             0x0d => {
@@ -2380,6 +2532,9 @@ impl Glue {
             let open = *open;
             let Some(c) = dlg.get_mut(id) else { continue };
             let Some(font) = font else { continue };
+            if open == Open::SaveReplay {
+                return self.save_rep_char(ch, &font, &refuse);
+            }
             if open == Open::NewId {
                 // 0x4b6b10: refused characters (0x51a70c and the caller's list) do
                 // nothing; a preset text goes on the first key; a full buffer takes only
@@ -2407,6 +2562,51 @@ impl Glue {
                 return;
             }
         }
+    }
+
+    /// 0x418a60 (Tab, from 0x418ab0; with Shift the previous control, 0x4180a0, else the
+    /// next, 0x4180c0, both around the list's ends): from the active control (the first
+    /// when none) the first control that is enabled, shown and has flag 0x10 takes the focus
+    /// (0x418830).
+    fn tab_focus(&mut self) {
+        let back = self.shift;
+        let Some((dlg, _)) = self.top() else { return };
+        let n = dlg.controls.len();
+        if n == 0 {
+            return;
+        }
+        let step = |i: usize| if back { (i + n - 1) % n } else { (i + 1) % n };
+        let first = dlg.active.map_or(0, step);
+        let mut i = first;
+        while {
+            let f = dlg.controls[i].flags;
+            f & 2 != 0 || f & 8 == 0 || f & 0x10 == 0
+        } {
+            i = step(i);
+            if i == first {
+                return;
+            }
+        }
+        // 0x418830: the dialog's active control (none with flag 0x20000000) gets event 5 (an
+        // edit shows its caret, 0x416790 AL = 1), the old one event 6 (0x416790 AL = 0).
+        if dlg.active == Some(i) {
+            return;
+        }
+        let old = dlg.active;
+        dlg.active = if dlg.this.flags & 0x2000_0000 != 0 { None } else { Some(i) };
+        if let Some(o) = old {
+            let c = &mut dlg.controls[o];
+            if let Some(e) = c.edit.as_mut() {
+                e.blink = None;
+                c.flags &= !0x4000_0000;
+            }
+        }
+        let c = &mut dlg.controls[i];
+        if let Some(e) = c.edit.as_mut() {
+            e.blink = Some(500);
+            c.flags |= 0x4000_0000;
+        }
+        todo_port!("0x418600", "after a focus change: the tooltip (0x417eb0)");
     }
 
     /// 0x4182f0: the button (type 1 / 2) with id `id` is pressed when it can be.
@@ -2573,6 +2773,17 @@ impl Glue {
         self.slide_tick(files, ms);
         self.create_tick(files, ms);
         self.score_tick(ms);
+        // 0x4de150's timer: 0x4de140 ends it (0x416000) and shows a stored error.
+        if let Some(left) = self.error_timer {
+            if self.dlg.is_none() {
+                self.error_timer = None;
+            } else if left > ms {
+                self.error_timer = Some(left - ms);
+            } else {
+                self.error_timer = None;
+                self.show_stored_error(files);
+            }
+        }
         // 0x4edaa0 event 8 code 0x57: the timer goes (0x416000), New ID opens.
         if let Some(left) = self.login_timer {
             if left > ms {
@@ -2792,6 +3003,8 @@ pub fn run(files: &Storage, shot: Option<&str>) -> std::io::Result<()> {
                 // (Screenshot mode plays none.)
                 let shotmode = win.is_none();
                 for i in list.into_iter().filter(|_| !shotmode) {
+                    // 0x4d4470 starts with 0x4be0b0 (the cursor off).
+                    glue.flush_notice();
                     cine::play(files, i as u32, win.as_mut(), audio.as_ref(), shot)?;
                 }
             }
@@ -2799,6 +3012,21 @@ pub fn run(files: &Storage, shot: Option<&str>) -> std::io::Result<()> {
             Top::Game => {
                 // 0x4e0710: the game; the score screen / next state after it (0x4d9950's
                 // result in 0x596904) are not ported.
+                // A replay started from the list (0x6d0f14 = 1; 0x4ef100 reads its header and
+                // commands, 0x4ee8c0 afterwards): the replay plays; the game's result
+                // (0x4d9950) for a replay is not ported, so the screen after it is the
+                // mission one like a quit.
+                if let Some(f) = glue.create.replay.take() {
+                    let rep = crate::replay::Replay::parse(&f).map_err(std::io::Error::other)?;
+                    if shot.is_none() {
+                        let mut a = crate::view::Assets::load(crate::storage::Storage::open(&crate::install_dir())?)?;
+                        crate::view::run_replay(&mut a, rep)?;
+                        glue.state = state::GLUE;
+                        glue.screen = 6 + if glue.expansion { 0x10 } else { 0 };
+                        continue;
+                    }
+                    return Ok(());
+                }
                 let Some(g) = glue.begin_game(files) else { return Ok(()) };
                 // Where the in-game save / load dialogs keep the saves (0x4ce5b0's inputs).
                 crate::menu::set_save_env(crate::menu::SaveEnv {
@@ -2811,6 +3039,10 @@ pub fn run(files: &Storage, shot: Option<&str>) -> std::io::Result<()> {
                 if let (Some(_), Ok(spec)) = (shot, std::env::var("SCBW_GLUE_GAME")) {
                     glue.game_end = crate::headless_game(&mut a, g, &spec)?;
                     glue.objectives = glue.game_end.as_ref().map_or(glue.objectives, |e| e.objectives);
+                    // 0x57f246, read by the campaign flow (0x4dc1c0) as the next map.
+                    if let Some(e) = glue.game_end.as_ref().filter(|e| !e.next_scenario.is_empty()) {
+                        glue.setup.next_map = e.next_scenario.clone();
+                    }
                     match &glue.game_end {
                         Some(e) => glue.state = if e.results[e.local as usize] == 2 { 7 } else { 6 },
                         None => return Ok(()),
@@ -2825,6 +3057,10 @@ pub fn run(files: &Storage, shot: Option<&str>) -> std::io::Result<()> {
                 // mission (0x4c9280: the campaign screen 6, or 0x16 with Brood War 0x58f440).
                 glue.game_end = crate::view::run_setup(&mut a, g)?;
                 glue.objectives = glue.game_end.as_ref().map_or(glue.objectives, |e| e.objectives);
+                // 0x57f246, read by the campaign flow (0x4dc1c0) as the next map.
+                if let Some(e) = glue.game_end.as_ref().filter(|e| !e.next_scenario.is_empty()) {
+                    glue.setup.next_map = e.next_scenario.clone();
+                }
                 match &glue.game_end {
                     Some(e) => glue.state = if e.results[e.local as usize] == 2 { 7 } else { 6 },
                     None => {
@@ -2844,18 +3080,22 @@ pub fn run(files: &Storage, shot: Option<&str>) -> std::io::Result<()> {
                 None => glue.open_popup(files, &t),
             }
         }
+        if let Some(au) = audio.as_mut() {
+            au.tick_fade();
+        }
         for cmd in std::mem::take(&mut glue.cmds) {
             let (Some(au), Some(dat)) = (audio.as_mut(), dat.as_ref()) else { continue };
             match cmd {
                 AudioCmd::Sound(id) => au.play_pan(files, dat, id, 99, 0, None),
                 AudioCmd::Music { path, fade } => {
+                    au.play_music(files, path);
                     if fade {
-                        todo_port!("0x4a6030", "music fade-in timer: needs an Audio hook");
+                        au.start_fade_in();
                     }
-                    au.play_music(files, path)
                 }
                 AudioCmd::Track(i) => au.start_track(files, i),
                 AudioCmd::FadeOutMusic => au.fade_out(),
+                AudioCmd::CreditsVolume(on) => au.credits_volume(on),
                 AudioCmd::StopSounds => au.stop_sounds(),
                 AudioCmd::Wav(d) => au.play_file(d),
                 AudioCmd::StopWavs => au.stop_files(),
@@ -2935,6 +3175,7 @@ pub fn run(files: &Storage, shot: Option<&str>) -> std::io::Result<()> {
         {
             use minifb::{Key, KeyRepeat};
             let alt = win.is_key_down(Key::LeftAlt) || win.is_key_down(Key::RightAlt);
+            glue.shift = win.is_key_down(Key::LeftShift) || win.is_key_down(Key::RightShift);
             for k in win.get_keys_pressed(KeyRepeat::Yes) {
                 let vk = match k {
                     Key::PageUp => 0x21,
@@ -2969,6 +3210,9 @@ pub fn run(files: &Storage, shot: Option<&str>) -> std::io::Result<()> {
         }
         if let Some((x, y)) = win.get_mouse_pos(MouseMode::Clamp) {
             glue.mouse_to(x as i32, y as i32);
+            if let Some((_, dy)) = win.get_scroll_wheel().filter(|w| w.1 != 0.0) {
+                glue.create_wheel(dy < 0.0);
+            }
             let down = win.get_mouse_down(MouseButton::Left);
             if down && !was_down {
                 glue.press(files);

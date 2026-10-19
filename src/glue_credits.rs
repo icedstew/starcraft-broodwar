@@ -13,7 +13,6 @@ use super::{state, screen, AudioCmd, Fade, Glue, Open};
 use crate::dlg::{flag, Dialog, Update};
 use crate::palette::{self, Pal};
 use crate::storage::Storage;
-use crate::todo_port;
 use std::collections::VecDeque;
 
 /// 0x4fff24 (8 bytes: control id, tag pointer): the six text areas of credits.bin.
@@ -235,7 +234,7 @@ impl Glue {
             self.pal_blank = true;
             self.fade = None;
         }
-        todo_port!("0x4d8fd0", "music volume 0 with the digital volume on: forced to 0x32 while the credits run (0x6cdfe0)");
+        self.cmds.push(AudioCmd::CreditsVolume(true));
         self.music_start(if exp { 9 } else { 5 });
         let cr = &mut self.credits;
         cr.running = true;
@@ -294,6 +293,7 @@ impl Glue {
         match then {
             Then::Top => {
                 self.music_fade_out();
+                self.cmds.push(AudioCmd::CreditsVolume(false));
                 self.state = state::GLUE;
                 self.screen = screen::MAIN;
             }

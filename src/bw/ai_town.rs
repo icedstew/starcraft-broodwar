@@ -784,7 +784,10 @@ impl State {
         let building_like = (flags & 1 != 0 && t != 0xbc) || matches!(t, 0x23 | 0x24 | 0x2a);
         let town = if building_like {
             if ai_kind(r) != AI_BUILDING {
-                todo_port!("0x434c90", "a building-type unit with a non-town AI");
+                // 1.16.1 takes +0x14 of any entry as the town and pushes the entry onto the
+                // building pool's free list (0x404500): a worker entry (town at +0x14 too)
+                // would move between pools, a guard / military entry has no town there.
+                todo_port!("0x434c90", "a building-type unit with a non-building AI (native mixes pools / faults)");
                 return false;
             }
             let b = ai_index(r);
@@ -798,7 +801,9 @@ impl State {
                 return false;
             }
             if ai_kind(r) != AI_WORKER {
-                todo_port!("0x434c90", "a worker with a non-worker AI");
+                // As above with the worker pool (0x404470) and `worker_count` (+0x1a) of the
+                // garbage town.
+                todo_port!("0x434c90", "a worker with a non-worker AI (native mixes pools / faults)");
                 return false;
             }
             let w = ai_index(r);
@@ -2653,6 +2658,8 @@ impl State {
         }
         let Some(town) = self.ai_entry_town(r) else { return };
         if ai_kind(r) != AI_BUILDING {
+            // The worker entry (town at +0x14 as well) is pushed onto the building pool's
+            // free list: the pools are separate arrays here, so this can't be modelled.
             todo_port!("0x404500", "a worker entry released into the building pool");
             return;
         }
@@ -2701,7 +2708,7 @@ impl State {
             return;
         }
         let Some(town) = self.ai_entry_town(r) else {
-            todo_port!("0x435700", "a parent with a guard / military AI");
+            todo_port!("0x435700", "a parent with a guard / military AI (+0x14 is no town: native faults or corrupts)");
             return;
         };
         if parent == u {
@@ -2722,7 +2729,7 @@ impl State {
             return;
         }
         let Some(town) = self.ai_entry_town(r) else {
-            todo_port!("0x435770", "a parent with a guard / military AI");
+            todo_port!("0x435770", "a parent with a guard / military AI (+0x14 is no town: native faults or corrupts)");
             return;
         };
         if parent == u {
@@ -2767,6 +2774,8 @@ impl State {
         }
         let Some(town) = self.ai_entry_town(r) else { return };
         if ai_kind(r) != AI_BUILDING {
+            // The worker entry (town at +0x14 as well) is pushed onto the building pool's
+            // free list: the pools are separate arrays here, so this can't be modelled.
             todo_port!("0x404500", "a worker entry released into the building pool");
             return;
         }
@@ -2811,7 +2820,30 @@ impl State {
             return;
         }
         if ai_kind(r) != AI_BUILDING {
-            todo_port!("0x435db0", "a parent with a non-building AI");
+            // 1.16.1 reads the entry as a building AI: the queue type byte is at +9 + idx
+            // (idx = 0 here, or the build queue slot). Only a byte that is neither 1 nor 2
+            // reads nothing else (0x462960); 1 / 2 would use the u32 at +0x18 as a region /
+            // guard pointer, and parent == u releases the entry (0x404500) into the
+            // building pool.
+            let idx = if parent == u || self.units[parent as usize].unit_type == t { 0 } else { self.units[parent as usize].build_queue_slot as usize };
+            let byte = match (ai_kind(r), idx) {
+                (AI_GUARD, 0) => Some(self.ai.guards.items[ai_index(r) as usize].times_died),
+                (AI_GUARD, 1 | 2) => Some(0),
+                (AI_WORKER, 0) => Some(self.ai.workers.items[ai_index(r) as usize].target_resource),
+                (AI_WORKER, 1) => Some(self.ai.workers.items[ai_index(r) as usize].reassign_count),
+                (AI_WORKER, 2) => Some(self.ai.workers.items[ai_index(r) as usize].wait_timer),
+                (AI_WORKER, 3) => Some(self.ai.workers.items[ai_index(r) as usize].last_update_second as u8),
+                (AI_WORKER, 4) => Some((self.ai.workers.items[ai_index(r) as usize].last_update_second >> 8) as u8),
+                (AI_MILITARY, 0) => Some(self.ai.military.items[ai_index(r) as usize].unk9),
+                (AI_MILITARY, 1) => Some(self.ai.military.items[ai_index(r) as usize].unka as u8),
+                (AI_MILITARY, 2) => Some((self.ai.military.items[ai_index(r) as usize].unka >> 8) as u8),
+                _ => None,
+            };
+            if parent != u && matches!(byte, Some(b) if b != 1 && b != 2) {
+                self.ai_guard_register(d, u);
+            } else {
+                todo_port!("0x435db0", "a parent with a non-building AI (native reads / writes the other entry)");
+            }
             return;
         }
         let b = ai_index(r) as usize;

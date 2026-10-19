@@ -180,10 +180,14 @@ impl<'a> Scene<'a> {
 
     /// `from_setup`, or `from_save` when the glue chose a saved game.
     pub fn for_setup(a: &'a Assets, g: &GameSetup) -> io::Result<Scene<'a>> {
-        match &g.save {
+        let s = match &g.save {
             Some(f) => Scene::from_save(a, f),
             None => Scene::from_setup(a, g),
-        }
+        }?;
+        // 0x4ce280: a new game records its commands.
+        crate::replay_rec::set_storm_ids([0; 12]);
+        crate::replay_rec::start(None);
+        Ok(s)
     }
 
     /// The game a replay recorded, set up as the replay's header says.
@@ -351,6 +355,11 @@ impl<'a> Scene<'a> {
     /// The finished game for the score screen (the glue's 0x4de200 state 6 / 7).
     pub fn game_end(&self) -> GameEnd {
         let st = &self.st;
+        // 0x4e0710's end (0x4dfab0 with 1): the recorded game becomes LastReplay.rep.
+        let exe = crate::menu::save_env().exe_dir;
+        if crate::replay_rec::recording() && !exe.is_empty() {
+            crate::replay_rec::write_replay(&exe, "LastReplay", true, st, &self.chk.raw);
+        }
         GameEnd {
             players: st.players.clone(),
             results: st.player_left,
@@ -361,6 +370,7 @@ impl<'a> Scene<'a> {
             local: st.local_player,
             frames: st.frame,
             objectives: st.trig.objectives,
+            next_scenario: st.next_scenario.clone(),
         }
     }
 
@@ -1313,6 +1323,8 @@ pub struct GameEnd {
     pub frames: u32,
     /// 0x58d6c4 at the end: the next mission's briefing and game start with it.
     pub objectives: [u32; 8],
+    /// 0x57f246 at the end: the next scenario a trigger named (0x4c50e0), empty for none.
+    pub next_scenario: Vec<u8>,
 }
 
 pub struct GameSetup {
@@ -2391,7 +2403,7 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
     let mut menu: Option<crate::menu::Menu> = None;
     let mut menu_paused = false;
     let mut game_acc = 0u32;
-    let mut ctx = crate::menu::Ctx { replay: replay.is_some(), multiplayer: false, replay_speed: 0 };
+    let mut ctx = crate::menu::Ctx { replay: replay.is_some(), multiplayer: false, replay_speed: 0, ..Default::default() };
     let mut menu_btn_down = false;
     let mut terrain_btn_down = false;
     // The next 42 ms tick of input and game logic (the browser build ticks per call).
@@ -2459,7 +2471,7 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
             let mut act = None;
             if let (Some(m), Some(u)) = (menu.as_mut(), ui.as_ref()) {
                 // The save dialog's name edit: WM_CHAR (0x20.., backspace) and WM_KEYDOWN.
-                m.tick(42);
+                let timer = m.tick(42);
                 for &c in &chars {
                     if c == 8 || (0x20..0x100).contains(&c) {
                         m.type_char(&u.skin, c as u8);
@@ -2482,7 +2494,7 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
                     };
                     m.key_down(&u.skin, vk, shift_bits);
                 }
-                act = m.mouse(&u.skin, cx, cy, ldown, &mut settings);
+                act = m.mouse(&u.skin, cx, cy, ldown, &mut settings).or(timer);
                 if std::mem::take(&mut m.click) {
                     scene.st.ui_sounds.push(BUTTON_CLICK_SFX);
                 }
@@ -2541,6 +2553,14 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
                         if let Some(next) = file.and_then(|f| Scene::from_save(a, &f).ok()) {
                             scene = next;
                             (vx, vy) = (scene.st.screen_tile.0 as i32 * 32, scene.st.screen_tile.1 as i32 * 32);
+                        }
+                    }
+                    // 0x460fa0 case 1: 0x48d0c0 (7 s, sound 0x17) with network.tbl string 0x10,
+                    // or the empty 0x501b7d when the table has fewer than 0x10 strings.
+                    crate::menu::Action::Message => {
+                        if let Some(u) = ui.as_ref() {
+                            let text = if u.network.len() > 0xf { u.network[0xf].split('\0').next().unwrap_or("") } else { "" };
+                            scene.msgs.print(&u.font, text.as_bytes(), scene.clock_ms, 0, 0x17, &mut scene.st.ui_sounds);
                         }
                     }
                     // ponytail: restarting rebuilds nothing yet; the menu just closes.

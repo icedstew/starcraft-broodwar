@@ -111,7 +111,20 @@ pub(super) struct Score {
     dir: String,
     /// The 20 ms timer 0x22 (0x4b3670): the ms to its next run.
     timer: Option<u32>,
+    /// 0x6d0f2c: the tile.grp of the save replay dialog and its message boxes (the index into
+    /// 0x50e040: race + 3 with victory).
+    save_tile: usize,
+    /// 0x51bfb8: the replay name the dialog ended with.
+    save_name: Vec<u8>,
 }
+
+/// 0x50e040: the palette (index into `PALETTES`) whose tile.grp each `Score::save_tile` is:
+/// glue\palzd, paltd, palpd, palzv, paltv, palpv.
+const TILE_PALETTE: [usize; 6] = [7, 9, 5, 8, 10, 6];
+
+/// 0x512768: the button graphics of the OK (style 3) and Cancel (style 5) buttons.
+const GRAPHIC_OK: u16 = 103;
+const GRAPHIC_CANCEL: u16 = 121;
 
 /// The step of a count-up (0x4b3670): an eighth of what is left, at least 4, not past the
 /// target. False when it is already there.
@@ -572,12 +585,10 @@ impl Glue {
     /// The score dialog's event proc for an activated control (0x4b4a30 code 2, or the
     /// control's own proc): a tab chooses itself (0x4b47c0 -> 0x4b4520); OK stops the sounds
     /// (0x4bbf50) and ends the dialog (0x4dd040); Save Replay (0x4b4960) saves the replay.
-    pub(super) fn score_activate(&mut self, id: i16) {
+    pub(super) fn score_activate(&mut self, files: &Storage, id: i16) {
         match id {
             ids::TAB_FIRST..=ids::TAB_LAST => self.score_tab(id),
-            ids::SAVE_REPLAY => {
-                todo_port!("0x4dffc0", "save the replay (then the button reads gluAll 0xb1 and is disabled)");
-            }
+            ids::SAVE_REPLAY => self.open_save_replay(files),
             _ => {
                 self.cmds.push(AudioCmd::StopSounds);
                 self.end_dialog(id as i32);
@@ -598,6 +609,7 @@ impl Glue {
             local: 0,
             frames: 24 * 60 * 14 + 24 * 31,
             objectives: [0; 8],
+            next_scenario: Vec::new(),
         };
         let p = &mut g.players;
         p.units_produced[0] = 61;
@@ -643,5 +655,281 @@ impl Glue {
         self.setup.slot_by_storm = [0, 8, 8, 8, 8, 8, 8, 8];
         self.setup.local_storm_id = 0;
         self.setup.local_slot = [0, 0];
+    }
+}
+
+// ---- the save replay dialog (0x4dffc0) ----
+
+impl Glue {
+    /// 0x4b4960 (event 0xe, user 2) -> 0x4dffc0 (EAX = 0x59b75c the local player won, ECX the
+    /// local player's race): the tile.grp of the dialog (0x50e040 by race, +3 on a win),
+    /// then rez\savegame.bin over it (event proc 0x4dfef0, the init 0x4dfdd0, the rows
+    /// 0x4df950). `save_replay_done` is the part after the dialog.
+    fn open_save_replay(&mut self, files: &Storage) {
+        let won = matches!(self.dlg.as_ref(), Some((_, Open::Score(true))));
+        let race = self.setup.slots[self.setup.local_slot[0] as usize % 12][slot::RACE] as usize;
+        self.score.save_tile = race % 3 + if won { 3 } else { 0 };
+        self.score.save_name.clear();
+        let Some(mut dlg) = self.tile_dialog(files, "rez/savegame.bin") else { return };
+        // 0x4df8a0 event 0 (the edit: margin 3, 0x416980), 0x4dfdd0 (0x4cda80 / 0x4cda30:
+        // OK style 3 and Cancel style 5, wide; the delete button and the label shown).
+        if let Some(c) = dlg.get_mut(2).filter(|c| c.ty == 8) {
+            c.flags |= 0x8000_0000 | 0x4000_0000;
+            if let Some(e) = c.edit.as_mut() {
+                e.margin = 3;
+                e.blink = Some(500);
+            }
+        }
+        for (id, g) in [(-2, GRAPHIC_OK), (-3, GRAPHIC_CANCEL)] {
+            if let Some(c) = dlg.get_mut(id) {
+                c.graphic = g;
+                c.flags |= flag::WIDE;
+            }
+        }
+        if let Some(c) = dlg.get_mut(3) {
+            c.flags |= flag::VISIBLE;
+        }
+        // 0x4df950: a row per replay, then Save off without one.
+        let names = self.replay_names();
+        if let Some(c) = dlg.get_mut(1).filter(|c| c.ty == 12) {
+            c.list.as_mut().unwrap().batch = true;
+            for n in &names {
+                c.list_add(n, 0x10);
+            }
+            c.list.as_mut().unwrap().batch = false;
+            c.list_layout();
+        }
+        if names.is_empty() {
+            if let Some(c) = dlg.get_mut(-2) {
+                c.flags |= flag::DISABLED;
+            }
+        }
+        // 0x4dfdd0: the label (gluAll 0xb3), then the row 0x51bfd8 = 0 selected (event 0xb:
+        // 0x4df9e0 copies it to the edit, 0x4df520 the delete button) and shown (0x41a600).
+        if let Some(c) = dlg.get_mut(4) {
+            c.text = self.glu_all.get(0xb2).cloned().unwrap_or_default().into_bytes();
+            c.flags |= flag::VISIBLE;
+        }
+        self.popup = Some((dlg, Open::SaveReplay));
+        Self::save_rep_buttons(self.popup.as_mut().map(|d| &mut d.0).unwrap());
+        if !names.is_empty() {
+            self.list_event(1, 0);
+            if let Some(c) = self.popup.as_mut().and_then(|(d, _)| d.get_mut(1)) {
+                c.list_scroll_to(0);
+            }
+        }
+    }
+
+    /// A dialog from `bin` over the tile.grp `save_tile` names (0x4c9cc0 by 0x4c9c40 with
+    /// 0x6d0f2c): the controls' event 10, the dialog centered, flags 0x2040000 (0x4dfa30).
+    fn tile_dialog(&mut self, files: &Storage, bin: &str) -> Option<Dialog> {
+        let Ok(d) = files.read(bin) else { crate::bw::fatal_error(bin) };
+        let mut dlg = Dialog::parse(&d);
+        dlg.this.flags |= 4;
+        dlg.bind(files);
+        dlg.init_lightups(files);
+        self.init_controls(files, &mut dlg);
+        let tile = format!("{}/tile.grp", super::PALETTES[TILE_PALETTE[self.score.save_tile % 6]]);
+        let Ok(t) = files.read(&tile) else { crate::bw::fatal_error(&tile) };
+        crate::dlg::Skin::tile_background(&Grp::parse(t), &mut dlg);
+        let (x, y) = ((640 - dlg.this.rect.2) / 2, (480 - dlg.this.rect.3) / 2);
+        dlg.this.rect = (x, y, dlg.this.rect.2 + x, dlg.this.rect.3 + y);
+        self.glue_dialog_init(files, &mut dlg, false);
+        dlg.this.flags |= 0x2040000;
+        Some(dlg)
+    }
+
+    /// 0x4df0b0: the replay names of `maps\replays\`: the files that are not hidden, system
+    /// or folders, named `*.rep`, the name without its extension when under 0x1c characters
+    /// (in the order of the file system listing: by name).
+    fn replay_names(&self) -> Vec<Vec<u8>> {
+        let exe = crate::saveload::exe_dir(&self.setup.characters_dir);
+        let Some(path) = crate::replay_rec::replay_path(&exe, "x") else { return Vec::new() };
+        let dir = crate::saveload::host(&path);
+        let mut v: Vec<Vec<u8>> = std::fs::read_dir(dir.parent().unwrap_or(&dir))
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter(|e| e.path().is_file())
+            .filter_map(|e| {
+                let n = e.file_name().to_string_lossy().into_owned();
+                let (stem, ext) = n.rsplit_once('.')?;
+                (ext.eq_ignore_ascii_case("rep") && stem.len() < 0x1c).then(|| stem.as_bytes().to_vec())
+            })
+            .collect();
+        v.sort_by_key(|n| n.to_ascii_uppercase());
+        v
+    }
+
+    /// 0x4df520 (the delete button, id 3, works with a row selected) and the Save button
+    /// (-2) with a text in the edit (0x4df740 / 0x4df4a0).
+    fn save_rep_buttons(dlg: &mut Dialog) {
+        let on = dlg.get(1).and_then(|c| c.list.as_ref()).is_some_and(|l| !l.items.is_empty() && l.sel != 0xff);
+        let empty = dlg.get(2).is_none_or(|c| c.text.is_empty());
+        for (id, off) in [(3, !on), (-2, empty)] {
+            if let Some(c) = dlg.get_mut(id) {
+                if off {
+                    c.flags |= flag::DISABLED;
+                } else {
+                    c.flags &= !flag::DISABLED;
+                }
+            }
+        }
+    }
+
+    /// 0x4df9e0 event 0xb after the list selected a row: 0x4df4a0 puts the row's text in the
+    /// edit (0x416650: the caret at its end) and 0x4df520 sets the delete button.
+    pub(super) fn save_rep_list_event(&mut self) {
+        let p = self.palette_id();
+        let Some(look) = self.looks[p].as_ref() else { return };
+        let Some((dlg, _)) = self.popup.as_mut() else { return };
+        let row = dlg.get(1).and_then(|c| c.list.as_ref()).filter(|l| !l.items.is_empty() && l.sel != 0xff).and_then(|l| l.items.get(l.sel as usize).map(|i| i.0.clone()));
+        if let (Some(t), Some(c)) = (row, dlg.get_mut(2).filter(|c| c.edit.is_some())) {
+            let font = look.skin.font_of(c).clone();
+            c.text = t;
+            if let Some(e) = c.edit.as_mut() {
+                e.caret = c.text.len() as u8;
+                e.mode |= 1;
+            }
+            c.edit_rescroll(&font);
+        }
+        Self::save_rep_buttons(dlg);
+    }
+
+    /// 0x4df740 (the edit's WM_CHAR): a refused character (network.tbl 0x11) does nothing;
+    /// else a full name (0x1b) or a space first does not type; the Save button follows the
+    /// text, and the row selected is let go (event 0xb, row 0xff).
+    pub(super) fn save_rep_char(&mut self, ch: u8, font: &crate::ui::Font, refuse: &[u8]) {
+        if refuse.contains(&ch) {
+            return;
+        }
+        let Some((dlg, _)) = self.popup.as_mut() else { return };
+        if let Some(c) = dlg.get_mut(2) {
+            if ch == 8 || (c.text.len() < 0x1b && !(ch == 0x20 && c.text.is_empty())) {
+                if c.edit_char(ch, font) {
+                    c.edit_rescroll(font);
+                }
+            }
+        }
+        if dlg.get(1).and_then(|c| c.list.as_ref()).is_some_and(|l| !l.items.is_empty() && l.sel != 0xff) {
+            if let Some(c) = dlg.get_mut(1) {
+                c.list_select(0xff);
+            }
+        }
+        Self::save_rep_buttons(dlg);
+    }
+
+    /// 0x4df8a0 event 0 with the Delete key (0x2e) and the caret before the text's end: the
+    /// row selected is let go (event 0xb, row 0xff; 0x4df520).
+    pub(super) fn save_rep_delete_key(&mut self) {
+        let Some((dlg, _)) = self.popup.as_mut() else { return };
+        let inside = dlg.get(2).is_some_and(|c| c.edit.as_ref().is_some_and(|e| (e.caret as usize) < c.text.len()));
+        if inside && dlg.get(1).and_then(|c| c.list.as_ref()).is_some_and(|l| !l.items.is_empty() && l.sel != 0xff) {
+            if let Some(c) = dlg.get_mut(1) {
+                c.list_select(0xff);
+            }
+            Self::save_rep_buttons(dlg);
+        }
+    }
+
+    /// 0x4dfef0 event 2 (an activated control) and 0x4df6d0: the edit's text (trailing
+    /// spaces cut, 0x4de7e0) is the name 0x51bfb8; Delete (3) deletes that replay (0x4df220)
+    /// and ends the dialog, Save (-2) is 0x4dfd70 (`replay_rec::save_named`: an existing file
+    /// asks first, 0x4dfc80), Cancel (-3) just ends it.
+    pub(super) fn save_replay_done(&mut self, files: &Storage, dlg: &Dialog, id: i16) {
+        let mut name = dlg.get(2).map(|c| c.text.clone()).unwrap_or_default();
+        while name.last() == Some(&b' ') {
+            name.pop();
+        }
+        self.score.save_name = name.clone();
+        let exe = crate::saveload::exe_dir(&self.setup.characters_dir);
+        match id {
+            3 => self.replay_delete(&exe, &name),
+            -2 => {
+                // 0x4dfd70: the path (0 when it cannot be made), then the question.
+                let Some(path) = crate::replay_rec::replay_path(&exe, &String::from_utf8_lossy(&name)) else { return self.save_replay_failed(files) };
+                if crate::saveload::host(&path).exists() {
+                    return self.open_replay_overwrite(files, &name);
+                }
+                self.replay_copy(files, &exe, &name);
+            }
+            _ => {}
+        }
+    }
+
+    /// 0x4df220: delete the replay file `name`.
+    fn replay_delete(&self, exe: &str, name: &[u8]) {
+        if let Some(path) = crate::replay_rec::replay_path(exe, &String::from_utf8_lossy(name)) {
+            let _ = std::fs::remove_file(crate::saveload::host(&path));
+        }
+    }
+
+    /// 0x4dfd70's copy (0x4ded30): a copy that worked is the end of 0x4b4960 (the button
+    /// reads gluAll 0xb1 and is off); one that failed is the popup 0x4f5ee0.
+    fn replay_copy(&mut self, files: &Storage, exe: &str, name: &[u8]) {
+        if crate::replay_rec::copy_last_replay(exe, &String::from_utf8_lossy(name)) {
+            let text = self.glu_all.get(0xb0).cloned().unwrap_or_default().into_bytes();
+            if let Some(c) = self.dlg.as_mut().and_then(|(d, _)| d.get_mut(ids::SAVE_REPLAY)) {
+                c.text = text;
+                c.flags |= flag::VISIBLE | flag::DISABLED;
+            }
+        } else {
+            self.save_replay_failed(files);
+        }
+    }
+
+    /// 0x4dffc0 (the file step returned 0): 0x4f5ee0 shows network.tbl 0x65 (rez\ok.bin).
+    fn save_replay_failed(&mut self, files: &Storage) {
+        let msg = self.network.get(100).cloned().unwrap_or_default();
+        self.open_tile_popup(files, "rez/ok.bin", Open::ReplayMessage, &msg);
+    }
+
+    /// 0x4dfc80: the overwrite question (rez\okcancel.bin): network.tbl 3 with the name cut
+    /// to 0xe6 pixels of font16 (0x41fc20) and "..." when it was cut.
+    fn open_replay_overwrite(&mut self, files: &Storage, name: &[u8]) {
+        let p = self.palette_id();
+        let font = &self.look(files, p).skin.fonts[2];
+        let (mut w, mut n) = (0, 0);
+        for &b in name {
+            w += font.advance(b, 1);
+            if w > 0xe6 {
+                break;
+            }
+            n += 1;
+        }
+        let mut shown = String::from_utf8_lossy(&name[..n]).into_owned();
+        if n != name.len() {
+            shown.push_str("...");
+        }
+        let msg = self.network.get(2).cloned().unwrap_or_default().replacen("%s", &shown, 1);
+        self.open_tile_popup(files, "rez/okcancel.bin", Open::ReplayOverwrite, &msg);
+    }
+
+    /// 0x4f5d70 (rez\okcancel.bin) / 0x4f5ee0 (rez\ok.bin): a message over the tile.grp
+    /// 0x6d0f2c; the text is the label 1 (0x4f5b70), OK (-2) and Cancel (-3) have styles 3
+    /// and 5.
+    fn open_tile_popup(&mut self, files: &Storage, bin: &str, open: Open, msg: &str) {
+        self.popup = None;
+        let Some(mut dlg) = self.tile_dialog(files, bin) else { return };
+        for (id, g) in [(-2, GRAPHIC_OK), (-3, GRAPHIC_CANCEL)] {
+            if let Some(c) = dlg.get_mut(id) {
+                c.graphic = g;
+                c.flags |= flag::WIDE;
+            }
+        }
+        if let Some(c) = dlg.get_mut(1) {
+            c.text = msg.as_bytes().to_vec();
+            c.update = Update::Align(0x28);
+        }
+        self.popup = Some((dlg, open));
+    }
+
+    /// 0x4dfc80 answered: OK copies the replay over the old one (0x4ded30).
+    pub(super) fn replay_overwrite_done(&mut self, files: &Storage, id: i16) {
+        if id == -2 {
+            let exe = crate::saveload::exe_dir(&self.setup.characters_dir);
+            let name = self.score.save_name.clone();
+            self.replay_copy(files, &exe, &name);
+        }
     }
 }

@@ -1162,10 +1162,17 @@ impl State {
             // 0x4c54b0 minimap ping,
             // 0x4c6990 / 0x4c6940 mute / unmute unit speech: UI only (local player's audio).
             0x1c | 0x1e | 0x1f => true,
-            // 0x4c50e0: next scenario (campaign flow: copies the name from the map's
-            // string table into 0x57f246 for the front end; no simulation effect).
+            // 0x4c50e0: next scenario: the map string (id in the action's string field, 0 = no
+            // change) is copied (SStrCopy, 0x20 bytes) into 0x57f246 for the campaign flow
+            // (0x4dc1c0 via the front end); no table or id 0 (low word) clears it.
             0x29 => {
-                todo_port!("0x4c50e0", "set next scenario name (campaign flow)");
+                if a.string != 0 {
+                    let name: &[u8] = match (&_d.dat.map_tbl, a.string as u16) {
+                        (Some(t), id) if id != 0 => crate::setup::tbl_str(t, id as usize - 1),
+                        _ => b"",
+                    };
+                    self.next_scenario = name[..name.len().min(0x1f)].to_vec();
+                }
                 true
             }
             0x3a => {

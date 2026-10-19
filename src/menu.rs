@@ -262,12 +262,29 @@ fn trim_end(mut t: Vec<u8>) -> Vec<u8> {
 }
 
 /// What opened the game is running as (0x6d0f14 replay, 0x57f0b4 multiplayer).
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct Ctx {
     pub replay: bool,
     pub multiplayer: bool,
     /// 0x6d0f6a: a replay's speed, shown on the (disabled) game speed slider.
     pub replay_speed: i16,
+    /// 0x51268c: the local player's storm id.
+    pub local_storm: u32,
+    /// 0x66fe20 (stride 0x22): per storm id, the net slot is connected (1).
+    pub net_slot: [u8; 8],
+    /// 0x596877 (game template +0x12): set, the game cannot be saved.
+    pub no_save: u8,
+}
+
+impl Ctx {
+    /// 0x4c3db0: the lowest storm id of a connected human (the local player's in a single
+    /// player game).
+    pub fn lowest_human(&self) -> u32 {
+        if !self.multiplayer {
+            return self.local_storm;
+        }
+        (0..8).find(|&i| self.net_slot[i] == 1).unwrap_or(8) as u32
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -354,6 +371,10 @@ pub enum Action {
     /// id (the header's +0x28, the game info's 0x596814). The dialog is closed. The caller
     /// opens it (`saveload::open_save`) and loads the state.
     LoadGame(String, u32),
+    /// 0x460fa0 case 1 (the victory dialog's button 1): the dialog closes and 0x48d0c0 adds
+    /// a message line (7 s, sound 0x17): rez\network.tbl string 0x10 (index 0xf) when the
+    /// table has more than 0xf strings, else the empty string 0x501b7d (sound only).
+    Message,
 }
 
 /// The open menu (0x6d5bf4) and the depth counter 0x6d1224.
@@ -376,6 +397,11 @@ pub struct Menu {
     clock: Option<u32>,
     /// The last press on a list: when and the control (a second within 500 ms is a double click).
     last_press: Option<(u32, i16)>,
+    /// The dialog's timers (0x416090) and the tick count (GetTickCount) they run by.
+    timers: crate::dlg::DlgTimers<()>,
+    tick_count: u32,
+    /// Milliseconds since the message pump last sent event 0xd (every 100 ms, 0x4d1bf0).
+    pump_ms: u32,
 }
 
 /// 0x512768: button graphics by style (0 minimap, 3 OK, 4 menu buttons, 5 Cancel, ...).
@@ -428,6 +454,7 @@ impl Menu {
             }
         }
         let depth = depth + 1;
+        let mut timers = crate::dlg::DlgTimers::default();
         match kind {
             Kind::Game => {
                 // 0x4c9a90 (multiplayer or replay): no save / load / pause in a replay.
@@ -479,12 +506,14 @@ impl Menu {
                 // 0x461020 / 0x461160: button 1 (continue observing / playing) only in a
                 // multiplayer game (4c4220's state is not modelled: not shown); -20 shows in
                 // single player, -21 and -23 (the multiplayer / replay lines) are hidden.
-                // The tail of 0x461020 sets a 20 s dialog timer (0x416090).
+                // The tail of 0x461020 (the defeat dialog only) sets a 20 s dialog timer (0x416090).
                 show(&mut dlg, 1, kind == Kind::Victory && ctx.multiplayer && !ctx.replay);
                 show(&mut dlg, -0x14, !ctx.multiplayer);
                 show(&mut dlg, -0x15, false);
                 show(&mut dlg, -0x17, false);
-                crate::todo_port!("0x416090", "end dialog 20 s timer");
+                if kind == Kind::Defeat {
+                    timers.set(0, 0, 0, 20000, None);
+                }
             }
             Kind::Tips => {
                 if let Some(c) = find(&mut dlg, 2) {
@@ -560,7 +589,7 @@ impl Menu {
         }
         // The edit has the focus (0x418580).
         dlg.active = dlg.controls.iter().position(|c| c.ty == 8 && c.flags & flag::VISIBLE != 0);
-        Some(Menu { kind, dlg, depth, saved: *set, pressed: None, dragging: None, click: false, was_down: false, clock: None, last_press: None })
+        Some(Menu { kind, dlg, depth, saved: *set, pressed: None, dragging: None, click: false, was_down: false, clock: None, last_press: None, timers, tick_count: 0, pump_ms: 0 })
     }
 
     /// 0x47e480: step the tip by `d` (1..=0x67 in the expansion, wrapping) and show it
@@ -750,17 +779,34 @@ impl Menu {
         matches!(self.dlg.controls[i].ty, 1 | 2).then(|| self.dlg.controls[i].id)
     }
 
-    /// Time passes (the caller's frame time in ms): the edit's caret blinks, a held list
-    /// scroll arrow repeats, and double clicks can be told.
+    /// Time passes (the caller's frame time in ms): the edit's caret blinks, the message
+    /// pump runs (0x4d1bf0: every 100 ms event 0xd, which repeats a held list scroll bar
+    /// arrow; the dialog timers 0x415dc0), and double clicks can be told. Some(id): the
+    /// activation a fired timer stands for (the defeat dialog's 20 s: event 8 id 0 sets the
+    /// result 7 and closes it, as the OK button -2 does).
     #[allow(dead_code)]
-    pub fn tick(&mut self, ms: u32) {
+    pub fn tick(&mut self, ms: u32) -> Option<i16> {
         self.clock = Some(self.clock.unwrap_or(0).wrapping_add(ms));
+        self.tick_count = self.tick_count.wrapping_add(ms);
         self.dlg.tick(ms);
-        for c in self.dlg.controls.iter_mut().filter(|c| c.list_scroll_active()) {
-            c.list_scroll_tick();
-            // 0x4bbcf0: a held arrow's re-press clicks.
-            self.click |= c.list_scroll_take_click();
+        self.pump_ms += ms;
+        if self.pump_ms >= 100 {
+            self.pump_ms = 0;
+            for c in self.dlg.controls.iter_mut().filter(|c| c.list_scroll_active()) {
+                c.list_scroll_tick();
+                // 0x4bbcf0: a held arrow's re-press clicks.
+                self.click |= c.list_scroll_take_click();
+            }
         }
+        let mut act = None;
+        let kind = self.kind;
+        self.timers.run(self.tick_count, |_, t| {
+            // 0x461430 event 8 (0x461470): only id 0.
+            if kind == Kind::Defeat && t.callback.is_none() && t.id == 0 {
+                act = Some(-2);
+            }
+        });
+        act
     }
 
     /// A key went down (WM_KEYDOWN, event 0; `vk` the virtual key, `mods` the shift bits
@@ -1069,7 +1115,10 @@ impl Menu {
             (Kind::Tips, -2 | -3) => back(Kind::Help),
             // 0x462600
             (Kind::Game, 1) => {
-                crate::todo_port!("0x4c3db0", "save: only the lowest human slot saves in multiplayer (and 0x596877 must be 0)");
+                // Only the lowest human saves (0x4c3db0), and 0x596877 must be 0.
+                if ctx.lowest_human() != ctx.local_storm || ctx.no_save != 0 {
+                    return (None, Action::Closed);
+                }
                 // 0x461720: in multiplayer one save per 2 minutes
                 let wait = ctx.multiplayer && sg().saved_at.is_some_and(|t| t.elapsed().as_millis() <= 120_000);
                 if wait || ctx.replay {
@@ -1123,7 +1172,7 @@ impl Menu {
             (Kind::Defeat | Kind::Victory, -2) => (None, Action::EndGame),
             (Kind::Defeat | Kind::Victory, 1) => {
                 if self.kind == Kind::Victory {
-                    crate::todo_port!("0x48d0c0", "victory dialog button 1 = 0x460fa0 case 1: if network.tbl entry 0 <= 0xf then 0x48d0c0(text 0x501b7d, eax 0 = 7000 ms) adds a message line (msgs 0x48cd30) and plays sound 0x17");
+                    return (None, Action::Message);
                 }
                 (None, Action::Closed)
             }

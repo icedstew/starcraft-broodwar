@@ -24,6 +24,7 @@ mod iscript;
 mod map;
 mod mpq;
 mod replay;
+mod replay_rec;
 mod statdata;
 mod palette;
 mod ui;
@@ -591,6 +592,36 @@ fn main() -> std::io::Result<()> {
             }
             println!("MATCH {} frames after f{at}", more);
         }
+        Some("reprecord") => {
+            // reprecord <in.rep> <out.rep>: play the replay headless with the recorder on
+            // (0x4cde70) and write the replay file it makes (0x4dfab0's layout).
+            let mut a = view::Assets::load(files)?;
+            let r = replay::Replay::parse(&std::fs::read(&args[1])?)?;
+            view::prepare_replay(&mut a, &r);
+            let mut scene = view::Scene::from_replay(&a, &r)?;
+            let mut player_of = [0u8; 256];
+            let mut storm = [0u8; 12];
+            for (i, s) in r.header.slots.iter().enumerate() {
+                storm[i] = s.player_id;
+                if s.kind == 1 || s.kind == 2 {
+                    player_of[s.player_id as usize] = i as u8;
+                }
+            }
+            replay_rec::set_storm_ids(storm);
+            replay_rec::start(Some(&r.header.raw));
+            let mut ci = 0;
+            for f in 0..r.header.frames {
+                while ci < r.commands.len() && r.commands[ci].frame <= f {
+                    let c = &r.commands[ci];
+                    scene.replay_command(player_of[c.player as usize], &c.data);
+                    ci += 1;
+                }
+                scene.step();
+            }
+            let mut rec = replay_rec::stop().ok_or_else(|| std::io::Error::other("no recorder"))?;
+            let f = rec.file(&r.chk).ok_or_else(|| std::io::Error::other("replay not written"))?;
+            std::fs::write(&args[2], f)?;
+        }
         Some("reptrace") => {
             // reptrace <rep> <frames> <trace>: play the replay headless, writing the same
             // per-frame trace as re/emu_game.py with SCBW_REPLAY.
@@ -1064,7 +1095,7 @@ fn main() -> std::io::Result<()> {
             let menu = std::env::var("SCBW_MENU").ok().and_then(|k| {
                 use menu::Kind::*;
                 let kind = match k.as_str() { "game" => Game, "options" => Options, "speed" => Speed, "sound" => Sound, "video" => Video, "help" => Help, "end" => EndMission, "objectives" => Objectives, "tips" => Tips, _ => return None };
-                let ctx = menu::Ctx { replay: std::env::var("SCBW_MENU_REPLAY").is_ok(), multiplayer: false, replay_speed: 6 };
+                let ctx = menu::Ctx { replay: std::env::var("SCBW_MENU_REPLAY").is_ok(), multiplayer: false, replay_speed: 6, ..Default::default() };
                 let skin = &ui.as_ref()?.skin;
                 let mut set = menu::Settings::default();
                 let mut m = menu::Menu::open(kind, 0, &a.files, skin, ctx, &set);
@@ -1402,7 +1433,7 @@ pub(crate) fn shot_setup(a: &mut view::Assets, mut g: view::GameSetup, out: &str
     // SCBW_MENU=objectives: the in-game Objectives menu (0x4c9de0) over the game start.
     let objectives = std::env::var("SCBW_MENU").is_ok_and(|k| k == "objectives");
     let menu = ui.as_ref().filter(|_| end != 0 || objectives).and_then(|u| {
-        let ctx = menu::Ctx { replay: false, multiplayer: false, replay_speed: 0 };
+        let ctx = menu::Ctx { replay: false, multiplayer: false, replay_speed: 0, ..Default::default() };
         if end == 0 {
             let mut m = menu::Menu::open(menu::Kind::Objectives, 0, &a.files, &u.skin, ctx, &menu::Settings::default())?;
             m.set_text(2, &view::objectives_text(&scene, u));

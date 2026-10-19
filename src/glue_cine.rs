@@ -44,10 +44,10 @@ impl Glue {
 /// the two intros (1, 0x18).
 pub fn play(files: &Storage, idx: u32, win: Option<&mut minifb::Window>, audio: Option<&Audio>, shot: Option<&str>) -> std::io::Result<bool> {
     use minifb::{Key, KeyRepeat};
-    // 0x4be0b0 (hides the cursor) / 0x4d2ff0 (clears the input handlers and the window's
-    // handlers 0x5968dc / 0x5968b4 / 0x5968c0 are set to 0x4d4410): the modal loop here
-    // reads the keys itself.
-    todo_port!("0x4be0b0", "cursor off; 0x4d2ff0 input handler reset");
+    // 0x4be0b0 (hides the cursor) is `Glue::flush_notice`, run by the caller; 0x4d2ff0 clears
+    // the input handlers and the window's handlers 0x5968dc / 0x5968b4 / 0x5968c0 are set to
+    // 0x4d4410: the modal loop here reads the keys itself.
+    todo_port!("0x4d2ff0", "input handler table reset (0x5968a0, ClipCursor)");
     let Some(name) = MOVIES.get(idx as usize) else { return Ok(false) };
     // Ordinal_454 flags 0x10280808 (+ 0x800000 from 0x19): from the file, the video's own palette.
     let video = files.read(name).ok().and_then(Smk::parse);

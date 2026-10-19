@@ -318,6 +318,17 @@ impl Glue {
         }
     }
 
+    /// 0x4af5c0 events 0x11 / 0x12 (the mouse wheel up / down): event 0xe code 0xf / 0x10 to the
+    /// map list's scroll bar (0x59bc7c + 0x36, 0x415af0), the list moves a row.
+    pub(super) fn create_wheel(&mut self, down: bool) {
+        if self.popup.is_some() {
+            return;
+        }
+        if let Some(c) = self.cctl(ids::LIST) {
+            c.list_scroll_wheel(down);
+        }
+    }
+
     fn cctl(&mut self, id: i16) -> Option<&mut Ctl> {
         self.cdlg()?.get_mut(id)
     }
@@ -509,7 +520,6 @@ impl Glue {
         // 0x4adac0: the buttons slide in (0x4dd5e0 over list 0x51a9f0, AX = 5) and
         // the folder label gets its draw 0x4ad980.
         self.slide_in(0x51a9f0, 5, 0);
-        todo_port!("0x4af5c0", "mouse wheel (events 0x11 / 0x12) to the map list's scroll bar");
         if self.setup.multiplayer {
             todo_port!("0x4ae860", "the network screen's game speed slider (id 16, 0x4ae250 / 0x4ae3c0) and game name");
         }

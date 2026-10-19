@@ -4,7 +4,6 @@
 
 use super::list::NIL;
 use super::{Data, State};
-use crate::todo_port;
 
 impl State {
     /// 0x4d94b0 game_step.
@@ -310,7 +309,7 @@ impl State {
                 un.shields = (un.shields + 7).min(max);
                 let s = un.sprite;
                 if self.sprites[s as usize].flags & 0x8 != 0 {
-                    todo_port!("0x497430", "selection hp/shield bar redraw");
+                    self.sprite_redraw_bars(s);
                 }
             }
         }

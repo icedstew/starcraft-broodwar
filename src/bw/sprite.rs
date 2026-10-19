@@ -428,6 +428,18 @@ impl State {
         }
     }
 
+    /// 0x497430: redraw sprite `s`'s images that use draw function 0x0b (the hp/shield bars).
+    pub(crate) fn sprite_redraw_bars(&mut self, s: u32) {
+        let mut i = self.sprites[s as usize].images.head;
+        while i != NIL {
+            let img = &mut self.images[i as usize];
+            if img.modifier == 0x0b {
+                img.flags |= 1;
+            }
+            i = img.link.next;
+        }
+    }
+
     /// 0x401e40: set the offset of sprite `s`'s main image; redraw only if it changed.
     pub fn sprite_set_main_offset(&mut self, s: u32, x: i8, y: i8) {
         let mi = self.sprites[s as usize].main_image;

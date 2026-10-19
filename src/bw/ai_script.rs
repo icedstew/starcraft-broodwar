@@ -1,12 +1,8 @@
 //! AI script interpreter (0x45b850): aiscript.bin / bwscript.bin threads.
 //!
-//! An opcode that is not ported yet stops its thread where it is (`todo_port!`), so the
-//! script never runs past code it can't execute.
-
 use super::list::NIL;
 use super::path::{approx_distance, region_at};
 use super::{Data, State};
-use crate::todo_port;
 
 /// What an opcode does to the thread after it ran.
 enum Step {
@@ -557,6 +553,12 @@ impl State {
                     _ => {}
                 }
             }
+            // 0x3b: the script's town takes `n` workers from the player's other towns (0x4355c0)
+            0x3b => {
+                let n = self.script_byte(d, s) as u32;
+                let town = self.ai.scripts.items[s as usize].town;
+                self.town_take_workers(d, town, n);
+            }
             // jump when the regions around the town have less than `n` * 32 tiles
             0x3a => {
                 let cap = (self.script_byte(d, s) as u32) << 5;
@@ -680,11 +682,7 @@ impl State {
                 }
             }
             0x6e => self.ai_allied_regions_follow(d, p as u8),
-            0x00..=0x70 => {
-                todo_port!("0x45b850", "AI script opcode");
-                return self.script_retry(s, start);
-            }
-            // Anything else ends the thread.
+            // Past the jump table's 0x71 entries (`ja` 0x45c9b3): the thread ends.
             _ => {
                 self.end_script(s);
                 return Step::End;

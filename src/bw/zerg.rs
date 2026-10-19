@@ -234,7 +234,7 @@ impl State {
         // town counts one worker less and takes the building (0x433dd0).
         let r = self.units[u as usize].ai;
         if self.player_type(self.units[u as usize].player) == 1 && r != NIL && super::ai_town::ai_kind(r) != super::ai_town::AI_WORKER {
-            todo_port!("0x45d890", "a drone with a non-worker AI");
+            todo_port!("0x45d890", "a drone with a non-worker AI (native releases the entry into the worker pool)");
         } else if self.player_type(self.units[u as usize].player) == 1 && r != NIL {
             let w = super::ai_town::ai_index(r);
             let town = self.ai.workers.items[w as usize].town;

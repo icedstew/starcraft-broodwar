@@ -363,6 +363,17 @@ impl Ctl {
         self.list.as_ref().and_then(|l| l.scroll.as_deref()).is_some_and(|b| b.captured)
     }
 
+    /// 0x415af0 event 0xe, code 0xf (`down` false) / 0x10 (true): the value one less / more
+    /// (0x4152f0, clamped); the list follows (the dialogs send them for the mouse wheel,
+    /// 0x4af5c0 events 0x11 / 0x12).
+    pub fn list_scroll_wheel(&mut self, down: bool) {
+        let Some(l) = self.list.as_mut() else { return };
+        l.scroll_op(true, |b| {
+            let v = b.value.wrapping_add(if down { 1 } else { -1 });
+            ((), b.set_value(v))
+        });
+    }
+
     /// 0x415af0 event 4 (0x415a90 -> 0x415980 -> 0x415910): the left button went down at
     /// (x, y), dialog-relative: true when the bar took it (arrows and page areas move the
     /// list at once, the thumb jumps under the mouse).
@@ -411,7 +422,8 @@ impl Ctl {
     }
 
     /// 0x415af0 event 0xd: a timer tick while the bar is held (arrows repeat every tick,
-    /// page areas every 3rd). The caller's tick rate is not ported (0x416090 timers).
+    /// page areas every 3rd). Sent by the message pump every 100 ms (0x4d1bf0), not by a
+    /// 0x416090 timer.
     pub fn list_scroll_tick(&mut self) {
         let Some(l) = self.list.as_mut() else { return };
         l.scroll_op(true, |b| {

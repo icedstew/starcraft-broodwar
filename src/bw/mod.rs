@@ -344,6 +344,9 @@ pub struct State {
     /// "always display" flag (else shown only with subtitles on, 0x6cdfec 0x400).
     /// The third field is the least time in ms it stays (0 = the text's reading time).
     pub shown_text: Vec<(u16, bool, u32)>,
+    /// 0x57f246: the next scenario's file name set by trigger action 0x29 (0x4c50e0); the
+    /// front end moves it to `Setup::next_map` (read by the campaign flow 0x4dc1c0).
+    pub next_scenario: Vec<u8>,
     /// 0x45edd0 for the front end: a transmission starts (unit type, length in ms): the
     /// talking portrait shows for that long and the real-time timer then calls
     /// `trigger_wait_end` (0x45e610).
@@ -534,6 +537,7 @@ impl State {
             shown_error: 0,
             cmd_player: None,
             shown_text: Vec::new(),
+            next_scenario: Vec::new(),
             transmissions: Vec::new(),
             center_view: None,
             ui_attached: false,

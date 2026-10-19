@@ -1840,7 +1840,13 @@ impl Skin {
     /// 0 / 3 / 6, columns +0 / +1 / +2) tiled over the dialog, its size rounded up to
     /// whole tiles.
     pub fn menu_background(&self, dlg: &mut Dialog) {
-        let (tw, th) = (self.tile.w.max(1), self.tile.h.max(1));
+        Self::tile_background(&self.tile, dlg)
+    }
+
+    /// 0x4c9cc0 with the tile graphics `tile` (the glue's save replay dialog uses
+    /// glue\pal??\tile.grp).
+    pub fn tile_background(tile: &Grp, dlg: &mut Dialog) {
+        let (tw, th) = (tile.w.max(1), tile.h.max(1));
         let (mut w, mut h) = (dlg.this.rect.2 - dlg.this.rect.0 + 1, dlg.this.rect.3 - dlg.this.rect.1 + 1);
         if w % tw != 0 {
             w += tw - w % tw;
@@ -1852,8 +1858,8 @@ impl Skin {
         // 0x4c8f10: one row of tiles; 0x40abbe blits frames without their offsets.
         let row = |bm: &mut Vec<u8>, base: usize, y: i32| {
             let put = |f: usize, x: i32, bm: &mut Vec<u8>| {
-                let Some(fr) = self.tile.frame(f) else { return };
-                self.tile.draw(f, false, x - fr.x, y - fr.y, bm, w, h, Blend::Normal);
+                let Some(fr) = tile.frame(f) else { return };
+                tile.draw(f, false, x - fr.x, y - fr.y, bm, w, h, Blend::Normal);
             };
             put(base, 0, bm);
             let mut x = tw;
@@ -1871,5 +1877,86 @@ impl Skin {
         }
         row(&mut bm, 6, y);
         dlg.bg = Some((w, h, bm));
+    }
+}
+
+/// A dialog timer (0x1c-byte node of timer.cpp): the timer (`dialog`, `id`) fires every
+/// `interval` ms; `callback` is the proc to call, None sends the dialog event 8 (code 0xe,
+/// user = id) to its event proc.
+#[derive(Clone, Copy, Debug)]
+pub struct DlgTimer<C: Copy> {
+    pub dialog: usize,
+    pub id: u16,
+    pub interval: u32,
+    /// +0xc: the tick count it last fired (or was set).
+    pub last: u32,
+    /// +0x18: smoothed lateness of the last firings (a late firing under 500 ms moves it
+    /// 1/32 of the way).
+    pub late: i32,
+    pub callback: Option<C>,
+}
+
+/// The dialog timers: 0x6d5ebc, sorted by the time they are due (`last` + `interval`);
+/// the ones that fired during a pass wait in 0x6d5ec0 until the pass ends.
+#[derive(Debug)]
+pub struct DlgTimers<C: Copy> {
+    list: Vec<DlgTimer<C>>,
+    fired: Vec<DlgTimer<C>>,
+}
+
+impl<C: Copy> Default for DlgTimers<C> {
+    fn default() -> Self {
+        DlgTimers { list: Vec::new(), fired: Vec::new() }
+    }
+}
+
+impl<C: Copy> DlgTimers<C> {
+    /// 0x6d5ebc: puts `t` before the first timer that is due no later than it.
+    fn insert(&mut self, t: DlgTimer<C>) {
+        let due = t.last.wrapping_add(t.interval) as i32;
+        let at = self.list.iter().position(|o| due <= o.last.wrapping_add(o.interval) as i32).unwrap_or(self.list.len());
+        self.list.insert(at, t);
+    }
+
+    /// 0x416090 (ECX = `dialog`, AX = `id`, stack = `interval`, `callback`; `now` =
+    /// GetTickCount): starts the timer; one of the same dialog and id (in either list) is
+    /// replaced.
+    pub fn set(&mut self, now: u32, dialog: usize, id: u16, interval: u32, callback: Option<C>) {
+        self.kill(dialog, id);
+        self.insert(DlgTimer { dialog, id, interval, last: now, late: 0, callback });
+    }
+
+    /// 0x416000 (ESI = `dialog`, DX = `id`): the timer stops.
+    pub fn kill(&mut self, dialog: usize, id: u16) {
+        self.list.retain(|t| !(t.dialog == dialog && t.id == id));
+        self.fired.retain(|t| !(t.dialog == dialog && t.id == id));
+    }
+
+    /// 0x415f30 (EDI = `dialog`): all the timers of the dialog stop.
+    pub fn kill_all(&mut self, dialog: usize) {
+        self.list.retain(|t| t.dialog != dialog);
+        self.fired.retain(|t| t.dialog != dialog);
+    }
+
+    /// 0x415dc0 (the message pump's pass at tick count `now`): every timer that is due
+    /// fires (`f` gets it and may start / stop timers), then the fired ones go back in
+    /// order with their new time.
+    pub fn run(&mut self, now: u32, mut f: impl FnMut(&mut Self, DlgTimer<C>)) {
+        while let Some(&head) = self.list.first() {
+            let elapsed = now.wrapping_sub(head.last).wrapping_sub(head.interval) as i32;
+            if elapsed <= 0 {
+                break;
+            }
+            let mut t = self.list.remove(0);
+            if elapsed < 500 {
+                t.late += (elapsed - t.late) >> 5;
+            }
+            t.last = now;
+            self.fired.push(t);
+            f(self, t);
+        }
+        for t in std::mem::take(&mut self.fired) {
+            self.insert(t);
+        }
     }
 }

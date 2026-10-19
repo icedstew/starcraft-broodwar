@@ -5,7 +5,6 @@
 use super::list::NIL;
 use super::{Data, State};
 use crate::grp::{Blend, Grp};
-use crate::todo_port;
 
 /// 0x51a0f0: the 26 interface colors (0x00bbggrr), matched to the palette as 0x6ceb20.
 pub const UI_RGB: [u32; 26] = [
@@ -114,12 +113,15 @@ impl Minimap {
         map_w: u16, map_h: u16, tileset: u16, palette: &[[u8; 3]; 256], dark: &[u8], vx4: Vec<u16>, vr4: Vec<u8>,
         player_colors: [u8; 12],
     ) -> Minimap {
-        let (mut w, mut h, mut shift, mut scale, mut tile_px) = (0x80, 0x80, 0, 1, 0x20);
+        let (w, h, shift, scale, tile_px);
         match map_w.max(map_h) {
             0x40 => (w, h, shift, scale, tile_px) = (map_w * 2, map_h * 2, 1, 1, 0x10),
-            0x60 | 0x80 => (w, h, scale, tile_px) = (map_w, map_h, 1, 0x20),
-            0xc0 | 0x100 => (w, h, scale, tile_px) = (map_w >> 1, map_h >> 1, 2, 0x40),
-            _ => todo_port!("0x4a4400", "minimap for a non-standard map size"),
+            0x60 | 0x80 => (w, h, shift, scale, tile_px) = (map_w, map_h, 0, 1, 0x20),
+            0xc0 | 0x100 => (w, h, shift, scale, tile_px) = (map_w >> 1, map_h >> 1, 0, 2, 0x40),
+            // 0x4a4400's switch default leaves the size globals (0x59cc74/64/68/6c, 0x59c184)
+            // as the last map set them (0 in a fresh process, a division by zero later).
+            // ponytail: a 128 map's values instead of the stale ones; keep them if odd sizes matter.
+            _ => (w, h, shift, scale, tile_px) = (0x80, 0x80, 0, 1, 0x20),
         }
         let excluded = excluded_colors(tileset);
         let mut remap = [0u8; 256];

@@ -1391,6 +1391,8 @@ impl State {
         self.rng.enabled = true;
         self.cmd_player = Some(player);
         self.receive_command(d, player, sel, p);
+        // 0x486d7a: the command goes to the replay writer.
+        crate::replay_rec::record(self, player, p);
         self.cmd_player = None;
         self.rng.enabled = was;
     }

@@ -1,6 +1,7 @@
 //! Units entering transports and bunkers (1.16.1 EnterTransport, PickupBunker and the
 //! load itself). A transport keeps its passengers' handles in `loaded_units` (+0xb0).
 
+use super::ai_town::{ai_index, ai_kind, AI_MILITARY};
 use super::list::NIL;
 use super::{Data, State};
 use crate::todo_port;
@@ -262,7 +263,14 @@ impl State {
                         self.ai.towns.items[town as usize].building_scv = NIL;
                     }
                 }
-                None => todo_port!("0x4e78e0", "an SCV with a guard / military AI loaded"),
+                // 1.16.1 takes the u32 at +0x14 of any entry as the town and reads its +0x28
+                // without a null check. A military entry (0x14 bytes) has the next array
+                // entry's `next` there: a pointer into the military pool, whose +0x28 is
+                // another entry's link, never this unit: no effect.
+                None if ai_kind(r) == AI_MILITARY && self.ai.military.items.get(ai_index(r) as usize + 1).is_some_and(|m| m.link.next != NIL) => {}
+                // A guard entry has home.y / other_home.x there (a bogus address), a last
+                // military entry a null pointer: the native game faults.
+                None => todo_port!("0x4e78e0", "an SCV with a guard / military AI loaded (native faults)"),
             }
         }
         self.units[u as usize].connected_unit = tr;

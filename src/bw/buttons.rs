@@ -8,7 +8,6 @@
 
 use super::list::NIL;
 use super::{Data, State};
-use crate::todo_port;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Button {
@@ -727,7 +726,7 @@ impl State {
             0x4deb40 if self.replay => if (self.replay_speed == 0 && self.replay_mult <= 1) || self.replay_paused { -1 } else { 1 },
             0x4deaf0 | 0x4deb40 => 0,
             _ => {
-                todo_port!("0x4282d0", "unknown button condition");
+                // Every condition in the button tables is matched above.
                 0
             }
         }
@@ -922,7 +921,7 @@ impl State {
             0x4df260 => ReplayFaster,
             0x4df300 => ReplaySlower,
             _ => {
-                todo_port!("0x423180", "unknown button action");
+                // Every action in the button tables is matched above.
                 let _ = player;
                 None
             }
