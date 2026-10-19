@@ -52,6 +52,8 @@ impl State {
 
     /// 0x4cfef0 from the creep_saved block: the sizes must equal 0x413900 / 0x4138c0's
     /// (w*h*2, w*h); then 0x47d9d0 (recession lists) and the three maps.
+    /// 0x47d9d0: the creep recession nodes, hash, heads and counts read back, indices to
+    /// pointers (inline here).
     pub(super) fn load_tiles(&mut self, _d: &Data, i: &mut In) -> bool {
         let n = self.terrain.width as usize * self.terrain.height as usize;
         let Some(v) = i.u32().filter(|&s| s as usize == n * 2).and_then(|_| i.packed(n * 2)) else { return false };

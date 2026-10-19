@@ -110,6 +110,7 @@ impl State {
     /// 0x48ae40 (0x48ab00 for save version >= 3, which is all we write; 0x48abd0 reads the
     /// older 0x6e-byte records, todo): clear the bullets, read the records, resolve the
     /// pointers (0x48a8d0) and rebuild the free / active lists (0x48a720).
+    /// 0x48a720: both lists relinked in slot order (inline here).
     pub(super) fn load_bullets(&mut self, _d: &Data, i: &mut In) -> bool {
         let zero = Bullet { sprite: NIL, move_target_unit: NIL, target: NIL, source: NIL, previous_bounce_target: NIL, ..Bullet::default() };
         self.bullets.pool = vec![zero.clone(); MAX_BULLETS];

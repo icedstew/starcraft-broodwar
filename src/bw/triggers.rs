@@ -1651,6 +1651,7 @@ impl State {
 
     /// 0x4c82d0: move the completed building `u` to (x, y) if it fits there; a terran one
     /// drops its addon (and takes one lined up at the new spot), zerg creep follows.
+    /// 0x463330: the building whose addon (+0xc0) is `u`, from the visible units (inline here).
     fn trigger_move_building(&mut self, d: &Data, u: u32, x: i32, y: i32) {
         if self.units[u as usize].status & 1 == 0 {
             return;

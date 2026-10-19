@@ -1193,6 +1193,7 @@ impl State {
     }
 
     /// 0x475c80: `u` may attack a remembered fog unit of type `ty`.
+    /// 0x475a90: the unit's ground weapon, else its turret's; 0x82 for an unburrowed lurker (inline here).
     fn fog_attack_ok(&self, d: &Data, u: u32, ty: u16) -> bool {
         if ty > 0xe3 || d.dat.units.flags[ty as usize] & 0x2000_0000 != 0 {
             return false;

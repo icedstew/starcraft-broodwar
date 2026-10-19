@@ -626,6 +626,8 @@ impl Ui {
 /// 0xc1 show shields (0x4566b0), 0xd0..0xd3 hp with the unit's random damage pattern
 /// (0x4567c0), 0xd8..0xdb hp (0x456730); all from twire.pcx.
 /// 0x4566b0: the shield colors of pixels 0xc0 / 0xc1 (inline here).
+/// 0x4567c0: the hp colors with the damage pattern, 0xd0..0xd3 (inline here).
+/// 0x456730: the hp colors 0xd8..0xdb (inline here).
 pub fn wireframe_colors(st: &crate::bw::State, d: &crate::bw::Data, u: u32, twire: &[u8]) -> [u8; 256] {
     const HP_ODD: [u8; 40] = [10, 10, 10, 10, 10, 10, 10, 0, 10, 10, 0, 0, 10, 10, 0, 1, 10, 10, 1, 1, 10, 0, 1, 1, 10, 1, 1, 1, 0, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1];
     const HP_EVEN: [u8; 40] = [10, 10, 10, 10, 10, 10, 10, 0, 10, 10, 0, 0, 10, 0, 0, 0, 10, 0, 0, 1, 0, 0, 0, 1, 0, 0, 1, 1, 0, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1];

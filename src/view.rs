@@ -1701,6 +1701,7 @@ fn heap_sift_up(h: &mut [(u32, u32)]) {
 /// (0x42d4c0 / 0x42d400, max-heap), popped largest first (0x42d460 / 0x42d370) into
 /// 0x6c2318 and drawn from the last popped back to the first.
 /// 0x42d460: pop the sprite heap, largest first (inline here).
+/// 0x42d370: the sift down after a pop (inline here).
 fn heap_draw_order(entries: Vec<(u32, u32)>) -> Vec<u32> {
     // 1-based heap as at 0x6c4a30.
     let mut h: Vec<(u32, u32)> = vec![(0, 0)];
@@ -1761,6 +1762,7 @@ pub(crate) fn blit_frame(g: &crate::grp::Grp, frame: usize, x: i32, y: i32, cw: 
 /// statdata.cpp's icon buttons: 0x456d30 (the race's cmdbtns.grp frame `gr`, centered,
 /// clipped to the control) and 0x456c30 (the icon centered, through ticon.pcx `row`);
 /// 0x4574e0 (info buttons) draws the icon first, 0x457480 the frame first.
+/// 0x456c30: the icon centered through ticon.pcx (inline here).
 #[allow(clippy::too_many_arguments)]
 fn stat_button(ui: &crate::ui::Ui, gr: u16, icons: &crate::grp::Grp, icon: u16, row: usize, icon_first: bool, r: (i32, i32, i32, i32), out: &mut [u8]) {
     let (w, h) = (SCREEN_W, SCREEN_H);

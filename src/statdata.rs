@@ -329,6 +329,11 @@ pub fn click(panel: Panel, id: i16) -> Option<Vec<u8>> {
 /// 0x402270: the yellow hit point band, 34..66% (inline here).
 /// 0x4022c0: the red hit point band, under 34% (inline here).
 /// 0x426c60: the info buttons (inline here).
+/// 0x425790: a weapon's info button, icon and upgrade level (inline here).
+/// 0x4253d0: the hangar button, interceptors / scarabs (inline here).
+/// 0x426300: the spider mines button (inline here).
+/// 0x425310: the nuke in the silo (inline here).
+/// 0x425a30: the energy line (inline here).
 pub fn unit_panel(st: &State, d: &Data, strings: &[String], u: u32) -> Vec<(i16, Show)> {
     let un = &st.units[u as usize];
     let t = un.unit_type;
