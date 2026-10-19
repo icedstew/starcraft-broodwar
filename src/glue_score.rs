@@ -415,8 +415,10 @@ impl Glue {
         }
     }
 
-    /// 0x4b4af0 after the dialog: iScore.grp (0x59b72c) is freed.
+    /// 0x4b30a0 (event 1, after the Sleep(1000)): the type-1 control's picture (pMain.pcx) and
+    /// the type-9 control's data (iScore.grp, 0x59b72c) are freed, 0x6d5a60 = 0.
     pub(super) fn score_end(&mut self) {
+        self.g6d5a60 = 0;
         self.score.gfx = None;
         self.score.timer = None;
     }
@@ -503,11 +505,18 @@ impl Glue {
         }
     }
 
-    /// The dialog's event 0 (0x4b4a30 -> 0x4b4600, then 0x4de150): the title by the local
-    /// result (Defeat / Victory / Draw / Disconnect, or "Replay" with 0x6d5a60), the
-    /// "Total Score" label lit, the screen's picture pMain.pcx and the elapsed time
-    /// (0x4b42d0); then the default proc gives the focus to the first tab, which chooses it.
+    /// The dialog's event 0 (0x4b4a30 -> 0x4b4600, then 0x4de150 gives the focus to the
+    /// first tab, which chooses it).
     pub(super) fn score_init(&mut self, files: &Storage) {
+        self.score_event0(files);
+        self.show_palette();
+        self.score_tab(ids::TAB_FIRST);
+    }
+
+    /// 0x4b4600: the title by the local result (Defeat / Victory / Draw / Disconnect, or
+    /// "Replay" with 0x6d5a60; a result without a string leaves the old title), the "Total
+    /// Score" label lit, the screen's picture pMain.pcx and the elapsed time (0x4b42d0).
+    fn score_event0(&mut self, files: &Storage) {
         let n = if self.g6d5a60 != 0 {
             0xb2
         } else {
@@ -519,7 +528,7 @@ impl Glue {
                 _ => 0,
             }
         };
-        let title = self.sglu(n);
+        let title = if n != 0 { self.sglu(n) } else { String::new() };
         let secs = self.score_seconds();
         let time = if secs / 3600 == 0 {
             format!("{:02}:{:02}", secs / 60 % 60, secs % 60)
@@ -546,8 +555,6 @@ impl Glue {
         if let Some(c) = dlg.get_mut(ids::TIME) {
             c.text = time.into_bytes();
         }
-        self.show_palette();
-        self.score_tab(ids::TAB_FIRST);
     }
 
     /// 0x4b42d0: the seconds of the game: 0x4a2ca0, or with 0x6d5a60 the frames

@@ -204,6 +204,8 @@ pub struct Triggers {
     pub end_screen_timer: u16,
     /// 0x685178: the victory / defeat dialog is open.
     pub end_open: bool,
+    /// 0x685174: the Battle.net result was reported.
+    pub bnet_reported: bool,
     /// 0x68517c: an end dialog button was used; the dialog does not open again.
     pub end_done: bool,
     /// The front end opens the victory / defeat dialog (0x4615b0 / 0x461640): the local
@@ -256,6 +258,7 @@ impl Default for Triggers {
             end_screen_timer: 0,
             end_open: false,
             end_done: false,
+            bnet_reported: false,
             end_request: 0,
             trigger_paused: false,
             paused: false,
@@ -408,15 +411,39 @@ impl State {
             return;
         }
         self.trig.end_screen_timer = 0x2d;
-        let r = self.player_left[self.local_player as usize];
-        if matches!(r, 2 | 3 | 5) && !self.trig.end_open && !self.trig.end_done {
-            // 0x4c4790 (a Battle.net game reports its end once, 0x685174) is not ported.
-            todo_port!("0x4c4790", "Battle.net: report the game result once (0x57f0b4, 0x59688c == 'NETB')");
-            self.trig.end_open = true;
-            // 0x48e310 / 0x48ca10 / 0x484cc0 / 0x4f57a0: the front end ends placement and
-            // targeting and opens the dialog (rez\lmission.bin / wmission.bin).
-            self.trig.end_request = r;
+        match self.player_left[self.local_player as usize] {
+            2 => self.defeat_screen(),
+            r @ (3 | 5) => self.victory_screen(r),
+            _ => {}
         }
+    }
+
+    /// 0x461640: victory / draw (`r` 3 / 5) of the local player; same state part as 0x4615b0.
+    /// Not yet open (0x685178) or used (0x68517c): a Battle.net game reports once (0x4c4790,
+    /// 0x685174), 0x685178 = 1, the front end ends placement and targeting (0x48e310 /
+    /// 0x48ca10), resets the handlers (0x484cc0), 0x6d051c = 0 and opens the dialog (0x4f57a0).
+    fn victory_screen(&mut self, r: u8) {
+        self.end_screen(r);
+    }
+
+    /// 0x4615b0: defeat of the local player (result 2); see `victory_screen`.
+    fn defeat_screen(&mut self) {
+        self.end_screen(2);
+    }
+
+    fn end_screen(&mut self, r: u8) {
+        if self.trig.end_open || self.trig.end_done {
+            return;
+        }
+        // 0x57f0b4 && 0x59688c == 'BNET' (0x424e4554) && !0x685174.
+        if super::players::MULTIPLAYER && !self.trig.bnet_reported {
+            self.trig.bnet_reported = true;
+            todo_port!("0x4c4790", "Battle.net: report the game result once");
+        }
+        self.trig.end_open = true;
+        // 0x48e310 / 0x48ca10 / 0x484cc0 / 0x6d051c = 0 / 0x4f57a0: the front end ends
+        // placement and targeting and opens the dialog (rez\lmission.bin / wmission.bin).
+        self.trig.end_request = r;
     }
 
     /// 0x48a460: the trigger pass after each game step; `ms` is the frame time of the
@@ -463,6 +490,16 @@ impl State {
         self.trig.check_timer = 1;
     }
 
+    /// 0x489c30: the countdown timer text: "h:mm:ss" from an hour on, else "m:ss" (minutes
+    /// not padded) for `t` = 0x58d6f4 seconds.
+    pub fn countdown_text(t: u32) -> String {
+        if t / 0xe10 != 0 {
+            format!("{}:{:02}:{:02}", t / 0xe10, t % 0xe10 / 0x3c, t % 0x3c)
+        } else {
+            format!("{}:{:02}", t / 0x3c, t % 0x3c)
+        }
+    }
+
     /// 0x489cc0: wait timers, the game clock and the countdown timer.
     fn trigger_timers(&mut self, ms: u32) {
         let tr = &mut self.trig;
@@ -497,7 +534,7 @@ impl State {
                     tr.check_timer = 1;
                 }
             }
-            // 0x489c30 / 0x4e5600: the timer text (UI).
+            // 0x489c30 (`countdown_text`) / 0x4e5600: the timer text (UI).
             tr.second_timer = 0xf;
         }
     }

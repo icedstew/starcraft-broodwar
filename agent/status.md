@@ -20,6 +20,9 @@ renderer at 2x/4x); the 8-bit 1.16.1 renderer stays the default and the test ref
 2026-10-17 (after the coverage fix below): no AI 1140/1615 (70%), AI only 350/358 (97%),
 all 1490/1973 (75%); front end 683/1186. Frontier lists: `--missing both` (non-AI),
 `--missing ai`, `--missing front`. The "left" column is what is still to port.
+2026-10-18: all functions 2182/4644 ported; the reachable sets have 0 left, so the
+frontier is now `--missing rest` (every unported in-scope function, ported callers first:
+dialog procs, tables and other indirect calls the reachability misses).
 Coverage fix 2026-10-17: a `///` line that only mentions an address in prose no longer
 counts; only a doc block's first line or a doc line starting with `/// 0x...` does
 (~90 false credits removed).
@@ -31,6 +34,14 @@ No screenshot tests unless working on UI. Small units, status updated with each 
 Delegate per agents.md: Haiku triage, Sonnet porting, Opus review / hard RE / commits.
 
 ## In flight
+
+- 2026-10-18 late (Haiku triage -> Sonnet porters -> Opus review): credits / mission text
+  screen (src/glue_credits.rs, 0x4d8df0 cluster; checked by `scbw glue`, not vs native),
+  minimap unit passes 0x4a4650 / 0x4a47b0 / 0x4a48e0 / 0x4a4ac0 and click clamp 0x4a3d70,
+  team supply caps 0x488f90 / 0x4857b0 / 0x485710 (`init_gamedata`, no caller until
+  multiplayer), end dialogs 0x461640 / 0x4615b0, countdown text 0x489c30 (no on-screen
+  timer yet: 0x4e5600), score 0x4b4600 / 0x4b30a0. Open sim question: trigger kill loops
+  0x45f9a0.. and EBX (areas/sim.md).
 
 - 2026-10-17 session (subagent waves: Haiku triage, Sonnet porters per file, Opus
   review): AI "left" 126 -> 0 and front end 32 -> 0 under the old count. Ported: AI

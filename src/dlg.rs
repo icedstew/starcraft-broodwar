@@ -212,6 +212,9 @@ pub enum Update {
     DirLabel,
     /// The score screen's controls (`Ctl::score`).
     Score,
+    /// 0x4d8930: a credits text area: the label with these text flags (0x6ce110) and flag
+    /// 0x80000000.
+    Credits(u8),
 }
 
 #[derive(Clone, Debug)]
@@ -1163,6 +1166,11 @@ impl Skin {
             (Update::MapList, 12) => return self.map_list_ctl(c, r, s),
             (Update::DirLabel, _) => return self.dir_label_ctl(c, r, s),
             (Update::Score, _) => return self.score_ctl(c, r, s),
+            (Update::Credits(align), _) => {
+                let mut c = c.clone();
+                c.flags |= 0x8000_0000;
+                return self.ctl_text(&c, &c.text, r, 0, 0, align, s);
+            }
             _ => {}
         }
         match c.ty {
@@ -1293,7 +1301,8 @@ impl Skin {
 
     /// The score screen's controls (glue_score.rs). 0x4b3820 (a tab: its picture unless it
     /// is the selected one, which is lit instead, then the centered text), 0x4b3b80 (the
-    /// total's box and its text 2 px down), 0x4b38a0 (the race icon 8 px in and 0x14 down,
+    /// total's box and its text 2 px down), 0x4b38a0 (the race icon, 0x4b3600: frame
+    /// table byte + 3 of iScore.grp drawn 8 px in and 0x14 down with 0x4ef440 mode 1 (0x2000),
     /// framed in the player's color, the name, and the team name beside the icon in
     /// font 0 color 6) and 0x4b3a40 (the bar and its number).
     fn score_ctl(&self, c: &Ctl, r: (i32, i32, i32, i32), s: &mut Surf) {

@@ -19,6 +19,8 @@ use crate::todo_port;
 mod create;
 #[path = "glue_score.rs"]
 mod score;
+#[path = "glue_credits.rs"]
+mod credits;
 
 /// What the glue asks the sound system for (the window loop plays them: `Audio` is not
 /// the glue's).
@@ -29,6 +31,8 @@ pub enum AudioCmd {
     /// 0x4a6140 (via 0x4a6310): start a music file, looped (type 1 tracks); `fade` is the
     /// 20 ms fade-in timer 0x4a6030 (attenuation -10000 rising 400 per step).
     Music { path: &'static str, fade: bool },
+    /// 0x4a6140 for the in-game tracks 1 ..= 9 of 0x512bb8 (type 2: played once).
+    Track(u32),
     /// 0x4a5f50.
     FadeOutMusic,
     /// 0x4bbf50: the playing sounds stop.
@@ -154,6 +158,8 @@ pub enum Open {
     Create(u8),
     /// 0x4b4af0: rez\gluScore.bin, event proc 0x4b4a30; true when the local player won.
     Score(bool),
+    /// 0x4d8df0: rez\credits.bin, event proc 0x4d8d60 (glue_credits.rs).
+    Credits,
     /// 0x4b2930: rez\gluCmpgn.bin, event proc 0x4b28b0.
     Campaign,
     /// 0x4b52a0: rez\gluExpCmpgn.bin, event proc 0x4b5220.
@@ -282,6 +288,8 @@ pub struct Glue {
     create: create::Create,
     /// The score screen's globals (glue_score.rs).
     score: score::Score,
+    /// The credits and mission text screens' globals (glue_credits.rs).
+    credits: credits::Credits,
 }
 
 impl Glue {
@@ -344,6 +352,7 @@ impl Glue {
             last_press: None,
             create: create::Create::default(),
             score: score::Score::default(),
+            credits: credits::Credits::default(),
         }
     }
 
@@ -371,10 +380,12 @@ impl Glue {
                 Top::Game
             }
             state::CREDITS | state::CREDITS_EXP => {
-                // After 0x4d8fd0 / 0x4d90c0: back to the main menu.
-                self.state = state::GLUE;
-                self.screen = screen::MAIN;
-                Top::Credits
+                // 0x4d8fd0 / 0x4d90c0 run their dialogs; at the end they set state 4 and the
+                // main menu (credits_finish).
+                if !self.credits.running {
+                    self.credits_start(files, self.state == state::CREDITS_EXP);
+                }
+                Top::Glue
             }
             state::AFTER_GAME => {
                 todo_port!("0x4f7ae0", "play the scenario cinematic 0x5122b8");
@@ -851,7 +862,15 @@ impl Glue {
             self.state = 5;
             return true;
         }
-        self.mission_text(false);
+        if self.mission_text(files, false, credits::Then::CampaignNext) {
+            // The rest (campaign_next_tail) runs when the text screen ends.
+            return true;
+        }
+        self.campaign_next_tail(files)
+    }
+
+    /// 0x4dc320 after the mission text (0x4d91b0).
+    fn campaign_next_tail(&mut self, files: &Storage) -> bool {
         self.camp_select();
         if self.camp_rec == 0 || self.exe_u16(self.camp_rec + 2) == 0 {
             return false;
@@ -904,22 +923,24 @@ impl Glue {
     /// 0x4d91b0 (`exp` false: the one record of 0x500160, "FinZ09bx" for mission 0x3f) /
     /// 0x4d9200 (`exp`: the 0x40 records of 0x4fff60, "Est..." per mission): when a
     /// single-player game ran a mission and 0x6d5a6c lacks 0x20000000, show the mission's
-    /// text screen (rez\<name>.txt on rez\credits.bin, 0x4d8df0).
-    fn mission_text(&mut self, exp: bool) {
+    /// text screen (rez\<name>.txt on rez\credits.bin, 0x4d8df0; glue_credits.rs). True when
+    /// it was opened: the caller goes on when it ends (`then`), as the native call returns
+    /// after the modal dialog.
+    fn mission_text(&mut self, files: &Storage, exp: bool, then: credits::Then) -> bool {
         let mission = self.setup.map_dir_flag;
         if self.setup.multiplayer || self.g6d5a6c & 0x2000_0000 != 0 || mission == 0 {
-            return;
+            return false;
         }
         let (table, n) = if exp { (0x4fff60, 0x40) } else { (0x500160, 1) };
         for i in 0..n {
             if self.exe_u16(table + 8 * i + 4) == mission {
                 let ptr = self.exe_u32(table + 8 * i);
                 let name: Vec<u8> = (0..).map(|k| self.exe_u8(ptr + k)).take_while(|&c| c != 0).collect();
-                let _ = name;
-                todo_port!("0x4d8df0", "mission text / credits screen: rez\\<name>.txt on rez\\credits.bin, event proc 0x4d8d60 (scroll 0x4d8bd0, 0x4d8c60)");
-                return;
+                self.credits_mission(files, &String::from_utf8_lossy(&name), then);
+                return true;
             }
         }
+        false
     }
 
     /// 0x4db200: whether the campaign dialog (rez\glucmpgn.bin, or gluexpcmpgn.bin for
@@ -958,7 +979,13 @@ impl Glue {
     fn open_ready(&mut self, files: &Storage, race: u8) {
         self.music_fade_out();
         self.music_start(0xa + race as u32);
-        self.mission_text(true);
+        if !self.mission_text(files, true, credits::Then::Ready(race)) {
+            self.open_ready_dialog(files, race);
+        }
+    }
+
+    /// 0x4f71f0 / 0x4f7550 / 0x4f78b0 after the mission text: the dialog.
+    fn open_ready_dialog(&mut self, files: &Storage, race: u8) {
         if self.state != state::GLUE {
             return;
         }
@@ -1486,6 +1513,11 @@ impl Glue {
         if self.music_playing {
             return;
         }
+        if (1..=9).contains(&i) {
+            self.music_playing = true;
+            self.cmds.push(AudioCmd::Track(i));
+            return;
+        }
         let Some((path, fade)) = music_track(i) else { return };
         self.music_playing = true;
         self.cmds.push(AudioCmd::Music { path, fade });
@@ -1836,6 +1868,9 @@ impl Glue {
     /// that take keys get it (0x418a10): a list moves its selection (0x41a9d0), an edit
     /// its caret (0x416980).
     pub fn key_down(&mut self, files: &Storage, vk: u16, mods: u8) {
+        if self.credits_open_now() {
+            return self.credits_key(files, vk);
+        }
         if mods & 8 != 0 {
             let ch = (vk as u8).to_ascii_lowercase();
             if self.press_hotkey(files, ch) {
@@ -1980,6 +2015,9 @@ impl Glue {
     /// double click, presses the default button (0x418270 flag 0x80000); an edit takes
     /// the focus and puts its caret under the mouse (0x416980 event 4 / 6, 0x4164d0).
     pub fn press(&mut self, files: &Storage) {
+        if self.credits_open_now() {
+            return self.credits_click(files);
+        }
         let (mx, my) = self.mouse;
         let clock = self.clock_ms;
         let Some((dlg, _)) = self.top() else { return };
@@ -2132,6 +2170,7 @@ impl Glue {
                 self.fade = None;
             }
         }
+        self.credits_tick(files, ms);
         self.cursor_ms += ms;
         self.cursor_frame += (self.cursor_ms / 50) as usize;
         self.cursor_ms %= 50;
@@ -2145,9 +2184,13 @@ impl Glue {
         let look = self.looks[p].as_ref().unwrap();
         px.fill(0);
         let mut s = Surf { px, w: 640, h: 480 };
-        for (dlg, _) in [self.dlg.as_ref(), self.popup.as_ref()].into_iter().flatten() {
+        // The credits' own palette; their old page while it fades out.
+        let credits = self.credits_open_now();
+        let main = self.credits.old().filter(|_| credits).or(self.dlg.as_ref().map(|d| &d.0));
+        for dlg in main.into_iter().chain(self.popup.as_ref().map(|d| &d.0)) {
             look.skin.draw(dlg, &mut s);
         }
+        let screen_pal = if credits { *self.credits.palette() } else { look.pal };
         // 0x4be120: the frame's grp box sits at the mouse minus 0x3f.
         let n = look.arrow.frame_count().max(1);
         look.arrow.draw(self.cursor_frame % n, false, self.mouse.0 - 0x3f, self.mouse.1 - 0x3f, s.px, 640, 480, Blend::Normal);
@@ -2155,10 +2198,10 @@ impl Glue {
         let pal = match &self.fade {
             Some(f) => {
                 let (step, total) = f.steps[(f.ms / 10).min(f.steps.len() as u32 - 1) as usize];
-                palette::blend(&f.from, f.to.as_ref().unwrap_or(&look.pal), step, total)
+                palette::blend(&f.from, f.to.as_ref().unwrap_or(&screen_pal), step, total)
             }
             None if self.pal_blank => [[0; 3]; 256],
-            None => look.pal,
+            None => screen_pal,
         };
         palette::gamma(&pal, self.gamma)
     }
@@ -2286,6 +2329,7 @@ pub fn run(files: &Storage, shot: Option<&str>) -> std::io::Result<()> {
     };
     let mut pressed: Option<i16> = None;
     let mut was_down = false;
+    let mut was_rdown = false;
     let mut held: Option<i16> = None;
     let mut script: std::collections::VecDeque<String> = std::env::var("SCBW_GLUE_INPUT").map(|v| v.split(';').map(str::to_string).collect()).unwrap_or_default();
     let mut popped = false;
@@ -2349,6 +2393,7 @@ pub fn run(files: &Storage, shot: Option<&str>) -> std::io::Result<()> {
                     }
                     au.play_music(files, path)
                 }
+                AudioCmd::Track(i) => au.start_track(files, i),
                 AudioCmd::FadeOutMusic => au.fade_out(),
                 AudioCmd::StopSounds => au.stop_sounds(),
             }
@@ -2470,6 +2515,12 @@ pub fn run(files: &Storage, shot: Option<&str>) -> std::io::Result<()> {
                 glue.release();
             }
             was_down = down;
+            // Event 7 (the right button went down): the credits go on (0x4d8d60).
+            let rdown = win.get_mouse_down(MouseButton::Right);
+            if rdown && !was_rdown && glue.credits_open_now() {
+                glue.press(files);
+            }
+            was_rdown = rdown;
             // 0x418eb0's button behavior: activate on release over the pressed control.
             let top = glue.popup.as_ref().or(glue.dlg.as_ref());
             let hit = top.and_then(|(dlg, _)| dlg.hit(x as i32, y as i32).filter(|&i| activates(&dlg.controls[i])).map(|i| dlg.controls[i].id));

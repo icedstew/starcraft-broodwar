@@ -114,7 +114,7 @@ pub struct Setup {
     pub g66fbfa: u8,
     /// 0x57f0b4: a network game.
     pub multiplayer: bool,
-    /// 0x59688c: the network provider id ('NETB' 0x424e4554 = battle.net).
+    /// 0x59688c: the network provider id ('BNET' 0x424e4554 = battle.net).
     pub net_provider: u32,
     /// 0x596865: the game template (see bw: +0 game type, +1 sub type, +8 victory 0x59686d,
     /// +0xc starting units 0x596871, +0x10 teams 0x596875, +0x12 0x596877).

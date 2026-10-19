@@ -2594,7 +2594,7 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
         if scene.targeting.is_some() && clicked && pressed.is_none() && !on_card {
             // A targeted order given on the minimap goes to that map point; the camera
             // stays (the click does not also scroll it).
-            let pt = if on_minimap_pt(cx, cy) { ((cx - ox) * scale, (cy - oy) * scale) } else { map_pt };
+            let pt = if on_minimap_pt(cx, cy) { scene.minimap.screen_to_map(cx, cy, (ox as i16, (oy - 0x13b) as i16)) } else { map_pt };
             scene.target_click(pt, shift);
             lmb_was_down = true; // the click is consumed; don't start a drag
             drag_start = None;
@@ -2614,8 +2614,9 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
             hud_press = Some(ui.as_ref().is_some_and(|u| u.hud_hit(cx, cy)));
         }
         if down && on_minimap_pt(cx, cy) && drag_start.is_none() {
-            vx = (cx - ox) * scale - vw / 2;
-            vy = (cy - oy) * scale - (vh - 120) / 2;
+            let (mx, my) = scene.minimap.screen_to_map(cx, cy, (ox as i16, (oy - 0x13b) as i16));
+            vx = mx - vw / 2;
+            vy = my - (vh - 120) / 2;
         } else if down && cy < vh - 120 && (drag_start.is_some() || hud_press == Some(false)) {
             let (sx, sy) = *drag_start.get_or_insert((cx, cy));
             scene.drag_box = Some((sx, sy, cx, cy));

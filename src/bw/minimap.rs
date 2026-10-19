@@ -83,6 +83,10 @@ pub struct Minimap {
     /// 0x6d5bc0: blink phase for units under attack; 0x6d5bc1: some unit is blinking.
     pub blink_phase: bool,
     pub blinking: bool,
+    /// 0x5993ac: draw all units without the vision test (set by 0x4b9ac0 around 0x4a5d10).
+    pub all_units: u32,
+    /// 0x6d0f1c: in a replay, draw every player's units.
+    pub replay_all: u32,
     /// 0x59c1a8 / 0x59c2b8: visibility checksum and box count of the last unit pass.
     pub checksum: u32,
     pub boxes: u32,
@@ -133,7 +137,7 @@ impl Minimap {
         let n = w as usize * h as usize;
         Minimap {
             w, h, shift, scale, tile_px, terrain: vec![0; n], pixels: vec![0; n], remap, fog, colors, player_colors, vx4, vr4,
-            ally_colors: false, hide_terrain: false, blink_phase: false, blinking: false, checksum: 0, boxes: 0,
+            ally_colors: false, hide_terrain: false, blink_phase: false, blinking: false, all_units: 0, replay_all: 0, checksum: 0, boxes: 0,
             pings: [Ping::default(); 16], blink_grp: None, tblink: Vec::new(),
         }
     }
@@ -287,43 +291,59 @@ impl Minimap {
         }
     }
 
-    /// 0x4a4ac0: unit boxes, neutral players first, the local player last (on top).
-    pub fn draw_units(&mut self, d: &Data, st: &mut State) {
-        self.boxes = 0;
-        self.checksum = 0;
-        let local = st.local_player as usize;
+    /// 0x4a4650: the boxes of a neutral player (8-11); with 0x5993ac set every unit is
+    /// drawn, otherwise only those the local vision mask (in a replay 0x6d0f18, or all
+    /// with 0x6d0f1c) sees. Resources are drawn in one color.
+    fn draw_neutral(&mut self, d: &Data, st: &State, p: usize) {
         let vision = st.local_vision_mask as u32;
-        // Watching a replay (0x6d0f14) every player is drawn in its color and there is no
-        // local pass.
-        for p in (0..12).rev() {
-            if p == local && !st.replay {
-                continue;
-            }
-            let base = self.player_color(st, p);
-            let mut u = st.player_units[p];
-            while u != NIL {
-                let t = st.units[u as usize].unit_type;
-                if !Self::skip(d, t) {
-                    let v = Self::unit_vis(st, u);
-                    self.checksum ^= v;
-                    if v & vision != 0 {
-                        // 0x4a4650: neutral resources are drawn in one color.
-                        let res = p >= 8 && ((0xb0..=0xb2).contains(&t) || t == 0xbc);
-                        self.box_for(d, st, u, if res { self.colors[0x19] } else { base });
-                    }
-                }
-                u = st.units[u as usize].player_next;
-            }
-        }
-        // 0x4a48e0: the local player's units, blinking while under attack.
-        self.blinking = false;
-        let mut u = if st.replay { NIL } else { st.player_units[local] };
+        let base = self.player_color(st, p);
+        let mut u = st.player_units[p];
         while u != NIL {
             let t = st.units[u as usize].unit_type;
             if !Self::skip(d, t) {
                 let v = Self::unit_vis(st, u);
                 self.checksum ^= v;
-                if v & vision != 0 {
+                let seen = if st.replay { v & vision != 0 || self.replay_all != 0 } else { v & vision != 0 };
+                if self.all_units != 0 || seen {
+                    let res = (0xb0..=0xb2).contains(&t) || t == 0xbc;
+                    self.box_for(d, st, u, if res { self.colors[0x19] } else { base });
+                }
+            }
+            u = st.units[u as usize].player_next;
+        }
+    }
+
+    /// 0x4a47b0: the boxes of player `p` (0-7), vision-tested like 0x4a4650; nothing is
+    /// drawn while 0x5993ac is 1.
+    fn draw_player(&mut self, d: &Data, st: &State, p: usize) {
+        let vision = st.local_vision_mask as u32;
+        let base = self.player_color(st, p);
+        let mut u = st.player_units[p];
+        while u != NIL {
+            let t = st.units[u as usize].unit_type;
+            if !Self::skip(d, t) {
+                let v = Self::unit_vis(st, u);
+                self.checksum ^= v;
+                let seen = if st.replay { v & vision != 0 || self.replay_all != 0 } else { v & vision != 0 };
+                if self.all_units != 1 && seen {
+                    self.box_for(d, st, u, base);
+                }
+            }
+            u = st.units[u as usize].player_next;
+        }
+    }
+
+    /// 0x4a48e0: the local player's boxes, blinking (counter at unit +0x8a) while under attack.
+    fn draw_local(&mut self, d: &Data, st: &mut State) {
+        let vision = st.local_vision_mask as u32;
+        self.blinking = false;
+        let mut u = st.player_units[st.local_player as usize];
+        while u != NIL {
+            let t = st.units[u as usize].unit_type;
+            if !Self::skip(d, t) {
+                let v = Self::unit_vis(st, u);
+                self.checksum ^= v;
+                if v & vision != 0 && self.all_units != 1 {
                     let mut color = self.colors[0x12];
                     let un = &mut st.units[u as usize];
                     if un.last_event_timer != 0 {
@@ -337,6 +357,37 @@ impl Minimap {
                 }
             }
             u = st.units[u as usize].player_next;
+        }
+    }
+
+    /// 0x4a3d70: a screen point on the minimap to a map point: `off` is the stored image
+    /// offset (0x59cc60 +4, +6; the y origin is 0x13b + off.1); each coordinate is clamped
+    /// to the image and scaled by the map pixels per minimap pixel (0x59cc6c).
+    pub fn screen_to_map(&self, x: i32, y: i32, off: (i16, i16)) -> (i32, i32) {
+        let scale = self.tile_px as i16;
+        let cx = (x as i16).wrapping_sub(off.0);
+        let cx = if cx < 0 { 0 } else if cx >= self.w as i16 { self.w as i16 - 1 } else { cx };
+        let cy = (y as i16).wrapping_sub(0x13b).wrapping_sub(off.1);
+        let cy = if cy < 0 { 0 } else if cy >= self.h as i16 { self.h as i16 - 1 } else { cy };
+        (cx.wrapping_mul(scale) as i32, cy.wrapping_mul(scale) as i32)
+    }
+
+    /// 0x4a4ac0: unit boxes, neutral players first, the local player last (on top).
+    pub fn draw_units(&mut self, d: &Data, st: &mut State) {
+        self.boxes = 0;
+        self.checksum = 0;
+        let local = st.local_player as usize;
+        // Watching a replay (0x6d0f14) every player is drawn in its color and there is no
+        // local pass.
+        for p in (0..12).rev() {
+            if p >= 8 {
+                self.draw_neutral(d, st, p);
+            } else if p != local || st.replay {
+                self.draw_player(d, st, p);
+            }
+        }
+        if !st.replay {
+            self.draw_local(d, st);
         }
         // Fogged copies of buildings and resources (0x654868), drawn last.
         let mut t = st.active_fog_thingies.head;

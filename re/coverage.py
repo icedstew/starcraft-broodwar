@@ -1,6 +1,6 @@
 """Port coverage of 1.16.1 StarCraft.exe, per original source file.
 
-usage: python -I re/coverage.py <decomp.c> [src_dir] [--html out.html] [--missing game_step|command|both|front|ai|ai-front] [--all]
+usage: python -I re/coverage.py <decomp.c> [src_dir] [--html out.html] [--missing game_step|command|both|front|ai|ai-front|rest] [--all]
 
 Unported functions are split by re/buckets.txt into "replaced" (the Rust port has its own
 equivalent: CRT, Storm / Win32, UI redraw plumbing), "deferred" (save / load, networking)
@@ -243,6 +243,21 @@ def main():
             for _, _, a, pc, nc, ln in rows_m:
                 st = (" todo" if a in todo else "") + ("" if not show_all else " " + bucket_of(a, info[a][1], buckets))
                 print(f"0x{a:06x}   {info[a][1][:24]:24} {pc:14} {nc:8} {ln:6}  {file_of[a]}{st}")
+    if missing == "rest":
+        # Every unported "left" function in scope, reachable or not (dialog procs, tables
+        # and other indirect calls); those with ported callers first.
+        callers = defaultdict(set)
+        for a, cs in calls.items():
+            for c in cs:
+                callers[c].add(a)
+        rows_m = sorted((-len(callers[f[0]] & ported), f[0], f[1], len(callers[f[0]]), f[4], fn)
+                        for f, fn in zip(funcs, files)
+                        if f[0] not in ported and not excl(fn)
+                        and bucket_of(f[0], f[1], buckets) == "left")
+        print(f"\nunported, in scope: {len(rows_m)}")
+        print(f"{'addr':10} {'name':24} {'ported callers':>14} {'callers':>8} {'lines':>6}  file")
+        for npc, a, name, nc, ln, fn in rows_m:
+            print(f"0x{a:06x}   {name[:24]:24} {-npc:14} {nc:8} {ln:6}  {fn}{' todo' if a in todo else ''}")
     if out_html:
         with open(out_html, "w") as o:
             o.write("<!doctype html><meta charset=utf-8><title>scbw coverage</title>"

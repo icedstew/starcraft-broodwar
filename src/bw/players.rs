@@ -1,5 +1,7 @@
 //! Per-player game tables (1.16.1 addresses).
 
+use crate::todo_port;
+
 #[derive(Clone, Debug)]
 pub struct Players {
     /// 0x57f0f0 / 0x57f120: minerals and gas; 0x57f180 / 0x57f150: gathered totals.
@@ -120,10 +122,88 @@ impl Players {
         }
     }
 
+    /// 0x488f90: game data init: clears the per-player counts (0x581de4, 0x540 bytes: men /
+    /// building / factory counts, supply, scores, caps, custom score) and the four
+    /// [unit type][player] tables from 0x582324 (counts, completed, kills, deaths). Supply caps
+    /// are then 400, or in a team game (`multiplayer` 0x57f0b4 with template teams byte
+    /// 0x596875 set) each team's lead player (`team_lead`, 0x57f1cc..: teams 1..4, 0xff =
+    /// none) gets max(1, seats of the race in the team) * 400 per race (zerg, terran, protoss).
+    pub fn init_gamedata(&mut self, multiplayer: bool, teams: u8, seat_races: &[u8; 8], team_lead: &[u8; 4]) {
+        self.factories = [0; 12];
+        self.buildings = [0; 12];
+        self.men = [0; 12];
+        self.supply_provided = [[0; 12]; 3];
+        self.factories_completed = [0; 12];
+        self.men_completed = [0; 12];
+        self.buildings_completed = [0; 12];
+        self.units_produced = [0; 12];
+        self.unit_score = [0; 12];
+        self.buildings_constructed = [0; 12];
+        self.building_score = [0; 12];
+        self.men_lost = [0; 12];
+        self.buildings_lost = [0; 12];
+        self.factories_lost = [0; 12];
+        self.men_killed = [0; 12];
+        self.kill_score = [0; 12];
+        self.buildings_razed = [0; 12];
+        self.razing_score = [0; 12];
+        self.factories_razed = [0; 12];
+        self.supply_max = [[0; 12]; 3];
+        self.supply_used = [[0; 12]; 3];
+        self.custom_score = [0; 12];
+        for t in self.unit_counts.iter_mut().chain(&mut self.completed_counts).chain(&mut self.deaths).chain(&mut self.kills) {
+            *t = [0; 12];
+        }
+        if !(multiplayer && teams != 0) {
+            self.supply_max = [[400; 12]; 3];
+            return;
+        }
+        for team in 1..5u8 {
+            let lead = team_lead[team as usize - 1];
+            if lead == 0xff {
+                continue;
+            }
+            for race in 0..3u8 {
+                let n = team_race_count(teams, seat_races, team, race) as i32 * 400;
+                self.supply_max[race as usize][lead as usize] = n.max(400);
+            }
+        }
+    }
+
     /// 0x4ce7f0: maximum level of `upgrade` for `player` (0x58d088 / 0x58f24a; Rust keeps one 61-entry array).
     pub fn upgrade_max_level(&self, player: u8, upgrade: usize) -> u8 {
         self.upgrade_max[player as usize][upgrade]
     }
+}
+
+/// 0x485710: seats per team for the template's teams byte 0x596875: 2 -> 4, 3 -> 3, 4 -> 2,
+/// else 0 (the original first runs an error path, 0x4c3d20(3) .. 0x4dcc50, not ported).
+pub fn team_size(teams: u8) -> u8 {
+    match teams {
+        2 => 4,
+        3 => 3,
+        4 => 2,
+        _ => {
+            todo_port!("0x485710", "invalid teams byte: error path 0x4c3d20 / 0x4bb300 / 0x4dcc50");
+            0
+        }
+    }
+}
+
+/// 0x4857b0: the number of seats of `team` (1-based; rows of `team_size` in the seat race
+/// table 0x57f1c0) whose race is `race`. A row running past 8 re-reads its first seat.
+pub fn team_race_count(teams: u8, seat_races: &[u8; 8], team: u8, race: u8) -> u8 {
+    let size = team_size(teams);
+    let start = size.wrapping_mul(team.wrapping_sub(1)) as usize;
+    let mut n = 0u8;
+    for i in 0..size as usize {
+        let idx = start + i;
+        let r = if idx < 8 { seat_races.get(idx) } else { seat_races.get(start) };
+        if r.copied().unwrap_or(0xff) == race {
+            n = n.wrapping_add(1);
+        }
+    }
+    n
 }
 
 /// 0x57f0b4: a network game; scbw never runs one.
