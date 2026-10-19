@@ -149,6 +149,8 @@ pub struct Setup {
     pub g57eebc: u32,
     /// 0x57f1cb: per force (1..4) the slot 0x485160 put its players on (0xff none).
     pub team_leaders: [u8; 5],
+    /// 0x66ff34: per lobby position the slot 0x4a9250 puts it on (filled by the lobby code).
+    pub slot_order: [u8; 8],
     /// 0x66ff3c: per slot the type 0x485160 gives the lobby copy (a network game's).
     pub net_types: [u8; 12],
     /// 0x596814.
@@ -224,6 +226,7 @@ impl Default for Setup {
             g6556e0: 0,
             g57eebc: 0,
             team_leaders: [0xff; 5],
+            slot_order: [0; 8],
             net_types: [0; 12],
             g596814: 0,
             expansion: false,
@@ -608,9 +611,22 @@ impl Setup {
         sstr_copy(dst, src, 0x19);
     }
 
-    /// The scenario of the map 0x57fd3c (staredit\\scenario.chk of its archive, as 0x4ccac0
-    /// reads it) and the archive itself.
-    pub fn scenario_chk(&mut self, files: &Storage) -> Option<(Vec<u8>, Option<Mpq>)> {
+    /// 0x4bf520 (with 0x4cc7f0): the game start's scenario load. A replay or mission
+    /// (0x6d0f14) takes `memory` (0x6d0f24, read by 0x4cc060); else the map 0x57fd3c: its
+    /// staredit\\scenario.chk, from the archive (0x4cc110) or the mission directory (0x57f244),
+    /// must have a known version (0x4cc060). Returns the chunk image and the archive, which
+    /// stays open. None when it cannot be read.
+    pub fn load_scenario(&mut self, files: &Storage, memory: Option<&[u8]>, net_tbl: &[u8]) -> Option<(Vec<u8>, Option<Mpq>)> {
+        let mut hdr = [0u8; 0x20];
+        if let Some(data) = memory {
+            self.map_version(data, &mut hdr, net_tbl)?;
+            // 0x413710 (the handlers of the whole scenario) is the game start's chunk
+            // reads in view.rs.
+            return Some((data.to_vec(), None));
+        }
+        if self.map_path[0] == 0 {
+            return None;
+        }
         let n = self.map_path.iter().position(|&c| c == 0).unwrap_or(self.map_path.len());
         let path = String::from_utf8_lossy(&self.map_path[..n]).into_owned();
         let mut dir = String::new();
@@ -620,7 +636,11 @@ impl Setup {
         let name = if dir.is_empty() { "staredit\\scenario.chk".to_string() } else { format!("{dir}\\staredit\\scenario.chk") };
         let chk = self.read_map_file(&name, files);
         let a = self.map_archive.take();
-        chk.map(|c| (c, a))
+        let chk = chk?;
+        // 0x4d2d10 read the file; failing 0x4cc060 frees it and the archive.
+        self.map_version(&chk, &mut hdr, net_tbl)?;
+        // 0x413710: the scenario's handlers run in the game start (view.rs).
+        Some((chk, a))
     }
 
     /// 0x4cc110: open the map `path` as an archive and look for a league certificate

@@ -48,6 +48,7 @@ impl State {
     /// 0x46f0f0: the units a selection picks from `found`: the local player's
     /// multi-selectable units (12 at most), else one other unit. `anchor` (a
     /// double-clicked unit) limits it to units like the anchor.
+    /// 0x402a70: status 0x800 set and 0x10 clear (inline here).
     pub fn select_filter(&self, d: &Data, found: &[u32], anchor: u32) -> Vec<u32> {
         let mut out: Vec<u32> = Vec::with_capacity(12);
         if anchor != NIL {

@@ -237,6 +237,7 @@ impl Glue {
         self.score.built = true;
     }
 
+    /// 0x4b2d50: the defeated test (outcome 2, not type 1 / 0xb; inline here).
     /// 0x4b3140: the sort key of row `row` (at position `i`): lower rows by position, higher
     /// totals first, the winners above and the defeated below.
     fn score_key(&self, row: &Row, i: usize) -> i32 {
@@ -249,7 +250,6 @@ impl Glue {
         if e.ty != 1 && e.ty != 0xb && by_storm(1) {
             k += 0x3fff_ffff;
         }
-        // 0x4b2d50.
         if e.ty != 1 && e.ty != 0xb && by_storm(2) {
             k -= 0x3fff_ffff;
         }
@@ -280,6 +280,8 @@ impl Glue {
     /// 0x22 killed, the column headings, the values of the visible players (0x4b31c0 with the
     /// tab's function), sorted (0x4b34d0), bound to the controls (0x4b3bc0), the count-up timer
     /// (every 20 ms: 0x4b3670) and its sound 0xa8.
+    /// 0x4b31c0: the per-row value pass over rows of type 1 / 2 / 10 / 11 (inline here).
+    /// 0x4b34d0: the row selection sort, then the largest of each value (inline here).
     fn score_refresh(&mut self) {
         let tab = self.score.tab;
         self.score.max = [0; 3];

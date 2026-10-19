@@ -1089,7 +1089,7 @@ fn main() -> std::io::Result<()> {
                 Some((a.parse::<i32>().ok()?, b.parse::<i32>().ok()?))
             });
             let cursor = match at {
-                Some((sx, sy)) => Some((scene.cursor_kind(sx, sy, x, y, false), 0, sx, sy)),
+                Some((sx, sy)) => Some((scene.cursor_kind(ui.as_ref(), sx, sy, x, y, false), 0, sx, sy)),
                 None => hover.map(|(_, sx, sy)| (0, 0, sx, sy)),
             };
             // Debug: SCBW_MENU=game|options|speed|sound|video|help|end opens that menu

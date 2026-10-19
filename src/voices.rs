@@ -55,6 +55,7 @@ impl Voices {
     }
 
     /// 0x48f4d0: `u` acknowledges an order.
+    /// 0x48eab0: the yes sound pick, type < 0x6a with a yes range (inline here).
     pub fn yes(&mut self, st: &bw::State, d: &Data, u: u32) -> Option<u16> {
         self.clicked = bw::list::NIL;
         let un = &st.units[u as usize];
@@ -77,6 +78,7 @@ impl Voices {
     }
 
     /// 0x48f910: `u` was selected.
+    /// 0x48eb30: own units (and neutral minerals, geysers, critters) outside replays (inline here).
     pub fn what(&mut self, st: &bw::State, d: &Data, u: u32) -> Option<u16> {
         let un = &st.units[u as usize];
         // 0x48eb30: own units (and neutral minerals, geysers and critters) outside replays.
@@ -187,10 +189,10 @@ pub fn order_ack_gate(st: &bw::State, d: &Data, sel: &bw::buttons::Selection) ->
 impl bw::State {
     /// 0x4564e0: the mouse moved over the map at map-screen point `p` (event x, y; `screen`
     /// = 0x62848c / 0x6284a8; `over_hud` = 0x4d1140). `sent0` is the first unit of the
-    /// selection sent to the sim (0x59724c). Returns the cursor to show (0x4c0380 with
-    /// x, y, sprite id) and whether 0x48f4d0 voices the active unit.
+    /// selection sent to the sim (0x59724c). Sends the right click (0x4c0380; `queued` =
+    /// 0x596a28) and returns the point, sprite id and whether 0x48f4d0 voices the active unit.
     #[allow(dead_code)]
-    pub fn hover_cursor(&mut self, d: &Data, sel: &bw::buttons::Selection, sent0: u32, p: (i32, i32), screen: (i32, i32), over_hud: bool) -> Option<((i32, i32), u16, bool)> {
+    pub fn hover_cursor(&mut self, d: &Data, sel: &bw::buttons::Selection, sent0: u32, p: (i32, i32), screen: (i32, i32), over_hud: bool, queued: bool) -> Option<((i32, i32), u16, bool)> {
         let nil = bw::list::NIL;
         if over_hud {
             return None;
@@ -218,8 +220,9 @@ impl bw::State {
         } else {
             self.show_marker(d, x as i16, y as i16);
         }
-        // 0x4c0380 (set the cursor) is not ported; the caller gets its arguments.
-        todo_port!("0x4c0380", "set cursor");
+        // 0x4c0380: the right click command (`queued` = the shift state).
+        let player = self.local_player;
+        self.command_right_click_packet(d, player, &self.selected.clone(), (x as i16, y as i16), t, 0xe4, queued);
         let ack = self.right_click_accepted(d, &self.selected.clone(), active, t);
         Some(((x, y), 0xe4, ack))
     }

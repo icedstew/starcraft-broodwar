@@ -438,6 +438,7 @@ pub struct State {
 /// Free list built by inserting 1..n after element 0 with insert_after_head, as 1.16.1 does
 /// for images (0x4d...), sprites (0x499900), thingies (0x488550) and orders (0x48c590):
 /// allocation order is 0, n-1, n-2, ..., 1.
+/// 0x499900: the sprite pool's free list (with sprites.dat read by dat.rs).
 fn pool_after_head<T: Default + Clone + list::Node>(n: usize) -> (Vec<T>, List) {
     let mut v = vec![T::default(); n];
     let mut l = List::default();

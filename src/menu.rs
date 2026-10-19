@@ -406,6 +406,12 @@ pub enum Action {
 }
 
 /// The open menu (0x6d5bf4) and the depth counter 0x6d1224.
+///
+/// 0x4c93a0 (the in-game dialogs' teardown, run by 0x460c30 / 0x480d00 / 0x481d30 / 0x4e8920):
+/// frees the +0x26 buffer (`saved` drops with the Menu), unpauses with 0x488790 when not
+/// multiplayer (view.rs `unpause_game(true)` once `menu` is None), clears 0x6d5bf4 (the
+/// Option is None). Not modelled: with 0x596904 == 3 it restores 0x6d120c = 0x596898 and
+/// 0x5968e0 = 0x5968fc, and clears 0x6d1214 (replay globals, no Rust state yet).
 pub struct Menu {
     pub kind: Kind,
     pub dlg: Dialog,

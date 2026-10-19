@@ -335,6 +335,7 @@ pub fn click(panel: Panel, id: i16) -> Option<Vec<u8>> {
 /// 0x426300: the spider mines button (inline here).
 /// 0x425310: the nuke in the silo (inline here).
 /// 0x425a30: the energy line (inline here).
+/// 0x475f10 / 0x475e40: a weapon's base damage / upgrade bonus times its hits (inline here).
 pub fn unit_panel(st: &State, d: &Data, strings: &[String], u: u32) -> Vec<(i16, Show)> {
     let un = &st.units[u as usize];
     let t = un.unit_type;

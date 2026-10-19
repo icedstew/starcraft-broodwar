@@ -529,6 +529,7 @@ impl State {
     /// 0x49c780 (each map draw, from the game screen's callback 0x4bd580): the screen's
     /// 0xe rows of up to 0x15 tiles from its top-left tile, the area 0x49c4c0 leaves
     /// out, brought up to date the same way (0x49c620 per row).
+    /// 0x49c620: one row of shown tiles refreshed from MTXM (inline here, per row).
     pub fn refresh_screen_tiles(&mut self) {
         let (w, h) = (self.terrain.width as u32, self.terrain.height as u32);
         let (sx, sy) = (self.screen_tile.0 as u32, self.screen_tile.1 as u32);

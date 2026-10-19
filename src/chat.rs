@@ -160,6 +160,7 @@ fn campaign_mission(exe: &[u8], rest: &[u8], race: usize, off: u32, exp: u32) ->
     Some(u16_at(r + 2) as u32)
 }
 
+/// 0x4b1b50: the option-toggling cheats (the table `BITS`, inline here).
 /// 0x4b23e0: the single player cheat check on `text`; `options` is 0x6d5a6c, `in_game`
 /// is 0x596904 == 3, `cheats_on` is 0x596876 == 1 (template +0x11). True when a cheat
 /// matched (the game then shows nothing). `act`: what the caller must do (`Act`).
@@ -179,9 +180,10 @@ pub fn cheat(text: &[u8], options: &mut u32, in_game: bool, cheats_on: bool, act
         let b = exe.get(rdata(va)..rdata(va) + 8)?;
         Some([u32::from_le_bytes(b[..4].try_into().ok()?), u32::from_le_bytes(b[4..].try_into().ok()?)])
     };
-    if in_game && !cheats_on {
-        return false;
-    }
+    // 0x4b1b50 and 0x4b2350 return 0 at once in a game without cheats; 0x4b1dc0 (the
+    // campaign jump) has no such test. (0x4b1b50 / 0x4b23e0 also leave at once in
+    // multiplayer 0x57f0b4: the caller only calls this in single player.)
+    let gated = in_game && !cheats_on;
     // 0x4b1b50: (hash pair address, option bit toggled), in its order.
     const BITS: [(usize, u32); 16] = [
         (0x500b78, 0x200), (0x500b10, 0x10), (0x500b18, 0x40000), (0x500b20, 0x80000),
@@ -189,18 +191,18 @@ pub fn cheat(text: &[u8], options: &mut u32, in_game: bool, cheats_on: bool, act
         (0x500b68, 0x800), (0x500b30, 1), (0x500b38, 2), (0x500b08, 4),
         (0x500b58, 0x4000), (0x500af8, 0x80), (0x500b00, 0x40), (0x500b40, 0x100),
     ];
-    for (va, bit) in BITS {
+    for (va, bit) in BITS.into_iter().filter(|_| !gated) {
         if pair(va) == Some(h) {
             *options ^= bit;
             return true;
         }
     }
     // 0x4b2350
-    if pair(0x500b80) == Some(h) {
+    if !gated && pair(0x500b80) == Some(h) {
         *options ^= 0x20000000;
         return true;
     }
-    if pair(0x500b70) == Some(h) {
+    if !gated && pair(0x500b70) == Some(h) {
         act.radio = true;
         return true;
     }

@@ -634,6 +634,8 @@ impl State {
     /// else 0x49e6c0; all other units are zeroed), the pointers to slots and the finder again
     /// (0x4e2e20), the 0x63ff5c head, the list heads and tails, the free list of the unused
     /// units (0x49e1f0) and the players' list heads.
+    /// 0x491570: the cloak list head handle read and turned into a slot (inline here).
+    /// 0x49e1f0: the free list of the unit slots not in the file (inline here).
     pub(super) fn load_units(&mut self, d: &Data, i: &mut In) -> bool {
         let Some(mask) = i.packed(MAX) else { return false };
         let Some(count) = i.u32() else { return false };

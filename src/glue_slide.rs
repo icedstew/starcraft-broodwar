@@ -193,11 +193,18 @@ impl Glue {
         }
     }
 
+    /// 0x4dcc00 (EBX = dialog): kills the timers 0x48 of its type 0xe children (0x416000;
+    /// their light-up animation runs from `Dialog::tick`, so nothing to stop) and decrements the
+    /// open-dialog count 0x51c4b8 (single open dialog here: always the last); at the last one the
+    /// dialog's timer 0x18 is killed (the `slide.timer`) and 0x51c418 cleared (`self.dlg` is
+    /// dropped by `dialog_done`). Todo: the count and 0x51c418 are not state, the 0x48 / 0x18
+    /// timers are not modelled apart from `slide.timer`.
+    pub(super) fn slide_teardown(&mut self) {
+        self.slide.timer = None;
+    }
+
     /// 0x4dcd00: each active control moves out by its step, which doubles; when all are off
-    /// the screen the timer ends and the dialog is destroyed (0x419ea0). 0x4dcc00 (kills the
-    /// type 0xe children's timers 0x48, and at the last count 0x51c4b8 the dialog's 0x18, clears
-    /// 0x51c418) is the `slide.timer = None` below plus `dialog_done`: the light-ups' animation
-    /// runs from `Dialog::tick`, and the single open dialog is `self.dlg`.
+    /// the screen the timer ends (`slide_teardown`) and the dialog is destroyed (0x419ea0).
     fn slide_out_step(&mut self, files: &Storage) {
         let mut done = true;
         for i in 0..self.slide.list.len() {
@@ -230,7 +237,7 @@ impl Glue {
         if !done {
             return;
         }
-        self.slide.timer = None;
+        self.slide_teardown();
         self.result = self.slide.leaving.take();
         self.slide.tail = None;
         self.dialog_done(files);

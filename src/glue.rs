@@ -2104,6 +2104,7 @@ impl Glue {
         self.popup_dialog(files, "rez/gluPOkSplit.bin", Open::PopupSplit, title, msg);
     }
 
+    /// 0x4b6c70: the background, flags 0x40000 (inline here).
     /// The part of 0x4b7180 / 0x4b7a70 up to 0x41a080: event 7 (0x4cd9c0: centered), 0
     /// (0x4b6810: the texts; their fit 0x4b6660), 10 (0x4b6c70: 0x4dd9e0 with the
     /// popup's pOPopup.pcx as the background).
@@ -2188,6 +2189,7 @@ impl Glue {
     /// 0x4b55a0 (after 0x4b5450 loaded the resource picture `name` of type 0x1b5d): every
     /// pixel becomes the index of the nearest color (0x4b53d0: least sum of squared
     /// channel differences, the first on ties, 0 distance ends) of the glue palette.
+    /// 0x4b53d0: the nearest palette index (least squared RGB distance, the first on ties, 0 ends; inline here).
     fn error_picture(&mut self, files: &Storage, name: &str) -> Option<(i32, i32, Vec<u8>)> {
         let d = exe_resource(0x1b5d, name)?;
         let ipal = pcx_palette(&d);

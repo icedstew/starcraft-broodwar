@@ -13,21 +13,11 @@ pub const UI_RGB: [u32; 26] = [
     0xba185a, 0x243c5c, 0xae54dc, 0xffff00,
 ];
 
-/// 0x5127dc: palette ranges each tileset color-cycles (inclusive).
-pub fn cycling(tileset: u16) -> &'static [(u8, u8)] {
-    match tileset {
-        0 | 4 => &[(1, 6), (7, 13), (248, 254)],
-        3 => &[(1, 4), (5, 8), (9, 12)],
-        5..=7 => &[(1, 13), (248, 254)],
-        _ => &[],
-    }
-}
-
 /// 0x4bdd60: the table 0x6d125c for `tileset`: true for the palette indexes inside one
-/// of its cycling ranges (`cycling`).
+/// of its cycling ranges (0x5127dc, `palette::cycling_record`).
 pub fn excluded_colors(tileset: u16) -> [bool; 256] {
     let mut excluded = [false; 256];
-    for &(lo, hi) in cycling(tileset) {
+    for &(_, lo, hi) in crate::palette::cycling_record(tileset).1 {
         excluded[lo as usize..=hi as usize].iter_mut().for_each(|e| *e = true);
     }
     excluded

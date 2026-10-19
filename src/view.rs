@@ -240,6 +240,8 @@ impl<'a> Scene<'a> {
         Scene::start(a, chk, None, None, Some((file, slots, seed, steps)))
     }
 
+    /// 0x49b500: game/tunit.pcx and tminimap.pcx read (inline here).
+    /// 0x49b060: each player's tunit.pcx row remap 0x581d76 (`player_colors`, inline here).
     fn start(a: &'a Assets, chk: Chk, rep: Option<&crate::replay::Header>, gs: Option<&GameSetup>, save: Option<(&[u8], [u8; 8], u32, bool)>) -> io::Result<Scene<'a>> {
         let ts = Tileset::load(&a.files, chk.tileset())?;
         let terrain = map::render_terrain(&chk, &ts);
@@ -433,9 +435,12 @@ impl<'a> Scene<'a> {
         Some(((sx / n - 0x140) & !7, (sy / n - 0xc8) & !7))
     }
 
-    /// Hotkey group command 0x13 (`action` 0 set, 1 select, 2 add); the local selection
-    /// follows the simulation's.
-    pub fn hotkey(&mut self, action: u8, g: u8) {
+    /// 0x4c07b0: send hotkey group command 0x13 (`action` 0 set, 1 select, 2 add; BL = group
+    /// `g`); the local selection follows the simulation's. Another action clears the last
+    /// group (0x597280 = 0xff, `last` with 0x59727c); a select (which copies the selection
+    /// to 0x59724c) of the same group within 500 ms of the last one returns true (native
+    /// centers the screen, 0x4967e0, and clears the marker) else records group and `now` ms.
+    pub fn hotkey(&mut self, action: u8, g: u8, now: usize, last: &mut (u8, usize)) -> bool {
         self.sim_selection();
         let me = self.local;
         let st = &mut self.st;
@@ -447,6 +452,16 @@ impl<'a> Scene<'a> {
         }
         self.set_selected(sel);
         self.sent_selection = self.st.selected.clone();
+        if action != 1 {
+            last.0 = 0xff;
+            return false;
+        }
+        if g == last.0 && now.saturating_sub(last.1) < 500 {
+            last.0 = 0xff;
+            return true;
+        }
+        *last = (g, now);
+        false
     }
 
     /// 0x49ae40: make `units` the local selection (0x6284b8).
@@ -533,10 +548,10 @@ impl<'a> Scene<'a> {
         self.msgs.expire(self.clock_ms);
     }
 
-    /// 0x4d14d0: which cursor shows with the mouse at screen (x, y): scrolling at the
+    /// 0x4d14d0, 0x4d1460: which cursor shows with the mouse at screen (x, y): scrolling at the
     /// screen edges (0x4d12a0), else over the minimap (0x6556fc) or the map (0x4d1460),
     /// where units under it pick a magnifier or target color (0x4d13e0).
-    pub fn cursor_kind(&mut self, x: i32, y: i32, vx: i32, vy: i32, dragging: bool) -> usize {
+    pub fn cursor_kind(&mut self, ui: Option<&crate::ui::Ui>, x: i32, y: i32, vx: i32, vy: i32, dragging: bool) -> usize {
         let (mw, mh) = (self.st.map_px.0 as i32, self.st.map_px.1 as i32);
         let dx = if x < 2 && vx > 0 { -1 } else if x >= 0x27e && vx < mw - SCREEN_W { 1 } else { 0 };
         let dy = if y < 2 && vy > 0 { -1 } else if y >= 0x1de && vy < mh - (SCREEN_H - 80) { 1 } else { 0 };
@@ -548,7 +563,8 @@ impl<'a> Scene<'a> {
         if on_minimap_pt(x, y) {
             return if self.targeting.is_some() { 2 } else { 0 };
         }
-        if !(0..SCREEN_W).contains(&x) || !(0..400).contains(&y) {
+        // 0x4d1460: the console (0x4d1140) is no map, then the map rect 0x5993b0.
+        if ui.is_some_and(|u| u.hud_hit(x, y)) || !(0..SCREEN_W).contains(&x) || !(0..400).contains(&y) {
             return 0;
         }
         if dragging {
@@ -1159,6 +1175,7 @@ impl<'a> Scene<'a> {
     /// 0x640958) gets the error voice and line (0x48f7b0) and placing goes on; a free one
     /// the race's placement sound (0x48eff0) and the build command (0x0c) at the tile,
     /// and placing ends (0x48e310).
+    /// 0x48e4e0: the placement result: error or placement sound, then the box refresh (inline here).
     pub fn build(&mut self) {
         let Some((order, t)) = self.placing else { return };
         let (tx, ty) = self.place_tile;
@@ -1527,10 +1544,12 @@ fn new_game(a: &Assets, chk: &Chk, rep: Option<&crate::replay::Header>, gs: Opti
         st.init_alliances(modes);
         // 0x4eed10 -> 0x49b870: the selection circle colors.
         st.selection_circle_colors(d);
-        // 0x4eee00: 0x462a50, the guard AI lists.
-        st.init_ai_guards();
         // 0x4eee00: the AI's player data (0x447680) before the scenario loads.
         st.init_player_ai();
+        // 0x4eee00: 0x462a50, the guard AI lists.
+        st.init_ai_guards();
+        // 0x4eee00: 0x432610, the worker / building / town pools and town lists.
+        st.init_ai_towns();
         // 0x4eee00: 0x488f90 (when 0x6d1218 is 0; a new game here) resets the score counters
         // and sets each player's supply caps (per team in a team game).
         let team_lead = [st.team_leaders[1], st.team_leaders[2], st.team_leaders[3], st.team_leaders[4]];
@@ -1897,7 +1916,7 @@ pub fn compose_with_cursor(
     scene.draw(vx, vy, w, h, idx);
     // The pause command's grey (0x41e930), then the options' gamma (0x41e870), which
     // every palette shown goes through.
-    let pal = if scene.st.palette_grey { crate::palette::grey(scene.palette()) } else { *scene.palette() };
+    let pal = if scene.st.palette_grey { crate::palette::grey(&scene.ts.cycle.pal) } else { scene.ts.cycle.pal };
     let pal = crate::palette::gamma(&pal, scene.gamma);
     if let Some(ui) = ui {
         draw_hud(scene, ui, vx, vy, cursor, menu, idx);
@@ -1909,6 +1928,7 @@ pub fn compose_with_cursor(
 }
 
 /// The interface over the map view, in the game palette.
+/// 0x4a4c40: the terrain button's tooltip, stat_txt 0x32a shown / 0x329 hidden (inline here).
 fn draw_hud(scene: &Scene, ui: &crate::ui::Ui, vx: i32, vy: i32, cursor: Option<(usize, usize, i32, i32)>, menu: Option<&crate::menu::Menu>, out: &mut [u8]) {
     let (w, h) = (SCREEN_W, SCREEN_H);
     ui.skin.colors.set(scene.minimap.colors);
@@ -2409,6 +2429,7 @@ pub fn frame_loop<'a>(a: &'a Assets, scene: Scene<'a>, replay: Option<ReplayPlay
 
 /// `frame_loop` that leaves the finished game in `end` when a victory / defeat dialog's OK
 /// ended it (0x460f30 / 0x460fa0).
+/// 0x4bd3f0: the start screen position and the 3 camera slots (inline here).
 pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Option<ReplayPlay>, end: std::rc::Rc<std::cell::RefCell<Option<GameEnd>>>) -> io::Result<impl FnMut() -> io::Result<bool> + 'a> {
     use minifb::{Key, Scale, Window, WindowOptions};
     let mut following = replay.is_some();
@@ -2451,7 +2472,11 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
     let mut lmb_was_down = false;
     let mut last_click = 0usize;
     // 0x57f270: the saved screen positions (Shift+F2..F4 save, F2..F4 recall).
-    let mut camera_slots = [(0i32, 0i32); 3];
+    // 0x4bd3f0 (game start, 0x4eee00 after the start units): the screen goes to the position
+    // the start units set (0x57f1d0/2; -1 = none: 0,0) via 0x49c440 (clamp, 8-pixel align,
+    // parallax 0x49bfd0 in draw_stars), then the 3 slots take it.
+    let (sx, sy) = (vx.clamp(0, (mw - vw).max(0)) & !7, vy.clamp(0, (mh - vh + 120).max(0)) & !7);
+    let mut camera_slots = [(sx, sy); 3];
     // 0x5999b4: the music volume Ctrl+M turned off; the same for Ctrl+S.
     let (mut saved_music, mut saved_digital) = (0i16, 0i16);
     // A press used for a targeted order is not also a minimap scroll until released.
@@ -2490,8 +2515,9 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
                 pend_l |= win.get_mouse_down(minifb::MouseButton::Left);
                 pend_r |= win.get_mouse_down(minifb::MouseButton::Right);
                 // Between ticks: only the cursor moves.
-                let kind = if menu.is_some() { 0 } else { scene.cursor_kind(cx, cy, vx, vy, drag_start.is_some()) };
+                let kind = if menu.is_some() { 0 } else { scene.cursor_kind(ui.as_ref(), cx, cy, vx, vy, drag_start.is_some()) };
                 scene.gamma = settings.gamma;
+                scene.ts.cycle.tick(settings.color_cycling); // 0x4d93f0
                 compose_with_cursor(&scene, ui.as_ref(), vx, vy, Some((kind, tick * 42 / 100, cx, cy)), menu.as_ref(), &mut idx, &mut rgb);
                 present(&mut win, &rgb, vw as usize, vh as usize)?;
                 return Ok(true);
@@ -2660,6 +2686,7 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
             }
             let counter = tick * 42 / 100;
             scene.gamma = settings.gamma;
+            scene.ts.cycle.tick(settings.color_cycling); // 0x4d93f0
             compose_with_cursor(&scene, ui.as_ref(), vx, vy, Some((0, counter, cx, cy)), menu.as_ref(), &mut idx, &mut rgb);
             present(&mut win, &rgb, vw as usize, vh as usize)?;
             return Ok(true);
@@ -2762,11 +2789,10 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
                             let mut opt = scene.st.game_options;
                             let on = scene.st.template[0x11] == 1;
                             let mut act = crate::chat::Act::default();
-                            if replay.is_none() && crate::chat::cheat(&t, &mut opt, true, on, &mut act) && opt != scene.st.game_options {
+                            // 0x4b23e0 returns 0 at once in a multiplayer game (0x57f0b4).
+                            if replay.is_none() && !scene.st.multiplayer && crate::chat::cheat(&t, &mut opt, true, on, &mut act) && opt != scene.st.game_options {
                                 let me = scene.local;
-                                let mut p = vec![0x12];
-                                p.extend_from_slice(&opt.to_le_bytes());
-                                with_data(a, |d| scene.st.execute_command(d, me, &[], &p));
+                                with_data(a, |d| scene.st.command_cheat_packet(d, me, opt));
                             }
                             // 0x4b2350 -> 0x4a62b0 (0x596904 == 3, 0x6d11e4 Brood War installed, 0x57f1e2 zerg):
                             // Radio Free Zerg on / off, with network.tbl line 0x41 / 0x42 (0x48ccb0: 7 s).
@@ -2806,20 +2832,15 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
                 // group again within 500 ms centers too (0x4c07b0).
                 let g = g as u8;
                 if ctrl || shift {
-                    scene.hotkey(if ctrl { 0 } else { 2 }, g);
-                    last_group.0 = 0xff;
+                    scene.hotkey(if ctrl { 0 } else { 2 }, g, tick * 42, &mut last_group);
                     continue;
                 }
-                scene.hotkey(1, g);
-                let now = tick * 42;
-                let double = last_group.0 == g && now.saturating_sub(last_group.1) < 500;
+                let double = scene.hotkey(1, g, tick * 42, &mut last_group);
                 if alt || double {
                     if let Some(p) = scene.group_centre() {
                         (vx, vy) = p;
                     }
                     last_group.0 = 0xff;
-                } else {
-                    last_group = (g, now);
                 }
                 continue;
             }
@@ -3116,9 +3137,10 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
             scene.portrait_tick(u, audio.as_ref(), 42, settings.portraits);
             scene.text_tick(u, 42, settings.sound_flags & 0x400 != 0);
         }
-        let kind = scene.cursor_kind(cx, cy, vx, vy, drag_start.is_some());
+        let kind = scene.cursor_kind(ui.as_ref(), cx, cy, vx, vy, drag_start.is_some());
         let counter = tick * 42 / 100;
         scene.gamma = settings.gamma;
+        scene.ts.cycle.tick(settings.color_cycling); // 0x4d93f0
         compose_with_cursor(&scene, ui.as_ref(), vx, vy, Some((kind, counter, cx, cy)), None, &mut idx, &mut rgb);
         present(&mut win, &rgb, vw as usize, vh as usize)?;
         Ok(true)
@@ -3284,8 +3306,12 @@ fn draw_resources(scene: &Scene, ui: &crate::ui::Ui, out: &mut [u8]) {
     }
 }
 
-/// 0x481510: a tooltip: `text` (font8, color 2, no line gap) on the black box of its
+/// 0x481510: a tooltip (callers 0x4576a0 / 0x457ce0 reach it through 0x457350, which places
+/// it at control field +6 and +8 plus the parent dialog's offsets, i.e. the control's
+/// screen (right, top) as the callers pass here; `this` there is a dialog control, not a
+/// unit): `text` (font8, color 2, no line gap) on the black box of its
 /// extent, outlined in interface color 0x10, its top-left at (x, y) kept on screen.
+/// 0x457350: the tooltip placed at a control's screen (right, top) (inline at the callers).
 fn tooltip(ui: &crate::ui::Ui, text: &str, x: i32, y: i32, out: &mut [u8], w: i32, h: i32) {
     let colors = ui.skin.colors.get();
     let mut buf = vec![colors[0xf]; (w * h) as usize];

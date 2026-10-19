@@ -1347,6 +1347,8 @@ impl State {
         Ok(())
     }
 
+    /// 0x4c0300: send command 0x15 (x, y, target handle, type, order, queued), 11 bytes
+    /// (the handle is the unit's index + 1 | its unique id << 11, 0 for no unit).
     #[allow(clippy::too_many_arguments)]
     fn command_targeted_packet(&mut self, d: &Data, player: u8, sel: &[u32], pos: (i16, i16), handle: u32, ty: u16, order: u8, queued: bool) {
         let mut p = vec![0x15];
@@ -1357,6 +1359,27 @@ impl State {
         p.push(order);
         p.push(queued as u8);
         self.execute_command(d, player, sel, &p);
+    }
+
+    /// 0x4c0380: send the right click command 0x14 (x, y, target handle, type, queued), 10
+    /// bytes (`target` is the unit or NIL).
+    #[allow(clippy::too_many_arguments)]
+    pub fn command_right_click_packet(&mut self, d: &Data, player: u8, sel: &[u32], pos: (i16, i16), target: u32, ty: u16, queued: bool) {
+        let handle = if target != NIL { self.unit_handle(target) } else { 0 };
+        let mut p = vec![0x14];
+        p.extend_from_slice(&(pos.0 as u16).to_le_bytes());
+        p.extend_from_slice(&(pos.1 as u16).to_le_bytes());
+        p.extend_from_slice(&(handle as u16).to_le_bytes());
+        p.extend_from_slice(&ty.to_le_bytes());
+        p.push(queued as u8);
+        self.execute_command(d, player, sel, &p);
+    }
+
+    /// 0x4c0400: send the cheat command 0x12 with the new game options (5 bytes).
+    pub fn command_cheat_packet(&mut self, d: &Data, player: u8, options: u32) {
+        let mut p = vec![0x12];
+        p.extend_from_slice(&options.to_le_bytes());
+        self.execute_command(d, player, &[], &p);
     }
 
     /// Run one command packet as the turn loop does (0x487191): with the synced RNG on.
@@ -1382,6 +1405,7 @@ impl State {
 
     /// 0x4c28a0: set `player`'s alliance with each of the 12 players (2 bits each), then
     /// 0x4c04d0: their units drop targets that are now allied.
+    /// 0x4aabb0: alliances allowed: template alliances 1 and not 0x596877 (inline here, negated).
     fn command_alliance(&mut self, d: &Data, player: u8, mut v: u32) {
         if self.template[0xf] != 1 || self.template[0x12] != 0 {
             return;

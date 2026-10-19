@@ -65,6 +65,7 @@ impl State {
     /// 0x498570: reads what `save_sprites` wrote: clears the pool, puts each record at its
     /// index (pointers back from 1-based indices, 0x497310), rebuilds the free list of the
     /// sprites without images in ascending order (0x497230) and reads the row lists.
+    /// 0x497230: the sprite free list, sprites without images in ascending order (inline here).
     pub(super) fn load_sprites(&mut self, _d: &Data, i: &mut In) -> bool {
         let Some(n) = i.u16() else { return false };
         let nimg = self.images.len();

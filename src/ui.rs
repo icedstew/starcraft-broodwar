@@ -505,6 +505,8 @@ impl Ui {
     }
 
     /// `replay`: watching a replay, the console is game\nconsole.pcx (0x4c3950).
+    /// 0x4ba120: loads game\tFontGam.pcx (the text colors, 0x6ce000) (inline here).
+    /// 0x4ba160: the same load as 0x4ba120 (inline here).
     pub fn load_with(files: &Storage, race: &str, replay: bool) -> io::Result<Ui> {
         // game\[tpz]console.pcx by the local race.
         let c = if replay { "n" } else { &race[..1] };

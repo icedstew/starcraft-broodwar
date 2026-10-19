@@ -57,6 +57,8 @@ impl State {
     /// 0x495a50: the flingy zeroed, the saved record put back, then 0x495370 (index to
     /// pointer) and 0x494da0 (the free list holds the flingy without a sprite, the active
     /// list the one with).
+    /// 0x494da0: the flingy free / active lists rebuilt (inline here).
+    /// 0x495370: the index to pointer fix-up (indices are kept, nothing to fix).
     pub(super) fn load_flingies(&mut self, _d: &Data, i: &mut In) -> bool {
         let Some(n) = i.u16() else { return false };
         let mut t = crate::bw::freeflingy::FreeFlingy { sprite: NIL, ..Default::default() };

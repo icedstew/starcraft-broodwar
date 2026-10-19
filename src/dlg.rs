@@ -242,6 +242,17 @@ pub enum Update {
     Portrait,
 }
 
+/// What the caller of `Ctl::default_event` (0x4e1a70) must still do.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Dispatch {
+    /// The dispatcher's return value.
+    pub ret: bool,
+    /// Run the hook 0x6d5eac(0).
+    pub sound0: bool,
+    /// Run the control's update (+0x2a) with event 2 and the hook 0x6d5eac(2).
+    pub activate: bool,
+}
+
 #[derive(Clone, Debug)]
 pub struct Dialog {
     /// The dialog's own entry (control 0): rect is absolute.
@@ -281,6 +292,50 @@ impl Ctl {
         let pressed = self.flags & flag::PRESSED != 0;
         self.flags &= !flag::PRESSED;
         pressed
+    }
+
+    /// 0x4e1a70 (EAX = the control, EBX = the event record, `ev` = its number at +0, `sub` = the
+    /// word at +0xc; `inside` as for `press_follow`): the default button dispatcher, `Dispatch`
+    /// is what the caller must run (sounds 0x6d5eac, the control's update +0x2a with event 2).
+    /// The capture table 0x6d5e40 (0x4196a0), the tooltip table 0x6d5e90 (0x4196f0), the focus
+    /// 0x418900 and the generic handler 0x418c40 have no state here: `todo_port!`.
+    pub fn default_event(&mut self, ev: u32, sub: u16, inside: bool) -> Dispatch {
+        let mut d = Dispatch::default();
+        match sub {
+            4 | 6 | 3 => {
+                if sub != 3 {
+                    todo_port!("0x4196a0", "capture table entries 5 and 3 := this control");
+                }
+                d.sound0 = self.press_follow(inside);
+                d.ret = true;
+            }
+            5 => {
+                d.sound0 = self.press_follow(inside);
+                todo_port!("0x418900", "focus / tooltip bookkeeping of the control");
+                d.activate = self.press_release();
+                d.ret = true;
+            }
+            0xe => {
+                if ev == 3 {
+                    // 0x418580: shown (redraw is the caller's)
+                    if self.flags & flag::PRESSED == 0 {
+                        todo_port!("0x4196f0", "tooltip table entry for this control");
+                        self.flags ^= flag::PRESSED;
+                        d.ret = true;
+                    } else {
+                        d.activate = self.press_release();
+                        d.ret = true;
+                    }
+                } else {
+                    if ev == 6 {
+                        self.flags &= !flag::PRESSED;
+                    }
+                    todo_port!("0x418c40", "generic control event handler");
+                }
+            }
+            _ => {}
+        }
+        d
     }
 
     /// 0x41b410 (list boxes, combo boxes): the rows shown, the bottom snapped to whole
@@ -1398,6 +1453,7 @@ impl Skin {
     /// table byte + 3 of iScore.grp drawn 8 px in and 0x14 down with 0x4ef440 mode 1 (0x2000),
     /// framed in the player's color, the name, and the team name beside the icon in
     /// font 0 color 6) and 0x4b3a40 (the bar and its number).
+    /// 0x4b3600: the race icon frame drawn with 0x4ef440 mode 0x2000 (inline here).
     fn score_ctl(&self, c: &Ctl, r: (i32, i32, i32, i32), s: &mut Surf) {
         let Some(k) = c.score.as_ref() else { return };
         match k {
@@ -1902,6 +1958,7 @@ impl Skin {
 
     /// 0x4c9cc0 with the tile graphics `tile` (the glue's save replay dialog uses
     /// glue\pal??\tile.grp).
+    /// 0x4c8f10: one row of three tile columns, the middle one repeated (inline here).
     pub fn tile_background(tile: &Grp, dlg: &mut Dialog) {
         let (tw, th) = (tile.w.max(1), tile.h.max(1));
         let (mut w, mut h) = (dlg.this.rect.2 - dlg.this.rect.0 + 1, dlg.this.rect.3 - dlg.this.rect.1 + 1);

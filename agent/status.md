@@ -202,9 +202,22 @@ Delegate per agents.md: Haiku triage, Sonnet porting, Opus review / hard RE / co
   rect / font unverified), notice 0x4be060 (game start / end only), 28 inline
   equivalents annotated after checking (2 panel fixes 0x425b50 / 0x4263e0), list / Vec
   replacements added to re/buckets.txt. In scope 2440 / 4494.
-  Next: 0x4246d0 /
-  0x4248f0 panel globals (find readers), 0x402a70, 0x498c50, 0x432610, 0x4b5e80, 0x4d1460,
-  0x457250 / 0x457310 (status control list), 0x4dcc00 (check slide-out reading).
+  2026-10-19 waves 3-4 (8 Haiku triage x 12 addresses, 12 Sonnet porters): palette color
+  cycling (palette.rs Cycle: 0x4cb5b0 / 0x4d93f0 / 0x41e900; was missing entirely; per
+  frame-loop pass with a 10 ms gate, native passes are more frequent: not checked by eye),
+  AI town reset 0x432610, team slot rebuild 0x4a9250 (from a loaded save; `slot_order`
+  0x66ff34 unfilled until the lobby exists), scenario load 0x4bf520 (`load_scenario`),
+  start view slots 0x4bd3f0, volume 0x4bc320 (mute keeps the stream at 0), command senders
+  0x4c0380 (right click 0x14) / 0x4c0400 / 0x4c07b0 (hotkey double tap), control dispatcher
+  0x4e1a70 (`Ctl::default_event`, no caller yet), console test in cursor_kind 0x4d1460,
+  cheat gating 0x4b1b50 (multiplayer, mission jump), trigger kill count 0 = all 0x4c7d80,
+  template parser 0x4aae20 stops on bad quotes; ~45 inline equivalents annotated, render /
+  network / registry ones bucketed. In scope 2543 / 4494.
+  Open: 0x49cc40 (would fill `seat_races` 0x57f1c0 in slot order, clashes with the
+  SCBW_TEAMS hack), 0x4b6810 (popup text set even when empty, proc 0x4b67f0), 0x48da30
+  (placement surface from frame bytes +8/+9 vs grp size), 0x4b4a00 (0x4dd9e0 0xf4 call),
+  0x4a2bf0 (0x59cc78 reader), 0x4913d0 / 0x48fb40 (find readers), 0x498c50 (needs
+  0x497ce0), 0x4a5d10 (minimappreview.bin layout).
 - Never run two suites at once: agent/tools/suite.sh / cmp.sh share output files in $W
   (concurrent runs gave false diffs 2026-10-19).
 - Background runs (suite, repcmp, native captures) with a copied binary

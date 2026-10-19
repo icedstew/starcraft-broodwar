@@ -608,6 +608,17 @@ impl State {
         self.ai.guard_lists = [NIL; 8];
     }
 
+    /// 0x432610: the per-game town reset: the worker pool 0x6b5448 (0x403db0), the building
+    /// pool 0x69f468 (0x404280) and the town pool 0x6aa090 (0x404550) all free, the 8 town
+    /// lists 0x6aa050 emptied and the town update player 0x6aa04c cleared.
+    pub fn init_ai_towns(&mut self) {
+        self.ai.workers = AiPool::new(1000);
+        self.ai.buildings = AiPool::new(1000);
+        self.ai.towns = AiPool::new(100);
+        self.ai.town_lists = [NIL; 8];
+        self.ai.town_update_player = 0;
+    }
+
     /// 0x447680: every player's AI data cleared; resources from the players' start.
     pub fn init_player_ai(&mut self) {
         let ai = &mut self.ai;

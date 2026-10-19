@@ -75,6 +75,7 @@ impl Parallax {
     /// star onto the black pixels of the 640 x 400 game screen `out` (`w` wide). Layer i
     /// takes the next `counts[4 - i]` records in file order (the counts are read from the
     /// last layer back).
+    /// 0x47ea60: the masked star blit, only onto black pixels (inline here).
     pub fn draw(&self, out: &mut [u8], w: usize) {
         let mut next = 0;
         for i in 0..5 {

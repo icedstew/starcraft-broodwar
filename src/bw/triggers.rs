@@ -1914,6 +1914,7 @@ impl State {
     }
 
     /// 0x4c8700: move `u` to the middle of location `dst`. True once `left` is used up.
+    /// 0x4c7cf0: lift the unit off the map, place it, find a free spot (back at its old spot on failure; inline here).
     /// 0x4688e0: mineral fields and geysers excluded (inline here).
     /// 0x401430: unit types 0xcb..=0xd5 excluded (inline here).
     #[allow(clippy::too_many_arguments)]
@@ -2158,6 +2159,8 @@ impl State {
 
     /// 0x4c8570 (one player): kill or remove up to `count` of player `p`'s units of type
     /// `t`, everywhere (`loc` 0xff, 0x4c7d80) or in location `loc` (0x4c8170).
+    /// 0x4c7d80: the player's unit list walked, a do-while on `count` (0 kills all; inline here).
+    /// 0x4c8170: the units of the location's box (0x4e8830 stops at the first callback hit; inline here).
     fn trigger_kill_units(&mut self, d: &Data, p: u32, t: u16, loc: u32, count: u32, remove: bool) {
         if p >= 12 {
             return;
@@ -2178,7 +2181,7 @@ impl State {
                         }
                         self.kill_unit(d, u);
                     }
-                    left -= 1;
+                    left = left.wrapping_sub(1);
                     if left == 0 {
                         return;
                     }

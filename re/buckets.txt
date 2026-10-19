@@ -293,3 +293,20 @@ replaced 0x4804d0   # fog dirty compare (0x6d5c0c vs 0x6d5c10): dirty-rect only,
 replaced 0x470040   # drag-box save-under restore/redraw (0x66ff5c, 0x6cf4ac): scene.drag_box is redrawn each frame
 replaced 0x46eeb0   # frees the drag-box save-under buffer (0x41e0d0) and clears 0x66ff5c
 replaced 0x4843f0   # cursor / input handler set index: scbw computes the cursor each frame (view.rs cursor_kind)
+replaced 0x4d2e80   # gamedata blob loader {dst, size, count} tables: dat.rs reads arr\*.dat directly
+replaced 0x498cb0   # per-row sprite image screen positions: computed at draw (view.rs, sprite.rs 0x4d57b0)
+replaced 0x498cf0   # same, the 0x4d57b0 pass over the rows: computed at draw
+replaced 0x49bf20   # dirty terrain row redraw: terrain redrawn from the megatile map each frame
+replaced 0x48d7b0   # placement box clear + dirty rect: boxes drawn from state each frame
+replaced 0x47d920   # creep tile dirty rect / minimap redraw: full redraw (creep.rs)
+replaced 0x44ba90   # Win32 combo refill via SendMessage: scbw draws its own combo (glue_create.rs)
+replaced 0x44eaa0   # frees the portrait handles: Rust ownership (glue_ready.rs)
+replaced 0x4b5e80   # saved-game list node search by pointer: Rust indexes self.saves
+deferred 0x497110   # network sync checksum: synced-sprite mask by unit type (0x629a88) for 0x497c30; with 0x47cfc0 / 0x496fc0 turn records
+deferred 0x496fc0   # copies the sync checksum out of the turn record (network)
+replaced 0x4bcdc0   # game view dirty-cell redraw (0x6ceff8 40x25 cells): full-frame redraw
+replaced 0x4bd630   # game view dirty-rect / paint callback 0x4bd580 init: full-frame redraw
+deferred 0x4a3380   # blocking network wait loop (DirectPlay receive)
+deferred 0x4c4fa0   # flush per-player pending net words 0x5971e4 (network game)
+deferred 0x4a6ee0   # registry recent maps list read (glue_create.rs todo)
+deferred 0x4a7210   # registry recent maps: chosen map first

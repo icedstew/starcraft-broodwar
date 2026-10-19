@@ -114,6 +114,8 @@ impl Chk {
 
 pub struct Tileset {
     pub palette: [[u8; 3]; 256],
+    /// 0x6ce2a0 / 0x6ce320: the palette color cycling (water, lava) has rotated so far.
+    pub cycle: crate::palette::Cycle,
     cv5: Vec<u8>,
     vx4: Vec<u32>,
     vr4: Vec<u8>,
@@ -132,7 +134,7 @@ impl Tileset {
         }
         let vx4 = rd("vx4")?.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]]) as u32).collect();
         let vf4 = rd("vf4")?.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
-        Ok(Tileset { palette, cv5: rd("cv5")?, vx4, vr4: rd("vr4")?, vf4 })
+        Ok(Tileset { palette, cycle: crate::palette::Cycle::new(id as u16, palette), cv5: rd("cv5")?, vx4, vr4: rd("vr4")?, vf4 })
     }
 
     pub fn megatile(&self, tile: u16) -> usize {

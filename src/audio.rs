@@ -24,6 +24,8 @@ pub struct Audio {
     /// 0x4a6030: the music fade-in: the attenuation (0x6d5bb8, hundredths of a dB) and when the
     /// 20 ms timer last ran (`now_ms`).
     fade_in: Option<(i32, u128)>,
+    /// 0x6d638c: the music was started (set by 0x4bc320).
+    music_started: bool,
     /// 0x5008f0: DirectSound attenuations (hundredths of a dB) by volume 0..=99, read from
     /// the install's StarCraft.exe (not stored in the repo).
     table: [i32; 100],
@@ -121,7 +123,7 @@ impl Audio {
         let mut sink = rodio::DeviceSinkBuilder::open_default_sink().ok()?;
         sink.log_on_drop(false);
         let names = dat::parse_tbl(&files.read("arr/sfxdata.tbl").ok()?);
-        Some(Audio { sink, names, cache: RefCell::new(HashMap::new()), music: None, music_track: 0, music_checked: 0, volumes: (25, 50), credits_volume: None, fade_in: None,
+        Some(Audio { sink, names, cache: RefCell::new(HashMap::new()), music: None, music_track: 0, music_checked: 0, volumes: (25, 50), credits_volume: None, fade_in: None, music_started: true,
             table: volume_table(), slots: RefCell::new(Default::default()), last: RefCell::new(HashMap::new()), files: RefCell::new(Vec::new()) })
     }
 
@@ -301,11 +303,30 @@ impl Audio {
         files.push(player);
     }
 
+    /// 0x4bc320: applies the volumes. Music 0 (muted): attenuation -10000 and the stream is
+    /// stopped, the started flag 0x6d638c cleared; else the stream gets the volume's table level
+    /// (`table[music - 1]` = the `music * 99 / 100` index), and the first time after a mute the
+    /// track starts with its fade-in (0x4a6310). The digital volume (0x6d5e3c) is read from
+    /// `volumes` where used (`digital_gain`).
+    // The muted stream is kept at volume 0 instead of closed: 0x4a6310 (restarting the track) is not ported.
     pub fn set_volumes(&mut self, music: i16, digital: i16) {
-        if let Some(p) = self.music.as_ref().filter(|_| self.volumes.0 != music) {
-            p.set_volume(music as f32 / 50.0);
-        }
         self.volumes = (music, digital);
+        if music == 0 {
+            if let Some(p) = self.music.as_ref() {
+                p.set_volume(0.0);
+            }
+            self.music_started = false;
+        } else {
+            if self.fade_in.is_none() {
+                if let Some(p) = self.music.as_ref() {
+                    p.set_volume(music as f32 / 50.0);
+                }
+            }
+            if !self.music_started {
+                self.music_started = true;
+                self.start_fade_in();
+            }
+        }
     }
 
     /// 0x4d8fd0 / 0x4d90c0 (`on`): with the music volume 0 and the digital volume on, the music
@@ -404,7 +425,7 @@ impl Audio {
         }
     }
 
-    /// 0x4a5f50: fade the music out (attenuation falls 5, 10, 15, ... per 20 ms step
+    /// 0x4bc100 (`stop_sounds`, then this) / 0x4a5f50: fade the music out (attenuation falls 5, 10, 15, ... per 20 ms step
     /// from the current level until below -4000), then close it (0x4a5e40).
     pub fn fade_out(&mut self) {
         let Some(p) = self.music.take() else { return };

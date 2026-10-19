@@ -416,6 +416,7 @@ impl Glue {
 
     // ---- the game types (0x51a270) ----
 
+    /// 0x4aae20: the next quoted name of the list, 0 (stop) when unterminated (inline here).
     /// 0x4ab860 with 0x4ab150: the game types of Templates\templates.lst, a node per quoted
     /// file name (0x4aae20) whose .got 0x4ab750 accepts.
     pub(super) fn load_templates(&mut self, files: &Storage) {
@@ -423,8 +424,14 @@ impl Glue {
             return;
         }
         let Ok(list) = files.read("Templates\\templates.lst") else { crate::bw::fatal_error("Unable to read game templates.") };
-        for name in list.split(|&c| c == b'"').skip(1).step_by(2) {
-            let name = String::from_utf8_lossy(&name[..name.len().min(0x103)]).into_owned();
+        let mut rest = &list[..];
+        // 0x4aae20: the next quoted name (under 0x104 bytes); it stops at an unterminated or
+        // too long one.
+        while let Some(open) = rest.iter().position(|&c| c == b'"') {
+            let after = &rest[open + 1..];
+            let Some(len) = after.iter().position(|&c| c == b'"').filter(|&l| l < 0x104) else { break };
+            let name = String::from_utf8_lossy(&after[..len]).into_owned();
+            rest = &after[len + 1..];
             let name = name.rsplit_once('.').map_or(name.as_str(), |(n, _)| n);
             let (mut a, mut b) = ([0u8; 0x20], [0u8; 0x20]);
             if let Some(rec) = Setup::load_got(files, name, &mut a, &mut b) {
@@ -485,6 +492,7 @@ impl Glue {
     /// speed), 0 (0x4adac0, the palette 0x4de150, then every control's own init), and when the
     /// controls have slid in (0x4dd5e0, `create_405`) 0x405 to the combos and the
     /// dialog.
+    /// 0x4adac0: the create screen's slide-in (list 0x51a9f0) and the folder label proc (inline here).
     pub(super) fn create_open(&mut self, files: &Storage, which: u8) {
         self.load_templates(files);
         self.create.which = which;
@@ -523,6 +531,9 @@ impl Glue {
         if self.setup.multiplayer {
             todo_port!("0x4ae860", "the network screen's game speed slider (id 16, 0x4ae250 / 0x4ae3c0) and game name");
         }
+        if let Some(c) = self.cctl(ids::DIR) {
+            c.update = Update::DirLabel;
+        }
         if let Some(icons) = icons {
             let frames: Vec<Icon> = (0..icons.frame_count())
                 .filter_map(|i| {
@@ -532,7 +543,6 @@ impl Glue {
                 })
                 .collect();
             if let Some(c) = self.cctl(ids::DIR) {
-                c.update = Update::DirLabel;
                 c.icons = frames.clone();
             }
             if let Some(c) = self.cctl(ids::LIST) {
@@ -795,6 +805,8 @@ impl Glue {
         self.info_apply(idx);
     }
 
+    /// 0x4a8cd0: the count of the slots of type 6 (inline here).
+    /// 0x4a8d10: the count of the lobby slots of type 1 or 5 (inline here).
     /// 0x4a7740: read the map `idx`'s header (0x4bf5d0: the lobby slots, forces and title
     /// of the setup change too) and set its texts, size, players and slots.
     fn map_info_load(&mut self, files: &Storage, idx: usize) {
@@ -1122,6 +1134,7 @@ impl Glue {
         false
     }
 
+    /// 0x4aad00: the game types with subtype 1, in list order (inline here).
     /// 0x4af400 (event 0x405 of the game type combo): a row per game type of the list that
     /// has a subtype 1 (0x4aad00, 0x4adea0 with 0x4ab5b0: its name, its game type as data);
     /// the one of last time or, in single player, the last whose +8 is 1 (Free For All) is
@@ -1181,11 +1194,13 @@ impl Glue {
         }
     }
 
-    /// 0x4ab0b0: the first game type with (`gt`, byte 1).
+    /// 0x4ab0b0 / 0x4ab0e0: the first game type with (`gt`, byte 1): its record (+0x28) /
+    /// its name (+8).
     fn find_by_type(&self, gt: u8, b1: u8) -> Option<&Template> {
         self.create.templates.iter().find(|t| t.rec[0] == gt && t.rec[1] == b1)
     }
 
+    /// 0x4aacc0: the game types with (`gt`, byte 1), in list order (inline here).
     /// 0x4ae790 (the subtype combo): a row per subtype of the game type (0x4aacc0 with
     /// 0x4ae1f0: its number as text, the subtype as data), the one of last time or the first
     /// (Top vs Bottom: the middle) selected; hidden with none.
@@ -1639,6 +1654,7 @@ impl Glue {
         0
     }
 
+    /// 0x4ad560: a row is selected and it is not a folder (flags 8; inline here).
     /// 0x4aee40 (after 0x4a8050 started the game): a map chosen (not a folder) must have a
     /// computer opponent (0x4ad460, else gluAll 0x39); 0x4ad850 then sets the races.
     fn create_finish(&mut self, files: &Storage) -> bool {
@@ -1677,6 +1693,7 @@ impl Glue {
         false
     }
 
+    /// 0x4a9d50: the race of the local slot set and dealt with 0x6d11c8 on (inline here).
     /// 0x4ad850: the races of the rows. Free For All (a game type with +8 = 0): the player's
     /// race (0x4a9d50). Melee / Free For All (+8 = 1): every shown row's race for the game
     /// start (0x57f266 ..).
@@ -1903,6 +1920,72 @@ impl Glue {
         false
     }
 
+    /// 0x4a9250 (0x4ef100 with a saved game, 0x6d1218 set, instead of 0x4a9d80; a network
+    /// game only): the slot types (5 -> 1, 6 / 8 -> 0), the occupied slots (2, 1, 3, 4, 7)
+    /// moved to the slots 0x66ff34 gives, the storm ids of the non-human ones cleared and the
+    /// indexes renumbered; with teams (0x596875) each force's leader is swapped to the slot
+    /// 0x57f1cc names (when that is not human) and the storm tables follow the leaders.
+    pub(super) fn rebuild_slots(&mut self) {
+        let n = &mut self.setup;
+        if !n.multiplayer {
+            return;
+        }
+        for s in n.slots.iter_mut().rev() {
+            match s[slot::TYPE] {
+                5 => s[slot::TYPE] = 1,
+                6 | 8 => s[slot::TYPE] = 0,
+                _ => {}
+            }
+        }
+        let old: [Slot; 8] = std::array::from_fn(|i| n.slots[i]);
+        n.slots = [[0; 0x24]; 12];
+        for i in (0..8).rev() {
+            if matches!(old[i][slot::TYPE], 2 | 1 | 3 | 4 | 7) {
+                n.slots[n.slot_order[i] as usize] = old[i];
+            }
+        }
+        for k in (0..12).rev() {
+            if n.slots[k][slot::TYPE] != 2 {
+                n.slots[k][slot::STORM..slot::STORM + 4].fill(0xff);
+            }
+            n.slots[k][..4].copy_from_slice(&(k as u32).to_le_bytes());
+        }
+        n.index_human_slots();
+        if n.template[0x10] == 0 {
+            return;
+        }
+        for f in 1..=4u8 {
+            // 0x484df0 over the slots 7..0: a computer / open slot (1, 5) of the force.
+            let has = |n: &Setup, tys: &[u8]| (0..8).any(|i| n.slots[i][slot::FORCE] == f && tys.contains(&n.slots[i][slot::TYPE]));
+            if has(n, &[1, 5]) || !has(n, &[2]) {
+                // with one the force is left (0x484df0 != 0); with no human slot it is skipped.
+                continue;
+            }
+            let l = n.team_leaders[f as usize] as usize;
+            if l < 12 && n.slots[l][slot::TYPE] != 2 {
+                let u = n.force_leader(f) as usize;
+                if u < 12 {
+                    n.slots.swap(l, u);
+                    n.slots[u][..4].copy_from_slice(&(u as u32).to_le_bytes());
+                    n.slots[l][..4].copy_from_slice(&(l as u32).to_le_bytes());
+                }
+            }
+        }
+        n.index_human_slots();
+        let me = n.local_slot[0] as usize;
+        if n.slots.get(me).is_some_and(|s| s[slot::TYPE] == 2) {
+            n.local_slot[0] = n.team_leaders.get(n.slots[me][slot::FORCE] as usize).copied().unwrap_or(0) as u32;
+        }
+        let by = n.slot_by_storm2;
+        n.slot_by_storm = [8; 8];
+        for j in 0..8 {
+            let s = &n.slots[by[j] as usize];
+            if s[slot::TYPE] == 2 {
+                n.slot_by_storm[j] = n.team_leaders.get(s[slot::FORCE] as usize).copied().unwrap_or(0) as u32;
+            }
+        }
+    }
+
     /// 0x485160: team game setup. The lobby copy takes the types 0x66ff3c; the leader of each
     /// force (0x484f70) and the human / computer / reserved slots are lifted out of the slot
     /// table, which is restored from the lobby copy; the leaders go to random start slots
@@ -2089,6 +2172,8 @@ impl Glue {
         // A saved game (the load screen, 0x4b6490 -> 0x4cf950): 0x4ef100 reads the file's state
         // instead of setting the game up.
         if let Some(save) = self.save.take() {
+            // 0x4ef100: 0x4a9250 (instead of 0x4a9d80) rebuilds the slots of a network game.
+            self.rebuild_slots();
             return Some(crate::view::GameSetup {
                 chk: Vec::new(),
                 mpq: None,
@@ -2120,7 +2205,7 @@ impl Glue {
         let colors = self.deal_colors(placed);
         self.create.rand_on = false;
         self.name_computers(&colors);
-        let (chk, mpq) = self.setup.scenario_chk(files)?;
+        let (chk, mpq) = self.setup.load_scenario(files, None, &self.network_raw)?;
         let name = |s: &[u8]| String::from_utf8_lossy(&s[..s.iter().position(|&c| c == 0).unwrap_or(s.len())]).into_owned();
         let s = &self.setup.slots;
         Some(crate::view::GameSetup {
