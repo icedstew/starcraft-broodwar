@@ -39,15 +39,18 @@ Delegate per agents.md: Haiku triage, Sonnet porting, Opus review / hard RE / co
   (areas/ui.md "Campaign headless"): race click -> mission list 0x4b7820 -> mission text ->
   briefing (src/glue_ready.rs, MBRF triggers, portraits) -> Start -> game -> victory ->
   score -> next mission text / briefing; defeat restarts. Cinematics src/glue_cine.rs.
-  Left: button slide-in 0x4dd5e0, briefing wav stop 0x4015f0, briefing objectives into
-  the game's 0x58d6c4, cinematic scaling unchecked vs native, first-start intro flags,
+  Slide-in 0x4dd5e0 (glue_slide.rs), wav stop 0x4015f0, objectives 0x58d6c4 done; glue
+  ticks in 20 ms passes (briefing takes ~30 s: scripts need `w 60000` before Start).
+  Left: login slide-in, cinematic scaling unchecked vs native, first-start intro flags,
   save / load (deferred). Not yet checked in a real window by the user.
 - Team games (user: "support team melee"): `State.multiplayer` (0x57f0b4) replaces the
   const; team start 0x49d8e0, CTF 0x4aba20 / 0x4ab980, 0x484ff0 leaders, init_gamedata
   wired. `SCBW_TEAMS=11` on `shot` / `view` forces one (runs, unverified). In 1.16.1 team
   behaviour needs a network game; no team replay exists locally: recording one natively
   (LAN, two clients in network namespaces: ~/games/Starcraft/broodwar-reps-team/
-  tm1.rep, NOTES.txt); repcmp MATCH to the end (8375). Native shots: in progress.
+  tm1.rep, NOTES.txt); repcmp MATCH to the end (8375); repshot vs 34 native shots (shots/tm1) mean 0.08%,
+  max 0.55% (fog edge at minerals, not team-specific). Shared control (2 humans in one
+  team) is still unrecorded: needs 3+ clients.
   1.16.1 replay file names must be short ("filename is too long").
 
 - 2026-10-18 late (Haiku triage -> Sonnet porters -> Opus review): credits / mission text

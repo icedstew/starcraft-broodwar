@@ -1184,8 +1184,15 @@ pub(crate) fn shot_setup(a: &mut view::Assets, mut g: view::GameSetup, out: &str
     let ui = ui::Ui::load(&a.files, ["zerg", "terran", "protoss"][scene.local_race()]).ok();
     let (w, h) = (view::SCREEN_W as usize, view::SCREEN_H as usize);
     let (mut idx, mut rgb) = (vec![0u8; w * h], vec![0u32; w * h]);
-    let menu = ui.as_ref().filter(|_| end != 0).and_then(|u| {
+    // SCBW_MENU=objectives: the in-game Objectives menu (0x4c9de0) over the game start.
+    let objectives = std::env::var("SCBW_MENU").is_ok_and(|k| k == "objectives");
+    let menu = ui.as_ref().filter(|_| end != 0 || objectives).and_then(|u| {
         let ctx = menu::Ctx { replay: false, multiplayer: false, replay_speed: 0 };
+        if end == 0 {
+            let mut m = menu::Menu::open(menu::Kind::Objectives, 0, &a.files, &u.skin, ctx, &menu::Settings::default())?;
+            m.set_text(2, &view::objectives_text(&scene, u));
+            return Some(m);
+        }
         let kind = if end == 2 { menu::Kind::Defeat } else { menu::Kind::Victory };
         menu::Menu::open(kind, 0, &a.files, &u.skin, ctx, &menu::Settings::default())
     });

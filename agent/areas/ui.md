@@ -113,3 +113,13 @@ Read when working on the HUD, dialogs, menus or glue screens.
   room). Delete the characters dir before each run (progress changes the flow). Without
   it, glue screenshot mode stops at game start (`shot_setup`), and script keys typed
   before then go to the ready room (its hotkeys fire). Waits are wall-clock: be generous.
+- Button slide (src/glue_slide.rs): 0x4dd5e0 slide-in (list of (id, dir) pairs from the exe,
+  timer 7 = 20 ms 0x4dd220: delay ms/20 steps, then a quarter of the way left per step;
+  controls after the highest id hide meanwhile; then dialog event 0x405 = `ready_405` /
+  `create_405`) and 0x4dd040 / 0x4dcd00 slide-out (step doubles; the dialog ends, `dialog_done`,
+  when all are off screen). The list persists until the next slide-in (login's 0x4ed82c is
+  not ported). Headless shots: script waits are simulated ms, but add a trailing `w 1` after
+  the wait that opens a screen, or the shot shows the not-yet-ticked dialog. 0x58d6c4
+  (objectives) is `Glue.objectives`: briefing action 0x427ec0 -> GameSetup -> `st.trig`,
+  back through GameEnd; `SCBW_MENU=objectives` works in `scbw glue` shot mode (shot_setup).
+- 0x4015f0: `Audio::stop_files` (list 0x51a208 of `play_file` wavs), also run by `stop_sounds`.

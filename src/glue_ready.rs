@@ -124,8 +124,6 @@ pub(super) struct Ready {
     /// units.dat's portrait of each unit (0x662f88) and portdata.dat (0x44f0f0).
     unit_portrait: Vec<u16>,
     portraits: Option<Portraits>,
-    /// 0x58d6c4: the mission objectives string per player.
-    objectives: [u32; 8],
     /// 0x68f538 / 0x68f55c: the two frame images of each portrait (0x44f020; never drawn).
     frames: Vec<Vec<(usize, usize, Vec<u8>)>>,
     /// The C runtime's _holdrand (0x44eb90 / 0x44ec90 use rand()).
@@ -147,7 +145,6 @@ impl Default for Ready {
             msg_interval: 0,
             unit_portrait: Vec::new(),
             portraits: None,
-            objectives: [0; 8],
             frames: Vec::new(),
             holdrand: 1,
         }
@@ -208,15 +205,15 @@ impl Glue {
 
     /// The events of a new ready room dialog (0x4f7150 / 0x4f74b0 / 0x4f7810): 10 (0x46d3c0,
     /// the slide-in 0x4dd5e0, the controls' own init: the portraits 0x44ef00), then 0x405 when
-    /// the controls have slid in (at once here: 0x4f70f0 / 0x4f7450 / 0x4f77b0).
-    pub(super) fn ready_open(&mut self, files: &Storage, race: u8) {
+    /// the controls have slid in (`ready_405`: 0x4f70f0 / 0x4f7450 / 0x4f77b0).
+    pub(super) fn ready_open(&mut self, race: u8) {
         self.ready = Ready::default();
         self.ready_46d3c0();
-        todo_port!("0x4dd5e0", "slide-in of the buttons (lists 0x512a70 / 0x512a54 / 0x512a14) and its timer 0x4dd220");
+        // 0x4f71d1 / 0x4f7531 / 0x4f7891: AX = 7 entries, 0x50 ms; 0x405 comes when they are in.
+        self.slide_in([0x512a70, 0x512a54, 0x512a14][race as usize], 7, 0x50);
         for id in ids::PORT_FIRST..=ids::PORT_LAST {
             self.ready_44ef00(id);
         }
-        self.ready_405(files, race);
     }
 
     /// 0x46d3c0 (event 10): in a network game the buttons picture and Replay go away; the ready
@@ -246,7 +243,7 @@ impl Glue {
     }
 
     /// Event 0x405: 0x46d220, then 0x44f020 with the race's two lists of frame images.
-    fn ready_405(&mut self, files: &Storage, race: u8) {
+    pub(super) fn ready_405(&mut self, files: &Storage, race: u8) {
         self.ready_46d220(files);
         // 0x4f70f0 (zerg) / 0x4f7450 (terran) / 0x4f77b0 (protoss): the strings of both lists.
         let (a, b): ([u32; 4], [u32; 4]) = match race {
@@ -353,7 +350,7 @@ impl Glue {
 
     /// 0x4015f0 (list 0x51a208): the wavs the briefing started stop.
     fn ready_stop_wavs(&mut self) {
-        todo_port!("0x4015f0", "stop the briefing's playing wavs (AudioCmd::Wav plays detached)");
+        self.cmds.push(AudioCmd::StopWavs);
     }
 
     /// 0x46d090 (`leave`): the briefing ends (no trigger runs, Start is disabled, in a network
@@ -481,7 +478,7 @@ impl Glue {
             // 0x427ec0: mission objectives.
             4 => {
                 let local = self.setup.local_slot[0] as usize & 7;
-                self.ready.objectives[local] = string;
+                self.objectives[local] = string;
                 self.ready_46cd30();
                 true
             }
@@ -572,7 +569,7 @@ impl Glue {
 
     /// 0x46cd30: the objectives control shows the local player's objectives string.
     fn ready_46cd30(&mut self) {
-        let id = self.ready.objectives[self.setup.local_slot[0] as usize & 7];
+        let id = self.objectives[self.setup.local_slot[0] as usize & 7];
         let text = self.ready_string(id as u16).unwrap_or_default();
         if let Some(c) = self.rctl(ids::OBJECTIVES) {
             c.text = text;

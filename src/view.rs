@@ -262,6 +262,7 @@ impl<'a> Scene<'a> {
             colors: self.colors,
             local: st.local_player,
             frames: st.frame,
+            objectives: st.trig.objectives,
         }
     }
 
@@ -1212,6 +1213,8 @@ pub struct GameEnd {
     pub colors: [u8; 8],
     pub local: u8,
     pub frames: u32,
+    /// 0x58d6c4 at the end: the next mission's briefing and game start with it.
+    pub objectives: [u32; 8],
 }
 
 pub struct GameSetup {
@@ -1228,6 +1231,9 @@ pub struct GameSetup {
     pub local: u8,
     /// 0x51ca10: the game seed.
     pub seed: u32,
+    /// 0x58d6c4: the mission objectives string per player; nothing clears it between the
+    /// briefing's Mission Objectives action (0x427ec0) and the game's menu (0x4c9de0).
+    pub objectives: [u32; 8],
 }
 
 /// Engine state for a new game on `chk` (map load, players, melee starting units), or
@@ -1253,6 +1259,9 @@ fn new_game(a: &Assets, chk: &Chk, rep: Option<&crate::replay::Header>, gs: Opti
         st.load_terrain(&ts, w as u16, h as u16, &chk.mtxm());
         let melee = rep.is_none() && gs.is_none() && is_melee_map(chk) && std::env::var("SCBW_NOMELEE").is_err();
         st.template = game_template(a, chk, rep, gs);
+        if let Some(g) = gs {
+            st.trig.objectives = g.objectives;
+        }
         let modes = bw::chk_load::ScenarioModes::of_template(&st.template);
         let units = chk.section(b"UNIT").unwrap_or(&[]); // start locations: the last UNIT handler call sets them
         if let Some(h) = rep {

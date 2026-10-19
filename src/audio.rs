@@ -26,6 +26,8 @@ pub struct Audio {
     slots: RefCell<[Option<Slot>; 8]>,
     /// 0x6d127c +4 per sound id: when it last started (`now_ms`).
     last: RefCell<HashMap<u16, u128>>,
+    /// 0x51a208: the wav files playing (0x4bc490); 0x4015f0 stops them.
+    files: RefCell<Vec<rodio::Player>>,
 }
 
 /// Wall clock in ms (std has no clock on wasm32).
@@ -113,7 +115,7 @@ impl Audio {
         sink.log_on_drop(false);
         let names = dat::parse_tbl(&files.read("arr/sfxdata.tbl").ok()?);
         Some(Audio { sink, names, cache: RefCell::new(HashMap::new()), music: None, music_track: 0, music_checked: 0, volumes: (25, 50),
-            table: volume_table(), slots: RefCell::new(Default::default()), last: RefCell::new(HashMap::new()) })
+            table: volume_table(), slots: RefCell::new(Default::default()), last: RefCell::new(HashMap::new()), files: RefCell::new(Vec::new()) })
     }
 
     /// Decoded-on-demand wav cache, kept forever. Stands in for the native sound cache:
@@ -180,12 +182,20 @@ impl Audio {
     /// 0x4bbf50: the playing sounds (not the ones the loader still holds, flag 8) stop and
     /// their slots free.
     pub fn stop_sounds(&self) {
+        self.stop_files();
         for slot in self.slots.borrow_mut().iter_mut() {
             if slot.as_ref().is_some_and(|s| s.flags & 8 == 0) {
                 if let Some(s) = slot.take() {
                     s.player.stop();
                 }
             }
+        }
+    }
+
+    /// 0x4015f0: every wav file playing (0x4bc490) stops and leaves the list.
+    pub fn stop_files(&self) {
+        for p in self.files.borrow_mut().drain(..) {
+            p.stop();
         }
     }
 
@@ -272,13 +282,16 @@ impl Audio {
     }
 
     /// 0x4bc490: plays a whole wav file (a trigger's, from the map archive) at the digital
-    /// volume's table attenuation, `table[digital * 99 / 100]`; no slot or priority.
+    /// volume's table attenuation, `table[digital * 99 / 100]`; no slot or priority. It is kept
+    /// in the list 0x51a208 (`stop_files`); the ones that ended are dropped here.
     pub fn play_file(&self, data: Vec<u8>) {
         let Ok(src) = rodio::Decoder::new(Cursor::new(Arc::<[u8]>::from(data))) else { return };
         let g = self.digital_gain();
         let player = rodio::Player::connect_new(self.sink.mixer());
         player.append(src.amplify(g));
-        player.detach();
+        let mut files = self.files.borrow_mut();
+        files.retain(|p| !p.empty());
+        files.push(player);
     }
 
     pub fn set_volumes(&mut self, music: i16, digital: i16) {

@@ -25,6 +25,8 @@ mod credits;
 mod ready;
 #[path = "glue_cine.rs"]
 mod cine;
+#[path = "glue_slide.rs"]
+mod slide;
 
 /// What the glue asks the sound system for (the window loop plays them: `Audio` is not
 /// the glue's).
@@ -43,6 +45,8 @@ pub enum AudioCmd {
     StopSounds,
     /// 0x4bc490: a whole wav file (the briefing's) plays once.
     Wav(Vec<u8>),
+    /// 0x4015f0: the wav files playing stop.
+    StopWavs,
 }
 
 /// 0x512bb8 (8 bytes per track: path, type, fade-in): the front-end tracks 0xa .. 0x12
@@ -198,6 +202,9 @@ pub struct Glue {
     first: bool,
     /// The game that just ended in victory / defeat (state 6 / 7), for the score screen.
     pub game_end: Option<crate::view::GameEnd>,
+    /// 0x58d6c4: the mission objectives string per player (the briefing's action 0x427ec0
+    /// and the game's trigger action 0x4c51b0 set it; the game's menu 0x4c9de0 shows it).
+    objectives: [u32; 8],
     /// 0x57f0b4: a multiplayer game.
     pub multiplayer: bool,
     /// 0x58f440: Brood War (expansion) chosen.
@@ -279,8 +286,8 @@ pub struct Glue {
     pub cmds: Vec<AudioCmd>,
     /// 0x6d5bac && 0x6d5bbc: a track is playing.
     music_playing: bool,
-    /// 0x51c42c: the buttons of the exit slide (0x4dd5e0, not ported: 0).
-    exit_slide: usize,
+    /// 0x51c428 ...: the buttons slide (0x4dd5e0 in, 0x4dd040 out) and its timer 7.
+    slide: slide::Slide,
     /// 0x51a158: the options gamma.
     pub gamma: i16,
     /// The fade in progress (0x41ea30), and the palette it ends in.
@@ -319,6 +326,7 @@ impl Glue {
             screen: screen::MAIN,
             first: true,
             game_end: None,
+            objectives: [0; 8],
             multiplayer: false,
             expansion: false,
             expansion_installed: files.read("rez/gluexpcmpgn.bin").is_ok(),
@@ -356,7 +364,7 @@ impl Glue {
             map_names: files.read("arr/mapdata.tbl").map(|d| crate::dat::parse_tbl(&d)).unwrap_or_default(),
             cmds: Vec::new(),
             music_playing: false,
-            exit_slide: 0,
+            slide: slide::Slide::default(),
             gamma: 100,
             fade: None,
             hover: None,
@@ -651,10 +659,11 @@ impl Glue {
         self.campaign_precheck(exp);
         let bin = if exp { "rez/gluExpCmpgn.bin" } else { "rez/gluCmpgn.bin" };
         let dlg = self.open_glue_dialog(files, bin);
-        todo_port!("0x4dd5e0", "slide-in of the buttons (lists 0x512b10 / 0x512a8c) and its timer 0x4dd220");
+        self.dlg = Some((dlg, if exp { Open::CampaignExp } else { Open::Campaign }));
+        // The event proc's slide-in (0x4b28ea / 0x4b525a, after 0x4dd9e0): ECX = the list, AX = 2.
+        self.slide_in(if exp { 0x512a8c } else { 0x512b10 }, 2, 0);
         self.show_palette();
         self.music_start(0x16);
-        self.dlg = Some((dlg, if exp { Open::CampaignExp } else { Open::Campaign }));
     }
 
     /// 0x4b2930 / 0x4b52a0 (after 0x41a080): act on the result.
@@ -1138,9 +1147,9 @@ impl Glue {
         let bin = ["rez/glurdyz.bin", "rez/glurdyt.bin", "rez/glurdyp.bin"][race as usize];
         let dlg = self.open_glue_dialog(files, bin);
         // The event proc's case 10 (0x46d3c0, the slide-in 0x4dd5e0, 0x4dd9e0), 0x405 when
-        // the buttons are in and case 0: 0x4de150.
+        // the buttons are in (`slide_in_step`) and case 0: 0x4de150.
         self.dlg = Some((dlg, Open::Ready(race)));
-        self.ready_open(files, race);
+        self.ready_open(race);
         self.show_palette();
     }
 
@@ -1507,8 +1516,8 @@ impl Glue {
         let mut dlg = self.open_glue_dialog(files, "rez/gluScore.bin");
         self.score_controls(files, &mut dlg);
         self.dlg = Some((dlg, Open::Score(won)));
-        // The event proc's slide-in (0x4b4a00: 0x4dd5e0 over list 0x51a844, 500 ms) is not ported.
-        todo_port!("0x4dd5e0", "slide-in of the score screen's picture (list 0x51a844) and its timer 0x4dd220");
+        // The event proc's slide-in (0x4b4a00: 0x4dd5e0 over list 0x51a844, 500 ms).
+        self.slide_in(0x51a844, 1, 500);
         self.score_init(files);
     }
 
@@ -1546,9 +1555,10 @@ impl Glue {
     /// screen.
     fn open_load(&mut self, files: &Storage) {
         let dlg = self.open_glue_dialog(files, "rez/gluLoad.bin");
-        todo_port!("0x4dd5e0", "slide-in of the buttons (list 0x512a48) and its timer 0x4dd220");
-        self.show_palette();
         self.dlg = Some((dlg, Open::Load));
+        // Event 10 (0x4b6410): the slide-in of list 0x512a48 (0x4b643b, AX = 3, no delay).
+        self.slide_in(0x512a48, 3, 0);
+        self.show_palette();
     }
 
     /// 0x4b6490 (after 0x41a080): 4 loads the game chosen (0x4cf950), 5 goes back to the
@@ -1749,12 +1759,12 @@ impl Glue {
         }
     }
 
-    /// 0x4dd040: end the modal dialog with `result` (0x41a080 returns it): the buttons
-    /// of the exit slide (0x51c428 list) are empty on the main menu, so the 0x4dcd00
-    /// timer ends the dialog at once; every control loses flag 0x10.
+    /// 0x4dd040: end the modal dialog with `result` (0x41a080 returns it): the buttons slide
+    /// out (`slide_out`) and the 0x4dcd00 timer ends the dialog; every control loses flag
+    /// 0x10.
     fn end_dialog(&mut self, result: i32) -> bool {
-        if self.exit_slide != 0 {
-            self.cmds.push(AudioCmd::Sound(0xad));
+        if self.slide.leaving.is_some() {
+            return true;
         }
         if let Some((dlg, _)) = self.dlg.as_mut() {
             dlg.this.flags &= !0x10;
@@ -1762,7 +1772,7 @@ impl Glue {
                 c.flags &= !0x10;
             }
         }
-        self.result = Some(result);
+        self.slide_out(result);
         true
     }
 
@@ -1911,6 +1921,9 @@ impl Glue {
     /// 0xe code 2 to the dialog's event proc). Runs the screen's `done_*` once the event
     /// proc ended the dialog.
     pub fn activate(&mut self, files: &Storage, id: i16) {
+        if self.slide.leaving.is_some() {
+            return;
+        }
         if let Some((dlg, open)) = self.popup.take() {
             // 0x4b6d60 / 0x4b5920 -> 0x418eb0: any control ends the popup (event 1 releases
             // its timers: 0x4dcc00) with its id; 0x4b6cc0's event 1 keeps the edit's text
@@ -1969,8 +1982,14 @@ impl Glue {
             }
             _ => {}
         }
+        self.dialog_done(files);
+    }
+
+    /// The dialog ended (its result is set, after the slide out): the screen's `done_*`.
+    fn dialog_done(&mut self, files: &Storage) {
         if let Some(r) = self.result.take() {
-            let (_, open) = self.dlg.take().unwrap();
+            let Some((_, open)) = self.dlg.take() else { return };
+            self.slide.tail = None;
             match open {
                 Open::Main => self.done_main(r),
                 Open::Campaign | Open::CampaignExp => self.done_campaign(r),
@@ -2309,8 +2328,19 @@ impl Glue {
 
     /// `ms` pass: the dialogs' 30 ms timers (0x4e0f50) and the cursor's 50 ms timer
     /// (0x4dcea0 -> 0x4be120 advances 0x597390).
-    pub fn tick(&mut self, files: &Storage, ms: u32) {
+    pub fn tick(&mut self, files: &Storage, mut ms: u32) {
+        // Long waits (scripts, slow frames) run as several 20 ms passes, as the message loop
+        // would: the timers fire once per pass.
+        while ms > 20 {
+            self.tick_pass(files, 20);
+            ms -= 20;
+        }
+        self.tick_pass(files, ms);
+    }
+
+    fn tick_pass(&mut self, files: &Storage, ms: u32) {
         self.clock_ms = self.clock_ms.wrapping_add(ms);
+        self.slide_tick(files, ms);
         self.create_tick(files, ms);
         self.score_tick(ms);
         // 0x4edaa0 event 8 code 0x57: the timer goes (0x416000), New ID opens.
@@ -2543,6 +2573,7 @@ pub fn run(files: &Storage, shot: Option<&str>) -> std::io::Result<()> {
                 let mut a = crate::view::Assets::load(crate::storage::Storage::open(&crate::install_dir())?)?;
                 if let (Some(_), Ok(spec)) = (shot, std::env::var("SCBW_GLUE_GAME")) {
                     glue.game_end = crate::headless_game(&mut a, g, &spec)?;
+                    glue.objectives = glue.game_end.as_ref().map_or(glue.objectives, |e| e.objectives);
                     match &glue.game_end {
                         Some(e) => glue.state = if e.results[e.local as usize] == 2 { 7 } else { 6 },
                         None => return Ok(()),
@@ -2556,6 +2587,7 @@ pub fn run(files: &Storage, shot: Option<&str>) -> std::io::Result<()> {
                 // the victory / defeat dialog's OK (the score screen), 4 after quitting the
                 // mission (0x4c9280: the campaign screen 6, or 0x16 with Brood War 0x58f440).
                 glue.game_end = crate::view::run_setup(&mut a, g)?;
+                glue.objectives = glue.game_end.as_ref().map_or(glue.objectives, |e| e.objectives);
                 match &glue.game_end {
                     Some(e) => glue.state = if e.results[e.local as usize] == 2 { 7 } else { 6 },
                     None => {
@@ -2589,6 +2621,7 @@ pub fn run(files: &Storage, shot: Option<&str>) -> std::io::Result<()> {
                 AudioCmd::FadeOutMusic => au.fade_out(),
                 AudioCmd::StopSounds => au.stop_sounds(),
                 AudioCmd::Wav(d) => au.play_file(d),
+                AudioCmd::StopWavs => au.stop_files(),
             }
         }
         let now = std::time::Instant::now();

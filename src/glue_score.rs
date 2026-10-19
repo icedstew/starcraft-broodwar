@@ -597,6 +597,7 @@ impl Glue {
             colors: [0, 1, 2, 3, 4, 5, 6, 7],
             local: 0,
             frames: 24 * 60 * 14 + 24 * 31,
+            objectives: [0; 8],
         };
         let p = &mut g.players;
         p.units_produced[0] = 61;

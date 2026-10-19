@@ -421,7 +421,7 @@ impl Glue {
 
     /// The events a new dialog gets: 10 (0x4af510: the controls the procs use, the game
     /// speed), 0 (0x4adac0, the palette 0x4de150, then every control's own init), and when the
-    /// controls have slid in (0x4dd5e0: not ported, so at once) 0x405 to the combos and the
+    /// controls have slid in (0x4dd5e0, `create_405`) 0x405 to the combos and the
     /// dialog.
     pub(super) fn create_open(&mut self, files: &Storage, which: u8) {
         self.load_templates(files);
@@ -455,9 +455,9 @@ impl Glue {
                 skin.list_init(c);
             }
         }
-        // 0x4adac0: the buttons slide in (0x4dd5e0 over list 0x51a9f0: not ported) and
+        // 0x4adac0: the buttons slide in (0x4dd5e0 over list 0x51a9f0, AX = 5) and
         // the folder label gets its draw 0x4ad980.
-        todo_port!("0x4dd5e0", "slide-in of the controls (list 0x51a9f0) and its timer 0x4dd220");
+        self.slide_in(0x51a9f0, 5, 0);
         todo_port!("0x4af5c0", "mouse wheel (events 0x11 / 0x12) to the map list's scroll bar");
         if self.setup.multiplayer {
             todo_port!("0x4ae860", "the network screen's game speed slider (id 16, 0x4ae250 / 0x4ae3c0) and game name");
@@ -484,7 +484,11 @@ impl Glue {
         self.create_list_init();
         self.create_fill_owners();
         self.create_fill_races();
-        // 0x405: the combos (17: 0x4af400), then the dialog (0x4af100).
+    }
+
+    /// Event 0x405 once the controls have slid in: the combos (17: 0x4af400), then the dialog
+    /// (0x4af100).
+    pub(super) fn create_405(&mut self) {
         self.create_fill_types();
         self.create_fill_list();
     }
@@ -1779,6 +1783,7 @@ impl Glue {
             template: self.setup.template,
             local: self.setup.local_slot[0] as u8,
             seed,
+            objectives: self.objectives,
         })
     }
 }
