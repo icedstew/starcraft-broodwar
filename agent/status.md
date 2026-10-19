@@ -1,4 +1,4 @@
-# Status (updated 2026-10-17, evening)
+# Status (updated 2026-10-19)
 
 Read first. Kept short: what is in flight and what is next. Rewrite it in the same commit
 as each step (conventions.md). Durable facts per area: [areas/sim.md](areas/sim.md),
@@ -35,14 +35,22 @@ Delegate per agents.md: Haiku triage, Sonnet porting, Opus review / hard RE / co
 
 ## In flight
 
+- Save / load (user 2026-10-18: "do the deferred functions, including saving/loading"):
+  done end to end (agent/areas/save.md): every part of 0x4d02d0 / 0x4cfef0 in
+  src/bw/save/, file level src/saveload.rs, in-game save / load dialogs (menu.rs), glue
+  load screen list, game start from a save. Checked by `scbw savetest` (testing.md 4b) on
+  16 replays x 2 points (2026-10-19: all MATCH after savetest relinks the active bullet /
+  thingy lists and shares the replay viewer), and headless: campaign mission saved (`SCBW_GLUE_GAME="300 save
+  t1"`), listed and loaded from the glue load screen. Not yet checked against a save made
+  by the real 1.16.1 (next: make one under wine, load it in scbw; and the reverse).
+  Gaps listed in save.md (implode 0x410b30, old formats, fields written as 0).
 - Campaign (user 2026-10-18: "play through the campaign"): works end to end headless
   (areas/ui.md "Campaign headless"): race click -> mission list 0x4b7820 -> mission text ->
   briefing (src/glue_ready.rs, MBRF triggers, portraits) -> Start -> game -> victory ->
   score -> next mission text / briefing; defeat restarts. Cinematics src/glue_cine.rs.
   Slide-in 0x4dd5e0 (glue_slide.rs), wav stop 0x4015f0, objectives 0x58d6c4 done; glue
   ticks in 20 ms passes (briefing takes ~30 s: scripts need `w 60000` before Start).
-  Login slide-in 0x4ed810 done. Left: cinematic scaling unchecked vs native, first-start intro flags,
-  save / load (deferred). Not yet checked in a real window by the user.
+  Login slide-in 0x4ed810 done. Left: cinematic scaling unchecked vs native, first-start intro flags. Not yet checked in a real window by the user.
 - Team games (user: "support team melee"): `State.multiplayer` (0x57f0b4) replaces the
   const; team start 0x49d8e0, CTF 0x4aba20 / 0x4ab980, 0x484ff0 leaders, init_gamedata
   wired. `SCBW_TEAMS=11` on `shot` / `view` forces one (runs, unverified). In 1.16.1 team

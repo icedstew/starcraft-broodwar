@@ -47,7 +47,7 @@ pub fn game_type_triggers(t: &[u8; 0x20]) -> Option<&'static str> {
 const FLAGS: usize = 0x940;
 const CUR_ACTION: usize = 0x95f;
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct Trigger(pub Box<[u8; TRIGGER_SIZE]>);
 
 impl Trigger {
@@ -153,7 +153,7 @@ pub struct Location {
 
 /// Unit counts the conditions read (0x45f7a0 copies the live ones; 0x4609d0 counts a
 /// location's units instead).
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct CountSnapshot {
     /// 0x68a708 men, 0x68a738 men completed, 0x68a858 buildings, 0x68a888 buildings
     /// completed, 0x68a9a8 factories, 0x68a9d8 factories completed.
@@ -183,6 +183,7 @@ impl Default for CountSnapshot {
     }
 }
 
+#[derive(Debug)]
 pub struct Triggers {
     /// 0x51a280: each player's triggers.
     pub lists: [Vec<Trigger>; 8],

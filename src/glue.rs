@@ -182,6 +182,9 @@ pub enum Open {
     MissionList,
     /// 0x4b73b0 from 0x4ed840 (Delete): rez\gluPOkCancel.bin, event proc 0x4b6d60.
     DeleteChar,
+    /// 0x4b73b0 from 0x4b62a0 (the load screen's Delete): rez\gluPOkCancel.bin, event proc
+    /// 0x4b6d60.
+    DeleteSave,
 }
 
 /// 0x50e06c + 0x10a: the light percentage translucent image controls use (0x6d5e24).
@@ -311,6 +314,15 @@ pub struct Glue {
     credits: credits::Credits,
     /// The ready room's globals (glue_ready.rs).
     ready: ready::Ready,
+    /// 0x51a238: the load screen's saved games, as the list rows show them (newest first; the
+    /// native records are in the order 0x4b6010 made them): the file name without its
+    /// extension (record +0x180). The record's other copies (+0x17c .. +0x1d8, +0x2a2: the
+    /// header's strings and game info) are read by nothing ported.
+    saves: Vec<Vec<u8>>,
+    /// 0x599da4: the name of the saved game selected (0x4b5ef0).
+    save_name: Vec<u8>,
+    /// The saved game 0x4cf950 opened (the file 0x6d1218), for the game start.
+    pub save: Option<Vec<u8>>,
 }
 
 impl Glue {
@@ -378,6 +390,9 @@ impl Glue {
             score: score::Score::default(),
             credits: credits::Credits::default(),
             ready: ready::Ready::default(),
+            saves: Vec::new(),
+            save_name: Vec::new(),
+            save: None,
         }
     }
 
@@ -388,6 +403,7 @@ impl Glue {
             self.expansion = false;
             self.setup.expansion = self.expansion;
         }
+        if std::env::var("SCBW_GLUE_TRACE").is_ok() { eprintln!("top state {} screen {} dlg {:?}", self.state, self.screen, self.dlg.as_ref().map(|d| d.1)); }
         match self.state {
             state::INTRO => {
                 // 0x4d4470 twice (the expansion's intro when gluexpcmpgn.bin exists), then 4.
@@ -1282,6 +1298,9 @@ impl Glue {
         if open == Open::Login && id == 8 {
             self.login_buttons();
         }
+        if open == Open::Load {
+            self.load_buttons();
+        }
         if matches!(open, Open::Create(_)) {
             self.create_event(id, row);
         }
@@ -1554,35 +1573,177 @@ impl Glue {
     }
 
     /// 0x4b6490 (rez\gluLoad.bin, event proc 0x4b6410), before 0x41a080: the load game
-    /// screen.
+    /// screen. The list's event proc 0x4b6340: event 10 sets flag 0x20000, event 0 (0x4b61c0)
+    /// is `load_fill_rows`.
     fn open_load(&mut self, files: &Storage) {
-        let dlg = self.open_glue_dialog(files, "rez/gluLoad.bin");
+        let mut dlg = self.open_glue_dialog(files, "rez/gluLoad.bin");
+        if let Some(c) = dlg.controls.iter_mut().find(|c| c.ty == 12) {
+            c.flags |= 0x20000;
+        }
         self.dlg = Some((dlg, Open::Load));
         // Event 10 (0x4b6410): the slide-in of list 0x512a48 (0x4b643b, AX = 3, no delay).
         self.slide_in(0x512a48, 3, 0);
         self.show_palette();
+        // 0x4b61c0: Ok (4) and Delete (7) are off until a game is selected.
+        self.disable(4, true);
+        self.disable(7, true);
+        self.load_fill_rows();
     }
 
-    /// 0x4b6490 (after 0x41a080): 4 loads the game chosen (0x4cf950), 5 goes back to the
-    /// campaign select (Brood War: +0x10), anything else to the main menu.
+    /// 0x4b6490 (after 0x41a080): 4 loads the game chosen (0x4cf950 with the name 0x599da4;
+    /// 0x4cf8e0 sets the state 4 -> 1, the game start), 5 goes back to the campaign select
+    /// (Brood War: +0x10), anything else to the main menu.
     fn done_load(&mut self, result: i32) {
         match result {
-            4 => todo_port!("0x4cf950", "load the chosen saved game"),
+            4 => {
+                let exe = crate::saveload::exe_dir(&self.setup.characters_dir);
+                let mut g = crate::saveload::OpenGlobals { g596904: self.state as u32, ..Default::default() };
+                let name = String::from_utf8_lossy(&self.save_name).into_owned();
+                self.save = crate::saveload::open_save(&exe, self.player_name.as_bytes(), self.multiplayer, self.expansion, &name, &mut g);
+                if self.save.is_some() && g.g596904 == state::START as u32 {
+                    self.state = state::START;
+                }
+            }
             5 => self.screen = if self.expansion { screen::CAMPAIGN2 } else { screen::CAMPAIGN },
             _ => self.screen = screen::MAIN,
         }
         self.glue_close();
     }
 
-    /// 0x4b6410: the load screen's event proc for an activated control: 7 (the game list)
-    /// opens 0x4b62a0, any other ends the dialog.
-    fn load_activate(&mut self, id: i16) -> bool {
+    /// 0x4b6410: the load screen's event proc for an activated control: 7 (Delete) asks
+    /// (0x4b62a0: gluAll.tbl 0x16, 0x4b73b0; `load_delete_done` is the rest), any other ends
+    /// the dialog.
+    fn load_activate(&mut self, files: &Storage, id: i16) -> bool {
         self.activated = id;
         if id == 7 {
-            todo_port!("0x4b62a0", "saved game list dialog (0x4b6010)");
+            let msg = self.glu_all.get(0x15).cloned().unwrap_or_default();
+            self.open_ok_cancel(files, &msg, Open::DeleteSave);
             return true;
         }
         self.end_dialog(id as i32)
+    }
+
+    /// 0x4b62a0 after the question: with Ok the selected game's file is deleted (0x4cf820),
+    /// the list refilled (0x4b6010 per file) and the buttons set (0x4b5ef0).
+    fn load_delete_done(&mut self, ok: bool) {
+        if !ok {
+            return;
+        }
+        let sel = self.load_list().and_then(|c| c.list.as_ref()).map_or(0xff, |l| l.sel);
+        if let Some(name) = self.saves.get(sel as usize).cloned() {
+            self.save_delete(&name);
+        }
+        self.load_fill_rows();
+    }
+
+    /// The load screen's list box.
+    fn load_list(&mut self) -> Option<&mut crate::dlg::Ctl> {
+        self.dlg.as_mut().and_then(|(d, _)| d.controls.iter_mut().find(|c| c.ty == 12))
+    }
+
+    /// 0x4cf820: delete the saved game `name` of the profile (the save dir, created if
+    /// missing; <name><extension>; a read-only file first made writable).
+    fn save_delete(&self, name: &[u8]) {
+        let exe = crate::saveload::exe_dir(&self.setup.characters_dir);
+        let name = String::from_utf8_lossy(name);
+        let Some(path) = crate::saveload::save_path(&exe, self.player_name.as_bytes(), self.multiplayer, self.expansion, false, &name) else { return };
+        let path = crate::saveload::host(&path);
+        if let Ok(m) = std::fs::metadata(&path) {
+            let mut p = m.permissions();
+            if p.readonly() {
+                #[allow(clippy::permissions_set_readonly_false)]
+                p.set_readonly(false);
+                let _ = std::fs::set_permissions(&path, p);
+            }
+        }
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// 0x4cfd90 (without the callback): the saved games of the profile, oldest first. The
+    /// save dir (0x4ce5b0) is listed (0x4cf330) for "*<extension>" (files only, not hidden);
+    /// 0x4cfb00 keeps a file whose name is under 0x20 characters and which 0x4cfa10 can read
+    /// (the text up to 0x1a, the header with id 0x69), named by the file name without its last
+    /// extension when that is under 0x1c characters; the list is kept in order of the file
+    /// time (a new one goes before the first that is not older).
+    fn save_files(&self) -> Vec<Vec<u8>> {
+        use crate::saveload::{host, save_dir, save_ext, read_header};
+        let exe = crate::saveload::exe_dir(&self.setup.characters_dir);
+        let Some(dir) = save_dir(&exe, self.player_name.as_bytes(), self.multiplayer, false, 0x104) else { return Vec::new() };
+        let ext = save_ext(self.expansion, self.multiplayer);
+        let mut ents: Vec<(String, std::time::SystemTime)> = std::fs::read_dir(host(&dir))
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter(|e| e.path().is_file())
+            .filter_map(|e| Some((e.file_name().into_string().ok()?, e.metadata().ok()?.modified().ok()?)))
+            .filter(|(n, _)| !n.starts_with('.') && n.len() >= ext.len() && n[n.len() - ext.len()..].eq_ignore_ascii_case(ext))
+            .collect();
+        ents.sort();
+        let mut list: Vec<(Vec<u8>, std::time::SystemTime)> = Vec::new();
+        for (n, t) in ents {
+            if n.len() >= 0x20 || dir.len() + n.len() >= 0x104 {
+                continue;
+            }
+            let Ok(f) = std::fs::read(host(&format!("{dir}{n}"))) else { continue };
+            let mut i = crate::bw::save::In::new(&f);
+            let head = loop {
+                match i.bytes(1) {
+                    None => break None,
+                    Some(b) if b[0] == 0x1a => break read_header(&mut i),
+                    _ => {}
+                }
+            };
+            if head.is_none_or(|h| h.id != 0x69) {
+                continue;
+            }
+            let mut name = n.as_bytes();
+            if let Some(p) = name.iter().rposition(|&c| c == b'.') {
+                name = &name[..p];
+            }
+            if name.len() >= 0x1c {
+                continue;
+            }
+            let at = list.iter().position(|(_, o)| t <= *o).unwrap_or(list.len());
+            list.insert(at, (name.to_vec(), t));
+        }
+        list.into_iter().map(|(n, _)| n).collect()
+    }
+
+    /// 0x4b61c0 / 0x4b62a0: the list cleared (0x41b890), a row per saved game (0x4b6010
+    /// inserts each at row 0, so the newest is first), laid out once (0x41b410), then the
+    /// buttons (0x4b5ef0).
+    fn load_fill_rows(&mut self) {
+        let files = self.save_files();
+        self.saves.clear();
+        if let Some(c) = self.load_list() {
+            c.list_clear();
+            c.list.as_mut().unwrap().batch = true;
+            let mut rows = Vec::new();
+            for n in files {
+                // 0x41b620 ignores a full list.
+                if c.list.as_ref().unwrap().items.len() >= crate::dlg::LIST_MAX {
+                    continue;
+                }
+                c.list_insert(0, &n, 0);
+                rows.insert(0, n);
+            }
+            c.list.as_mut().unwrap().batch = false;
+            c.list_layout();
+            self.saves = rows;
+        }
+        self.load_buttons();
+    }
+
+    /// 0x4b5ef0: with a game selected Ok (4) and Delete (7) are on and its name goes to
+    /// 0x599da4; else both are off.
+    fn load_buttons(&mut self) {
+        let sel = self.load_list().and_then(|c| c.list.as_ref()).map_or(0xff, |l| l.sel);
+        let rec = if sel == 0xff { None } else { self.saves.get(sel as usize).cloned() };
+        self.disable(4, rec.is_none());
+        self.disable(7, rec.is_none());
+        if let Some(n) = rec {
+            self.save_name = n;
+        }
     }
 
     /// 0x4be0b0: flush the pending notice: flags bit 0 is set and 0x41e0d0 (the UI engine,
@@ -1937,6 +2098,7 @@ impl Glue {
                     self.login_new_id_done(files, id == 1, text);
                 }
                 Open::DeleteChar => self.login_delete_done(id == 1),
+                Open::DeleteSave => self.load_delete_done(id == 1),
                 Open::MissionList => {
                     let rec = self.hist_done(&dlg, id);
                     if let Some((idx, p)) = self.hist.take() {
@@ -1965,7 +2127,7 @@ impl Glue {
                 self.campaign_activate(files, id, true);
             }
             Open::Load => {
-                self.load_activate(id);
+                self.load_activate(files, id);
             }
             Open::Score(_) => {
                 self.activated = id;
@@ -2572,6 +2734,13 @@ pub fn run(files: &Storage, shot: Option<&str>) -> std::io::Result<()> {
                 // 0x4e0710: the game; the score screen / next state after it (0x4d9950's
                 // result in 0x596904) are not ported.
                 let Some(g) = glue.begin_game(files) else { return Ok(()) };
+                // Where the in-game save / load dialogs keep the saves (0x4ce5b0's inputs).
+                crate::menu::set_save_env(crate::menu::SaveEnv {
+                    exe_dir: crate::saveload::exe_dir(&glue.setup.characters_dir),
+                    profile: glue.player_name.as_bytes().to_vec(),
+                    multi: glue.multiplayer,
+                    expansion: glue.expansion,
+                });
                 let mut a = crate::view::Assets::load(crate::storage::Storage::open(&crate::install_dir())?)?;
                 if let (Some(_), Ok(spec)) = (shot, std::env::var("SCBW_GLUE_GAME")) {
                     glue.game_end = crate::headless_game(&mut a, g, &spec)?;

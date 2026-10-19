@@ -170,23 +170,64 @@ pub fn is_melee_map(chk: &Chk) -> bool {
 impl<'a> Scene<'a> {
     /// (Call `prepare_map` on the assets first.)
     pub fn new(a: &'a Assets, chk: Chk) -> io::Result<Scene<'a>> {
-        Scene::start(a, chk, None, None)
+        Scene::start(a, chk, None, None, None)
     }
 
     /// The game the glue menus set up (0x4e0710). (Call `prepare_setup` on the assets first.)
     pub fn from_setup(a: &'a Assets, g: &GameSetup) -> io::Result<Scene<'a>> {
-        Scene::start(a, Chk::parse(&g.chk), None, Some(g))
+        Scene::start(a, Chk::parse(&g.chk), None, Some(g), None)
+    }
+
+    /// `from_setup`, or `from_save` when the glue chose a saved game.
+    pub fn for_setup(a: &'a Assets, g: &GameSetup) -> io::Result<Scene<'a>> {
+        match &g.save {
+            Some(f) => Scene::from_save(a, f),
+            None => Scene::from_setup(a, g),
+        }
     }
 
     /// The game a replay recorded, set up as the replay's header says.
     /// (Call `prepare_replay` on the assets first.)
     pub fn from_replay(a: &'a Assets, r: &crate::replay::Replay) -> io::Result<Scene<'a>> {
-        let mut s = Scene::start(a, Chk::parse(&r.chk), Some(&r.header), None)?;
+        let mut s = Scene::start(a, Chk::parse(&r.chk), Some(&r.header), None, None)?;
         s.st.replay_frames = r.header.frames;
         Ok(s)
     }
 
-    fn start(a: &'a Assets, chk: Chk, rep: Option<&crate::replay::Header>, gs: Option<&GameSetup>) -> io::Result<Scene<'a>> {
+    /// A saved game (the file 0x4cf8e0 opened): 0x4cf5f0 reads the head, then game init
+    /// 0x4ef100 runs with the file set, skipping the map's own units (0x49b060, 0x4cc110)
+    /// and reading the state (0x4eed10 -> 0x4cfef0). Here a first pass over a scratch state
+    /// finds the map file (kept in the save) and the color slots, then the game of that map
+    /// starts and the whole save is read over it.
+    pub fn from_save(a: &'a Assets, file: &[u8]) -> io::Result<Scene<'a>> {
+        Scene::from_save_steps(a, file, true)
+    }
+
+    /// `from_save`, without 0x4d9530's two steps when `steps` is false (tests).
+    pub fn from_save_steps(a: &'a Assets, file: &[u8], steps: bool) -> io::Result<Scene<'a>> {
+        // The map size 0x57f1d4 and tileset 0x57f1dc from the game data block.
+        let dims = (|| {
+            let mut i = bw::save::In::new(file);
+            while i.bytes(1)?[0] != 0x1a {}
+            crate::saveload::read_header(&mut i)?;
+            i.packed(0x1b0)?;
+            let g = i.packed(96000)?;
+            let u16_at = |a: usize| u16::from_le_bytes([g[a - 0x57f0f0], g[a - 0x57f0f0 + 1]]);
+            Some(((u16_at(0x57f1d4) as usize, u16_at(0x57f1d6) as usize), u16_at(0x57f1dc)))
+        })();
+        let Some((wh, tileset)) = dims else { return Err(io::Error::other("bad saved game")) };
+        let mut tmp = bw::State::new(wh, tileset, 1700);
+        if !load_save(a, &mut tmp, file) {
+            return Err(io::Error::other("bad saved game"));
+        }
+        let slots = std::array::from_fn(|p| tmp.color_slot[p] as u8);
+        let chk = Chk::parse(&std::mem::take(&mut tmp.chk));
+        let seed = tmp.rng.seed;
+        drop(tmp);
+        Scene::start(a, chk, None, None, Some((file, slots, seed, steps)))
+    }
+
+    fn start(a: &'a Assets, chk: Chk, rep: Option<&crate::replay::Header>, gs: Option<&GameSetup>, save: Option<(&[u8], [u8; 8], u32, bool)>) -> io::Result<Scene<'a>> {
         let ts = Tileset::load(&a.files, chk.tileset())?;
         let terrain = map::render_terrain(&chk, &ts);
         let (tw, _, tunit) = pcx(&a.files.read("game/tunit.pcx")?);
@@ -198,10 +239,12 @@ impl<'a> Scene<'a> {
             // it (0x4de950); the remap 0x581d76 takes the row COLR[slot] (checked against
             // the running game: tl1313's player 0, slot 6 -> row 10).
             Some(h) => h.slots.iter().take(8).map(|s| via_colr(s.color as u8)).collect(),
-            None => match gs {
-                // 0x57f21c: the colors 0x49b360 dealt, through COLR the same way.
-                Some(g) => g.colors.iter().map(|&c| via_colr(c)).collect(),
-                None => map_colr.clone(),
+            None => match (gs, save.map(|s| s.1)) {
+                // 0x57f21c: the colors 0x49b360 dealt (or a saved game's), through COLR the
+                // same way.
+                (Some(g), _) => g.colors.iter().map(|&c| via_colr(c)).collect(),
+                (None, Some(c)) => c.iter().map(|&c| via_colr(c)).collect(),
+                (None, None) => map_colr.clone(),
             },
         };
         let mut player_colors = [[0u8; 8]; 12];
@@ -227,7 +270,13 @@ impl<'a> Scene<'a> {
         for (t, &c) in thpbar.iter_mut().zip(pcx(&a.files.read("game/thpbar.pcx")?).2.iter()) {
             *t = c;
         }
-        let mut st = new_game(a, &chk, rep, gs)?;
+        let mut st = new_game(a, &chk, rep, gs, save.map(|s| s.2))?;
+        st.chk = chk.raw.clone();
+        if let Some((f, _, _, _)) = save {
+            if !load_save(a, &mut st, f) {
+                return Err(io::Error::other("bad saved game"));
+            }
+        }
         let local = st.local_player;
         let mut minimap = load_minimap(&a.files, &chk)?;
         // 0x581dd6: each player's minimap color is the tminimap.pcx entry of its color.
@@ -242,12 +291,61 @@ impl<'a> Scene<'a> {
             // 0x4d9950 first sets the 100-frame counter 0x51ce98 to 1, so the first step is a
             // 100th frame (vision reset) and the resets come every 100 steps from there.
             st.counter_100 = 1;
-            st.game_step(d);
-            st.game_step(d);
+            if !save.is_some_and(|s| !s.3) {
+                st.game_step(d);
+                st.game_step(d);
+            }
             minimap.refresh(d, &mut st)
         });
         let creep_grp = a.files.read(&format!("tileset/{}.grp", map::TILESETS[chk.tileset()])).ok().map(crate::grp::Grp::parse);
         Ok(Scene { st, creep_grp, minimap, voices: crate::voices::Voices::new(), portrait: Default::default(), talk_left: 0, talk_unit: None, trans_left: None, sent_selection: Vec::new(), card_menu: None, placing: None, card_held: None, targeting: None, error: 0, msgs: Default::default(), chat: Default::default(), clock_ms: 0, gamma: 100, pause_tick: 0, pause_replay_saved: false, place_ok: false, place_tile: (0, 0), place_err: 0, drag_box: None, a, chk, ts, terrain, player_colors, colors: std::array::from_fn(|p| colr.get(p).copied().unwrap_or(p as u8)), end_at: std::env::var("SCBW_END_AT").ok().and_then(|v| Some((v.trim_end_matches('d').parse().ok()?, if v.ends_with('d') { 0x40 } else { 0x80 }))), local, shadow, dark, fog: crate::fog::Fog::new(), tselect, thpbar, remaps })
+    }
+
+    /// 0x4d02d0 after the header: the player table and game data (`save_head`), then the
+    /// game state (`save_state`); None when a part failed.
+    pub fn save_state(&mut self) -> Option<Vec<u8>> {
+        let mut o = bw::save::Out::default();
+        let st = &mut self.st;
+        with_data(self.a, |d| st.save_head(d, &mut o) && st.save_state(d, &mut o)).then_some(o.buf)
+    }
+
+    /// 0x4d9950's start of the game loop: the 100-frame counter 0x51ce98 = 1, then
+    /// 0x4d9530's two steps (no frame advance). `start` does the same.
+    pub fn init_steps(&mut self) {
+        let st = &mut self.st;
+        st.counter_100 = 1;
+        with_data(self.a, |d| {
+            st.game_step(d);
+            st.game_step(d);
+        });
+    }
+
+    /// 0x4d02d0: the whole saved game `name`: the text (0x4ce950), the header (0x4cf160),
+    /// then `save_state`'s parts. None when the game would not save.
+    pub fn save_file(&mut self, name: &[u8], multi: bool) -> Option<Vec<u8>> {
+        let table = self.st.player_table();
+        let slots: Vec<[u8; 0x24]> = table.chunks_exact(0x24).map(|c| c.try_into().unwrap()).collect();
+        // not kept: the map's title (0x596845) and path (0x57fd3c), the game type name
+        // (0x4aad40) and the game info 0x5967f8 (zeros but the template and what 0x4cf160
+        // sets).
+        let mut f = crate::saveload::save_text(name, multi, &slots, None, b"", b"")?;
+        let mut o = bw::save::Out::default();
+        let mut info = [0u8; 0x8d];
+        // 0x596865: the game template, +0x6d of the game info.
+        info[0x6d..0x8d].copy_from_slice(&self.st.template);
+        todo_port!("0x4c40f0", "the two network values of the save header");
+        let ok = crate::saveload::save_header(&mut o, &mut info, 0, 0, 0, &slots, self.st.rng.seed);
+        f.extend_from_slice(&o.buf);
+        let body = self.save_state()?;
+        f.extend_from_slice(&body);
+        ok.then_some(f)
+    }
+
+    /// 0x4cf5f0 then 0x4cfef0 over this scene's state.
+    pub fn load_state(&mut self, f: &[u8]) -> bool {
+        let st = &mut self.st;
+        let mut i = bw::save::In::new(f);
+        with_data(self.a, |d| st.load_head(d, &mut i) && st.load_state(d, &mut i))
     }
 
     /// The finished game for the score screen (the glue's 0x4de200 state 6 / 7).
@@ -1234,11 +1332,31 @@ pub struct GameSetup {
     /// 0x58d6c4: the mission objectives string per player; nothing clears it between the
     /// briefing's Mission Objectives action (0x427ec0) and the game's menu (0x4c9de0).
     pub objectives: [u32; 8],
+    /// A saved game chosen on the load screen (0x4cf950: the file 0x4cf8e0 opened; the glue's
+    /// 0x596904 went 4 -> 1): the file bytes. `Scene::from_save` starts the game from it;
+    /// `chk`, `mpq` and the player fields are empty then (the save holds the map and players).
+    pub save: Option<Vec<u8>>,
 }
 
 /// Engine state for a new game on `chk` (map load, players, melee starting units), or
 /// for the game replay header `rep` recorded.
-fn new_game(a: &Assets, chk: &Chk, rep: Option<&crate::replay::Header>, gs: Option<&GameSetup>) -> io::Result<bw::State> {
+/// 0x4cf5f0 then 0x4cfef0: the saved game `file` read over `st`.
+fn load_save(a: &Assets, st: &mut bw::State, file: &[u8]) -> bool {
+    let mut i = bw::save::In::new(file);
+    with_data(a, |d| match crate::saveload::read_save_head(st, d, &mut i) {
+        // 0x596bb4: the header's seed becomes the game's (0x4ef100: 0x51ca14 = 0x51ca10).
+        Some(h) => {
+            st.rng.seed = h.seed;
+            // 0x5967f8 = the header's game info: the template 0x596865 at +0x6d.
+            st.template.copy_from_slice(&h.info[0x6d..0x8d]);
+            st.load_state(d, &mut i)
+        }
+        None => false,
+    })
+}
+
+fn new_game(a: &Assets, chk: &Chk, rep: Option<&crate::replay::Header>, gs: Option<&GameSetup>, save_seed: Option<u32>) -> io::Result<bw::State> {
+    let loading = save_seed.is_some();
     let (w, h) = chk.dims();
     let mut st = bw::State::new((w, h), chk.tileset() as u16, 1700);
     let name = map::TILESETS[chk.tileset()];
@@ -1354,15 +1472,26 @@ fn new_game(a: &Assets, chk: &Chk, rep: Option<&crate::replay::Header>, gs: Opti
         // 0x4eee00: 0x488f90 (when 0x6d1218 is 0; a new game here) resets the score counters
         // and sets each player's supply caps (per team in a team game).
         let team_lead = [st.team_leaders[1], st.team_leaders[2], st.team_leaders[3], st.team_leaders[4]];
-        st.players.init_gamedata(st.multiplayer, st.template[0x10], &st.seat_races, &team_lead);
+        if !loading {
+            st.players.init_gamedata(st.multiplayer, st.template[0x10], &st.seat_races, &team_lead);
+        }
         // 0x4eec30 -> 0x489b30: trigger state for a new game (0x489790: who is in it).
         st.init_trigger_players();
         // 0x4ef100: srand(0x51ca10, the game seed) for the CRT rand creep tiles use; then
         // 0x4ee2d0 draws once for the music variant 0x51a3b4 (outside campaigns, in the
         // process's first game: 0x51a3b4 starts at -1). Games here are never campaign
         // missions (0x57f244 = 0).
+        // A saved game's seed is the header's (0x596bb4 -> 0x51ca10).
+        if let Some(s) = save_seed {
+            st.rng.seed = s;
+        }
         st.crt_seed = st.rng.seed;
         crate::audio::next_music_variant(|| st.crt_rand());
+        // A saved game (0x6d1218 set): 0x4eee00 skips the scenario (0x4bf520), the start
+        // units, 0x4bd3f0, 0x437a70(1) and 0x446350; 0x4ef100 skips 0x4abaf0 (0x6d121c).
+        if loading {
+            return;
+        }
         // 0x4eee00 loads the scenario right after 0x4ef100 seeds the RNG, with it on.
         // Handler order (table 0x5001e8): MTXM, THG2 (its unit doodads draw from the
         // RNG too), UNIT.
@@ -2172,7 +2301,7 @@ pub fn run_setup(a: &mut Assets, mut g: GameSetup) -> io::Result<Option<GameEnd>
     prepare_setup(a, &mut g);
     let a: &Assets = a;
     let end = std::rc::Rc::new(std::cell::RefCell::new(None));
-    let mut frame = frame_loop_end(a, Scene::from_setup(a, &g)?, None, end.clone())?;
+    let mut frame = frame_loop_end(a, Scene::for_setup(a, &g)?, None, end.clone())?;
     while frame()? {}
     drop(frame);
     let e = end.borrow_mut().take();
@@ -2325,10 +2454,34 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
             Some(m)
         };
         if menu.is_some() {
-            typed.borrow_mut().clear();
+            let chars = std::mem::take(&mut *typed.borrow_mut());
             let ldown = lmb;
             let mut act = None;
             if let (Some(m), Some(u)) = (menu.as_mut(), ui.as_ref()) {
+                // The save dialog's name edit: WM_CHAR (0x20.., backspace) and WM_KEYDOWN.
+                m.tick(42);
+                for &c in &chars {
+                    if c == 8 || (0x20..0x100).contains(&c) {
+                        m.type_char(&u.skin, c as u8);
+                    }
+                }
+                let shift_bits = if shift { 1 } else { 0 };
+                for k in keys_rep.iter() {
+                    let vk = match k {
+                        Key::Left => 0x25,
+                        Key::Up => 0x26,
+                        Key::Right => 0x27,
+                        Key::Down => 0x28,
+                        Key::Home => 0x24,
+                        Key::End => 0x23,
+                        Key::PageUp => 0x21,
+                        Key::PageDown => 0x22,
+                        Key::Insert => 0x2d,
+                        Key::Delete => 0x2e,
+                        _ => continue,
+                    };
+                    m.key_down(&u.skin, vk, shift_bits);
+                }
                 act = m.mouse(&u.skin, cx, cy, ldown, &mut settings);
                 if std::mem::take(&mut m.click) {
                     scene.st.ui_sounds.push(BUTTON_CLICK_SFX);
@@ -2366,6 +2519,29 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
                     crate::menu::Action::EndGame => {
                         *end.borrow_mut() = Some(scene.game_end());
                         return Ok(false);
+                    }
+                    // 0x4c0600 (command 6, run at once here): the game saved as `name`.
+                    crate::menu::Action::SaveGame(name) => {
+                        let env = crate::menu::save_env();
+                        let ok = crate::saveload::save_path(&env.exe_dir, &env.profile, env.multi, env.expansion, false, &name)
+                            
+                            .and_then(|p| Some((p, scene.save_file(name.as_bytes(), env.multi)?)))
+                            .is_some_and(|(p, f)| std::fs::write(crate::saveload::host(&p), f).is_ok());
+                        if !ok {
+                            todo_port!("0x4bb300", "the save failed message (gluAll 0x65)");
+                        }
+                    }
+                    // 0x4619a0 (command 7): the chosen save replaces the game (0x4cf950, then
+                    // game init with the file open).
+                    crate::menu::Action::LoadGame(name, _) => {
+                        let env = crate::menu::save_env();
+                        let file = crate::saveload::open_save(&env.exe_dir, &env.profile, env.multi, env.expansion, &name, &mut Default::default());
+                        // ponytail: the map's UNIx / UPGx / TECx dat changes stay those of
+                        // the game that was running (assets are shared while it runs).
+                        if let Some(next) = file.and_then(|f| Scene::from_save(a, &f).ok()) {
+                            scene = next;
+                            (vx, vy) = (scene.st.screen_tile.0 as i32 * 32, scene.st.screen_tile.1 as i32 * 32);
+                        }
                     }
                     // ponytail: restarting rebuilds nothing yet; the menu just closes.
                     _ => {}

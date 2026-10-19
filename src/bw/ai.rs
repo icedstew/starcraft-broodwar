@@ -209,7 +209,7 @@ pub trait AiNode: Default + Clone {
 
 /// A fixed AI pool (`AiArray`): 1000 guards / workers / buildings / military, 100 towns
 /// and scripts.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct AiPool<T: AiNode> {
     pub items: Vec<T>,
     pub free: u32,
@@ -524,7 +524,7 @@ impl Default for PlayerAi {
 }
 
 /// Everything the AI keeps.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct Ai {
     pub players: Vec<PlayerAi>,
     /// 0x68fee4: the player 0x448920 looks at next.

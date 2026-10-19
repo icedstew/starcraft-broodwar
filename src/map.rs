@@ -8,6 +8,8 @@ pub const TILESETS: [&str; 8] = ["badlands", "platform", "install", "ashworld", 
 pub struct Chk {
     /// Every section in file order: 0x413550 runs a tag's handler once per instance.
     sections: Vec<([u8; 4], Vec<u8>)>,
+    /// The file as loaded (0x5993d4, 0x5994d8 bytes): a saved game keeps it.
+    pub raw: Vec<u8>,
 }
 
 impl Chk {
@@ -27,7 +29,7 @@ impl Chk {
             sections.push((tag, d[i..end].to_vec()));
             i = end;
         }
-        Chk { sections }
+        Chk { sections, raw: d.to_vec() }
     }
 
     /// The last instance of `tag`: what the handlers that copy a section into fixed

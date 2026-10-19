@@ -262,53 +262,13 @@ pub fn tbl_str(tbl: &[u8], idx: usize) -> &[u8] {
     }
 }
 
-/// The standard CRC-32 table-driven loop of 0x410430 (seed 0xffffffff, no final xor).
-fn crc32(d: &[u8]) -> u32 {
-    let mut c = 0xffff_ffffu32;
-    for &b in d {
-        let mut t = (c ^ b as u32) & 0xff;
-        for _ in 0..8 {
-            t = if t & 1 != 0 { 0xedb8_8320 ^ (t >> 1) } else { t >> 1 };
-        }
-        c = t ^ (c >> 8);
-    }
-    c
-}
-
 fn unix_time() -> u32 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as u32).unwrap_or(0)
 }
 
-/// 0x4c3280: read `len` bytes written by 0x4c3450 from a file: crc, chunk count, then per
-/// chunk (<= 0x2000 plain bytes) its stored size and bytes (PKWare imploded unless the
-/// stored size equals the plain size).
+/// 0x4c3280 on a whole file.
 fn read_packed(f: &[u8], len: usize) -> Option<Vec<u8>> {
-    if len == 0 {
-        return None;
-    }
-    let u32_at = |o: usize| f.get(o..o + 4).map(|b| u32::from_le_bytes(b.try_into().unwrap()) as usize);
-    let (crc, n) = (u32_at(0)?, u32_at(4)?);
-    let (mut pos, mut out) = (8usize, Vec::new());
-    for i in 0..n {
-        let sz = u32_at(pos)?;
-        pos += 4;
-        if sz > len - out.len() {
-            return None;
-        }
-        let stored = f.get(pos..pos + sz)?;
-        pos += sz;
-        let plain = (len.wrapping_sub(0x2000 * i)).min(0x2000);
-        if sz == plain {
-            out.extend_from_slice(stored);
-        } else {
-            let d = explode::explode(stored).ok()?;
-            if d.is_empty() || d.len() > len - out.len() {
-                return None;
-            }
-            out.extend_from_slice(&d);
-        }
-    }
-    (out.len() == len && crc32(&out) as usize == crc).then_some(out)
+    crate::bw::save::In::new(f).packed(len)
 }
 
 /// A player profile (characters\<name>.spc / .mpc, 0x70 bytes).
@@ -1107,17 +1067,9 @@ impl Setup {
         if std::fs::create_dir_all(&self.characters_dir).is_err() {
             return false;
         }
-        let mut out = Vec::new();
-        out.extend_from_slice(&crc32(&p.0).to_le_bytes());
-        out.extend_from_slice(&(p.0.len().div_ceil(0x2000) as u32).to_le_bytes());
-        for c in p.0.chunks(0x2000) {
-            // 0x4c3200 stores a chunk uncompressed when the implode does not shrink it,
-            // and 0x4c3280 reads that back.
-            todo_port!("0x410b30", "PKWare implode of the profile chunk (stored uncompressed)");
-            out.extend_from_slice(&(c.len() as u32).to_le_bytes());
-            out.extend_from_slice(c);
-        }
-        std::fs::write(self.profile_path(p.name()), out).is_ok()
+        let mut out = crate::bw::save::Out::default();
+        out.packed(&p.0);
+        std::fs::write(self.profile_path(p.name()), out.buf).is_ok()
     }
 
     /// 0x4a8ab0 (characters\*.spc / .mpc, 0x4a87f0) with 0x4a8940 on each: the profiles

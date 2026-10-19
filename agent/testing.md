@@ -51,6 +51,18 @@ edge smoothing + missing geyser smoke overlay). Compare rows 0..400 (the buffer 
 HUD). Camera is fixed at the replay's start view; capture more passes with other camera
 positions for coverage.
 
+## 4b. Save / load round trip (savetest)
+
+`scbw savetest <rep> <frame> [frames]`: plays the replay to <frame>, saves the whole file,
+loads it into a new game (`Scene::from_save`), applies to the original what a 1.16.1 load
+changes (agent/areas/save.md), then both play on and the per-frame traces (units, bullets,
+thingies, fog, tiles, rng, selections, hotkeys; slot numbers ignored) must MATCH.
+`SCBW_SAVETEST_DUMP=<p>` writes both full states (Debug) after the load,
+`SCBW_SAVETEST_DUMPAT=<f>` at frame f (as `<f>.da` / `<f>.db` in the current directory),
+`SCBW_SAVEOUT=<p>` both save files.
+Resave: SAME, except with pylons alive (DIFF in the images, ~0x17b00: the load re-makes
+the psi field sprites in other slots). 2026-10-19: 16 replays x f3000 / f9000 all MATCH.
+
 ## 5. Visual checks
 
 `scbw shot <map|rep> out.png x y [frames] [n]` renders a frame with the HUD for eyeballing

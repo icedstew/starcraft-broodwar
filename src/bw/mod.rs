@@ -62,6 +62,7 @@ pub mod minimap;
 pub mod load;
 pub mod rng;
 pub mod sai;
+pub mod save;
 pub mod select;
 pub mod short_path;
 pub mod siege;
@@ -161,6 +162,7 @@ impl Data<'_> {
     }
 }
 
+#[derive(Debug)]
 pub struct State {
     pub images: Vec<Image>,
     pub free_images: List,
@@ -188,6 +190,8 @@ pub struct State {
     pub marker_thingy: Option<u32>,
     /// 0x652920: the right-click marker is shown (drawn by 0x488180 though hidden).
     pub marker_shown: bool,
+    /// 0x5993d4 / 0x5994d8: the map's CHK file (written to saved games; set by whoever loads the map).
+    pub chk: Vec<u8>,
     pub units: Vec<Unit>,
     pub free_units: List,      // 0x140e77fe0 / 0x140e77fd8
     pub visible_units: List,   // 0x140e77fc8 / 0x140e78078
@@ -467,6 +471,7 @@ impl State {
             active_fog_thingies: List::default(),
             marker_thingy: None,
             marker_shown: false,
+            chk: Vec::new(),
             units,
             free_units,
             visible_units: List::default(),

@@ -3,6 +3,7 @@
 mod audio;
 mod chat;
 mod bw;
+mod saveload;
 mod setup;
 mod storage;
 mod storm;
@@ -375,6 +376,220 @@ fn main() -> std::io::Result<()> {
                 o += &format!("cmd {} {} {hex}\n", c.frame, player_of[c.player as usize]);
             }
             std::fs::write(&args[2], o)?;
+        }
+        Some("savetest") => {
+            // savetest <rep> <frame> [frames]: play the replay to <frame>, save the game state,
+            // load it into a fresh game of the same replay and check that saving again gives
+            // the same bytes and that both games then play <frames> more frames alike.
+            let mut a = view::Assets::load(files)?;
+            let r = replay::Replay::parse(&std::fs::read(&args[1])?)?;
+            let at: u32 = args[2].parse().unwrap_or(1000);
+            let more: u32 = args.get(3).and_then(|v| v.parse().ok()).unwrap_or(500);
+            view::prepare_replay(&mut a, &r);
+            let mut player_of = [0u8; 256];
+            for (i, s) in r.header.slots.iter().enumerate() {
+                if s.kind == 1 || s.kind == 2 {
+                    player_of[s.player_id as usize] = i as u8;
+                }
+            }
+            let play = |scene: &mut view::Scene, ci: &mut usize, f: u32| {
+                while *ci < r.commands.len() && r.commands[*ci].frame <= f {
+                    let c = &r.commands[*ci];
+                    scene.replay_command(player_of[c.player as usize], &c.data);
+                    *ci += 1;
+                }
+                scene.step();
+            };
+            let trace = |st: &bw::State, f: u32| {
+                let mut t = vec![format!("f{f} rng {:#x}", st.rng.seed), format!("f{f} sel {:?}", st.selections), format!("f{f} hk {:?}", st.hotkeys), thingy_trace(st, f), fog_trace(st, f), bullet_trace(st, f), tile_trace(st, f)];
+                let mut u = st.visible_units.head;
+                while u != bw::list::NIL {
+                    t.push(unit_trace(st, f, u));
+                    u = st.units[u as usize].link.next;
+                }
+                t
+            };
+            let mut sa = view::Scene::from_replay(&a, &r)?;
+            let mut ca = 0;
+            for f in 0..at {
+                play(&mut sa, &mut ca, f);
+            }
+            // Saving changes the game (0x4e2e20 refreshes the overlap flags 0x40000 as the
+            // units go back in the finder), as in 1.16.1.
+            let s0 = sa.save_file(b"savetest", true).ok_or_else(|| std::io::Error::other("save failed"))?;
+            let seed0 = sa.st.rng.seed;
+            let mut sb = view::Scene::from_save_steps(&a, &s0, false)?;
+            // Test only: the loaded game watches as the replay does (the creep shown flag
+            // 0x40000000 follows the local vision, 0x47e2d0).
+            (sb.st.replay, sb.st.local_vision_mask) = (sa.st.replay, sa.st.local_vision_mask);
+            // Globals game init resets that the save does not hold, so a loaded 1.16.1 game
+            // has them anew: the stagger counters 0x59cca4 / 0x6283e8 (0x49f380) and the
+            // AI timers 0x59cc8c / 0x59cc90 / 0x59cc94 (0x4eee00).
+            sa.st.stagger_150 = 10;
+            sa.st.stagger_300 = 0x96;
+            (sa.st.ai.timer_300, sa.st.ai.timer_6, sa.st.ai.timer_tick) = (0xf, 6, 0x3c);
+            // 0x49f380 also zeroes the finder arrays (0x66ff78 / 0x6769b8): stale entries past
+            // the count, which 1.16.1's searches read at the edges, are zero in a loaded game.
+            // A unit's path is saved as its offset in the pool (0x4e3410), so one in slot 0
+            // reads back as none (0x4e2e20): the loaded game lost it, as 1.16.1's does.
+            for u in sa.st.units.iter_mut() {
+                if u.path == 0 {
+                    u.path = bw::list::NIL;
+                }
+            }
+            // 0x63fe2c (when the recent-selection groups were used) is in no save and never
+            // reset: zero in a fresh process.
+            sa.st.recent_used = Default::default();
+            // 0x65eb10 (the creep recession countdown): 0x47d660 zeroes it at game init.
+            sa.st.random_event_timer = 0;
+            // The CRT rand (creep tile variants): srand(the header's seed) at game init (0x4ef100).
+            sa.st.crt_seed = seed0;
+            // Test only: replay commands name units by handle (slot | unique id << 11), but a
+            // load rebuilds the free list (0x49e1f0) and zeroes the free slots, so units made
+            // after it get other handles. The loaded game takes the original's free list
+            // order and stale unique ids so that the replay's commands still find them.
+            // 0x49e910 zeroes every unit before reading the saved ones: free slots lose what
+            // their last unit left (a new unit inherits some of it).
+            let mut u = sa.st.free_units.head;
+            while u != bw::list::NIL {
+                let k = &mut sa.st.units[u as usize];
+                let (link, uid) = (k.link, k.unique_id);
+                *k = Default::default();
+                (k.link, k.unique_id) = (link, uid);
+                u = link.next;
+            }
+            // The other pools' loaders zero them first too (images 0x4d6220, sprites 0x498570,
+            // bullets 0x48ae40, thingies 0x487db0).
+            fn zero_free<T: bw::list::Node + Default>(p: &mut [T], l: bw::list::List) {
+                let mut u = l.head;
+                let mut n = 0;
+                while u != bw::list::NIL && n <= p.len() {
+                    let link = *p[u as usize].link();
+                    p[u as usize] = T::default();
+                    *p[u as usize].link_mut() = link;
+                    u = link.next;
+                    n += 1;
+                }
+            }
+            zero_free(&mut sa.st.images, sa.st.free_images);
+            zero_free(&mut sa.st.sprites, sa.st.free_sprites);
+            zero_free(&mut sa.st.bullets.pool, sa.st.bullets.free);
+            zero_free(&mut sa.st.thingies, sa.st.free_thingies);
+            zero_free(&mut sa.st.fog_thingies, sa.st.free_fog_thingies);
+            // Likewise the other pools' free lists (0x497230 / 0x4d4ba0 / 0x48a720 / 0x487990
+            // rebuild them in slot order), so new sprites, images, bullets and thingies take
+            // the same slots in both games.
+            // (Only when both have the same free slots: a load re-creates the pylons' psi field
+            // sprites (0x4ead50 -> 0x494030) in other slots, as 1.16.1's does.)
+            fn same_free<T: bw::list::Node>(a: &[T], b: &mut [T], la: bw::list::List, lb: &mut bw::list::List) {
+                let set = |p: &[T], l: bw::list::List| {
+                    let mut v = Vec::new();
+                    let mut u = l.head;
+                    while u != bw::list::NIL && v.len() <= p.len() {
+                        v.push(u);
+                        u = p[u as usize].link().next;
+                    }
+                    v.sort_unstable();
+                    v
+                };
+                if set(a, la) != set(b, *lb) {
+                    return;
+                }
+                *lb = la;
+                let mut u = la.head;
+                while u != bw::list::NIL {
+                    *b[u as usize].link_mut() = *a[u as usize].link();
+                    u = a[u as usize].link().next;
+                }
+            }
+            same_free(&sa.st.units, &mut sb.st.units, sa.st.free_units, &mut sb.st.free_units);
+            let mut u = sa.st.free_units.head;
+            while u != bw::list::NIL {
+                sb.st.units[u as usize].unique_id = sa.st.units[u as usize].unique_id;
+                u = sa.st.units[u as usize].link.next;
+            }
+            same_free(&sa.st.sprites, &mut sb.st.sprites, sa.st.free_sprites, &mut sb.st.free_sprites);
+            same_free(&sa.st.images, &mut sb.st.images, sa.st.free_images, &mut sb.st.free_images);
+            same_free(&sa.st.thingies, &mut sb.st.thingies, sa.st.free_thingies, &mut sb.st.free_thingies);
+            same_free(&sa.st.fog_thingies, &mut sb.st.fog_thingies, sa.st.free_fog_thingies, &mut sb.st.free_fog_thingies);
+            same_free(&sa.st.bullets.pool, &mut sb.st.bullets.pool, sa.st.bullets.free, &mut sb.st.bullets.free);
+            // 0x48a720 / 0x487990 also relink the active bullets and thingies in slot order.
+            fn slot_order<T: bw::list::Node>(p: &mut [T], l: &mut bw::list::List) {
+                let mut live = Vec::new();
+                let mut u = l.head;
+                while u != bw::list::NIL && live.len() <= p.len() {
+                    live.push(u);
+                    u = p[u as usize].link().next;
+                }
+                live.sort_unstable();
+                let mut prev = bw::list::NIL;
+                for (k, &s) in live.iter().enumerate() {
+                    let next = live.get(k + 1).copied().unwrap_or(bw::list::NIL);
+                    *p[s as usize].link_mut() = bw::list::Link { prev, next };
+                    prev = s;
+                }
+                (l.head, l.tail) = (live.first().copied().unwrap_or(bw::list::NIL), prev);
+            }
+            slot_order(&mut sa.st.bullets.pool, &mut sa.st.bullets.active);
+            slot_order(&mut sa.st.thingies, &mut sa.st.active_thingies);
+            slot_order(&mut sa.st.fog_thingies, &mut sa.st.active_fog_thingies);
+            let n = sa.st.finder.count;
+            for v in [&mut sa.st.finder.x, &mut sa.st.finder.y] {
+                v[n..].fill((0, 0));
+            }
+            // Both run 0x4d9950's start (`init_steps`), then save again and play on.
+            sa.init_steps();
+            sb.init_steps();
+            if let Ok(p) = std::env::var("SCBW_SAVETEST_DUMP") {
+                let dump = |st: &bw::State| format!("{st:#?}");
+                std::fs::write(format!("{p}.a"), dump(&sa.st))?;
+                std::fs::write(format!("{p}.b"), dump(&sb.st))?;
+            }
+            let s1 = sa.save_file(b"savetest", true).ok_or_else(|| std::io::Error::other("save failed"))?;
+            let s2 = sb.save_file(b"savetest", true).ok_or_else(|| std::io::Error::other("second save failed"))?;
+            if let Ok(p) = std::env::var("SCBW_SAVEOUT") {
+                std::fs::write(format!("{p}.1"), &s1)?;
+                std::fs::write(format!("{p}.2"), &s2)?;
+            }
+            match s1.iter().zip(&s2).position(|(x, y)| x != y) {
+                None if s1.len() == s2.len() => println!("save {} bytes: resave SAME", s1.len()),
+                p => println!("save {} / {} bytes: resave DIFF at {:#x}", s1.len(), s2.len(), p.unwrap_or(s1.len().min(s2.len()))),
+            }
+            let mut cb = ca;
+            for f in at..at + more {
+                play(&mut sa, &mut ca, f);
+                play(&mut sb, &mut cb, f);
+                if let Some(p) = std::env::var("SCBW_SAVETEST_DUMPAT").ok().filter(|v| *v == f.to_string()) {
+                    std::fs::write(format!("{p}.da"), format!("{:#?}", sa.st))?;
+                    std::fs::write(format!("{p}.db"), format!("{:#?}", sb.st))?;
+                }
+                // A load rebuilds some lists in slot order (bullets 0x48a720, images, sprites,
+                // fog thingies), as 1.16.1's does: entries within a line compare unordered.
+                let norm = |t: Vec<String>| -> Vec<String> {
+                    t.into_iter()
+                        .map(|l| {
+                            // Slot numbers differ once a unit is made after the load (0x49e1f0
+                            // rebuilds the free list): drop them (u<n>, tgt <n>, t<n>).
+                            let mut w: Vec<String> = Vec::new();
+                            let mut skip = false;
+                            for x in l.split(' ') {
+                                if skip { skip = false; continue; }
+                                if x == "tgt" { skip = true; continue; }
+                                if x.len() > 1 && x.starts_with('u') && x[1..].bytes().all(|c| c.is_ascii_digit()) { continue; }
+                                w.push(x.split(',').filter(|f| !(f.starts_with('t') && f[1..].bytes().all(|c| c.is_ascii_digit()))).collect::<Vec<_>>().join(","));
+                            }
+                            if l.contains(" bul ") || l.contains(" th ") { w.sort_unstable(); }
+                            w.join(" ")
+                        })
+                        .collect()
+                };
+                let (ta, tb) = (norm(trace(&sa.st, f)), norm(trace(&sb.st, f)));
+                if let Some(k) = (0..ta.len().max(tb.len())).find(|&k| ta.get(k) != tb.get(k)) {
+                    println!("DIFF f{f}\n  orig   {:?}\n  loaded {:?}", ta.get(k), tb.get(k));
+                    return Ok(());
+                }
+            }
+            println!("MATCH {} frames after f{at}", more);
         }
         Some("reptrace") => {
             // reptrace <rep> <frames> <trace>: play the replay headless, writing the same
@@ -1161,7 +1376,7 @@ fn load_camera_or(default: Option<&std::path::Path>) -> std::collections::HashMa
 pub(crate) fn shot_setup(a: &mut view::Assets, mut g: view::GameSetup, out: &str) -> std::io::Result<()> {
     view::prepare_setup(a, &mut g);
     let a: &view::Assets = a;
-    let mut scene = view::Scene::from_setup(a, &g)?;
+    let mut scene = view::Scene::for_setup(a, &g)?;
     let frames: usize = std::env::var("SCBW_GLUE_SHOT_FRAMES").ok().and_then(|f| f.parse().ok()).unwrap_or(24);
     scene.step();
     for _ in 0..frames {
@@ -1207,13 +1422,27 @@ pub(crate) fn shot_setup(a: &mut view::Assets, mut g: view::GameSetup, out: &str
 pub(crate) fn headless_game(a: &mut view::Assets, mut g: view::GameSetup, spec: &str) -> std::io::Result<Option<view::GameEnd>> {
     view::prepare_setup(a, &mut g);
     let a: &view::Assets = a;
-    let mut scene = view::Scene::from_setup(a, &g)?;
+    let mut scene = view::Scene::for_setup(a, &g)?;
     let mut it = spec.split_whitespace();
     let frames: usize = it.next().and_then(|f| f.parse().ok()).unwrap_or(0);
     for _ in 0..=frames {
         scene.step();
     }
-    match it.next() {
+    let mut word = it.next();
+    // "save <name>": the game saved as the in-game dialog's Ok would (command 6), then
+    // the glue goes on (no game end).
+    if word == Some("save") {
+        let name = it.next().unwrap_or("save");
+        let env = crate::menu::save_env();
+        let path = crate::saveload::save_path(&env.exe_dir, &env.profile, env.multi, env.expansion, false, name)
+            
+            .ok_or_else(|| std::io::Error::other("no save path"))?;
+        let f = scene.save_file(name.as_bytes(), env.multi).ok_or_else(|| std::io::Error::other("save failed"))?;
+        std::fs::write(crate::saveload::host(&path), f)?;
+        eprintln!("saved {path}");
+        return Ok(None);
+    }
+    match word.take() {
         Some("win") => scene.st.game_options |= 0x80,
         Some("lose") => scene.st.game_options |= 0x40,
         _ => {}

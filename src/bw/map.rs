@@ -2,7 +2,7 @@
 //! minitile walkability map used by region creation (sai_ContoursCreate.cpp).
 
 /// Tileset files the game reads (Tileset\<name>.vf4 / .cv5).
-#[derive(Clone, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct TilesetData {
     /// .vf4: 16 minitile flag words per megatile (0x5993d0).
     pub vf4: Vec<u16>,
@@ -36,6 +36,7 @@ impl TilesetData {
     }
 }
 
+#[derive(Debug)]
 pub struct GameMap {
     /// 0x57f1d4 / 0x57f1d6: size in tiles.
     pub width: u16,

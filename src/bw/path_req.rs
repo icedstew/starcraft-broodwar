@@ -74,7 +74,7 @@ impl Path {
     }
 
     /// The path as its 0x80 bytes in the pool (0x6d1a80 entries).
-    fn raw(&self) -> [u8; 0x80] {
+    pub(crate) fn raw(&self) -> [u8; 0x80] {
         let mut b = [0u8; 0x80];
         let pt = |b: &mut [u8; 0x80], o: usize, p: (i16, i16)| {
             b[o..o + 2].copy_from_slice(&p.0.to_le_bytes());
@@ -89,6 +89,33 @@ impl Path {
         b[0x18..0x20].copy_from_slice(&[self.flags, self.wait, self.direction, self.total_regions, self.region_count as u8, self.region_index as u8, self.waypoint_count as u8, self.waypoint_index as u8]);
         b[0x20..].copy_from_slice(&self.data);
         b
+    }
+}
+
+impl Path {
+    /// `raw` inverse: a path from its 0x80 bytes (saved games).
+    pub(crate) fn from_raw(b: &[u8]) -> Path {
+        let i16at = |o: usize| i16::from_le_bytes([b[o], b[o + 1]]);
+        let u32at = |o: usize| u32::from_le_bytes([b[o], b[o + 1], b[o + 2], b[o + 3]]);
+        let mut data = [0u8; 0x60];
+        data.copy_from_slice(&b[0x20..0x80]);
+        Path {
+            start: (i16at(0), i16at(2)),
+            next_waypoint: (i16at(4), i16at(6)),
+            target: (i16at(8), i16at(10)),
+            creation_frame: u32at(0xc),
+            collision_unit: u32at(0x10),
+            speed: u32at(0x14) as i32,
+            flags: b[0x18],
+            wait: b[0x19],
+            direction: b[0x1a],
+            total_regions: b[0x1b],
+            region_count: b[0x1c] as i8,
+            region_index: b[0x1d] as i8,
+            waypoint_count: b[0x1e] as i8,
+            waypoint_index: b[0x1f] as i8,
+            data,
+        }
     }
 }
 

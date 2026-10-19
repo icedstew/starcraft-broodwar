@@ -765,7 +765,7 @@ impl State {
 
     /// 0x4e6180 (EAX = unit, stack = slot): the unit's sprite takes the selected look
     /// (flag 8) and the slot it holds in the selection.
-    fn sprite_select(&mut self, d: &Data, u: u32, slot: u8) {
+    pub(super) fn sprite_select(&mut self, d: &Data, u: u32, slot: u8) {
         let s = self.units[u as usize].sprite as usize;
         let sp = &mut self.sprites[s];
         if d.dat.units.flags[self.units[u as usize].unit_type as usize] & 0x2000_0000 != 0 || sp.flags & 8 == 0 {

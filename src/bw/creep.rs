@@ -562,24 +562,24 @@ impl State {
 /// One creep-recession node (0x659b10, 0x400 of 0x14 bytes).
 #[derive(Clone, Copy, Debug)]
 pub struct RecedeNode {
-    next: u32,
-    prev: u32,
-    hnext: u32,
-    hprev: u32,
-    x: u8,
-    y: u8,
+    pub(crate) next: u32,
+    pub(crate) prev: u32,
+    pub(crate) hnext: u32,
+    pub(crate) hprev: u32,
+    pub(crate) x: u8,
+    pub(crate) y: u8,
     /// Neighbour-count bucket 0..=8, 9 = free.
-    bucket: u8,
+    pub(crate) bucket: u8,
 }
 
 /// Creep tiles waiting to recede (0x47d660): buckets by creep-neighbour count
 /// (0x658ae8, counts 0x65eb14; bucket 9 is the free list) and a tile hash (0x658b10).
 #[derive(Clone, Debug)]
 pub struct Recession {
-    nodes: Vec<RecedeNode>,
-    heads: [u32; 10],
-    counts: [u16; 10],
-    hash: Vec<u32>,
+    pub(crate) nodes: Vec<RecedeNode>,
+    pub(crate) heads: [u32; 10],
+    pub(crate) counts: [u16; 10],
+    pub(crate) hash: Vec<u32>,
 }
 
 impl Recession {

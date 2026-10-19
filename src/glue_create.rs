@@ -1758,6 +1758,23 @@ impl Glue {
     /// start `view` runs; 0x4d9950 (the game loop), 0x4ee8c0 and the score screen after it
     /// are not ported.
     pub fn begin_game(&mut self, files: &Storage) -> Option<crate::view::GameSetup> {
+        // A saved game (the load screen, 0x4b6490 -> 0x4cf950): 0x4ef100 reads the file's state
+        // instead of setting the game up.
+        if let Some(save) = self.save.take() {
+            return Some(crate::view::GameSetup {
+                chk: Vec::new(),
+                mpq: None,
+                types: [0; 12],
+                races: [0; 12],
+                names: Default::default(),
+                colors: [0; 8],
+                template: [0; 0x20],
+                local: 0,
+                seed: 0,
+                objectives: self.objectives,
+                save: Some(save),
+            });
+        }
         self.race_picks_apply();
         // 0x51ca10 = time (a debug seed from SCBW_SEED); 0x51ca14 = 0x51ca10.
         let seed = std::env::var("SCBW_SEED").ok().and_then(|s| s.parse().ok()).unwrap_or_else(|| {
@@ -1784,6 +1801,7 @@ impl Glue {
             local: self.setup.local_slot[0] as u8,
             seed,
             objectives: self.objectives,
+            save: None,
         })
     }
 }
