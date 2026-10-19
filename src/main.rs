@@ -1193,6 +1193,33 @@ pub(crate) fn shot_setup(a: &mut view::Assets, mut g: view::GameSetup, out: &str
     write_png_rgb(out, w, h, &rgb)
 }
 
+/// Test hook (`scbw glue <png>` with SCBW_GLUE_GAME="<frames>[ win|lose]"): runs the game
+/// headless for that many frames, ends it for the local player like the 0x6d5a6c cheat
+/// bits 0x80 (victory, "there is no cow level") / 0x40 (defeat) do in 0x48a200, runs on to
+/// the end dialog request (0x48a410) and takes the dialog's OK (result 6 / 7, 0x4e0710).
+pub(crate) fn headless_game(a: &mut view::Assets, mut g: view::GameSetup, spec: &str) -> std::io::Result<Option<view::GameEnd>> {
+    view::prepare_setup(a, &mut g);
+    let a: &view::Assets = a;
+    let mut scene = view::Scene::from_setup(a, &g)?;
+    let mut it = spec.split_whitespace();
+    let frames: usize = it.next().and_then(|f| f.parse().ok()).unwrap_or(0);
+    for _ in 0..=frames {
+        scene.step();
+    }
+    match it.next() {
+        Some("win") => scene.st.game_options |= 0x80,
+        Some("lose") => scene.st.game_options |= 0x40,
+        _ => {}
+    }
+    for _ in 0..3000 {
+        if std::mem::take(&mut scene.st.trig.end_request) != 0 {
+            return Ok(Some(scene.game_end()));
+        }
+        scene.step();
+    }
+    Ok(None)
+}
+
 fn load_chk(path: &str) -> std::io::Result<map::Chk> {
     Ok(map::Chk::parse(&load_chk_raw(path)?))
 }

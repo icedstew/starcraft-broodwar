@@ -35,17 +35,20 @@ Delegate per agents.md: Haiku triage, Sonnet porting, Opus review / hard RE / co
 
 ## In flight
 
-- Campaign (user 2026-10-18: "play through the campaign"): race click -> mission list
-  (0x4b7820 / 0x4b6530) -> 0x4dbfc0 / 0x4d3fc0 game creation -> mission text works
-  (`SCBW_GLUE_INPUT` path in areas/ui.md). Next blocker: the ready room / briefing
-  (porter running; runner RE in areas/ui.md "Mission briefing"). Then the cinematics
-  0x4f7ae0 / 0x4d4470, the UMS player shuffle 0x4a9c90 / 0x4a95d0 (todo hit by every UMS
-  new game), victory -> next mission check.
+- Campaign (user 2026-10-18: "play through the campaign"): works end to end headless
+  (areas/ui.md "Campaign headless"): race click -> mission list 0x4b7820 -> mission text ->
+  briefing (src/glue_ready.rs, MBRF triggers, portraits) -> Start -> game -> victory ->
+  score -> next mission text / briefing; defeat restarts. Cinematics src/glue_cine.rs.
+  Left: button slide-in 0x4dd5e0, briefing wav stop 0x4015f0, briefing objectives into
+  the game's 0x58d6c4, cinematic scaling unchecked vs native, first-start intro flags,
+  save / load (deferred). Not yet checked in a real window by the user.
 - Team games (user: "support team melee"): `State.multiplayer` (0x57f0b4) replaces the
   const; team start 0x49d8e0, CTF 0x4aba20 / 0x4ab980, 0x484ff0 leaders, init_gamedata
   wired. `SCBW_TEAMS=11` on `shot` / `view` forces one (runs, unverified). In 1.16.1 team
   behaviour needs a network game; no team replay exists locally: recording one natively
-  (LAN, ~/games/Starcraft/broodwar-reps-team/).
+  (LAN, two clients in network namespaces: ~/games/Starcraft/broodwar-reps-team/
+  tm1.rep, NOTES.txt); repcmp MATCH to the end (8375). Native shots: in progress.
+  1.16.1 replay file names must be short ("filename is too long").
 
 - 2026-10-18 late (Haiku triage -> Sonnet porters -> Opus review): credits / mission text
   screen (src/glue_credits.rs, 0x4d8df0 cluster; checked by `scbw glue`, not vs native),

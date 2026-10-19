@@ -107,3 +107,9 @@ Read when working on the HUD, dialogs, menus or glue screens.
   0x46cfd0 (teardown), type 2 code 0xe -> 0x46d160 (dispatch on 0x6d051c: 0xd ->
   0x46d090(0), 0xe -> 0x46d090(1) + 0x46ca90 + 0x4dd040, 0x14 -> 0x46cbc0 restart),
   event 0xa -> 0x46d3c0 init, 0x405 -> frame images 0x4f70f0 / 0x4f7450 / 0x4f77b0.
+- Campaign headless: `SCBW_GLUE_GAME="<frames>[ win|lose]"` with `scbw glue <png>`: the
+  game runs headless, then ends by the cheat bits 0x80 / 0x40 (0x48a200 -> result 3 / 2)
+  and the glue script continues (score screen Ok at 555,445, next mission text / ready
+  room). Delete the characters dir before each run (progress changes the flow). Without
+  it, glue screenshot mode stops at game start (`shot_setup`), and script keys typed
+  before then go to the ready room (its hotkeys fire). Waits are wall-clock: be generous.

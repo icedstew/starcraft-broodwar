@@ -2541,6 +2541,14 @@ pub fn run(files: &Storage, shot: Option<&str>) -> std::io::Result<()> {
                 // result in 0x596904) are not ported.
                 let Some(g) = glue.begin_game(files) else { return Ok(()) };
                 let mut a = crate::view::Assets::load(crate::storage::Storage::open(&crate::install_dir())?)?;
+                if let (Some(_), Ok(spec)) = (shot, std::env::var("SCBW_GLUE_GAME")) {
+                    glue.game_end = crate::headless_game(&mut a, g, &spec)?;
+                    match &glue.game_end {
+                        Some(e) => glue.state = if e.results[e.local as usize] == 2 { 7 } else { 6 },
+                        None => return Ok(()),
+                    }
+                    continue;
+                }
                 if let Some(out) = shot {
                     return crate::shot_setup(&mut a, g, out);
                 }
