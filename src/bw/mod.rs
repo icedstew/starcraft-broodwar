@@ -277,6 +277,8 @@ pub struct State {
     pub multiplayer: bool,
     /// 0x57f1e3: a campaign map continues into the next (the glue's 0x51ca1c).
     pub camp_cont: u8,
+    /// 0x57f244: the campaign mission number (0 outside campaigns).
+    pub mission: u16,
     /// 0x57f240: the real-time seconds of the game when it was saved (0x4d02d0); loaded, they
     /// start the timer 0x6d5bcc again (0x4ef100).
     pub game_secs: u32,
@@ -530,6 +532,7 @@ impl State {
             template: [0; 0x20],
             multiplayer: false,
             camp_cont: 0,
+            mission: 0,
             game_secs: 0,
             seat_races: [0; 8],
             team_leaders: [0xff; 5],

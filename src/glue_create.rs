@@ -2306,6 +2306,7 @@ impl Glue {
                 objectives: self.objectives,
                 save: Some(save),
                 camp_cont: false,
+                mission: self.setup.map_dir_flag,
             });
         }
         self.race_picks_apply();
@@ -2340,6 +2341,7 @@ impl Glue {
             objectives: self.objectives,
             save: None,
             camp_cont: self.camp_cont,
+            mission: self.setup.map_dir_flag,
         })
     }
 }

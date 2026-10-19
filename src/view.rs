@@ -290,6 +290,7 @@ impl<'a> Scene<'a> {
         // 0x4dbea0 / 0x4a8590: 0x57f1e3 = the glue's campaign-continues flag.
         if let Some(g) = gs {
             st.camp_cont = g.camp_cont as u8;
+            st.mission = g.mission;
         }
         if let Some((f, _, _, _)) = save {
             if !load_save(a, &mut st, f) {
@@ -1269,7 +1270,7 @@ impl<'a> Scene<'a> {
         let Some(ps) = ui.portraits.as_ref() else { return };
         self.portrait.borrow_mut().animate = mode == 2;
         if let Some(&(t, len)) = started.last() {
-            if let Some(p) = Some(self.a.dat().units.portrait[t as usize]).filter(|&p| p < 110 && mode != 0) {
+            if let Some(p) = Some(crate::portrait::unit_portrait(&self.a.dat().units.portrait, self.st.mission, t)).filter(|&p| p < 110 && mode != 0) {
                 self.talk_left = len;
                 self.talk_unit = None;
                 self.portrait.borrow_mut().show_talking(ps, &self.a.files, p);
@@ -1277,7 +1278,7 @@ impl<'a> Scene<'a> {
         }
         // 0x45ea30: the generic advisor portrait (0x52) takes the unit owner's color.
         let portrait = |s: &Self, u: u32| {
-            let p = s.a.dat().units.portrait[s.st.units[u as usize].unit_type as usize];
+            let p = crate::portrait::unit_portrait(&s.a.dat().units.portrait, s.st.mission, s.st.units[u as usize].unit_type);
             let p = if p == 0x52 { s.st.advisor_portrait(s.st.sprites[s.st.units[u as usize].sprite as usize].owner) } else { p };
             Some(p).filter(|&p| p < 110 && mode != 0)
         };
@@ -1422,6 +1423,8 @@ pub struct GameSetup {
     pub save: Option<Vec<u8>>,
     /// 0x51ca1c: a campaign map continues (the game's 0x57f1e3).
     pub camp_cont: bool,
+    /// 0x57f244: the campaign mission (0 outside campaigns).
+    pub mission: u16,
 }
 
 /// Engine state for a new game on `chk` (map load, players, melee starting units), or

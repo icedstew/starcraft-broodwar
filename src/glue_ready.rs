@@ -639,16 +639,9 @@ impl Glue {
     /// replacements) shows with its first frame.
     fn ready_46cf30(&mut self, files: &Storage, slot: u8, unit: u16) {
         let id = ids::PORT_FIRST + slot as i16;
-        let table = |g: &Glue, u: usize| g.ready.unit_portrait.get(u).copied().unwrap_or(0);
-        let mut p = table(self, unit as usize);
-        let mission = self.setup.map_dir_flag;
-        if p == 0x26 {
-            if mission > 0x1f {
-                p = table(self, 152);
-            }
-        } else if p == 0x3c && mission > 0x1b {
-            p = table(self, 78);
-        }
+        // 0x45e320 (units.dat missing or `unit` out of range: 0).
+        let t = &self.ready.unit_portrait;
+        let p = if (unit as usize) < t.len() && t.len() > 152 { crate::portrait::unit_portrait(t, self.setup.map_dir_flag, unit) } else { 0 };
         if let Some(st) = self.ready_port(id) {
             st.video = None;
             st.flags = 2;

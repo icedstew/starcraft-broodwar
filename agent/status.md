@@ -228,7 +228,11 @@ Delegate per agents.md: Haiku triage, Sonnet porting, Opus review / hard RE / co
   2026-10-19 wave 8: start resources 0x4aabf0 (template[9] = 1: template[0x17] minerals),
   trigger list reset 0x4893c0, statfluf dialogs 0x4f4dc0 (loaded, not drawn), map download
   protocol bucketed as network. Wave 9 (workflow): statdata / statcmd / statport / opt_dlgs
-  / fd_user clusters.
+  / fd_user clusters: 0x45e320 campaign portrait swap (`portrait::unit_portrait`, wired in
+  view.rs and glue_ready.rs; `State.mission` = 0x57f244 from GameSetup), slot / force
+  helpers 0x45a8b0..0x45ade0 (saveload.rs), statcmd.rs tooltip cache 0x4597c0 / 0x459860,
+  statdata.rs 0x457de0.. cache, 0x456e00, portrait.rs 0x45e4c0..0x45e710: all unwired
+  (no caller yet). opt_dlgs: equivalents, gaps checked in wave 10.
   Open: 0x49cc40 (would fill `seat_races` 0x57f1c0 in slot order, clashes with the
   SCBW_TEAMS hack), 0x4b6810 (popup text set even when empty, proc 0x4b67f0), 0x48da30
   (placement surface from frame bytes +8/+9 vs grp size), 0x4b4a00 (0x4dd9e0 0xf4 call),

@@ -316,3 +316,50 @@ pub fn open_save(exe_dir: &str, profile: &[u8], multi: bool, expansion: bool, na
     let path = find_file(&dir, &n)?;
     open_file(&path, multi, g)
 }
+
+/// 0x45a8b0 (__fastcall, AL = `start`, DL = `force`): the first slot of the 8 (offset 0x57eee0,
+/// stride 0x24) of type 6 in force `force`, searching round-robin from `start + 1`; 8 if none.
+pub fn next_slot_in_force(slots: &[[u8; 0x24]], start: u8, force: u8) -> u8 {
+    let mut i = start.wrapping_add(1) as u32;
+    for _ in 0..8 {
+        let s = &slots[(i & 7) as usize];
+        if s[0xa] == force && s[8] == 6 {
+            return (i & 7) as u8;
+        }
+        i += 1;
+    }
+    8
+}
+
+/// 0x45a900 (__fastcall, DL = `force`): the index of the first of the 8 slots of type 6 in
+/// force `force`; 8 if none.
+pub fn first_type6_slot_in_force(slots: &[[u8; 0x24]], force: u8) -> u8 {
+    slots[..8].iter().position(|s| s[0xa] == force && s[8] == 6).unwrap_or(8) as u8
+}
+
+/// 0x45a920 (__fastcall, CL = `force`): whether any of the 8 slots of type 5 is in force `force`.
+pub fn force_has_type5_slot(slots: &[[u8; 0x24]], force: u8) -> bool {
+    slots[..8].iter().any(|s| s[0xa] == force && s[8] == 5)
+}
+
+/// 0x45ad20: the force 1..=4 with the most type 6 slots (the lower force on a tie); 0 if none.
+pub fn force_with_most_type6(slots: &[[u8; 0x24]]) -> u8 {
+    let (mut best, mut best_n) = (0u8, 0u8);
+    for f in 1..=4u8 {
+        let n = slots[..8].iter().filter(|s| s[0xa] == f && s[8] == 6).count() as u8;
+        if n > best_n {
+            best = f;
+            best_n = n;
+        }
+    }
+    best
+}
+
+/// 0x45ade0: the first type 6 slot of the force with the most of them (0x45ad20); 0xff when
+/// there is no such force, 8 when none is found.
+pub fn first_slot_of_largest_force(slots: &[[u8; 0x24]]) -> u8 {
+    match force_with_most_type6(slots) {
+        0 => 0xff,
+        f => first_type6_slot_in_force(slots, f),
+    }
+}

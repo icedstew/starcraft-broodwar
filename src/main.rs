@@ -26,6 +26,7 @@ mod map;
 mod mpq;
 mod replay;
 mod replay_rec;
+mod statcmd;
 mod statdata;
 mod palette;
 mod parallax;

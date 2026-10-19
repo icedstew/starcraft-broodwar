@@ -3,6 +3,7 @@
 
 use crate::bw::list::NIL;
 use crate::bw::{Data, State};
+use crate::todo_port;
 
 /// What a shown control displays.
 #[derive(Clone, Debug, PartialEq)]
@@ -597,4 +598,71 @@ pub fn morph_panel(st: &State, d: &Data, strings: &[String], u: u32) -> Option<V
         }
         _ => None,
     }
+}
+
+/// The status panel's refresh state (0x68c1e8 / 0x68c1ec cache, 0x68c1f8 dirty flag).
+/// Not wired into the Rust panel, which redraws every frame.
+#[allow(dead_code)]
+pub struct StatCache {
+    /// 0x68c1e8: the control the tooltip was last built for (0 = none).
+    pub control: u32,
+    /// 0x68c1ec: that control's data at +0x26 (-1 = none).
+    pub data: u32,
+    /// 0x68c1f8.
+    pub dirty: bool,
+}
+
+#[allow(dead_code)]
+impl StatCache {
+    /// 0x457de0: `control` (ESI) with its data at +0x26 and +0x32 value; `current` = 0x418340
+    /// (the control under the cursor, 0 if none); `replay_flag` = 0x6509c4. Returns the value
+    /// to pass to 0x457ce0 (the tooltip) when the cache changed; otherwise a cleared cache
+    /// hides the tooltip (0x481480).
+    pub fn update(&mut self, control: u32, data: u32, arg: u32, current: u32, replay_flag: bool) -> Option<u32> {
+        if !replay_flag && control == current {
+            if control != self.control {
+                self.data = data;
+                self.control = control;
+                return Some(arg);
+            }
+            return None;
+        }
+        self.control = 0;
+        self.data = 0xffff_ffff;
+        todo_port!("0x481480", "hide the tooltip");
+        None
+    }
+
+    /// 0x457e40 (`arg` = EAX) and 0x457fe0 (`arg` = the statdata dialog 0x68c1f0): the
+    /// cursor control `current` (0x418340, or 0 when 0x6509c4 is set) with its data at +0x26;
+    /// returns `arg` for 0x457ce0 when the control or its data changed.
+    pub fn update_cursor(&mut self, current: u32, data: u32, arg: u32) -> Option<u32> {
+        if current != self.control || (current != 0 && data != self.data) {
+            if current != 0 {
+                self.data = data;
+            }
+            self.control = current;
+            return Some(arg);
+        }
+        None
+    }
+
+    /// 0x4584c0: a refresh request.
+    pub fn request_refresh(&mut self) {
+        todo_port!("0x418100", "refresh the dialog");
+        todo_port!("0x4c35f0", "refresh");
+        self.dirty = true;
+    }
+}
+
+/// 0x456e00: the command-button background frame of the control rect `r` (left, top,
+/// right, bottom): cmdbtns.grp frame 11 if the grp has more than 11 frames, else 0,
+/// clipped to the control, centered horizontally, at the top.
+#[allow(dead_code)]
+pub fn top_frame(ui: &crate::ui::Ui, r: (i32, i32, i32, i32), out: &mut [u8]) {
+    let (l, t, rr, b) = r;
+    let i = if ui.cmdbtns.frame(11).is_some() { 11 } else { 0 };
+    let Some(f) = ui.cmdbtns.frame(i) else { return };
+    let (fw, fh) = (f.w.min(rr - l + 1), f.h.min(b - t + 1));
+    crate::view::blit_frame(&ui.cmdbtns, i, l + (rr - fw - l) / 2, t, fw, fh, None, out, crate::view::SCREEN_W, crate::view::SCREEN_H);
 }

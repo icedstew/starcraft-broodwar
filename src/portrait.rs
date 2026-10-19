@@ -3,7 +3,23 @@
 //! talking 110..220) for the status unit's units.dat portrait, played by Storm's SVid.
 
 use crate::smk::Smk;
+use crate::todo_port;
 use crate::storage::Storage;
+
+/// 0x45e320: the portrait id of unit type `t` from units.dat's portrait table (0x662f88),
+/// with the campaign mission 0x57f244 (`mission`) swapping portrait 0x26 for the entry
+/// 0x6630b8 (table[152]) above mission 0x1f and 0x3c for 0x663024 (table[78]) from mission 0x1c.
+pub fn unit_portrait(table: &[u16], mission: u16, t: u16) -> u16 {
+    let p = table[t as usize];
+    if p == 0x26 {
+        if mission > 0x1f {
+            return table[152];
+        }
+    } else if p == 0x3c && mission >= 0x1c {
+        return table[78];
+    }
+    p
+}
 
 pub struct Portraits {
     /// arr\portdata.dat file ids (portdata.tbl strings, 1-based) and the names.
@@ -54,11 +70,14 @@ pub struct Player {
     rng: Option<[u32; 3]>,
     /// The palette the translation was made for, and the translation.
     remap: Option<([[u8; 3]; 256], [u8; 256])>,
+    /// 0x6d5ca8: frames the video still has to run although the mode is not 2 (set to 1 by
+    /// `begin`, so a still portrait shows its first frame).
+    pub wait: u32,
 }
 
 impl Default for Player {
     fn default() -> Self {
-        Player { portrait: None, talking: false, animate: true, last_talk: 0, video: None, elapsed: 0, rng: None, remap: None }
+        Player { portrait: None, talking: false, animate: true, last_talk: 0, video: None, elapsed: 0, rng: None, remap: None, wait: 0 }
     }
 }
 
@@ -76,6 +95,64 @@ impl Player {
             if r < max.wrapping_sub(min).wrapping_add(1) {
                 return r + min;
             }
+        }
+    }
+
+    /// 0x45e510: start a video. The out handle (`video`) is cleared; `mode` is 0x515224
+    /// (0: no portraits, returns false), else 0x6d5ca8 = 1 and the SVid begin (Ordinal_454,
+    /// done by `Smk::parse` in `open`) follows.
+    pub fn begin(&mut self, mode: u8) -> bool {
+        self.video = None;
+        if mode == 0 {
+            return false;
+        }
+        self.wait = 1;
+        true
+    }
+
+    /// 0x45e4c0: the video step. `mode` is 0x515224; `stepped` is the result of the SVid
+    /// step (Ordinal_457) and is only consulted when the mode is 2 or `wait` is set.
+    /// Returns false when disabled or the step failed.
+    pub fn step(&mut self, mode: u8, stepped: bool) -> bool {
+        if mode == 0 {
+            return false;
+        }
+        if mode == 2 || self.wait != 0 {
+            if !stepped {
+                return false;
+            }
+            if self.wait != 0 && self.video.is_some() {
+                self.wait -= 1;
+            }
+        }
+        true
+    }
+
+    /// 0x45e710: teardown. Frees the video (Ordinal_458) and the portrait buffer
+    /// 0x6d5c9c (Rust ownership); the control 0x68ac8c is destroyed by 0x419ea0.
+    pub fn close(&mut self) {
+        self.video = None;
+        todo_port!("0x419ea0", "destroy the portrait control 0x68ac8c");
+    }
+
+    /// 0x45e570: the static drawn into the portrait rect `[x1, y1, x2, y2]` of the 8-bit
+    /// screen `out` (`sw` wide): each pixel whose roll (0..=100) is at least `threshold`
+    /// takes a random one of the first 16 interface colors (0x6ceb20, `colors`).
+    pub fn draw_static(&mut self, ps: &Portraits, threshold: u8, rect: [i16; 4], colors: &[u8], out: &mut [u8], sw: i32) {
+        let w = rect[2] as i32 - rect[0] as i32 + 1;
+        let h = rect[3] as i32 - rect[1] as i32 + 1;
+        let mut at = rect[1] as i32 * sw + rect[0] as i32;
+        for _ in 0..h.max(0) {
+            for _ in 0..w.max(0) {
+                if self.rand(ps, 128, 100, 0) >= threshold as u32 {
+                    let c = colors[self.rand(ps, 16, 15, 0) as usize];
+                    if let Some(px) = usize::try_from(at).ok().and_then(|i| out.get_mut(i)) {
+                        *px = c;
+                    }
+                }
+                at += 1;
+            }
+            at += sw - w;
         }
     }
 

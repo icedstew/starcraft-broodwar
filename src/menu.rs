@@ -463,6 +463,36 @@ fn disable(dlg: &mut Dialog, id: i16) {
     }
 }
 
+/// 0x4e18c0 (ESI = the control): the first box of its option run, found by stepping to the
+/// sibling whose id is one below while that one is a type 3 control.
+fn option_first(dlg: &Dialog, mut i: usize) -> usize {
+    loop {
+        let id = dlg.controls[i].id;
+        match dlg.controls.iter().position(|c| c.id == id.wrapping_sub(1)) {
+            Some(j) if dlg.controls[j].ty == 3 => i = j,
+            _ => return i,
+        }
+    }
+}
+
+/// 0x4e1900 (EAX = ESI = the clicked option box): clears the boxes of the run from its
+/// first one (0x4e18c0) up through the following ids while they are type 3 (marking each
+/// for redraw, flag 1 + 0x41c400), then selects the clicked one.
+fn option_click(dlg: &mut Dialog, i: usize) {
+    let mut j = option_first(dlg, i);
+    loop {
+        let c = &mut dlg.controls[j];
+        c.checked = false;
+        c.flags |= 1;
+        let next = c.id.wrapping_add(1);
+        match dlg.controls.iter().position(|c| c.id == next) {
+            Some(k) if dlg.controls[k].ty == 3 => j = k,
+            _ => break,
+        }
+    }
+    dlg.controls[i].checked = true;
+}
+
 /// What `option_event` leaves to the caller.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum OptionAct {
@@ -972,9 +1002,7 @@ impl Menu {
                 None
             }
             3 => {
-                for c in self.dlg.controls.iter_mut().filter(|c| c.ty == 3) {
-                    c.checked = c.id == id;
-                }
+                option_click(&mut self.dlg, i);
                 self.store(set);
                 None
             }
