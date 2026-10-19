@@ -176,6 +176,9 @@ pub enum Open {
     CampaignExp,
     /// 0x4b6490: rez\gluLoad.bin, event proc 0x4b6410.
     Load,
+    /// 0x4b5b20 from 0x4b27a0 / 0x4b5110 (campaign button `idx` with advice): the question
+    /// rez\gluPOkCancel.bin (0x4b73b0); Ok starts the campaign (0x4dc0b0).
+    Advice(u8),
     /// 0x4b6e50 from 0x4ed940 (New ID): rez\gluPEdit.bin, event proc 0x4b6cc0.
     NewId,
     /// 0x4b7820: rez\gluHist.bin (the campaign's mission list), event proc 0x4b6e10.
@@ -633,7 +636,7 @@ impl Glue {
     /// 0x4b26e0 (classic) / 0x4b5050 (Brood War): the advice for each campaign button from
     /// the player's profile: -10 when the race's first campaign was not started, -11 / -12
     /// when the other campaigns are not done (the messages network.tbl 0x8d ..).
-    fn campaign_precheck(&mut self, exp: bool) {
+    fn campaign_precheck(&mut self, files: &Storage, exp: bool) {
         self.campaign_advice[exp as usize] = [0; 3];
         self.setup.multiplayer = self.multiplayer;
         let (p, ok) = self.setup.load_profile(self.player_name.as_bytes());
@@ -641,7 +644,7 @@ impl Glue {
             let default = self.network.get(0x47).map(String::as_str).unwrap_or_default();
             // 0x6d5a10 is 0 here (0x4de200's main menu case clears it).
             if !self.player_name.eq_ignore_ascii_case(default) {
-                todo_port!("0x4bb300", "error popup (string 0x58)");
+                self.error_popup(files, 0x58);
             }
             return;
         }
@@ -672,7 +675,7 @@ impl Glue {
     fn open_campaign(&mut self, files: &Storage, exp: bool) {
         // 0x6d11c0 = 0, 0x57f0b4 = 0.
         self.multiplayer = false;
-        self.campaign_precheck(exp);
+        self.campaign_precheck(files, exp);
         let bin = if exp { "rez/gluExpCmpgn.bin" } else { "rez/gluCmpgn.bin" };
         let dlg = self.open_glue_dialog(files, bin);
         self.dlg = Some((dlg, if exp { Open::CampaignExp } else { Open::Campaign }));
@@ -721,8 +724,11 @@ impl Glue {
     fn campaign_check(&mut self, files: &Storage, idx: usize, exp: bool) -> bool {
         if self.campaign_advice[exp as usize][idx] != 0 {
             let k = if exp { 0x8e + (idx != 1) as usize } else { 0x8c + (idx == 2) as usize };
-            let _text = self.network.get(k).cloned().unwrap_or_default();
-            todo_port!("0x4b5b20", "OK / Cancel confirmation (GLUEOKCANCEL_BIN) with the advice; taken as OK");
+            let text = self.network.get(k).cloned().unwrap_or_default();
+            // 0x4b5b20: with a dialog open (always here) it is 0x4b73b0; Ok (`activate`)
+            // continues with 0x4dc0b0.
+            self.open_ok_cancel(files, &text, Open::Advice(idx as u8));
+            return false;
         }
         self.campaign_start(files, idx)
     }
@@ -742,7 +748,7 @@ impl Glue {
             match created {
                 Some(n) => p = n,
                 // 0x6d5a10 is 0 here.
-                None => todo_port!("0x4bb300", "error popup (string 0x58)"),
+                None => self.error_popup(files, 0x58),
             }
         }
         // 0x4b7820 (ECX = the race's record list, EAX = the profile's best mission).
@@ -957,7 +963,7 @@ impl Glue {
             }
         }
         // 0x6d5a10 is 0 here.
-        todo_port!("0x4bb300", "error popup (string 0x6a)");
+        self.error_popup(files, 0x6a);
         self.screen = back;
         false
     }
@@ -2042,6 +2048,56 @@ impl Glue {
         self.popup = Some((dlg, open));
     }
 
+    /// 0x4bb300 (EAX = line, ECX = file, EDX = debug text, all 0 at the callers; stack =
+    /// the network.tbl string `id`, 1-based): an error popup. With the palette blanked or
+    /// no dialog it only stores the error (0x4bb1a0); in a game (0x4e4a10) or with the
+    /// glue screen 4 (0x448ec0, a message box) other paths; else 0x4b5cc0 with no title,
+    /// which is 0x4b59a0.
+    fn error_popup(&mut self, files: &Storage, id: usize) {
+        if self.pal_blank || (self.dlg.is_none() && self.popup.is_none()) {
+            todo_port!("0x4bb1a0", "store the error text (0x6d5a14 ..)");
+            return;
+        }
+        if self.state == state::GAME {
+            todo_port!("0x4e4a10", "the in-game error message");
+            return;
+        }
+        if self.screen == 4 {
+            todo_port!("0x448ec0", "the error message box (palette 4)");
+            return;
+        }
+        let msg = self.network.get(id - 1).cloned().unwrap_or_default();
+        self.open_error(files, &msg);
+    }
+
+    /// 0x4b55a0 (after 0x4b5450 loaded the resource picture `name` of type 0x1b5d): every
+    /// pixel becomes the index of the nearest color (0x4b53d0: least sum of squared
+    /// channel differences, the first on ties, 0 distance ends) of the glue palette.
+    fn error_picture(&mut self, files: &Storage, name: &str) -> Option<(i32, i32, Vec<u8>)> {
+        let d = exe_resource(0x1b5d, name)?;
+        let ipal = pcx_palette(&d);
+        let (w, h, mut px) = crate::view::pcx(&d);
+        let p = self.palette_id();
+        let pal = self.look(files, p).pal;
+        for v in px.iter_mut() {
+            let c = ipal[*v as usize];
+            let (mut best, mut bi) = (u32::MAX, 0usize);
+            for (i, q) in pal.iter().enumerate() {
+                let dist: u32 = (0..3).map(|k| (q[k] as i32 - c[k] as i32).pow(2) as u32).sum();
+                if dist == 0 {
+                    bi = i;
+                    break;
+                }
+                if dist < best {
+                    best = dist;
+                    bi = i;
+                }
+            }
+            *v = bi as u8;
+        }
+        Some((w as i32, h as i32, px))
+    }
+
     /// 0x4b59a0: an error message. With a dialog already open (and no error shown yet)
     /// it is the glue popup 0x4b7180; else GLUEOK_BIN from the exe.
     pub fn open_error(&mut self, files: &Storage, msg: &str) {
@@ -2063,10 +2119,7 @@ impl Glue {
         }
         // 0x4b57b0 (event 10): the title in id 2, the text in id 5; the picture of the
         // dialog comes from the resource 0x1b5d (0x4b5450).
-        let Some(bin) = exe_resource(0x1b5c, "GLUEOK_BIN") else {
-            todo_port!("0x4b59a0", "GLUEOK_BIN resource of StarCraft.exe");
-            return;
-        };
+        let Some(bin) = exe_resource(0x1b5c, "GLUEOK_BIN") else { crate::bw::fatal_error("GLUEOK_BIN") };
         let mut dlg = Dialog::parse(&bin);
         dlg.this.flags |= 4;
         let (a, b) = if title.is_empty() { (msg, "") } else { (title, msg) };
@@ -2076,7 +2129,11 @@ impl Glue {
         if let Some(c) = dlg.get_mut(5) {
             c.text = b.as_bytes().to_vec();
         }
-        todo_port!("0x4b55a0", "the error dialog's picture from the exe's resources");
+        dlg.bg = self.error_picture(files, "GLUEOK_PCX");
+        // Event 7 (0x4b5920): centered.
+        let (x, y) = ((640 - dlg.this.rect.2) / 2, (480 - dlg.this.rect.3) / 2);
+        dlg.this.rect = (x, y, dlg.this.rect.2 + x, dlg.this.rect.3 + y);
+        todo_port!("0x4b5640", "shrink the text's font until it fits the label");
         self.popup = Some((dlg, if title.is_empty() { Open::Error } else { Open::ErrorSplit }));
     }
 
@@ -2096,6 +2153,15 @@ impl Glue {
                 Open::NewId => {
                     let text = dlg.get(4).map(|c| c.text.iter().copied().take(0x18).collect()).unwrap_or_default();
                     self.login_new_id_done(files, id == 1, text);
+                }
+                Open::Advice(idx) => {
+                    if id == 1 && self.campaign_start(files, idx as usize) {
+                        self.end_dialog(self.activated as i32);
+                        if let Some(r) = self.result.take() {
+                            self.dlg.take();
+                            self.done_campaign(r);
+                        }
+                    }
                 }
                 Open::DeleteChar => self.login_delete_done(id == 1),
                 Open::DeleteSave => self.load_delete_done(id == 1),

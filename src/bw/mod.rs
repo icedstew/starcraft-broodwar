@@ -62,6 +62,7 @@ pub mod minimap;
 pub mod load;
 pub mod rng;
 pub mod sai;
+pub mod implode;
 pub mod save;
 pub mod select;
 pub mod short_path;

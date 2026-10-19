@@ -7,7 +7,6 @@
 //! reader pair lives in its own file under `save/`.
 
 use super::{Data, State};
-use crate::todo_port;
 
 #[path = "save/images.rs"]
 mod images;
@@ -75,11 +74,11 @@ impl Out {
         self.u32(crc32(data));
         self.u32(data.len().div_ceil(0x2000) as u32);
         for c in data.chunks(0x2000) {
-            // ponytail: chunks are stored as is (a form 0x4c3280 reads); the implode
-            // (binary, 1 KB dictionary) only makes the file smaller.
-            todo_port!("0x410b30", "PKWare implode of a saved chunk (stored uncompressed)");
-            self.u32(c.len() as u32);
-            self.bytes(c);
+            // 0x4c3200: binary mode, 1 KB dictionary; stored as is unless smaller.
+            let z = super::implode::implode(c);
+            let z = if z.len() < c.len() { &z[..] } else { c };
+            self.u32(z.len() as u32);
+            self.bytes(z);
         }
         true
     }

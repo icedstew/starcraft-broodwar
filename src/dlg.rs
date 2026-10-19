@@ -231,6 +231,8 @@ pub enum Update {
     /// 0x4d8930: a credits text area: the label with these text flags (0x6ce110) and flag
     /// 0x80000000.
     Credits(u8),
+    /// 0x4f59c0: a message label: its text (if any) with these text flags (0x4ef870).
+    Align(u8),
     /// 0x46c6e0: the ready room's message buffer from its scroll row, over the control.
     BriefText,
     /// 0x44e9e0: a ready room portrait's video buffer, copied into the control.
@@ -1193,6 +1195,12 @@ impl Skin {
                     let rows = (p.h - p.scroll).min(b - t + 1).max(0);
                     let from = (p.scroll.max(0) * p.w) as usize;
                     self.blit(p.px.get(from..).unwrap_or(&[]), p.w, rows, l, t, r, None, true, s);
+                }
+                return;
+            }
+            (Update::Align(align), _) => {
+                if !c.text.is_empty() {
+                    self.ctl_text(c, &c.text, r, 0, 0, align, s);
                 }
                 return;
             }

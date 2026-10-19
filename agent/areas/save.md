@@ -14,7 +14,8 @@ Started 2026-10-18 (user: "do the deferred functions, including saving/loading")
 
 "Packed" = 0x4c3450 / 0x4c3280: crc32 (0x410430), chunk count, per 0x2000-byte chunk its
 stored size + bytes (imploded, or as is when that does not shrink it). `save::Out::packed`
-/ `save::In::packed`. We store chunks as is (todo 0x410b30 implode); 1.16.1 reads that.
+/ `save::In::packed`. Implode 0x410b30 in src/bw/implode.rs (binary, 1 KB dictionary):
+re-imploding 1.16.1 replay chunks gives the same bytes (118/118 checked 2026-10-19).
 
 ## Code
 
@@ -60,7 +61,6 @@ replay's unit handles keep resolving, and gives it the replay's viewer (`replay`
 
 ## Gaps
 
-- Chunks are stored, not imploded (0x410b30): files are larger than 1.16.1's.
 - Old save formats (< 3): bullets 0x48abd0, AI 0x447e20 / script +0xb0 not read.
 - Written as 0 (not kept in Rust): image +0x10..0x17, +0x24, +0x28, modifier 0xb's unit;
   flingy +0x14 / +0x26; bullet +0x25 / +0x26 / +0x52 / +0x54 / +0x6d..; order +9; unit

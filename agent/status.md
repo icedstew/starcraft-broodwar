@@ -43,7 +43,18 @@ Delegate per agents.md: Haiku triage, Sonnet porting, Opus review / hard RE / co
   thingy lists and shares the replay viewer), and headless: campaign mission saved (`SCBW_GLUE_GAME="300 save
   t1"`), listed and loaded from the glue load screen. Not yet checked against a save made
   by the real 1.16.1 (next: make one under wine, load it in scbw; and the reverse).
-  Gaps listed in save.md (implode 0x410b30, old formats, fields written as 0).
+  Gaps listed in save.md (old formats, fields written as 0).
+- Deferred functions (user 2026-10-19: "port other deferred functions" = the todo_port!
+  sites). Wave 1 done: implode 0x410b30, glue error popup 0x4bb300 / 0x4b59a0 / 0x4b55a0,
+  campaign advice OK/Cancel 0x4b5b20, saved game / replay info in the create list
+  (0x4a7540 / 0x4a7c30; start stops at 0x4d3910 network create; `Create.replay` set but
+  no game start reads it yet), plain scroll bar 0x415090, arrow re-press click 0x4bbcf0,
+  message label 0x4f59c0. Left, needing plumbing: dialog timers 0x416090 (end dialog 20 s,
+  scroll auto-repeat), 0x4c3db0 (multiplayer save rule: Ctx needs net slot), 0x461e50,
+  0x48d0c0 (adds a message line + sound 0x17, not "clear"), mouse wheel 0x4af5c0 (no wheel
+  input), replay recorder + writer (none exists: 0x4dffc0 Save Replay needs it; ~300
+  lines), 0x6d5a68 flag. Note: headless `SCBW_GLUE_INPUT` typing into the New ID popup
+  shows no text (also at HEAD 64c2f65): check the script / popup timing before relying on it.
 - Campaign (user 2026-10-18: "play through the campaign"): works end to end headless
   (areas/ui.md "Campaign headless"): race click -> mission list 0x4b7820 -> mission text ->
   briefing (src/glue_ready.rs, MBRF triggers, portraits) -> Start -> game -> victory ->

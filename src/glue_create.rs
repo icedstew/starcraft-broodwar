@@ -92,6 +92,9 @@ pub(super) struct MapNode {
     league: u32,
     /// +0x535: the 8 "user selectable race" flags (0x59bda8).
     user_sel: [u8; 8],
+    /// +0x48c: the game description (0x8d bytes) of a saved game / replay (the +0x480
+    /// header's first 0xc bytes are not kept).
+    info: Vec<u8>,
 }
 
 /// 0x4a6dd0: what the list says of a row's node.
@@ -148,6 +151,9 @@ pub(super) struct Create {
     seed: u32,
     /// 0x5967f8: the description of the single-player game (0x8d bytes) 0x4d3fc0 takes.
     game_desc: Vec<u8>,
+    /// The replay file started from the list (0x6d0f24 holds its data natively); the game
+    /// start has to play it.
+    pub(super) replay: Option<Vec<u8>>,
     /// The registry values ("Custom Type", "Game Subtype", "Game Speed") Storm keeps; here
     /// for the session only.
     prefs: HashMap<&'static str, Vec<u8>>,
@@ -179,6 +185,7 @@ impl Default for Create {
             rand_on: false,
             seed: 0,
             game_desc: Vec::new(),
+            replay: None,
             prefs: HashMap::new(),
         }
     }
@@ -250,6 +257,50 @@ fn insert_sorted(nodes: &mut Vec<MapNode>, node: MapNode) {
 fn sstr(s: &[u8], max: usize) -> Vec<u8> {
     let s = s.split(|&c| c == 0).next().unwrap_or(&[]);
     s[..s.len().min(max - 1)].to_vec()
+}
+
+/// 0x41f1b0 with one "%s": the format `f` with `arg` (up to its nul) put in.
+fn fmt_s(f: &[u8], arg: &[u8]) -> Vec<u8> {
+    let arg = arg.split(|&c| c == 0).next().unwrap_or(&[]);
+    match f.windows(2).position(|w| w == b"%s") {
+        Some(p) => [&f[..p], arg, &f[p + 2..]].concat(),
+        None => f.to_vec(),
+    }
+}
+
+/// Ordinal 503 (SStrNCat): `src` (up to its nul) appended to `dst` within `max` bytes.
+fn cat(dst: &mut Vec<u8>, src: &[u8], max: usize) {
+    let src = src.split(|&c| c == 0).next().unwrap_or(&[]);
+    let room = (max - 1).saturating_sub(dst.len());
+    dst.extend_from_slice(&src[..src.len().min(room)]);
+}
+
+/// 0x4cfa10: the game description (0x8d bytes) and the name (the file name without its
+/// extension, under 0x1c characters) of the saved game `path`; Err(1) when it cannot be read
+/// (0x4ce470 text up to 0x1a, 0x4cf0f0 header), Err(2) when it is no save of this game.
+fn save_head_info(path: &str) -> Result<(Vec<u8>, Vec<u8>), u8> {
+    let f = std::fs::read(crate::saveload::host(path)).map_err(|_| 1u8)?;
+    let mut i = crate::bw::save::In::new(&f);
+    loop {
+        match i.bytes(1) {
+            None => return Err(1),
+            Some(b) if b[0] == 0x1a => break,
+            _ => {}
+        }
+    }
+    let h = crate::saveload::read_header(&mut i).ok_or(1u8)?;
+    if h.id != 0x69 {
+        return Err(2);
+    }
+    let file = path.rsplit(['\\', '/']).next().unwrap_or(path);
+    let mut name = sstr(file.as_bytes(), 0x20);
+    if let Some(dot) = name.iter().rposition(|&c| c == b'.') {
+        name.truncate(dot);
+    }
+    if name.len() >= 0x1c {
+        return Err(1);
+    }
+    Ok((h.info.to_vec(), name))
 }
 
 /// 0x41a890's comparison: byte `i` of both, without case.
@@ -727,9 +778,9 @@ impl Glue {
         if flags & 4 != 0 {
             self.map_info_load(files, idx);
         } else if flags & 1 != 0 {
-            todo_port!("0x4a7540", "the saved game's information (0x4cfa10)");
+            self.save_info_load(idx);
         } else if flags & 0x80 != 0 {
-            todo_port!("0x4a7c30", "the replay's information (0x4df570, 0x4de9d0)");
+            self.replay_info_load(files, idx);
         }
         self.info_apply(idx);
     }
@@ -797,6 +848,150 @@ impl Glue {
         n.humans = humans;
         n.user_sel = user_sel;
         n.league = u32::from_le_bytes(hdr[0x1c..0x20].try_into().unwrap());
+        n.state = 0;
+    }
+
+    /// 0x4a7540: read the saved game node `idx` (once): 0x4cfa10 reads its header, the texts
+    /// are the game's title, "\n\n" and the save's name; failures put a message into the
+    /// description (state 1 stays).
+    fn save_info_load(&mut self, idx: usize) {
+        let Some(n) = self.create.nodes.get(idx) else { return };
+        if n.loaded {
+            return;
+        }
+        let (path, name_len, path_len, name) = (n.path.clone(), n.name.len(), n.path.len(), n.name.clone());
+        let title = sstr(self.glu(0x2f).as_bytes(), 0x20);
+        {
+            let n = &mut self.create.nodes[idx];
+            n.loaded = true;
+            n.state = 1;
+            n.title = title;
+        }
+        let msg = if name_len >= 0x20 || path_len + 1 + name_len >= 0x105 {
+            0x41
+        } else {
+            match save_head_info(&path) {
+                Ok((info, save_name)) => {
+                    let (w, h) = (u16::from_le_bytes([info[0x20], info[0x21]]), u16::from_le_bytes([info[0x22], info[0x23]]));
+                    let tile = u16::from_le_bytes([info[0x30], info[0x31]]);
+                    let mut desc = fmt_s(self.glu(0x30).as_bytes(), &info[0x4d..0x6d]);
+                    cat(&mut desc, b"\n\n", 0x100);
+                    cat(&mut desc, &save_name, 0x100);
+                    let players_s = self.glu(0x1e).replacen("%u", &info[0x24].to_string(), 1).into_bytes();
+                    let size_s = self.glu(0x20).replacen("%u", &w.to_string(), 1).replacen("%u", &h.to_string(), 1).into_bytes();
+                    let tileset_s = sstr(self.glu(tile as usize + 0x27).as_bytes(), 0x23);
+                    let n = &mut self.create.nodes[idx];
+                    n.disp = sstr(&name, 0x41);
+                    n.players = info[0x25];
+                    n.width = w;
+                    n.height = h;
+                    n.desc = sstr(&desc, 0x100);
+                    n.players_s = players_s;
+                    n.size_s = size_s;
+                    n.tileset_s = tileset_s;
+                    n.info = info;
+                    n.state = 0;
+                    return;
+                }
+                Err(e) => 0x41 + e as usize,
+            }
+        };
+        self.create.nodes[idx].desc = sstr(self.glu(msg).as_bytes(), 0x100);
+    }
+
+    /// 0x4a7c30 (with 0x4df570 and 0x4de9d0): read the replay node `idx` (once) with
+    /// 0x6d0f14 = 1: the header's game description and slots, the map header from the
+    /// replay's embedded scenario (0x4bf5d0 with the mission mode), the texts.
+    fn replay_info_load(&mut self, files: &Storage, idx: usize) {
+        let net = self.network_raw.clone();
+        let Some(n) = self.create.nodes.get(idx) else { return };
+        if n.loaded {
+            return;
+        }
+        let (path, name_len, path_len) = (n.path.clone(), n.name.len(), n.path.len());
+        let title = sstr(self.glu(0xb2).as_bytes(), 0x20);
+        {
+            let n = &mut self.create.nodes[idx];
+            n.loaded = true;
+            n.state = 1;
+            n.title = title;
+        }
+        if name_len >= 0x20 || path_len + 1 + name_len >= 0x105 {
+            self.create.nodes[idx].desc = sstr(self.glu(0x3e).as_bytes(), 0x100);
+            return;
+        }
+        // 0x4df570: the file must be a 1.16 replay ("reRS") with a map; a Brood War replay
+        // needs the expansion. The command buffers (0x4ce280, 0x4ce220) are the replay
+        // player's.
+        let mut bw = false;
+        let rep = std::fs::read(crate::saveload::host(&path)).ok().and_then(|f| crate::replay::Replay::parse(&f).ok()).filter(|r| {
+            let raw = &r.header.raw;
+            if r.modern || raw.len() < 0x279 || raw[0x46] == 0 {
+                return false;
+            }
+            bw = raw[0] != 0;
+            !bw || self.expansion
+        });
+        let Some(r) = rep else {
+            let msg = if bw { 0x3c } else { 0x3f };
+            let d = sstr(self.glu(msg).as_bytes(), 0x100);
+            let n = &mut self.create.nodes[idx];
+            n.state = 2;
+            n.desc = d;
+            return;
+        };
+        let raw = &r.header.raw;
+        // 0x4de9d0: the game description (0x6d0f44) and the 12 slots (0x6d0fd1).
+        let info = raw[0x14..0x14 + 0x8d].to_vec();
+        let slots = &raw[0xa1..0xa1 + 12 * 0x24];
+        let comps = slots.chunks(0x24).filter(|s| s[0] == 1).count() as u8;
+        let humans = slots.chunks(0x24).filter(|s| s[0] == 2).count() as u8;
+        let (w, h) = (u16::from_le_bytes([info[0x20], info[0x21]]), u16::from_le_bytes([info[0x22], info[0x23]]));
+        let tile = u16::from_le_bytes([info[0x30], info[0x31]]);
+        let campaign = u16::from_le_bytes([raw[5], raw[6]]);
+        let mut hdr: MapHeader = [0; 0x20];
+        let ok = if campaign == 0 {
+            // 0x6d0f14 is the mission flag: the map is the replay's scenario.
+            let saved = (self.setup.mission, std::mem::replace(&mut self.setup.mission_chk, r.chk.clone()));
+            self.setup.mission = true;
+            let ok = self.setup.load_map(files, &path, &mut hdr, false, &net);
+            (self.setup.mission, self.setup.mission_chk) = saved;
+            ok
+        } else {
+            todo_port!("0x4bf5d0", "the map header of a campaign mission replay (0x59c080)");
+            false
+        };
+        if !ok {
+            let old = u16::from_le_bytes([hdr[0x18], hdr[0x19]]) < 0x3c;
+            let d = sstr(self.glu(if old { 0x3f } else { 0x3c }).as_bytes(), 0x100);
+            let n = &mut self.create.nodes[idx];
+            if !old {
+                n.state = 2;
+            }
+            n.desc = d;
+            return;
+        }
+        let mut desc = fmt_s(self.glu(0x30).as_bytes(), &info[0x4d..0x6d]);
+        cat(&mut desc, b"\n\n", 0x100);
+        let players_s = self.glu(0x1e).replacen("%u", "1", 1).into_bytes();
+        let size_s = self.glu(0x20).replacen("%u", &w.to_string(), 1).replacen("%u", &h.to_string(), 1).into_bytes();
+        let comps_s = self.glu(0x23).replacen("%u", &comps.to_string(), 1).into_bytes();
+        let humans_s = self.glu(0x25).replacen("%u", &humans.to_string(), 1).into_bytes();
+        let tileset_s = sstr(self.glu(tile as usize + 0x27).as_bytes(), 0x23);
+        let n = &mut self.create.nodes[idx];
+        n.disp = sstr(&n.name, 0x41);
+        n.humans = humans;
+        n.width = w;
+        n.height = h;
+        n.comps = comps;
+        n.players = 8;
+        n.desc = sstr(&desc, 0x100);
+        n.players_s = players_s;
+        n.size_s = size_s;
+        n.comps_s = comps_s;
+        n.humans_s = humans_s;
+        n.tileset_s = tileset_s;
+        n.info = info;
         n.state = 0;
     }
 
@@ -1296,12 +1491,48 @@ impl Glue {
                 self.start_map(idx, packed)
             }
             1 => {
-                todo_port!("0x4a7540", "start a saved game (0x4a68d0, 0x4d3910)");
+                if !loaded {
+                    self.save_info_load(idx);
+                }
+                match self.create.nodes[idx].state {
+                    1 => return -0x7fff_fff9,
+                    2 => return -0x7fff_ffff,
+                    _ => {}
+                }
+                let mut d = self.create.nodes[idx].info.clone();
+                d.resize(0x8d, 0);
+                let name = sstr(&self.setup.local_name, 0x18);
+                d[4..0x1c].fill(0);
+                d[4..4 + name.len()].copy_from_slice(&name);
+                todo_port!("0x4d3910", "create the network game of the saved game's description");
                 -0x7fff_fffa
             }
             0x80 => {
-                todo_port!("0x4a7c30", "start a replay from the list");
-                -0x7fff_fffa
+                // 0x6d0f14 = 1 (the replay's map comes from memory) stays set.
+                self.create.nodes[idx].loaded = false;
+                self.replay_info_load(files, idx);
+                match self.create.nodes[idx].state {
+                    1 => return -0x7fff_fff9,
+                    2 => return -0x7fff_ffff,
+                    _ => {}
+                }
+                let mut d = self.create.nodes[idx].info.clone();
+                d.resize(0x8d, 0);
+                let name = sstr(&self.setup.local_name, 0x18);
+                d[4..0x1c].fill(0);
+                d[4..4 + name.len()].copy_from_slice(&name);
+                if self.setup.multiplayer {
+                    todo_port!("0x4d3910", "create the network game of the replay's description");
+                    return -0x7fff_fffa;
+                }
+                if !self.setup.local_slot_setup() {
+                    return -0x7fff_fff9;
+                }
+                if !self.create_game(&d) {
+                    return -0x7fff_fffa;
+                }
+                self.create.replay = std::fs::read(crate::saveload::host(&path)).ok();
+                0
             }
             _ => -0x7fff_fffa,
         }

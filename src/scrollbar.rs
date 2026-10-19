@@ -51,6 +51,9 @@ pub struct ScrollBar {
     /// last position, dialog-relative.
     pub captured: bool,
     pub mouse: (i32, i32),
+    /// Set when `track` re-presses an arrow (0x4bbcf0, the button click sound); the window
+    /// loop takes it with `Ctl::list_scroll_take_click`.
+    pub click: bool,
 }
 
 impl ScrollBar {
@@ -144,7 +147,8 @@ impl ScrollBar {
             if PRESS[hit] == held {
                 self.flags ^= held;
                 if self.flags & held != 0 {
-                    todo_port!("0x4bbcf0", "arrow re-press sound");
+                    // 0x4bbcf0: plays the button click (sfxdata entry 15) if sound is on.
+                    self.click = true;
                 }
             }
         } else if PRESS[hit] != held {
@@ -238,6 +242,7 @@ impl Skin {
             m,
             captured: false,
             mouse: (0, 0),
+            click: false,
         };
         b.rect.2 = b.rect.2.max(b.rect.0 + m.w);
         if let Some(l) = c.list.as_mut() {
@@ -258,7 +263,33 @@ impl Skin {
         let clip = (b.rect.0 + dx, b.rect.1 + dy, b.rect.2 + dx, b.rect.3 + dy);
         let (x, top) = (clip.0, clip.1);
         if b.flags & 0x200_0000 != 0 {
-            todo_port!("0x415090", "plain scroll bar (flag 0x2000000)");
+            // 0x415090: a plain bar: an outline in color 0x6ceb28 (0x6ceb30 if enabled) and,
+            // when enabled, a 6 high one at the thumb. (Its focus flag 0x1000 update needs the
+            // dialog's focused control and is not kept: the bit is not used here.)
+            let col = self.colors.get();
+            let color = col[if b.flags & flag::DISABLED != 0 { 8 } else { 0x10 }];
+            let w = clip.2 - clip.0;
+            let outline = |(l, t, r, bt): (i32, i32, i32, i32), s: &mut Surf| {
+                for y in [t, bt] {
+                    for x in l..=r {
+                        if x >= 0 && y >= 0 && x < s.w && y < s.h {
+                            s.px[(y * s.w + x) as usize] = color;
+                        }
+                    }
+                }
+                for x in [l, r] {
+                    for y in t..=bt {
+                        if x >= 0 && y >= 0 && x < s.w && y < s.h {
+                            s.px[(y * s.w + x) as usize] = color;
+                        }
+                    }
+                }
+            };
+            outline((x, top, x + w, clip.3 - clip.1 + top), s);
+            if b.flags & flag::DISABLED == 0 {
+                let y = b.thumb_off() as i16 as i32 + top;
+                outline((x, y, x + w, y + 5), s);
+            }
             return;
         }
         if (m.s + m.w) * 2 > (b.rect.3 - b.rect.1) as i16 as i32 {
@@ -320,6 +351,11 @@ impl Ctl {
         if sel != 0xff {
             b.set_value(top as i16);
         }
+    }
+
+    /// Takes the pending arrow re-press click sound (0x4bbcf0).
+    pub fn list_scroll_take_click(&mut self) -> bool {
+        self.list.as_mut().and_then(|l| l.scroll.as_deref_mut()).is_some_and(|b| std::mem::take(&mut b.click))
     }
 
     /// The bar is held by the mouse (a click returned true and the button is still down).

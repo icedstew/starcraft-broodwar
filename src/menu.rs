@@ -540,8 +540,8 @@ impl Menu {
                 let msg = sg().msg.clone();
                 if let Some(c) = find(&mut dlg, 1) {
                     c.text = msg;
+                    c.update = crate::dlg::Update::Align(0x28);
                 }
-                crate::todo_port!("0x4f59c0", "message label: draw the text with flags 0x28");
             }
             _ => {}
         }
@@ -690,6 +690,7 @@ impl Menu {
                     }
                     let c = &mut self.dlg.controls[i];
                     if c.list_scroll_click(rx, ry) {
+                        self.click |= c.list_scroll_take_click();
                         return Some(None);
                     }
                     if c.list_inside(rx, ry) {
@@ -714,6 +715,7 @@ impl Menu {
             for c in self.dlg.controls.iter_mut() {
                 if c.list_scroll_active() {
                     c.list_scroll_drag(rx, ry);
+                    self.click |= c.list_scroll_take_click();
                 }
                 if c.list.as_ref().is_some_and(|l| l.pressed) && c.list_inside(rx, ry) {
                     let r = c.list_row_at(rx, ry);
@@ -756,6 +758,8 @@ impl Menu {
         self.dlg.tick(ms);
         for c in self.dlg.controls.iter_mut().filter(|c| c.list_scroll_active()) {
             c.list_scroll_tick();
+            // 0x4bbcf0: a held arrow's re-press clicks.
+            self.click |= c.list_scroll_take_click();
         }
     }
 
@@ -1119,7 +1123,7 @@ impl Menu {
             (Kind::Defeat | Kind::Victory, -2) => (None, Action::EndGame),
             (Kind::Defeat | Kind::Victory, 1) => {
                 if self.kind == Kind::Victory {
-                    crate::todo_port!("0x48d0c0", "victory dialog button 1: clear the message line");
+                    crate::todo_port!("0x48d0c0", "victory dialog button 1 = 0x460fa0 case 1: if network.tbl entry 0 <= 0xf then 0x48d0c0(text 0x501b7d, eax 0 = 7000 ms) adds a message line (msgs 0x48cd30) and plays sound 0x17");
                 }
                 (None, Action::Closed)
             }
