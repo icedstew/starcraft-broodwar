@@ -89,3 +89,21 @@ Read when working on the HUD, dialogs, menus or glue screens.
   draw on-screen (0x49c780 from the map callback 0x4bd580; `refresh_screen_tiles`, run
   at the end of `Scene::step`). Without the last, start creep looked small (user report
   2026-10-17). Native check: tl1354 frames 10..130 in the real game show full creep.
+
+## Mission briefing (ready room), 1.16.1
+
+- The briefing triggers (CHK MBRF, loaded by 0x4cc1f0 -> 0x46c790 into the list at
+  0x51a310 / head 0x51a314) run in the ready room, not in the game's trigger pass:
+  0x46d1b0 (ECX = dialog; set up by 0x46d220 at 0x46d2aa) runs node `[dlg+0x26]` through
+  0x427da0 (ESI = node + 8 = the trigger); when it finishes it moves to the next node
+  (+4), and at the end sets `[dlg+0x26]` = 0 (network games also call 0x46d090(0)).
+  0x46cbc0 puts the list's first node (0x51a318) back in `[dlg+0x26]`.
+- 0x427da0: only for a trigger whose +0xf byte is 0xd; action index +0x95f (0x40 = done),
+  actions at (idx + 10) * 0x20 (+0x1a opcode, +0x1c flags bit 2 = disabled), table
+  0x519e50 indexed by opcode: 0x427e40, 0x427e50, 0x427fa0 (play WAV), 0x427f10,
+  0x427ec0, 0x427ef0, 0x427ee0, 0x427f80, 0x4280e0 (transmission), 0x427ea0. An action
+  returning 0 waits (re-run next tick). 0x6ca664 is the briefing's speaking flag.
+- Ready room event procs 0x4f7150 / 0x4f74b0 / 0x4f7810: type 0 -> 0x4de150, type 1 ->
+  0x46cfd0 (teardown), type 2 code 0xe -> 0x46d160 (dispatch on 0x6d051c: 0xd ->
+  0x46d090(0), 0xe -> 0x46d090(1) + 0x46ca90 + 0x4dd040, 0x14 -> 0x46cbc0 restart),
+  event 0xa -> 0x46d3c0 init, 0x405 -> frame images 0x4f70f0 / 0x4f7450 / 0x4f77b0.

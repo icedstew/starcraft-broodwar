@@ -687,7 +687,7 @@ impl State {
                 }
             }
         }
-        if super::players::MULTIPLAYER && self.template[0x10] != 0 {
+        if self.multiplayer && self.template[0x10] != 0 {
             // Other members of the local player's force (0x57eeea): each selected unit not the
             // local player's (or any, in a replay) takes one more ally-selection mark.
             let me = self.local_player as usize;

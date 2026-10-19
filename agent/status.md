@@ -35,6 +35,18 @@ Delegate per agents.md: Haiku triage, Sonnet porting, Opus review / hard RE / co
 
 ## In flight
 
+- Campaign (user 2026-10-18: "play through the campaign"): race click -> mission list
+  (0x4b7820 / 0x4b6530) -> 0x4dbfc0 / 0x4d3fc0 game creation -> mission text works
+  (`SCBW_GLUE_INPUT` path in areas/ui.md). Next blocker: the ready room / briefing
+  (porter running; runner RE in areas/ui.md "Mission briefing"). Then the cinematics
+  0x4f7ae0 / 0x4d4470, the UMS player shuffle 0x4a9c90 / 0x4a95d0 (todo hit by every UMS
+  new game), victory -> next mission check.
+- Team games (user: "support team melee"): `State.multiplayer` (0x57f0b4) replaces the
+  const; team start 0x49d8e0, CTF 0x4aba20 / 0x4ab980, 0x484ff0 leaders, init_gamedata
+  wired. `SCBW_TEAMS=11` on `shot` / `view` forces one (runs, unverified). In 1.16.1 team
+  behaviour needs a network game; no team replay exists locally: recording one natively
+  (LAN, ~/games/Starcraft/broodwar-reps-team/).
+
 - 2026-10-18 late (Haiku triage -> Sonnet porters -> Opus review): credits / mission text
   screen (src/glue_credits.rs, 0x4d8df0 cluster; checked by `scbw glue`, not vs native),
   minimap unit passes 0x4a4650 / 0x4a47b0 / 0x4a48e0 / 0x4a4ac0 and click clamp 0x4a3d70,

@@ -356,7 +356,7 @@ impl Glue {
 
     /// 0x4ab860 with 0x4ab150: the game types of Templates\templates.lst, a node per quoted
     /// file name (0x4aae20) whose .got 0x4ab750 accepts.
-    fn load_templates(&mut self, files: &Storage) {
+    pub(super) fn load_templates(&mut self, files: &Storage) {
         if !self.create.templates.is_empty() {
             return;
         }
@@ -1358,7 +1358,7 @@ impl Glue {
 
     /// 0x4a68d0 (`d` the description): the game type's settings must suit the game; the game
     /// speed or 6 is set in it; 0x80000008 or the refusal.
-    fn check_template(&mut self, d: &mut [u8]) -> i32 {
+    pub(super) fn check_template(&mut self, d: &mut [u8]) -> i32 {
         let (gt, b1, sub) = (d[0x28], d[0x29], u16::from_le_bytes([d[0x2a], d[0x2b]]));
         let Some(rec) = self.find_template(gt, b1, sub).map(|t| t.rec) else { return -0x7fff_fff8 };
         let cur = self.setup.template[0];
@@ -1565,7 +1565,7 @@ impl Glue {
     /// the storm id -> slot tables and per-game tables. The Storm calls (the provider setup
     /// 0x4d3cc0, SNetCreateGame Ordinal 101) are not ported: networking is our own; the
     /// local player's storm id is 0.
-    fn create_game(&mut self, d: &[u8]) -> bool {
+    pub(super) fn create_game(&mut self, d: &[u8]) -> bool {
         // 0x4d3cc0 (provider setup: Ordinal 117 / 114 / 123 callbacks 0x4c4980, 0x4c3c90,
         // 0x47f750, 0x4aaea0): a single-player game has provider 0 (0x59688c).
         todo_port!("0x4d3cc0", "Storm provider setup and message callbacks for the game");
@@ -1579,6 +1579,8 @@ impl Glue {
             s[slot::STORM..slot::STORM + 4].copy_from_slice(&id.to_le_bytes());
         }
         self.create.game_desc = d.to_vec();
+        // 0x5967f8 + 0x6d (0x596865) is the game type record.
+        self.setup.template.copy_from_slice(&d[0x6d..0x8d]);
         // 0x596888 = 1 (the description is in place)
         self.setup.index_human_slots();
         self.setup.reset_game_tables();

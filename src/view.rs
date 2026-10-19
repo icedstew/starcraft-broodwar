@@ -1314,6 +1314,24 @@ fn new_game(a: &Assets, chk: &Chk, rep: Option<&crate::replay::Header>, gs: Opti
             }
             st.local_player = owners.iter().position(|&o| o == 6).unwrap_or(0) as u8;
         }
+        // Debug: SCBW_TEAMS=<game type> (11 Team Melee, 12 Team FFA, 13 Team CTF, 15 Top vs
+        // Bottom) plays a team game (0x57f0b4 on): the active slots are dealt over the forces
+        // in turn; the glue's 0x485160 would set the seat races 0x57f1c0 and leaders 0x57f1cb.
+        if rep.is_none() && std::env::var("SCBW_TEAMS").is_ok() && st.template[0x10] != 0 {
+            st.multiplayer = true;
+            let forces = if st.template[0] == 0x0f { 2 } else { st.template[0x10] };
+            let active: Vec<usize> = (0..8).filter(|&p| matches!(st.player_types[p], 1 | 2)).collect();
+            let mut seat = 0;
+            for f in 1..=forces {
+                for &p in active.iter().skip(f as usize - 1).step_by(forces as usize) {
+                    st.player_force[p] = f;
+                    st.team_leaders[f as usize] = p as u8;
+                    st.seat_races[seat.min(7)] = st.player_races[p];
+                    seat += 1;
+                }
+                seat = f as usize * bw::players::team_size(st.template[0x10]) as usize;
+            }
+        }
         st.local_vision_mask = match rep {
             // Watching a replay shows every player's vision.
             Some(h) => h.slots.iter().take(8).enumerate().filter(|(_, s)| s.kind == 2 || s.kind == 1).fold(0, |m, (p, _)| m | 1 << p),
@@ -1324,6 +1342,10 @@ fn new_game(a: &Assets, chk: &Chk, rep: Option<&crate::replay::Header>, gs: Opti
         st.selection_circle_colors(d);
         // 0x4eee00: the AI's player data (0x447680) before the scenario loads.
         st.init_player_ai();
+        // 0x4eee00: 0x488f90 (when 0x6d1218 is 0; a new game here) resets the score counters
+        // and sets each player's supply caps (per team in a team game).
+        let team_lead = [st.team_leaders[1], st.team_leaders[2], st.team_leaders[3], st.team_leaders[4]];
+        st.players.init_gamedata(st.multiplayer, st.template[0x10], &st.seat_races, &team_lead);
         // 0x4eec30 -> 0x489b30: trigger state for a new game (0x489790: who is in it).
         st.init_trigger_players();
         // 0x4ef100: srand(0x51ca10, the game seed) for the CRT rand creep tiles use; then
@@ -1371,16 +1393,23 @@ fn new_game(a: &Assets, chk: &Chk, rep: Option<&crate::replay::Header>, gs: Opti
             }
         }
         st.rng.enabled = false;
-        // 0x4bf520: 0x49da40 starting units (team melee with shared bases 0x49d8e0 is
-        // not ported).
+        // 0x4bf520: 0x49d8e0 team melee starting units in a team game, else 0x49da40.
         st.rng.enabled = true;
-        st.melee_start_units(d, st.template[0xc]);
+        if st.multiplayer && st.template[0x10] != 0 {
+            st.team_start_units(d);
+        } else {
+            st.melee_start_units(d, st.template[0xc]);
+        }
         st.rng.enabled = false;
         // 0x4eee00 tail: 0x437a70(1) AI regions for the map's region count.
         st.init_ai_regions();
         st.init_resource_areas(d);
         // 0x4ef100 -> 0x4abaf0: the game type's computer scripts and own triggers.
         st.start_game_type_ai(d);
+        // 0x4abaf0: capture the flag beacons, then CTF.trg.
+        if st.template[8] == 4 {
+            st.ctf_setup(d);
+        }
         if let Some(name) = bw::triggers::game_type_triggers(&st.template) {
             if let Ok(t) = a.files.read(name) {
                 st.load_triggers(&t);
@@ -1397,8 +1426,11 @@ fn game_template(a: &Assets, chk: &Chk, rep: Option<&crate::replay::Header>, gs:
         return g.template;
     }
     let melee = rep.is_none() && is_melee_map(chk) && std::env::var("SCBW_NOMELEE").is_err();
+    // Debug: SCBW_TEAMS=<game type> picks a team game's template (sub type 1).
+    let team = std::env::var("SCBW_TEAMS").ok().and_then(|s| s.parse().ok()).filter(|_| rep.is_none());
     let (gt, sub) = match rep {
         Some(h) => (h.game_type, h.sub_type),
+        None if team.is_some() => (team.unwrap(), 1),
         None if melee => (2, 1),
         None => (10, 1),
     };

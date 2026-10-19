@@ -324,6 +324,52 @@ impl State {
         }
     }
 
+    /// The force search shared by 0x49d8e0 and 0x4aba20: whether `force` has a human (type 2)
+    /// or, failing that, a computer (type 1 or 5) among the 8 slots.
+    pub(super) fn force_is_playing(&self, force: u8) -> bool {
+        let any = |f: &dyn Fn(u8) -> bool| (0..8).any(|p| self.player_force[p] == force && f(self.player_types[p]));
+        any(&|t| t == 2) || any(&|t| t == 1 || t == 5)
+    }
+
+    /// 0x49d8e0: team melee starting units. Each force that has a human or computer slot
+    /// (forces 1..=teams, or 1..=2 for Top vs Bottom) starts at its leader's location
+    /// (0x57f1cb[force]): the town hall of the force's first seat race (mode 2; zerg also an
+    /// overlord) and four workers, the race cycling over the force's seats.
+    pub fn team_start_units(&mut self, d: &Data) {
+        let mode = self.template[0xc];
+        let max = if self.template[0] == 0x0f { 2 } else { self.template[0x10] };
+        for force in 1..=max {
+            if !self.force_is_playing(force) {
+                continue;
+            }
+            let leader = self.team_leaders[force as usize];
+            let size = super::players::team_size(self.template[0x10]);
+            let base = size.wrapping_mul(force - 1) as usize;
+            if mode == 2 {
+                let race = self.seat_races.get(base).copied().unwrap_or(0);
+                self.start_town_hall(d, race, leader);
+                if race == 0 {
+                    self.start_overlord(d, leader);
+                }
+            }
+            if mode == 0 || mode > 2 {
+                continue;
+            }
+            for i in 0..4usize {
+                let idx = base + i % size.max(1) as usize;
+                let race = self.seat_races.get(if idx < 8 { idx } else { base + 1 }).copied().unwrap_or(0);
+                let worker = match race {
+                    0 => 0x29,
+                    1 => 7,
+                    2 => 0x40,
+                    _ => 0xe4,
+                };
+                let (x, y) = self.start_locations[leader as usize];
+                self.start_unit(d, worker, x, y, leader);
+            }
+        }
+    }
+
     /// 0x49d7c0: the town hall on the start location's tile grid; units in its way die.
     fn start_town_hall(&mut self, d: &Data, race: u8, p: u8) {
         let t: u16 = match race {

@@ -265,6 +265,12 @@ pub struct State {
     /// type, +8 victory condition (0x59686d), +0xc starting units (0x596871), +0xf
     /// alliances allowed (0x596874), +0x10 teams (0x596875), +0x12 (0x596877).
     pub template: [u8; 0x20],
+    /// 0x57f0b4: a network game (set by the glue's main menu only).
+    pub multiplayer: bool,
+    /// 0x57f1c0: the race of each seat, `team_size` seats per force in force order (team games).
+    pub seat_races: [u8; 8],
+    /// 0x57f1cb: the player that holds each force's start (index = force 1..4, 0xff = none).
+    pub team_leaders: [u8; 5],
     /// 0x658ae4: shared countdown for 0x4000-status dead-unit removal.
     pub dead_removal_counter: u32,
     /// 0x64dec8: lurker spine hits, 32 frames of 16 (lurker + 1, target + 1) pairs (0 = empty);
@@ -501,6 +507,9 @@ impl State {
             game_options: 0,
             forward_offsets: Vec::new(),
             template: [0; 0x20],
+            multiplayer: false,
+            seat_races: [0; 8],
+            team_leaders: [0xff; 5],
             player_left: [0; 12],
             trig: Default::default(),
             ai: Default::default(),

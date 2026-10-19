@@ -10,7 +10,7 @@
 
 use crate::dlg::{Dialog, Effects, Skin, Surf};
 use crate::grp::{Blend, Grp};
-use crate::setup::{slot, Profile, Setup};
+use crate::setup::{slot, sstr_copy, Profile, Setup};
 use crate::storage::Storage;
 use crate::palette::{self, Pal};
 use crate::todo_port;
@@ -168,6 +168,8 @@ pub enum Open {
     Load,
     /// 0x4b6e50 from 0x4ed940 (New ID): rez\gluPEdit.bin, event proc 0x4b6cc0.
     NewId,
+    /// 0x4b7820: rez\gluHist.bin (the campaign's mission list), event proc 0x4b6e10.
+    MissionList,
     /// 0x4b73b0 from 0x4ed840 (Delete): rez\gluPOkCancel.bin, event proc 0x4b6d60.
     DeleteChar,
 }
@@ -248,6 +250,10 @@ pub struct Glue {
     /// 0x6d11cc: the campaign mission record (a VA into the exe's 8-byte records of
     /// 0x5122a0 / 0x5122ac: +2 mission, +4 scenario number, +6 race), 0 none.
     camp_rec: u32,
+    /// The campaign start waiting for the mission list (0x4b7820): the race index and the
+    /// profile; `hist_list` is 0x6d5a4c, the record list.
+    hist: Option<(usize, Profile)>,
+    hist_list: u32,
     /// 0x51ca1c: a campaign map continues (set by 0x4a8590).
     camp_cont: bool,
     /// 0x5122b8: the scenario (cinematic) number 0x4e0820 case 10 plays.
@@ -350,6 +356,8 @@ impl Glue {
             login_timer: None,
             edit_refuse: Vec::new(),
             last_press: None,
+            hist: None,
+            hist_list: 0,
             create: create::Create::default(),
             score: score::Score::default(),
             credits: credits::Credits::default(),
@@ -361,6 +369,7 @@ impl Glue {
     pub fn top_step(&mut self, files: &Storage) -> Top {
         if !self.expansion_installed {
             self.expansion = false;
+            self.setup.expansion = self.expansion;
         }
         match self.state {
             state::INTRO => {
@@ -388,6 +397,8 @@ impl Glue {
                 Top::Glue
             }
             state::AFTER_GAME => {
+                // 0x4e0820 case 10: 0x4f7ae0 plays the cinematic of 0x5122b8 (ESI), which is
+                // then reset to its default 0x1c (unconditionally, as natively).
                 todo_port!("0x4f7ae0", "play the scenario cinematic 0x5122b8");
                 self.scenario = 0x1c;
                 if self.state == state::AFTER_GAME {
@@ -432,6 +443,7 @@ impl Glue {
             self.player_name.truncate(0x18);
         }
         self.expansion = self.direct_map;
+        self.setup.expansion = self.expansion;
         // 0x57f1e3 = 0.
         // 0x4db200 (campaign .bin present; it returns 1, so AX = 1) and 0x4dbfc0 (start the
         // mission) pick ready room 8 / 7 / 9 by 0x51c608 and set 0x6d11c0; 0x596904 = 1 with
@@ -443,6 +455,7 @@ impl Glue {
         // Their failure path.
         self.screen = screen::MAIN;
         self.expansion = false;
+        self.setup.expansion = self.expansion;
     }
 
     /// One pass of 0x4de200's `while (0x596904 == 4) switch (0x6d11bc)` (the glue loop),
@@ -697,11 +710,20 @@ impl Glue {
                 None => todo_port!("0x4bb300", "error popup (string 0x58)"),
             }
         }
-        // 0x4b7820 returns the chosen record (a VA into the exe's tables), 0 for cancel.
-        let rec: u32 = {
-            todo_port!("0x4b7820", "mission list dialog (gluHist.tbl / .bin, list 0x5122a0 / 0x5122ac [idx]) -> the chosen record");
-            0
-        };
+        // 0x4b7820 (ECX = the race's record list, EAX = the profile's best mission).
+        let list = self.exe_u32(0x5122a0 + if self.expansion { 0xc } else { 0 } + idx as u32 * 4);
+        let best = p.best(self.expansion, idx as u8);
+        if !self.hist_gate(list, best) {
+            return self.campaign_chosen(files, idx, p, list);
+        }
+        self.open_hist(files, list, best);
+        self.hist = Some((idx, p));
+        false
+    }
+
+    /// 0x4dc0b0 after 0x4b7820 returned `rec` (0: cancelled): the profile's best mission,
+    /// then a scenario (the next game state) or the mission (0x4dbfc0).
+    fn campaign_chosen(&mut self, files: &Storage, idx: usize, mut p: Profile, rec: u32) -> bool {
         self.camp_rec = rec;
         if rec == 0 {
             return false;
@@ -712,6 +734,7 @@ impl Glue {
             self.setup.write_profile(&p);
         }
         if scenario != 0 {
+            // 0x5122b8 = scenario, 0x57f244 = mission, 0x57f246 = 0, state 10.
             self.scenario = scenario as u32;
             self.setup.map_dir_flag = mission;
             self.setup.next_map.clear();
@@ -719,6 +742,67 @@ impl Glue {
             return true;
         }
         self.start_mission(files, mission)
+    }
+
+    /// 0x4b6530 (EAX = the record list, ESI = `best`): more than one record of the list
+    /// (8 bytes each, +0 flag, +2 mission; ends at mission 0) is within the best mission.
+    fn hist_gate(&self, list: u32, best: u32) -> bool {
+        let mut n = 0;
+        let mut r = list;
+        while self.exe_u16(r + 2) != 0 {
+            if self.exe_u16(r + 2) as u32 <= best && self.exe_u16(r) != 0 {
+                n += 1;
+            }
+            r += 8;
+        }
+        n > 1
+    }
+
+    /// 0x4b7820 after the gate: the mission history dialog (rez\gluHist.bin over
+    /// glue\campaign\pHist.pcx, event proc 0x4b6e10, shared case 0 / 10 with 0x4b6d60). Event 0
+    /// (0x4b6930) lists the records within `best` with a flag by the text gluHist.tbl[flag - 1]
+    /// (the row's data is the record's index) and selects the first.
+    fn open_hist(&mut self, files: &Storage, list: u32, best: u32) {
+        let Ok(raw) = files.read("rez/gluHist.tbl") else { crate::bw::fatal_error("rez\\gluHist.tbl") };
+        let tbl = crate::dat::parse_tbl(&raw);
+        self.popup = None;
+        self.popup_dialog_pcx(files, "rez/gluHist.bin", "glue/campaign/pHist", Open::MissionList, "", "");
+        let mut rows = Vec::new();
+        let (mut r, mut i) = (list, 0u32);
+        while self.exe_u16(r + 2) != 0 {
+            let flag = self.exe_u16(r) as usize;
+            if self.exe_u16(r + 2) as u32 <= best && flag != 0 {
+                rows.push((tbl.get(flag - 1).cloned().unwrap_or_default(), i));
+            }
+            r += 8;
+            i += 1;
+        }
+        self.hist_list = list;
+        let Some((dlg, _)) = self.popup.as_mut() else { return };
+        let Some(c) = dlg.get_mut(6) else { return };
+        c.list.as_mut().unwrap().batch = true;
+        for (text, i) in &rows {
+            let row = c.list_add(text.as_bytes(), 0);
+            if let Some(it) = c.list.as_mut().unwrap().items.get_mut(row as usize) {
+                it.2 = *i;
+            }
+        }
+        c.list.as_mut().unwrap().batch = false;
+        c.list_layout();
+        if !rows.is_empty() {
+            c.list_select(0);
+            c.list_scroll_to(0);
+        }
+    }
+
+    /// 0x4b6570 (event 0xe code 2): the chosen record when Ok (1) was activated and a row is
+    /// selected: the list + the row's data * 8; else 0 (0x6d5a48).
+    fn hist_done(&self, dlg: &Dialog, id: i16) -> u32 {
+        let sel = dlg.get(6).and_then(|c| c.list.as_ref()).and_then(|l| l.items.get(l.sel as usize));
+        match sel {
+            Some(it) if id == 1 => self.hist_list + it.2 * 8,
+            _ => 0,
+        }
     }
 
     /// The exe's initialized data: .rdata / .data sit at file offset VA - 0x400000.
@@ -813,19 +897,16 @@ impl Glue {
             return true;
         }
         let (mut a, mut b) = ([0u8; 0x20], [0u8; 0x20]);
-        if Setup::load_got(files, "Use Map Settings(1)", &mut a, &mut b).is_some() {
+        if let Some(t) = Setup::load_got(files, "Use Map Settings(1)", &mut a, &mut b) {
             let mp = self.setup.map_path;
             let mp = &mp[..mp.iter().position(|&c| c == 0).unwrap_or(mp.len())];
             if let Some(sep) = mp.iter().rposition(|&c| c == b'\\') {
                 let mut path = mp[..=sep].to_vec();
                 path.extend_from_slice(&self.setup.next_map);
-                // 0x4a8590 (EAX = path, ECX = the template's first 4 bytes, ESI = 0x57ee9c,
-                // stack: 0x6cdfd4) sets 0x51ca1c, picks the slot (0x4dbe50) and starts the
-                // game (0x4d3fc0); 0 is success.
-                let r: i32 = {
-                    todo_port!("0x4a8590", "start the next campaign map (load header, game description, 0x4a68d0, 0x4dbe50, 0x4d3fc0)");
-                    -1
-                };
+                // 0x4a8590 (EAX = path, ECX = the template's first 4 bytes, ESI = 0x57ee9c, stack:
+                // 0x6cdfd4); 0 is success.
+                let packed = u32::from_le_bytes([t[0], t[1], t[2], t[3]]);
+                let r = self.start_next_map(files, &path, packed);
                 if r == 0 {
                     let race = self.setup.slots[self.setup.local_slot[0] as usize % 12][slot::RACE];
                     match race {
@@ -844,6 +925,54 @@ impl Glue {
         todo_port!("0x4bb300", "error popup (string 0x6a)");
         self.screen = back;
         false
+    }
+
+    /// 0x4a8590 (EAX = `path`, ECX = `packed`, the first 4 bytes of the game type record: type,
+    /// +1, subtype; ESI = 0x57ee9c, the player name; stack: the speed 0x6cdfd4): load the map's
+    /// header, build the game description (name, map title, size, players, league byte,
+    /// game type), check it (0x4a68d0), mark the campaign as continuing (0x51ca1c, 0x57f1e3),
+    /// take the local slot (0x4dbe50) and create the game (0x4d3fc0). 0 is success, else the
+    /// error code.
+    fn start_next_map(&mut self, files: &Storage, path: &[u8], packed: u32) -> i32 {
+        if path.is_empty() {
+            return -0x7fff_fffa;
+        }
+        let mut hdr = [0u8; 0x20];
+        let path_s = String::from_utf8_lossy(path).into_owned();
+        if !self.setup.load_map(files, &path_s, &mut hdr, false, &self.network_raw) {
+            let len = u16::from_le_bytes([hdr[0x18], hdr[0x19]]);
+            return (-0x7fff_fffa_i32).wrapping_sub(if len > 0x3b { 5 } else { 0 });
+        }
+        let mut d = [0u8; 0x8d];
+        sstr_copy(&mut d[4..], &self.setup.local_name, 0x20);
+        let name_id = u16::from_le_bytes([hdr[0], hdr[1]]);
+        // 0x4bd0c0: the map's string, "" for a map without the table.
+        let title = if name_id != 0 { self.setup.map_string(name_id).unwrap_or_default().to_vec() } else { Vec::new() };
+        sstr_copy(&mut d[0x4d..], &title, 0x20);
+        d[0x24] = 1;
+        d[0x25] = self.setup.lobby_occupied();
+        d[0x20..0x22].copy_from_slice(&self.setup.map_width.to_le_bytes());
+        d[0x22..0x24].copy_from_slice(&self.setup.map_height.to_le_bytes());
+        d[0x30..0x32].copy_from_slice(&self.setup.tileset.to_le_bytes());
+        d[0x27] = hdr[0x1c];
+        d[0x28..0x2c].copy_from_slice(&packed.to_le_bytes());
+        self.load_templates(files);
+        self.create.speed = crate::menu::Settings::default().game_speed as u8;
+        let rc = self.check_template(&mut d);
+        if rc != 0 {
+            return rc;
+        }
+        // 0x596888 = 0.
+        self.camp_cont = true;
+        if !self.setup.local_slot_setup() {
+            return -0x7fff_fff9;
+        }
+        if self.create_game(&d) {
+            0
+        } else {
+            // 0x4a8590: the Storm error decides (Ordinal 463); 0x80000004 + 2 unless 0xb7.
+            -0x7fff_fffa
+        }
     }
 
     /// 0x4dc320 (`flag` = the stack argument): what comes after a game or a scenario. A
@@ -960,16 +1089,22 @@ impl Glue {
         if !self.setup.load_map(files, &path, &mut hdr, true, &self.network_raw) {
             return false;
         }
+        // The game description (0x8d bytes): +4 the player name (0x18), +0x24 / +0x25 = 1,
+        // +0x26 the speed (0x6cdfd4), +0x4d the map title (0x20), +0x6d the template.
+        let mut d = [0u8; 0x8d];
+        sstr_copy(&mut d[4..], &self.setup.local_name, 0x18);
+        sstr_copy(&mut d[0x4d..], &self.setup.map_title, 0x20);
+        d[0x26] = crate::menu::Settings::default().game_speed as u8;
+        d[0x24] = 1;
+        d[0x25] = 1;
         let (mut a, mut b) = ([0u8; 0x20], [0u8; 0x20]);
-        if Setup::load_got(files, "Use Map Settings(1)", &mut a, &mut b).is_none() {
-            return false;
-        }
+        let Some(t) = Setup::load_got(files, "Use Map Settings(1)", &mut a, &mut b) else { return false };
+        d[0x6d..0x8d].copy_from_slice(&t);
         if !self.setup.local_slot_setup() {
             return false;
         }
         // 0x596888 = 0.
-        todo_port!("0x4d3fc0", "create the single-player game from the description (name, map title, template, settings 0x6cdfd4)");
-        false
+        self.create_game(&d)
     }
 
     /// 0x4f71f0 (`race` 0 zerg, rez\glurdyz.bin, event proc 0x4f7150) / 0x4f7550 (1 terran,
@@ -1587,9 +1722,11 @@ impl Glue {
                 if self.expansion_installed {
                     todo_port!("0x4db6e0", "StarCraft / Brood War choice (rez\\gluexpcmpgn.bin)");
                     self.expansion = true;
+                    self.setup.expansion = self.expansion;
                 } else {
                     todo_port!("0x4db770", "single player / multiplayer check");
                     self.expansion = false;
+                    self.setup.expansion = self.expansion;
                 }
                 self.end_dialog(id as i32)
             }
@@ -1699,7 +1836,8 @@ impl Glue {
         self.init_controls(files, &mut dlg);
         let p = self.palette_id();
         let dir = PALETTES[p];
-        let Ok(pcx) = files.read(&format!("{dir}/{pcx}.pcx")) else { crate::bw::fatal_error(pcx) };
+        let path = if pcx.contains('/') { format!("{pcx}.pcx") } else { format!("{dir}/{pcx}.pcx") };
+        let Ok(pcx) = files.read(&path) else { crate::bw::fatal_error(pcx) };
         let (w, h, px) = crate::view::pcx(&pcx);
         if self.state == state::GLUE {
             let (x, y) = ((640 - dlg.this.rect.2) / 2, (480 - dlg.this.rect.3) / 2);
@@ -1773,6 +1911,18 @@ impl Glue {
                     self.login_new_id_done(files, id == 1, text);
                 }
                 Open::DeleteChar => self.login_delete_done(id == 1),
+                Open::MissionList => {
+                    let rec = self.hist_done(&dlg, id);
+                    if let Some((idx, p)) = self.hist.take() {
+                        if self.campaign_chosen(files, idx, p, rec) {
+                            self.end_dialog(self.activated as i32);
+                            if let Some(r) = self.result.take() {
+                                self.dlg.take();
+                                self.done_campaign(r);
+                            }
+                        }
+                    }
+                }
                 _ => {}
             }
             return;

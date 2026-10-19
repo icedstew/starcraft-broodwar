@@ -206,12 +206,9 @@ pub fn team_race_count(teams: u8, seat_races: &[u8; 8], team: u8, race: u8) -> u
     n
 }
 
-/// 0x57f0b4: a network game; scbw never runs one.
-pub const MULTIPLAYER: bool = false;
-
-/// 0x484f50: a team game (multiplayer and the template's teams byte 0x596875 set).
-pub fn is_team_game(template: &[u8; 0x20]) -> bool {
-    MULTIPLAYER && template[0x10] != 0
+/// 0x484f50: a team game (multiplayer 0x57f0b4 and the template's teams byte 0x596875 set).
+pub fn is_team_game(multiplayer: bool, template: &[u8; 0x20]) -> bool {
+    multiplayer && template[0x10] != 0
 }
 
 /// 0x484e90: human players (type 2) of the 8 slots whose force is `team` and whose storm id

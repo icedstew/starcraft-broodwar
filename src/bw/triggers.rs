@@ -20,8 +20,7 @@ pub fn replay_frame_ms(speed: usize, mult: u32) -> u32 {
 }
 
 /// 0x4abaf0: the trigger file of the game type (template +8 and +4).
-/// ponytail: 0x4ab230 (computer players' AI scripts) and 0x4aba20 (capture the flag
-/// setup) are not ported.
+/// The capture the flag setup (0x4aba20, `State::ctf_setup`) runs before CTF.trg loads.
 pub fn game_type_triggers(t: &[u8; 0x20]) -> Option<&'static str> {
     let v = u32::from_le_bytes([t[4], t[5], t[6], t[7]]);
     match t[8] {
@@ -307,22 +306,73 @@ enum Count {
 }
 
 impl State {
+    /// 0x4aba20: capture the flag setup: a flag beacon for every human and computer slot
+    /// (slots 7..0), or in a team game for each force's leader (forces teams..1, or 2 for
+    /// Top vs Bottom).
+    pub fn ctf_setup(&mut self, d: &Data) {
+        if !self.multiplayer || self.template[0x10] == 0 {
+            for p in (0..8u8).rev() {
+                if matches!(self.player_types[p as usize], 1 | 2) {
+                    self.ctf_flag(d, p);
+                }
+            }
+            return;
+        }
+        let n = if self.template[0] == 0x0f { 2 } else { self.template[0x10] };
+        for force in (1..=n).rev() {
+            if self.force_is_playing(force) {
+                self.ctf_flag(d, self.team_leaders[force as usize]);
+            }
+        }
+    }
+
+    /// 0x4ab980 (edi = `p`): the flag beacon of `p`'s race (unit 0xc5 + race) placed near its
+    /// start location by the first of its units that is a building-type flag 8 unit.
+    fn ctf_flag(&mut self, d: &Data, p: u8) {
+        let ty = 0xc5u16.wrapping_add(self.player_races[p as usize] as u16);
+        let mut b = self.player_units[p as usize];
+        while b != NIL && d.dat.units.flags[self.units[b as usize].unit_type as usize] & 8 == 0 {
+            b = self.units[b as usize].player_next;
+        }
+        if b == NIL {
+            return;
+        }
+        let radius = if ty == 0x7c { 0x28 } else { 0x40 };
+        let Some((x, y)) = self.ai_find_build_spot(d, b, ty, self.start_locations[p as usize], radius) else { return };
+        if let Some(u) = self.create_unit(d, ty, x, y, p) {
+            self.finish_unit_pre(d, u);
+            self.finish_unit_post(d, u);
+        }
+    }
+
     /// 0x484ff0: the next player after `*it` whose triggers can run (`*it` starts at -1);
     /// 8 when there are no more.
     pub fn next_trigger_player(&self, it: &mut u32) -> u32 {
-        // ponytail: team melee (0x57f0b4 multiplayer and template +0x10) iterates the
-        // team leaders 0x57f1cc instead; neither replays nor local games set 0x57f0b4.
+        let ok = |p: u32| match self.player_types[p as usize] {
+            3 | 4 | 7 => true,
+            1 | 2 => !matches!(self.player_left[p as usize], 1 | 2),
+            _ => false,
+        };
+        // Team games (0x57f0b4 and template +0x10): the team leaders 0x57f1cc[0..4].
+        if self.multiplayer && self.template[0x10] != 0 {
+            loop {
+                *it = it.wrapping_add(1);
+                if *it >= 4 {
+                    return 8;
+                }
+                let p = self.team_leaders[*it as usize + 1] as u32;
+                if p < 8 && ok(p) {
+                    return p;
+                }
+            }
+        }
         loop {
             *it = it.wrapping_add(1);
             let p = *it;
             if p >= 8 {
                 return 8;
             }
-            let ty = self.player_types[p as usize];
-            if matches!(ty, 3 | 4 | 7) {
-                return p;
-            }
-            if matches!(ty, 1 | 2) && !matches!(self.player_left[p as usize], 1 | 2) {
+            if ok(p) {
                 return p;
             }
         }
@@ -436,7 +486,7 @@ impl State {
             return;
         }
         // 0x57f0b4 && 0x59688c == 'BNET' (0x424e4554) && !0x685174.
-        if super::players::MULTIPLAYER && !self.trig.bnet_reported {
+        if self.multiplayer && !self.trig.bnet_reported {
             self.trig.bnet_reported = true;
             todo_port!("0x4c4790", "Battle.net: report the game result once");
         }
