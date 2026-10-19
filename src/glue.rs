@@ -1195,14 +1195,16 @@ impl Glue {
     }
 
     /// 0x4edc30 (rez\gluLogin.bin, event proc 0x4edaa0), before 0x41a080: the profile
-    /// login. Event 10: the list (8, proc 0x4ed770 from 0x51a478) gets flag 0x20000;
-    /// event 0: 0x4ed720, 0x4de150, then the list's 0x4ed640.
+    /// login. Event 10: the list (8, proc 0x4ed770 from 0x51a478) gets flag 0x20000, the
+    /// panels slide in (0x4ed810); event 0: 0x4ed720, 0x4de150, then the list's 0x4ed640.
     fn open_login(&mut self, files: &Storage) {
         let mut dlg = self.open_glue_dialog(files, "rez/gluLogin.bin");
         if let Some(c) = dlg.get_mut(8) {
             c.flags |= 0x20000;
         }
         self.dlg = Some((dlg, Open::Login));
+        // Event 10's 0x4ed810: after 0x4dd9e0, the slide-in 0x4dd5e0 (ECX = 0x512a00, AX = 3).
+        self.slide_in(0x512a00, 3, 0);
         self.login_profiles();
         self.show_palette();
         self.login_fill();

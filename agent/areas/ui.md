@@ -117,8 +117,8 @@ Read when working on the HUD, dialogs, menus or glue screens.
   timer 7 = 20 ms 0x4dd220: delay ms/20 steps, then a quarter of the way left per step;
   controls after the highest id hide meanwhile; then dialog event 0x405 = `ready_405` /
   `create_405`) and 0x4dd040 / 0x4dcd00 slide-out (step doubles; the dialog ends, `dialog_done`,
-  when all are off screen). The list persists until the next slide-in (login's 0x4ed82c is
-  not ported). Headless shots: script waits are simulated ms, but add a trailing `w 1` after
+  when all are off screen). The list persists until the next slide-in (login's: 0x4ed810, list
+  0x512a00). Headless shots: script waits are simulated ms, but add a trailing `w 1` after
   the wait that opens a screen, or the shot shows the not-yet-ticked dialog. 0x58d6c4
   (objectives) is `Glue.objectives`: briefing action 0x427ec0 -> GameSetup -> `st.trig`,
   back through GameEnd; `SCBW_MENU=objectives` works in `scbw glue` shot mode (shot_setup).
