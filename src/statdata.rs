@@ -629,7 +629,7 @@ impl StatCache {
         }
         self.control = 0;
         self.data = 0xffff_ffff;
-        todo_port!("0x481480", "hide the tooltip");
+        // 0x481480 (hide the tooltip): see CmdTip::clear_cost, nothing to hide here.
         None
     }
 

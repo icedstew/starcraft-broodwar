@@ -37,6 +37,8 @@ pub struct Assets {
     pub bw: bw::load::Loaded,
     /// The scenario archive (.scm/.scx) of the map being played, if it came from one.
     pub map_mpq: Option<crate::mpq::Mpq>,
+    /// `GameSetup::map_dir` of the game being played.
+    pub map_dir: Option<String>,
     image_names: Vec<String>,
     grps: RefCell<Vec<Option<Option<std::rc::Rc<Grp>>>>>,
 }
@@ -45,7 +47,7 @@ impl Assets {
     pub fn load(files: Storage) -> io::Result<Assets> {
         let bw = bw::load::Loaded::load(&files)?;
         let image_names = dat::parse_tbl(&files.read("arr/images.tbl")?);
-        Ok(Assets { files, bw, map_mpq: None, image_names, grps: RefCell::new(vec![None; dat::Images::COUNT]) })
+        Ok(Assets { files, bw, map_mpq: None, map_dir: None, image_names, grps: RefCell::new(vec![None; dat::Images::COUNT]) })
     }
 
     pub fn dat(&self) -> &Dat {
@@ -1405,9 +1407,14 @@ pub struct GameSetup {
     pub chk: Vec<u8>,
     /// The map archive (its sounds), moved to the assets by `prepare_setup`.
     pub mpq: Option<crate::mpq::Mpq>,
+    /// A campaign mission's directory in the install (0x59c080 of the mission, 0x57f244
+    /// set): its wavs are read from there instead of an archive.
+    pub map_dir: Option<String>,
     pub types: [u8; 12],
     pub races: [u8; 12],
     pub names: [String; 12],
+    /// 0x57eeea: each slot's force (1..4; 0 none), as 0x45ad90 assigned it.
+    pub forces: [u8; 8],
     pub colors: [u8; 8],
     pub template: [u8; 0x20],
     /// The local player's slot.
@@ -1479,6 +1486,8 @@ fn new_game(a: &Assets, chk: &Chk, rep: Option<&crate::replay::Header>, gs: Opti
                 st.player_types[p] = s.kind;
                 st.player_races[p] = s.race;
                 st.player_names[p] = s.name.clone();
+                // 0x57eeea: the slot's force (trigger owners 18..21, 0x4894c0).
+                st.player_force[p] = s.team;
                 // Melee starting resources go to all eight players, empty slots too (as
                 // the real game's memory shows; todo: the routine applying game settings).
                 st.players.minerals[p] = 50;
@@ -1498,6 +1507,8 @@ fn new_game(a: &Assets, chk: &Chk, rep: Option<&crate::replay::Header>, gs: Opti
                 st.player_races[p] = g.races[p];
                 st.player_names[p] = g.names[p].clone();
             }
+            // 0x57eeea: the forces 0x45ad90 gave the slots (trigger owners 18..21, 0x4894c0).
+            st.player_force[..8].copy_from_slice(&g.forces);
             if modes.flag_59686d || modes.flag_596871 || modes.flag_596877 {
                 // As for a replay: the melee starting resources go to all eight players.
                 st.players.minerals[..8].fill(50);
@@ -1527,6 +1538,12 @@ fn new_game(a: &Assets, chk: &Chk, rep: Option<&crate::replay::Header>, gs: Opti
                     o => o,
                 };
                 st.player_races[p] = races[p].min(2);
+            }
+            // As 0x45ac10 / 0x45ad90 would: FORC's force + 1 for each occupied slot (0x57eeea).
+            if let Some(f) = chk.section(b"FORC").filter(|f| f.len() >= 8) {
+                for p in 0..8 {
+                    st.player_force[p] = if st.player_types[p] != 0 { f[p].wrapping_add(1) } else { 0 };
+                }
             }
             st.local_player = owners.iter().position(|&o| o == 6).unwrap_or(0) as u8;
         }
@@ -1680,6 +1697,7 @@ pub fn prepare_map(a: &mut Assets, chk: &Chk) {
 pub fn prepare_setup(a: &mut Assets, g: &mut GameSetup) {
     apply_map_dat(a, &Chk::parse(&g.chk), None, Some(g));
     a.map_mpq = g.mpq.take();
+    a.map_dir = g.map_dir.take();
 }
 
 pub fn prepare_replay(a: &mut Assets, r: &crate::replay::Replay) {
@@ -2422,6 +2440,57 @@ pub fn run_replay(a: &mut Assets, rep: crate::replay::Replay) -> io::Result<()> 
     run_with(a, scene, Some(ReplayPlay::new(rep)))
 }
 
+thread_local! {
+    /// The window and the audio waiting for the next screen: the glue parks its own before a
+    /// game starts and takes them back after, so the menus and the game share one window and
+    /// one sound output (as the one process did).
+    static PARKED: std::cell::RefCell<Option<minifb::Window>> = const { std::cell::RefCell::new(None) };
+    static PARKED_AUDIO: std::cell::RefCell<Option<crate::audio::Audio>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Exit Program (quit.bin -2) was chosen: the whole program ends, not only the game.
+pub static EXIT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn park_window(w: minifb::Window) {
+    PARKED.with(|p| *p.borrow_mut() = Some(w));
+}
+
+pub fn take_window() -> Option<minifb::Window> {
+    PARKED.with(|p| p.borrow_mut().take())
+}
+
+pub fn park_audio(a: crate::audio::Audio) {
+    PARKED_AUDIO.with(|p| *p.borrow_mut() = Some(a));
+}
+
+pub fn take_audio() -> Option<crate::audio::Audio> {
+    PARKED_AUDIO.with(|p| p.borrow_mut().take())
+}
+
+/// What the game loop borrowed from the glue: parked again (by `park`) when the loop ends.
+struct Lent<T>(Option<T>, fn(T));
+
+impl<T> Drop for Lent<T> {
+    fn drop(&mut self) {
+        if let Some(v) = self.0.take() {
+            (self.1)(v);
+        }
+    }
+}
+
+impl<T> std::ops::Deref for Lent<T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        self.0.as_ref().unwrap()
+    }
+}
+
+impl<T> std::ops::DerefMut for Lent<T> {
+    fn deref_mut(&mut self) -> &mut T {
+        self.0.as_mut().unwrap()
+    }
+}
+
 /// Show a 0RGB frame. minifb's web canvas takes the buffer's bytes as RGBA instead.
 fn present(win: &mut minifb::Window, rgb: &[u32], w: usize, h: usize) -> io::Result<()> {
     #[cfg(target_arch = "wasm32")]
@@ -2453,14 +2522,23 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
     }
     let race = ["zerg", "terran", "protoss"][scene.local_race()];
     let ui = crate::ui::Ui::load_with(&a.files, race, scene.st.replay).ok();
-    let mut audio = crate::audio::Audio::open(&a.files);
+    // The glue's audio when it started the game (`park_audio`), else a new output.
+    let mut audio = Lent(Some(take_audio().or_else(|| crate::audio::Audio::open(&a.files))), |a| {
+        if let Some(a) = a {
+            park_audio(a);
+        }
+    });
     if let Some(au) = audio.as_mut() {
         au.fade_out(); // 0x4ef100 -> 0x4a5f50: the front-end music ends as the game starts
         au.start_track(&a.files, crate::audio::game_start_track(scene.local_race())); // 0x4d9960 -> 0x4a6310
     }
     let (vw, vh) = (SCREEN_W, SCREEN_H);
     let opts = WindowOptions { scale: Scale::X2, ..WindowOptions::default() };
-    let mut win = Window::new("scbw", vw as usize, vh as usize, opts).map_err(|e| io::Error::other(e.to_string()))?;
+    // The glue's window when it started the game (`park_window`), else a new one.
+    let mut win = Lent(Some(match take_window() {
+        Some(w) => w,
+        None => Window::new("scbw", vw as usize, vh as usize, opts).map_err(|e| io::Error::other(e.to_string()))?,
+    }), park_window);
     // The window loop runs at the display rate: the software cursor is redrawn on every
     // pass (as 1.16.1's main loop does), the game clock below ticks every 42 ms.
     win.set_target_fps(60);
@@ -2533,7 +2611,7 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
                 scene.gamma = settings.gamma;
                 scene.ts.cycle.tick(settings.color_cycling); // 0x4d93f0
                 compose_with_cursor(&scene, ui.as_ref(), vx, vy, Some((kind, tick * 42 / 100, cx, cy)), menu.as_ref(), &mut idx, &mut rgb);
-                present(&mut win, &rgb, vw as usize, vh as usize)?;
+                present(&mut *win, &rgb, vw as usize, vh as usize)?;
                 return Ok(true);
             }
             next_tick = if now > next_tick + dt { now + dt } else { next_tick + dt };
@@ -2636,7 +2714,11 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
                 let (next, action) = m.on_activate(id, &mut settings, ctx);
                 menu = next.and_then(|(k, depth)| open_menu(&scene, k, depth, &mut settings));
                 match action {
-                    crate::menu::Action::QuitMission | crate::menu::Action::ExitProgram => return Ok(false),
+                    crate::menu::Action::QuitMission => return Ok(false),
+                    crate::menu::Action::ExitProgram => {
+                        EXIT.store(true, std::sync::atomic::Ordering::Relaxed);
+                        return Ok(false);
+                    }
                     // 0x4e0710: the game's result 0x51ce90 (7 after the defeat dialog, else 6)
                     // is the glue's next state; 0x4de200 then opens the score screen.
                     crate::menu::Action::EndGame => {
@@ -2702,7 +2784,7 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
             scene.gamma = settings.gamma;
             scene.ts.cycle.tick(settings.color_cycling); // 0x4d93f0
             compose_with_cursor(&scene, ui.as_ref(), vx, vy, Some((0, counter, cx, cy)), menu.as_ref(), &mut idx, &mut rgb);
-            present(&mut win, &rgb, vw as usize, vh as usize)?;
+            present(&mut *win, &rgb, vw as usize, vh as usize)?;
             return Ok(true);
         }
         let mdown = lmb;
@@ -3101,7 +3183,7 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
             }
         }
         for (id, x, y) in sounds {
-            if let Some(au) = &audio {
+            if let Some(au) = audio.as_ref() {
                 if let Some((v, pan)) = position_sound(&scene, a.dat(), settings.digital, id, x, y, vx, vy) {
                     au.play_pan(&a.files, a.dat(), id, v as i32, pan, None);
                 }
@@ -3118,7 +3200,7 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
         // 0x48ed50 from the sim (vision gate passed in State::unit_sound): distance volume
         // and pan at the unit's sprite, at least the call's minimum and the sfxdata one.
         for (id, u, min, x, y) in std::mem::take(&mut scene.st.unit_sounds) {
-            if let (Some(au), true) = (&audio, settings.digital != 0) {
+            if let (Some(au), true) = (audio.as_ref(), settings.digital != 0) {
                 let m = a.dat().sfxdata.volume.get(id as usize).copied().unwrap_or(0) as i32;
                 let (d, pan) = if u == NIL { (99, 0) } else { (sound_distance_volume(x as i32, y as i32, vx, vy), sound_pan(x as i32, vx)) };
                 let v = min.max(d).max(m);
@@ -3127,18 +3209,23 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
                 }
             }
         }
-        // 0x4c77d0 -> 0x4bc490: the trigger's wav from the scenario archive (a replay embeds
-        // only the chk, so there is none then).
+        // 0x4c77d0 -> 0x4bc490: the trigger's wav from the scenario archive, or a campaign
+        // mission's directory (as the briefing's 0x427fa0; a replay embeds only the chk, so
+        // there is none then).
         for id in std::mem::take(&mut scene.st.trigger_wavs) {
-            let name = scene.chk.string_bytes(id).map(|b| String::from_utf8_lossy(b).into_owned());
-            if let (Some(au), Some(m), Some(n)) = (&audio, a.map_mpq.as_ref(), name) {
-                if let Ok(d) = m.read(&n) {
-                    au.play_file(d);
-                }
+            let name = scene.chk.string_bytes(id).map(|b| String::from_utf8_lossy(&b[..b.iter().position(|&c| c == 0).unwrap_or(b.len())]).into_owned());
+            let (Some(au), Some(n)) = (audio.as_ref(), name) else { continue };
+            let data = match (a.map_mpq.as_ref(), a.map_dir.as_ref()) {
+                (Some(m), _) => m.read(&n).ok(),
+                (None, Some(dir)) => a.files.read(&format!("{dir}\\{n}")).ok(),
+                _ => None,
+            };
+            if let Some(d) = data {
+                au.play_file(d);
             }
         }
         for id in std::mem::take(&mut scene.st.ui_sounds) {
-            if let Some(au) = &audio {
+            if let Some(au) = audio.as_ref() {
                 au.play(&a.files, a.dat(), id, 1.0);
             }
         }
@@ -3160,7 +3247,7 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
         scene.gamma = settings.gamma;
         scene.ts.cycle.tick(settings.color_cycling); // 0x4d93f0
         compose_with_cursor(&scene, ui.as_ref(), vx, vy, Some((kind, counter, cx, cy)), None, &mut idx, &mut rgb);
-        present(&mut win, &rgb, vw as usize, vh as usize)?;
+        present(&mut *win, &rgb, vw as usize, vh as usize)?;
         Ok(true)
     })
 }

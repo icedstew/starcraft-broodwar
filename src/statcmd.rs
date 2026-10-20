@@ -1,7 +1,5 @@
 //! The command card's tooltip state (1.16.1 statcmd.cpp).
 
-use crate::todo_port;
-
 /// The tooltip globals: 0x68c1b4 (the button the tooltip is for, 0 = none), 0x68c1cc (the
 /// cost icon count) and 0x68c1d0..0x68c1de (the eight cost slots).
 #[derive(Default)]
@@ -16,7 +14,8 @@ pub struct CmdTip {
 impl CmdTip {
     /// 0x459360: hides the tooltip (0x481480) and clears the cost block.
     pub fn clear_cost(&mut self) {
-        todo_port!("0x481480", "hide the tooltip");
+        // 0x481480 (hide the tooltip: marks its rect dirty, origin 640x400, inactive): the
+        // tooltip is drawn by view.rs only while a text is built, so there is nothing to hide.
         self.cost = [0; 8];
         self.cost_count = 0;
     }

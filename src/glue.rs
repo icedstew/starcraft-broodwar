@@ -1916,6 +1916,21 @@ impl Glue {
         }
     }
 
+    /// 0x4e0d40 on the captured control `id` of the top dialog: the pressed flag follows
+    /// `inside`; coming back inside runs the hooks 0 and 1 (`mouse_down`).
+    pub fn button_follow(&mut self, id: i16, inside: bool) {
+        let Some((dlg, _)) = self.top() else { return };
+        let Some(c) = dlg.get_mut(id) else { return };
+        if c.press_follow(inside) {
+            self.mouse_down();
+        }
+    }
+
+    /// 0x4e19f0 on control `id`: released; true when it was pressed (activate it).
+    pub fn button_release(&mut self, id: i16) -> bool {
+        self.top().and_then(|(dlg, _)| dlg.get_mut(id)).is_some_and(|c| c.press_release())
+    }
+
     /// 0x4a6310 / 0x4a6140 (eax = track `i`): starts the front-end track unless one plays: 0x4a6140
     /// opens it (looped: type 1) and, for tracks with the fade flag (0x512bbd) and music on,
     /// the 20 ms timer 0x4a6030 raises it from -10000 by 400 a step.
@@ -3010,6 +3025,34 @@ impl Look {
 
 /// The front end's window loop (`scbw glue`). `shot`: write the first frame to a PNG
 /// and exit.
+/// Runs `game` with the glue's window and audio parked for it (`view::park_window`,
+/// `park_audio`), then takes them back and makes its input callback the glue's again.
+fn hand_over<T>(win: &mut Option<minifb::Window>, audio: &mut Option<crate::audio::Audio>, typed: &std::rc::Rc<std::cell::RefCell<Vec<u32>>>, game: impl FnOnce(minifb::Window) -> std::io::Result<T>) -> std::io::Result<T> {
+    let w = win.take().expect("the glue's window");
+    if let Some(a) = audio.take() {
+        crate::view::park_audio(a);
+    }
+    let r = game(w);
+    if crate::view::EXIT.load(std::sync::atomic::Ordering::Relaxed) {
+        std::process::exit(0);
+    }
+    *win = crate::view::take_window();
+    *audio = crate::view::take_audio();
+    if let Some(w) = win.as_mut() {
+        w.set_input_callback(Box::new(Typed(typed.clone())));
+    }
+    r
+}
+
+/// Typed characters (WM_CHAR).
+struct Typed(std::rc::Rc<std::cell::RefCell<Vec<u32>>>);
+
+impl minifb::InputCallback for Typed {
+    fn add_char(&mut self, c: u32) {
+        self.0.borrow_mut().push(c);
+    }
+}
+
 pub fn run(files: &Storage, shot: Option<&str>) -> std::io::Result<()> {
     use minifb::{MouseButton, MouseMode, Scale, Window, WindowOptions};
     let (w, h) = (640usize, 480usize);
@@ -3023,24 +3066,21 @@ pub fn run(files: &Storage, shot: Option<&str>) -> std::io::Result<()> {
     let mut win = if shot.is_none() {
         let opts = WindowOptions { scale: Scale::X2, ..WindowOptions::default() };
         let mut win = Window::new("scbw", w, h, opts).map_err(|e| std::io::Error::other(e.to_string()))?;
-        win.set_target_fps(24);
+        // 60 like the game window (view.rs): the cursor is drawn per frame, so 24 lagged.
+        win.set_target_fps(60);
+        // The glue draws its own cursor (`draw`), as the game does (view.rs).
+        win.set_cursor_visibility(false);
         Some(win)
     } else {
         None
     };
     let mut pressed: Option<i16> = None;
+    let mut btn_down = false;
     let mut was_down = false;
     let mut was_rdown = false;
     let mut held: Option<i16> = None;
     let mut script: std::collections::VecDeque<String> = std::env::var("SCBW_GLUE_INPUT").map(|v| v.split(';').map(str::to_string).collect()).unwrap_or_default();
     let mut popped = false;
-    // Typed characters (WM_CHAR).
-    struct Typed(std::rc::Rc<std::cell::RefCell<Vec<u32>>>);
-    impl minifb::InputCallback for Typed {
-        fn add_char(&mut self, c: u32) {
-            self.0.borrow_mut().push(c);
-        }
-    }
     let typed = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
     if let Some(w) = win.as_mut() {
         w.set_input_callback(Box::new(Typed(typed.clone())));
@@ -3081,7 +3121,13 @@ pub fn run(files: &Storage, shot: Option<&str>) -> std::io::Result<()> {
                     let rep = crate::replay::Replay::parse(&f).map_err(std::io::Error::other)?;
                     if shot.is_none() {
                         let mut a = crate::view::Assets::load(crate::storage::Storage::open(&crate::install_dir())?)?;
-                        crate::view::run_replay(&mut a, rep)?;
+                        // 0x4ef100 -> 0x4a5f50: the front-end music fades out (the game's
+                        // `fade_out` on the shared audio).
+                        glue.music_playing = false;
+                        hand_over(&mut win, &mut audio, &typed, |w| {
+                            crate::view::park_window(w);
+                            crate::view::run_replay(&mut a, rep)
+                        })?;
                         glue.state = state::GLUE;
                         glue.screen = 6 + if glue.expansion { 0x10 } else { 0 };
                         continue;
@@ -3131,7 +3177,13 @@ pub fn run(files: &Storage, shot: Option<&str>) -> std::io::Result<()> {
                 // 0x4e0710: the next state is the game's result 0x51ce90 (0x4d9950): 6 / 7 after
                 // the victory / defeat dialog's OK (the score screen), 4 after quitting the
                 // mission (0x4c9280: the campaign screen 6, or 0x16 with Brood War 0x58f440).
-                glue.game_end = crate::view::run_setup(&mut a, g)?;
+                // 0x4ef100 -> 0x4a5f50: the front-end music fades out (the game's `fade_out`
+                // on the shared audio).
+                glue.music_playing = false;
+                glue.game_end = hand_over(&mut win, &mut audio, &typed, |w| {
+                    crate::view::park_window(w);
+                    crate::view::run_setup(&mut a, g)
+                })?;
                 // 0x4d9950 ends with 0x4be0b0.
                 glue.flush_notice();
                 glue.objectives = glue.game_end.as_ref().map_or(glue.objectives, |e| e.objectives);
@@ -3197,9 +3249,10 @@ pub fn run(files: &Storage, shot: Option<&str>) -> std::io::Result<()> {
                 AudioCmd::StopWavs => au.stop_files(),
             }
         }
-        let now = std::time::Instant::now();
-        glue.tick(files, now.duration_since(last).as_millis() as u32);
-        last = now;
+        // Whole ms only; the remainder stays in `last` for the next pass.
+        let ms = last.elapsed().as_millis() as u32;
+        glue.tick(files, ms);
+        last += std::time::Duration::from_millis(ms as u64);
         let pal = glue.draw(files, &mut idx);
         for (o, &i) in rgb.iter_mut().zip(&idx) {
             let [r, g, b] = pal[i as usize];
@@ -3327,16 +3380,24 @@ pub fn run(files: &Storage, shot: Option<&str>) -> std::io::Result<()> {
             // 0x418eb0's button behavior: activate on release over the pressed control.
             let top = glue.popup.as_ref().or(glue.dlg.as_ref());
             let hit = top.and_then(|(dlg, _)| dlg.hit(x as i32, y as i32).filter(|&i| activates(&dlg.controls[i])).map(|i| dlg.controls[i].id));
-            if win.get_mouse_down(MouseButton::Left) {
-                if pressed.is_none() && hit.is_some() {
-                    glue.mouse_down();
+            // The press is captured only when the button goes down over a control; while
+            // held, the control's pressed look follows the mouse (0x4e0d40); the release
+            // activates it when it is still pressed (0x4e19f0).
+            if down && !btn_down {
+                pressed = hit;
+                if let Some(id) = hit {
+                    glue.button_follow(id, true);
                 }
-                pressed = pressed.or(hit);
+            } else if down {
+                if let Some(id) = pressed {
+                    glue.button_follow(id, hit == Some(id));
+                }
             } else if let Some(id) = pressed.take() {
-                if hit == Some(id) {
+                if glue.button_release(id) {
                     glue.activate(files, id);
                 }
             }
+            btn_down = down;
         }
         win.update_with_buffer(&rgb, w, h).map_err(|e| std::io::Error::other(e.to_string()))?;
     }

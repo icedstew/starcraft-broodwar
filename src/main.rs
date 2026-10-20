@@ -1099,7 +1099,7 @@ fn main() -> std::io::Result<()> {
             // (SCBW_MENU_REPLAY=1: as while watching a replay).
             let menu = std::env::var("SCBW_MENU").ok().and_then(|k| {
                 use menu::Kind::*;
-                let kind = match k.as_str() { "game" => Game, "options" => Options, "speed" => Speed, "sound" => Sound, "video" => Video, "help" => Help, "end" => EndMission, "objectives" => Objectives, "tips" => Tips, "fatal" => { menu::set_fatal(Some(b"The save failed.".to_vec())); Fatal }, _ => return None };
+                let kind = match k.as_str() { "game" => Game, "options" => Options, "speed" => Speed, "sound" => Sound, "video" => Video, "help" => Help, "end" => EndMission, "objectives" => Objectives, "tips" => Tips, "save" => SaveGame, "load" => LoadGame, "fatal" => { menu::set_fatal(Some(b"The save failed.".to_vec())); Fatal }, _ => return None };
                 let ctx = menu::Ctx { replay: std::env::var("SCBW_MENU_REPLAY").is_ok(), multiplayer: false, replay_speed: 6, ..Default::default() };
                 let skin = &ui.as_ref()?.skin;
                 let mut set = menu::Settings::default();

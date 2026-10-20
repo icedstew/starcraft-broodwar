@@ -124,8 +124,6 @@ pub(super) struct Ready {
     /// units.dat's portrait of each unit (0x662f88) and portdata.dat (0x44f0f0).
     unit_portrait: Vec<u16>,
     portraits: Option<Portraits>,
-    /// 0x68f538 / 0x68f55c: the two frame images of each portrait (0x44f020; never drawn).
-    frames: Vec<Vec<(usize, usize, Vec<u8>)>>,
     /// The C runtime's _holdrand (0x44eb90 / 0x44ec90 use rand()).
     holdrand: u32,
 }
@@ -145,7 +143,6 @@ impl Default for Ready {
             msg_interval: 0,
             unit_portrait: Vec::new(),
             portraits: None,
-            frames: Vec::new(),
             holdrand: 1,
         }
     }
@@ -236,7 +233,7 @@ impl Glue {
         let Some(c) = self.rctl(id) else { return };
         let (w, h) = (c.rect.2 - c.rect.0, c.rect.3 - c.rect.1);
         c.update = Update::Portrait;
-        c.pic = Some(Pic { w: 0x78, h: 0x70, px: vec![0; 0x78 * 0x70], scroll: 0, dx: (w - 0x77) / 2, dy: (h - 0x6f) / 2 });
+        c.pic = Some(Pic { w: 0x78, h: 0x70, px: vec![0; 0x78 * 0x70], scroll: 0, dx: (w - 0x77) / 2, dy: (h - 0x6f) / 2, ..Default::default() });
         self.ready.ports[(id - ids::PORT_FIRST) as usize] = Port::default();
         self.rtimer_set(Some(id), 1, 0x32, Proc::Port);
         self.rshow(id, false);
@@ -255,18 +252,20 @@ impl Glue {
     }
 
     /// 0x44f020 (EAX = list `a`, stack = list `b`): per portrait the two images (Ordinal_325
-    /// loads each .pcx), kept in 0x68f538 / 0x68f55c. Nothing draws them.
+    /// loads each .pcx), kept in 0x68f55c (`b`) / 0x68f538 (`a`, the talking one) by control
+    /// id; the portrait's draw 0x44e9e0 reads them (`Pic::frames`).
     fn ready_44f020(&mut self, files: &Storage, a: &[u32; 4], b: &[u32; 4]) {
         let path = |g: &Glue, va: u32| -> String { (0..).map(|k| g.exe_u8(va + k)).take_while(|&c| c != 0).map(|c| c as char).collect() };
-        self.ready.frames.clear();
         for i in 0..4 {
-            let mut pair = Vec::new();
-            for va in [b[i], a[i]] {
+            let load = |va: u32| {
                 let p = path(self, va);
                 let Ok(d) = files.read(&p.replace('\\', "/")) else { crate::bw::fatal_error(&p) };
-                pair.push(crate::view::pcx(&d));
+                crate::view::pcx(&d)
+            };
+            let pair = std::rc::Rc::new([load(b[i]), load(a[i])]);
+            if let Some(pic) = self.rctl(ids::PORT_FIRST + i as i16).and_then(|c| c.pic.as_mut()) {
+                pic.frames = Some(pair);
             }
-            self.ready.frames.push(pair);
         }
     }
 
@@ -280,7 +279,7 @@ impl Glue {
         if let Some(c) = self.rctl(ids::MESSAGE) {
             let (w, h) = (c.rect.2 - c.rect.0 + 1, (c.rect.3 - c.rect.1 + 1) * 20);
             c.update = Update::BriefText;
-            c.pic = Some(Pic { w, h, px: vec![0; (w * h) as usize], scroll: 0, dx: 0, dy: 0 });
+            c.pic = Some(Pic { w, h, px: vec![0; (w * h) as usize], scroll: 0, dx: 0, dy: 0, ..Default::default() });
         }
         self.rtimer_set(None, 10, 100, Proc::Brief);
         self.ready_46cbc0();
@@ -626,6 +625,15 @@ impl Glue {
             p.video = None;
             p.flags = 0;
         }
+        self.ready_port_lit(id);
+    }
+
+    /// The record's +0xc bit 0 into the control's picture (the frame 0x44e9e0 picks).
+    fn ready_port_lit(&mut self, id: i16) {
+        let lit = self.ready_port(id).is_some_and(|p| p.flags & 1 != 0);
+        if let Some(pic) = self.rctl(id).and_then(|c| c.pic.as_mut()) {
+            pic.lit = lit;
+        }
     }
 
     /// 0x46ca30 (CL = the slot): the portrait goes.
@@ -656,6 +664,7 @@ impl Glue {
         if let Some(st) = self.ready_port(id) {
             st.flags |= 1;
         }
+        self.ready_port_lit(id);
         self.rtimer_set(Some(id), 2, ms, Proc::Port);
     }
 
@@ -672,6 +681,7 @@ impl Glue {
             }
             st.flags &= !1;
             st.video = None;
+            self.ready_port_lit(id);
             self.rtimer_kill(Some(id), 2);
         }
         self.ready_44edb0(files, id);
@@ -788,8 +798,10 @@ impl Glue {
         let (vw, vh) = (v.w, v.h);
         let Some(c) = self.dlg.as_mut().and_then(|(d, _)| d.get_mut(id)) else { return };
         let Some(pic) = c.pic.as_mut() else { return };
-        // Ordinal_454's flag 0x200: the video is played at double size into the 0x78 x 0x70 buffer.
-        for y in 0..pic.h as usize {
+        // Ordinal_454's flag 0x200: the video is played at double width and interlaced into the
+        // 0x78 x 0x70 buffer (each row once, the rows between left as cleared: black lines,
+        // as the real game's briefing shows).
+        for y in (0..pic.h as usize).step_by(2) {
             for x in 0..pic.w as usize {
                 if x / 2 < vw && y / 2 < vh {
                     pic.px[y * pic.w as usize + x] = t[v.pixels[y / 2 * vw + x / 2] as usize];

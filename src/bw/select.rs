@@ -345,7 +345,7 @@ impl State {
         grp_pixel(g, im.frame, fx as u32, (py - y as i32) as u32)
     }
 
-    /// 0x402a00: point (px, py) is on unit `u`'s graphics.
+    /// 0x402a00: point (px, py) is on unit `u`'s graphics (bounds test = 0x498220).
     fn unit_hit(&self, d: &Data, u: u32, px: i32, py: i32) -> bool {
         let s = self.units[u as usize].sprite;
         let Some(b) = self.sprite_click_bounds(d, s) else { return false };

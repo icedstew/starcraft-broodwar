@@ -2296,9 +2296,11 @@ impl Glue {
             return Some(crate::view::GameSetup {
                 chk: Vec::new(),
                 mpq: None,
+                map_dir: None,
                 types: [0; 12],
                 races: [0; 12],
                 names: Default::default(),
+                forces: [0; 8],
                 colors: [0; 8],
                 template: [0; 0x20],
                 local: 0,
@@ -2331,9 +2333,12 @@ impl Glue {
         Some(crate::view::GameSetup {
             chk,
             mpq,
+            // 0x57f244: a campaign mission's wavs come from its directory.
+            map_dir: (self.setup.map_dir_flag != 0).then(|| self.map_names.get(self.setup.map_dir_flag as usize).cloned().unwrap_or_default()),
             types: std::array::from_fn(|i| s[i][slot::TYPE]),
             races: std::array::from_fn(|i| s[i][slot::RACE].min(2)),
             names: std::array::from_fn(|i| name(&s[i][slot::NAME..slot::NAME + 0x19])),
+            forces: std::array::from_fn(|i| s[i][slot::FORCE]),
             colors,
             template: self.setup.template,
             local: self.setup.local_slot[0] as u8,

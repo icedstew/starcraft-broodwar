@@ -107,6 +107,13 @@ fn sg() -> MutexGuard<'static, Sg> {
     SG.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// 0x461720 (negated): in multiplayer a save is refused while GetTickCount <= 0x685164 + 120000.
+/// 0x685164 starts at 0, so before the first save this is the machine's uptime, which is
+/// not known here (taken as past 2 minutes).
+fn save_wait(ctx: &Ctx) -> bool {
+    ctx.multiplayer && sg().saved_at.is_some_and(|t| t.elapsed().as_millis() <= 120_000)
+}
+
 /// 0x4e4a10 (ECX = the message, None = null; EAX = the debug text, "" at the callers): the
 /// in-game error message to open (`Kind::Fatal`). `msg` is network.tbl string `id` as
 /// 0x4bb300 picks it: None for id 0, "" past the table. The caller opens the dialog (the
@@ -296,6 +303,9 @@ pub struct Ctx {
     pub net_slot: [u8; 8],
     /// 0x596877 (game template +0x12): set, the game cannot be saved.
     pub no_save: u8,
+    /// 0x6d1264 == 0 (no sound device): the sound dialog's sliders and boxes 3..5 are disabled
+    /// (0x460bb0 / 0x460b20). Negated so that `Default` keeps the sound on.
+    pub no_sound: bool,
 }
 
 impl Ctx {
@@ -520,7 +530,8 @@ pub fn option_event(c: &mut Ctl, sub: u16, ev: u32, data: u32, op: i32) -> Optio
 }
 
 impl Menu {
-    /// 0x4f57a0 + the dialog's init (event 0xe, user 0).
+    /// 0x4f57a0 + the dialog's init (event 0xe, user 0). The option dialogs' open is 0x481e80 /
+    /// 0x460d60 / 0x480e70 (`saved` = the copy of the 9 settings dwords).
     /// 0x4cda30: the Cancel / Previous (-3) graphic and the WIDE flag (inline here).
     pub fn open(kind: Kind, depth: u8, files: &Storage, skin: &Skin, ctx: Ctx, set: &Settings) -> Option<Menu> {
         let mut dlg = Dialog::parse(&files.read(kind.bin(ctx.replay)).ok()?);
@@ -556,6 +567,8 @@ impl Menu {
                     show(&mut dlg, 8, false);
                 }
             }
+            // 0x4ca160 with 0x4c95a0 (quit2mnu.bin, not a replay): control 1 hidden (0x418700).
+            Kind::QuitMission if !ctx.replay => show(&mut dlg, 1, false),
             // 0x4c94f0: no network options in single player.
             Kind::Options if !ctx.multiplayer => show(&mut dlg, 4, false),
             Kind::Speed => {
@@ -578,6 +591,12 @@ impl Menu {
                 for (id, bit) in [(3, 1), (4, 2), (5, 4), (6, 0x400)] {
                     if let Some(c) = find(&mut dlg, id) {
                         c.checked = set.sound_flags & bit != 0;
+                    }
+                }
+                // 0x460bb0 (ids 1, 2) / 0x460b20 (ids 3..5, not 6): 0x418640 without a sound device.
+                if ctx.no_sound {
+                    for id in 1..=5 {
+                        disable(&mut dlg, id);
                     }
                 }
             }
@@ -1011,7 +1030,7 @@ impl Menu {
         }
     }
 
-    /// The dialog's controls into the live settings (the option dialogs apply as they
+    /// 0x460a90: the dialog's controls into the live settings (the option dialogs apply as they
     /// change: 0x481b00 / 0x460a80 / 0x480b20 and the box handlers).
     fn store(&self, set: &mut Settings) {
         let d = &self.dlg;
@@ -1237,8 +1256,7 @@ impl Menu {
                     return (None, Action::Closed);
                 }
                 // 0x461720: in multiplayer one save per 2 minutes
-                let wait = ctx.multiplayer && sg().saved_at.is_some_and(|t| t.elapsed().as_millis() <= 120_000);
-                if wait || ctx.replay {
+                if save_wait(&ctx) || ctx.replay {
                     return (None, Action::Closed);
                 }
                 Self::clear_choice();
@@ -1267,14 +1285,14 @@ impl Menu {
             (Kind::Options, 3) => (Some((Kind::Video, self.depth)), Action::None),
             (Kind::Options | Kind::Help | Kind::Objectives | Kind::EndMission, -3) if self.depth > 1 => back(Kind::Game),
             // 0x481ef0 / 0x460dd0 / 0x480ee0 with 0x4c9780: Cancel restores the copy (a
-            // replay keeps its speed); both return to the options.
-            (Kind::Speed | Kind::Sound | Kind::Video, -2 | -3) => {
-                if id == -3 {
-                    let speed = set.game_speed;
-                    *set = self.saved;
-                    if ctx.replay {
-                        set.game_speed = speed;
-                    }
+            // replay keeps its speed) and returns to the options; OK sets the depth to 1
+            // (0x6d1224) so the dialog just closes.
+            (Kind::Speed | Kind::Sound | Kind::Video, -2) => (None, Action::Apply),
+            (Kind::Speed | Kind::Sound | Kind::Video, -3) => {
+                let speed = set.game_speed;
+                *set = self.saved;
+                if ctx.replay {
+                    set.game_speed = speed;
                 }
                 if self.depth > 1 {
                     (Some((Kind::Options, self.depth.saturating_sub(2))), Action::Apply)

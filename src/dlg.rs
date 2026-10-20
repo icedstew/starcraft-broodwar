@@ -92,6 +92,11 @@ pub struct Pic {
     /// Where it sits in the control (a portrait's bytes +0x11 / +0x12).
     pub dx: i32,
     pub dy: i32,
+    /// A portrait's two frame images (0x68f55c / 0x68f538 by control id, 0x44f020): the
+    /// second while `lit` (the record's +0xc bit 0, talking). 0x44e9e0 draws the one at the
+    /// control's corner over the video, color 0 transparent (0x41d090).
+    pub frames: Option<std::rc::Rc<[(usize, usize, Vec<u8>); 2]>>,
+    pub lit: bool,
 }
 
 /// What a gluScore.bin control draws (its +0x2e draw function and the row data it reads).
@@ -1401,6 +1406,10 @@ impl Skin {
             (Update::Portrait, _) => {
                 if let Some(p) = c.pic.as_ref() {
                     self.blit(&p.px, p.w, p.h, l + p.dx, t + p.dy, r, None, false, s);
+                    if let Some(f) = p.frames.as_ref() {
+                        let (fw, fh, px) = &f[p.lit as usize];
+                        self.blit(px, *fw as i32, *fh as i32, l, t, (0, 0, s.w - 1, s.h - 1), None, true, s);
+                    }
                 }
                 return;
             }
@@ -1836,6 +1845,35 @@ impl Skin {
         }
     }
 
+    /// 0x417130 (0x4172f0 mode 3): `px` blended over the screen at light `lv` (0x6d09b8):
+    /// level 0 draws nothing; 1..=6 go through the blend tables 0x6d0590 with Storm's
+    /// blitters 0x6d0540 (levels 1, 2: T[dst][src]) / 0x6d0588 (T[src][dst]), i.e.
+    /// `Effects::mix(lv, dst, src)`; level 7 (0x416ed0, table 0x6d053c) copies. Source 0
+    /// keeps the screen at every level (the tables' row and column 0).
+    #[allow(clippy::too_many_arguments)]
+    fn blit_lit(&self, px: &[u8], w: i32, h: i32, x: i32, y: i32, clip: (i32, i32, i32, i32), fx: &Effects, lv: u8, s: &mut Surf) {
+        if lv == 0 {
+            return;
+        }
+        for sy in 0..h {
+            let dy = y + sy;
+            if dy < clip.1 || dy > clip.3 || dy < 0 || dy >= s.h {
+                continue;
+            }
+            for sx in 0..w {
+                let dx = x + sx;
+                if dx < clip.0 || dx > clip.2 || dx < 0 || dx >= s.w {
+                    continue;
+                }
+                let Some(&c) = px.get((sy * w + sx) as usize) else { continue };
+                if c != 0 {
+                    let d = &mut s.px[(dy * s.w + dx) as usize];
+                    *d = fx.mix(lv, *d, c);
+                }
+            }
+        }
+    }
+
     /// 0x4172f0 (modes 0, 1 and 4): `px` (w x h) at (x, y) clipped to `clip` (inclusive).
     /// With `remap` the covered pixels (source not 0) are replaced by their remap; else
     /// the source is copied, skipping color 0 when `keyed`.
@@ -1875,11 +1913,13 @@ impl Skin {
                 continue;
             }
             let Some(v) = a.video.as_ref() else { continue };
+            let v = v.borrow();
             if a.flags & 3 != 0 {
-                todo_port!("0x417130", "translucent video blit by the fade level");
+                // 0x4e0be0 mode 3 -> 0x417130 at the light level of the entry's alpha byte.
+                let Some(fx) = self.fx.as_ref() else { continue };
+                self.blit_lit(&v.pixels, v.w as i32, v.h as i32, r.0 + a.x, r.1 + a.y, r, fx, level(a.alpha as u8 as i32), s);
                 continue;
             }
-            let v = v.borrow();
             self.blit(&v.pixels, v.w as i32, v.h as i32, r.0 + a.x, r.1 + a.y, r, None, a.flags & 0x10 != 0, s);
         }
         if c.text.is_empty() {
