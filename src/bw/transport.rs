@@ -172,8 +172,10 @@ impl State {
     pub fn order_pickup_bunker(&mut self, d: &Data, u: u32) {
         let t = self.units[u as usize].order_target_unit;
         if t != NIL {
+            // 0x4752b0 with esi = the target, eax = the bunker: the target gets
+            // EnterTransport (0x5c) toward the bunker.
             if self.can_load(d, u, t) {
-                self.order_with_target(d, u, 0x5c, t);
+                self.order_with_target(d, t, 0x5c, u);
             }
             self.order_done_or_next(d, u);
             return;

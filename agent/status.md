@@ -41,6 +41,10 @@ Delegate per agents.md: Haiku triage, Sonnet porting, Opus review / hard RE / co
   not load in 1.16.1: post-1.18 recording). repshot over 72: map mean 0.29% on the 68
   normal ones, full screen ~2.2% (0 exact). Outliers (likely desyncs, unchecked): tl1668
   52%, tl1742 27%, tl2090 9.7%, tl2034 8.0%. Summary: agent/local/scratch/p1311/summary.txt.
+  Desyncs vs native rng (2026-10-22): tl1668 fixed (PickupBunker 0x4e73b0 gave the bunker,
+  not its target, EnterTransport): matches to the end. Open: tl1742 f20550 (player 3's
+  moves in a frame with chat + a leave are ignored natively), tl2090 (< f43787), tl2034
+  (< f20647). Tools: agent/local/scratch/desync (check.sh, ucmp.py).
   Minimap border 0x4a3570 (narrow / short maps) ported: pixel-exact vs native.
   Left on the map view: native redraws dirty 16 px cells only (0x4bd580 / 0x4bcdc0 /
   0x497000): stale strips after camera jumps, mineral shadows darkened again next to
