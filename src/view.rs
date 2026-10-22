@@ -2661,7 +2661,6 @@ impl Follow {
 /// of its players.
 pub struct ReplayPlay {
     pub rep: crate::replay::Replay,
-    pub player_of: [u8; 256],
     pub players: Vec<u8>,
     pub next: usize,
     pub frame: u32,
@@ -2670,16 +2669,14 @@ pub struct ReplayPlay {
 
 impl ReplayPlay {
     pub fn new(rep: crate::replay::Replay) -> ReplayPlay {
-        let mut player_of = [0u8; 256];
         let mut players = Vec::new();
         for (i, s) in rep.header.slots.iter().enumerate() {
             if s.kind == 1 || s.kind == 2 {
-                player_of[s.player_id as usize] = i as u8;
                 players.push(i as u8);
             }
         }
         let first = std::env::var("SCBW_FOLLOW").ok().and_then(|v| v.parse().ok()).unwrap_or_else(|| players.first().copied().unwrap_or(0));
-        ReplayPlay { rep, player_of, players, next: 0, frame: 0, follow: Follow { player: first, focus: None } }
+        ReplayPlay { rep, players, next: 0, frame: 0, follow: Follow { player: first, focus: None } }
     }
 
     /// Ease the camera (top-left of a `vw` x `vh` map view) a quarter of the way toward
@@ -2694,7 +2691,7 @@ impl ReplayPlay {
     pub fn commands(&mut self, scene: &mut Scene) {
         while self.next < self.rep.commands.len() && self.rep.commands[self.next].frame <= self.frame {
             let c = &self.rep.commands[self.next];
-            let p = self.player_of[c.player as usize];
+            let p = c.owner;
             scene.replay_command(p, &c.data);
             self.follow.command(&scene.st, p, &c.data);
             self.next += 1;

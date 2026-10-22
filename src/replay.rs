@@ -96,7 +96,11 @@ pub struct Header {
 #[derive(Debug, Clone)]
 pub struct Command {
     pub frame: u32,
+    /// The storm id the command came with.
     pub player: u8,
+    /// The player 0x487100 runs it as (0x512678): the slot whose storm id (0x57eee0 +4)
+    /// matches, or the one before it in the frame's group.
+    pub owner: u8,
     /// Command id byte followed by its payload.
     pub data: Vec<u8>,
 }
@@ -134,7 +138,12 @@ impl Replay {
         }
         let cmds = r.sized_section()?;
         let chk = r.sized_section()?;
-        Ok(Replay { modern: modern121 || d[28] == 0x78, header: parse_header(&h), commands: parse_commands(&cmds)?, chk })
+        let modern = modern121 || d[28] == 0x78;
+        // SC:R's files use commands 1.16.1 lacks (0x60..): framed by our own table.
+        let header = parse_header(&h);
+        let owners = Owners::new(&header.raw);
+        let commands = if modern { parse_commands(&cmds, &owners)? } else { playback_commands(&cmds, &owners) };
+        Ok(Replay { modern, header, commands, chk })
     }
 }
 
@@ -214,13 +223,131 @@ pub fn command_len(id: u8, rest: &[u8]) -> Option<usize> {
     })
 }
 
-fn parse_commands(d: &[u8]) -> io::Result<Vec<Command>> {
+/// 0x5005f8: each command's length with its id byte (0x4cdff0); -1 = not a command.
+const CMD_LEN: [i8; 0x77] = [
+    -1, -1, -1, -1, -1, 1, 33, 33, 1, 26, 26, 26, 8, 3, 5, 2, //
+    1, 1, 5, 3, 10, 11, -1, -1, 1, 1, 2, 1, 1, 1, 2, 3, //
+    3, 2, 2, 3, 1, 2, 2, 1, 2, 3, 1, 2, 2, 2, 1, 5, //
+    2, 1, 2, 1, 1, 3, 1, 1, 1, 1, 2, 2, -1, -1, -1, -1, //
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, //
+    -1, -1, -1, -1, -1, 2, 10, 2, 5, -1, 1, -1, 82, -1, -1, -1, //
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, //
+    -1, -1, -1, -1, -1, -1, -1,
+];
+
+/// 0x487100's player lookup: the 8 entries of the slot table 0x57eee0 (as the header
+/// stores it at 0xa1): +4 the storm id, +0 the player. A group starts from 0x512684, the
+/// local player: 0x596bac in a replay (0x4dbe50), 0 when read from the real game (tl1742).
+struct Owners([(u32, u8); 8]);
+
+impl Owners {
+    fn new(raw: &[u8]) -> Owners {
+        let u32_at = |o: usize| raw.get(o..o + 4).map_or(u32::MAX, |b| u32::from_le_bytes(b.try_into().unwrap()));
+        Owners(std::array::from_fn(|i| (u32_at(0xa1 + i * 36 + 4), u32_at(0xa1 + i * 36) as u8)))
+    }
+
+    /// The player for storm id `id`, else `cur` (0x512678 unchanged).
+    fn owner(&self, id: u8, cur: u8) -> u8 {
+        self.0.iter().find(|e| e.0 == id as u32).map_or(cur, |e| e.1)
+    }
+}
+
+/// 0x6552b0: the group's command bytes; 0x6554d8, right after it, the storm ids.
+const GROUP_DATA: usize = 0x228;
+
+/// The commands 1.16.1 runs when it plays a replay, at the frame and as the player it runs
+/// them. 0x4cdff0 reads every block of one frame (u32 frame, u8 length, then storm id +
+/// command pairs) into one group; the command lengths come from 0x5005f8 (0x09..0x0b: 2
+/// bytes per unit + 2), and the bytes read so far in a block are counted in a byte, so a
+/// long command (chat 0x5c, 82 bytes) can wrap the count past the block's length and the
+/// reading runs on into the next block's header. The bytes go to 0x6552b0, only 0x228 long:
+/// a bigger group runs over the storm ids at 0x6554d8 (each written before its command's
+/// bytes), so its first commands can run as another player, and storm ids written later
+/// land in earlier commands' bytes. Reaching the end of the data 0x4cdff0 returns -1
+/// instead of the frame, so 0x487100 never runs that last group. 0x487100 reads one group
+/// per frame and runs it once the counter reaches its frame (a group behind the counter
+/// runs at once).
+fn playback_commands(d: &[u8], owners: &Owners) -> Vec<Command> {
+    let mut out = Vec::new();
+    let (mut p, mut next, mut cur) = (0usize, -1i64, 0i64);
+    let u32_at = |p: usize| d.get(p..p + 4).map(|b| u32::from_le_bytes(b.try_into().unwrap()));
+    loop {
+        // 0x487100 at counter `cur`: a new group is read once the last one has run.
+        if cur <= next {
+            cur = next + 1;
+        }
+        let Some(frame) = u32_at(p) else { break };
+        // ponytail: one flat buffer for 0x6552b0 and what follows; a group past 0x6554d8 +
+        // its own storm ids would reach other globals, which are not modeled.
+        let mut mem: Vec<u8> = vec![0; GROUP_DATA + 0x400];
+        let mut cmds: Vec<(usize, usize)> = Vec::new();
+        let mut off = 0usize;
+        let mut done = false;
+        while p < d.len() {
+            if u32_at(p) != Some(frame) {
+                done = true;
+                break;
+            }
+            let Some(&len) = d.get(p + 4) else {
+                p = d.len();
+                break;
+            };
+            p += 5;
+            let mut read = 0u8;
+            while read < len {
+                let (Some(&player), Some(&id)) = (d.get(p), d.get(p + 1)) else {
+                    p = d.len();
+                    break;
+                };
+                let n = match id {
+                    0x09..=0x0b => d.get(p + 2).map_or(0, |&k| k as usize * 2 + 2),
+                    _ => match CMD_LEN.get(id as usize) {
+                        Some(&n) if n > 0 => n as usize,
+                        // Not a command: 1.16.1 would copy (u32)-1 bytes.
+                        _ => {
+                            p = d.len();
+                            break;
+                        }
+                    },
+                };
+                let src = &d[p + 1..(p + 1 + n).min(d.len())];
+                let at = GROUP_DATA + cmds.len();
+                if at >= mem.len() || off + src.len() > mem.len() {
+                    p = d.len();
+                    break;
+                }
+                mem[at] = player;
+                mem[off..off + src.len()].copy_from_slice(src);
+                cmds.push((off, src.len()));
+                off += src.len();
+                p += 1 + n;
+                read = read.wrapping_add(n as u8).wrapping_add(1);
+            }
+        }
+        if !done {
+            break;
+        }
+        next = frame as i64;
+        let run = next.max(cur);
+        let mut owner = 0;
+        for (i, &(o, n)) in cmds.iter().enumerate() {
+            let player = mem[GROUP_DATA + i];
+            owner = owners.owner(player, owner);
+            out.push(Command { frame: run as u32, player, owner, data: mem[o..o + n].to_vec() });
+        }
+        next = run;
+    }
+    out
+}
+
+fn parse_commands(d: &[u8], owners: &Owners) -> io::Result<Vec<Command>> {
     let mut out = Vec::new();
     let mut p = 0;
     while p + 5 <= d.len() {
         let frame = u32::from_le_bytes(d[p..p + 4].try_into().unwrap());
         let end = (p + 5 + d[p + 4] as usize).min(d.len());
         p += 5;
+        let mut owner = 0;
         while p + 2 <= end {
             let (player, id) = (d[p], d[p + 1]);
             let Some(n) = command_len(id, &d[p + 2..end]) else {
@@ -228,7 +355,8 @@ fn parse_commands(d: &[u8]) -> io::Result<Vec<Command>> {
                 break;
             };
             let stop = (p + 2 + n).min(end);
-            out.push(Command { frame, player, data: d[p + 1..stop].to_vec() });
+            owner = owners.owner(player, owner);
+            out.push(Command { frame, player, owner, data: d[p + 1..stop].to_vec() });
             p = stop;
         }
         p = end;

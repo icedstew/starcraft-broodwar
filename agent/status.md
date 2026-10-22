@@ -39,12 +39,15 @@ Delegate per agents.md: Haiku triage, Sonnet porting, Opus review / hard RE / co
   minimap UI"): tl1311 (PvZ) rng + draw count match native every frame to f42049.
   Native shots for 71 more replays (`re/native_all.sh`, 4 at a time, ~3.5 h; tl2101 does
   not load in 1.16.1: post-1.18 recording). repshot over 72: map mean 0.29% on the 68
-  normal ones, full screen ~2.2% (0 exact). Outliers (likely desyncs, unchecked): tl1668
-  52%, tl1742 27%, tl2090 9.7%, tl2034 8.0%. Summary: agent/local/scratch/p1311/summary.txt.
-  Desyncs vs native rng (2026-10-22): tl1668 fixed (PickupBunker 0x4e73b0 gave the bunker,
-  not its target, EnterTransport): matches to the end. Open: tl1742 f20550 (player 3's
-  moves in a frame with chat + a leave are ignored natively), tl2090 (< f43787), tl2034
-  (< f20647). Tools: agent/local/scratch/desync (check.sh, ucmp.py).
+  normal ones, full screen ~2.2% (0 exact). Outliers were desyncs (tl1668 52%, tl1742 27%,
+  tl2090 9.7%, tl2034 8.0%). Summary: agent/local/scratch/p1311/summary.txt.
+  Desyncs vs native rng (2026-10-22), all four now match to the end: tl1668 PickupBunker
+  0x4e73b0 (the target gets EnterTransport, not the bunker); tl1742 / tl2090 replay
+  playback 0x4cdff0 / 0x487100 (one frame's blocks grouped into the 0x228-byte buffer
+  0x6552b0, overflow writes the storm-id array 0x6554d8 so commands run as the wrong
+  player; unmatched storm id keeps the previous player, group starts from 0x512684 = 0
+  measured in tl1742; last group never runs); tl2034 0x49fed0 larva->egg clamp
+  (0x401fa0 then 0x4eb9f0 if moved). Tools: agent/local/scratch/desync (check.sh, ucmp.py).
   Minimap border 0x4a3570 (narrow / short maps) ported: pixel-exact vs native.
   Left on the map view: native redraws dirty 16 px cells only (0x4bd580 / 0x4bcdc0 /
   0x497000): stale strips after camera jumps, mineral shadows darkened again next to

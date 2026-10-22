@@ -371,16 +371,12 @@ fn main() -> std::io::Result<()> {
             let t = view::load_template(&a, r.header.game_type, r.header.sub_type);
             let hex = |b: &[u8]| b.iter().map(|b| format!("{b:02x}")).collect::<String>();
             o += &format!("template {}\nmapunits {}\n", hex(&t), hex(&r.header.raw[0x271..0x279]));
-            let mut player_of = [0u8; 256];
             for (i, s) in r.header.slots.iter().enumerate().take(8) {
                 o += &format!("player {i} {} {}\n", s.kind, s.race);
-                if s.kind == 1 || s.kind == 2 {
-                    player_of[s.player_id as usize] = i as u8;
-                }
             }
             for c in &r.commands {
                 let hex: String = c.data.iter().map(|b| format!("{b:02x}")).collect();
-                o += &format!("cmd {} {} {hex}\n", c.frame, player_of[c.player as usize]);
+                o += &format!("cmd {} {} {hex}\n", c.frame, c.owner);
             }
             std::fs::write(&args[2], o)?;
         }
@@ -393,16 +389,10 @@ fn main() -> std::io::Result<()> {
             let at: u32 = args[2].parse().unwrap_or(1000);
             let more: u32 = args.get(3).and_then(|v| v.parse().ok()).unwrap_or(500);
             view::prepare_replay(&mut a, &r);
-            let mut player_of = [0u8; 256];
-            for (i, s) in r.header.slots.iter().enumerate() {
-                if s.kind == 1 || s.kind == 2 {
-                    player_of[s.player_id as usize] = i as u8;
-                }
-            }
             let play = |scene: &mut view::Scene, ci: &mut usize, f: u32| {
                 while *ci < r.commands.len() && r.commands[*ci].frame <= f {
                     let c = &r.commands[*ci];
-                    scene.replay_command(player_of[c.player as usize], &c.data);
+                    scene.replay_command(c.owner, &c.data);
                     *ci += 1;
                 }
                 scene.step();
@@ -605,13 +595,9 @@ fn main() -> std::io::Result<()> {
             let r = replay::Replay::parse(&std::fs::read(&args[1])?)?;
             view::prepare_replay(&mut a, &r);
             let mut scene = view::Scene::from_replay(&a, &r)?;
-            let mut player_of = [0u8; 256];
             let mut storm = [0u8; 12];
             for (i, s) in r.header.slots.iter().enumerate() {
                 storm[i] = s.player_id;
-                if s.kind == 1 || s.kind == 2 {
-                    player_of[s.player_id as usize] = i as u8;
-                }
             }
             replay_rec::set_storm_ids(storm);
             replay_rec::start(Some(&r.header.raw));
@@ -619,7 +605,7 @@ fn main() -> std::io::Result<()> {
             for f in 0..r.header.frames {
                 while ci < r.commands.len() && r.commands[ci].frame <= f {
                     let c = &r.commands[ci];
-                    scene.replay_command(player_of[c.player as usize], &c.data);
+                    scene.replay_command(c.owner, &c.data);
                     ci += 1;
                 }
                 scene.step();
@@ -637,19 +623,13 @@ fn main() -> std::io::Result<()> {
             let mut t = std::io::BufWriter::new(std::fs::File::create(&args[3])?);
             view::prepare_replay(&mut a, &r);
             let mut scene = view::Scene::from_replay(&a, &r)?;
-            let mut player_of = [0u8; 256];
-            for (i, s) in r.header.slots.iter().enumerate() {
-                if s.kind == 1 || s.kind == 2 {
-                    player_of[s.player_id as usize] = i as u8;
-                }
-            }
             let mut ci = 0;
             let camera = load_camera();
             use std::io::Write;
             for f in 0..frames {
                 while ci < r.commands.len() && r.commands[ci].frame <= f {
                     let c = &r.commands[ci];
-                    scene.replay_command(player_of[c.player as usize], &c.data);
+                    scene.replay_command(c.owner, &c.data);
                     ci += 1;
                 }
                 scene.st.rng.log = std::env::var("SCBW_RNGLOG_AT").is_ok_and(|v| v == f.to_string());
@@ -823,12 +803,6 @@ fn main() -> std::io::Result<()> {
             // re/native_shots.sh plays at Fastest x 16.
             scene.st.replay_mult = 16;
             // 0x487100: commands name the sender by storm id (0x57eee4); find its player.
-            let mut player_of = [0u8; 256];
-            for (i, s) in r.header.slots.iter().enumerate() {
-                if s.kind == 1 || s.kind == 2 {
-                    player_of[s.player_id as usize] = i as u8;
-                }
-            }
             let camera = load_camera_or(Some(&dir.join("camera.txt")));
             let last = shots.iter().map(|s| s.0).max().unwrap_or(0);
             let mut report = String::new();
@@ -841,7 +815,7 @@ fn main() -> std::io::Result<()> {
                 // and the game steps.
                 while ci < r.commands.len() && r.commands[ci].frame <= frame {
                     let c = &r.commands[ci];
-                    scene.replay_command(player_of[c.player as usize], &c.data);
+                    scene.replay_command(c.owner, &c.data);
                     ci += 1;
                 }
                 scene.step();

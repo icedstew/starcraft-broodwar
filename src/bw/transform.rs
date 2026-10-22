@@ -37,9 +37,15 @@ impl State {
             self.selection_deselect(d, u);
             self.selection_remove_local(d, u);
         }
+        // 0x401fa0: the new type's box must fit in the map; if it moved the unit, 0x4eb9f0
+        // puts it there (an egg from a larva at the map's edge).
         let ut = self.units[u as usize].unit_type;
-        let mut p = self.unit_sprite_pos(u);
+        let p0 = self.unit_sprite_pos(u);
+        let mut p = p0;
         self.clamp_unit_pos(d, ut, &mut p);
+        if p != p0 {
+            self.set_unit_position(d, u, p.0, p.1);
+        }
         let s = self.units[u as usize].sprite;
         if self.sprites[s as usize].flags & super::sprite::sflag::HIDDEN == 0 {
             self.finder_insert(d, u);
