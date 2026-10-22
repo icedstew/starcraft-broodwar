@@ -27,6 +27,7 @@ mod map;
 mod mpq;
 mod replay;
 mod rbtest;
+mod net;
 mod replay_rec;
 mod statcmd;
 mod statdata;
@@ -597,6 +598,14 @@ fn main() -> std::io::Result<()> {
             let end: u32 = args.get(3).and_then(|v| v.parse().ok()).unwrap_or(r.header.frames);
             view::prepare_replay(&mut a, &r);
             println!("{}", rbtest::run(&a, &r, k, end)?);
+        }
+        Some("nettest") => {
+            // nettest <rep> [delay] [latency] [jitter]: rollback sessions over a simulated link (src/net.rs).
+            let mut a = view::Assets::load(files)?;
+            let r = replay::Replay::parse(&std::fs::read(&args[1])?)?;
+            let n = |i: usize, d: u32| args.get(i).and_then(|v| v.parse().ok()).unwrap_or(d);
+            view::prepare_replay(&mut a, &r);
+            println!("{}", net::nettest(&a, &r, n(2, 2), n(3, 3), n(4, 2))?);
         }
         Some("reprecord") => {
             // reprecord <in.rep> <out.rep>: play the replay headless with the recorder on

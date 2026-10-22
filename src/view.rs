@@ -194,7 +194,7 @@ pub struct Scene<'a> {
     pub minimap: bw::minimap::Minimap,
     /// The minimap dialog's timers (0x6d5ebc entries of dialog 0x59cc60).
     pub minimap_timers: crate::dlg::DlgTimers<()>,
-    local: u8,
+    pub local: u8,
     shadow: [u8; 256],
     /// The tileset's dark.pcx: 32 darkness levels x 256 colors (0x5973a0).
     dark: Vec<u8>,

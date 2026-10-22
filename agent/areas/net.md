@@ -148,3 +148,39 @@ AI and trigger state (SB's list doesn't have them either).
   speech, unit_sounds, talked, portrait_dropped, minimap_pings): discard what a
   re-simulated frame produces (shortcut; SB matches them against the first run).
   Check each against its readers before relying on this list.
+
+## Phase 2: rollback session (src/net.rs)
+
+`Session` (one peer): input table per player by frame (frames < delay known empty),
+`local_turn` / `remote_turn` / `tick(&mut Scene)`, PRED_LIMIT 8, a snapshot per frame
+(ring of PRED_LIMIT + 1: a late turn is never older than that), dispatch in storm id
+order 7..0 (0x486f50). `State::restore_sim` (src/bw/rollback.rs) keeps the viewer-local
+fields (not the UI image pools / order marker: they index pools the snapshot restores;
+a rollback can leave a stale circle / ghost until redrawn). Re-simulated frames' output
+queues are cut back (`out_lens` / `truncate_outs`); Scene-side voices / pings /
+show_error still run twice (ponytail). Replay recording of confirmed frames only: todo.
+`scbw nettest <rep> [delay] [latency] [jitter]`: one Session + Scene per replay player in
+one process, turns over a simulated link; all final hashes must equal straight playback.
+2026-10-22: every 8th 1.16.1 replay at 2/3/2 and 1/8/6: 20 MATCH (latency + jitter past
+PRED_LIMIT stalls, ~30% more ticks); tl2071 INVALID (a command at frame 0 < delay).
+
+## Phase 3 plan (transport, .exe first)
+
+- Crates (native only, cfg(not wasm32)): `wtransport` (WebTransport over quinn: the same
+  server takes .exe and browser clients; the .exe client uses it too), `rcgen` (per-game
+  self-signed ECDSA cert, <= 14 days), later `igd-next` (UPnP). tokio runtime on a
+  thread; the game loop talks to it through channels (try_recv per tick).
+- Host relays (star): datagrams `{from, frame, bytes}` x the last unacked turns
+  (redundancy), plus per sender the newest frame received (ack) and the sender's current
+  frame (pacing: a peer ahead of the slowest by more than its lead skips a tick). Reliable
+  stream for the lobby: hello / GameSetup (chk, slots, races, names, forces, colors,
+  template, seed; each client sets `local`) / start / leave.
+- 3a: transport + `scbw netrep <rep> host <port> | join <addr#hash>`: two (or more)
+  headless processes each play one replay player's commands as local input over real
+  QUIC on localhost; final hashes must equal straight playback (the nettest check
+  across processes).
+- 3b: live game: frame loop drives `Session::tick` instead of `turn_tick` + step, turns
+  keep flowing while a menu is open; game start from the received GameSetup.
+- 3c: minimal lobby (host: map, slots; join: address field), LAN broadcast discovery.
+- 3d: UPnP, leaves (fence), desync hashes every 8 confirmed frames, confirmed-only
+  replay recording.

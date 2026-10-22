@@ -5,6 +5,7 @@
 //! callees are explicit `todo_port!` markers, never approximations.
 
 pub mod addon;
+pub mod rollback;
 pub mod ai;
 pub mod ai_areas;
 pub mod ai_attack;

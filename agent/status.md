@@ -42,8 +42,10 @@ Delegate per agents.md: Haiku triage, Sonnet porting, Opus review / hard RE / co
   straight playback): all 90 1.16.1 replays MATCH at delay 3; wasm timing fine
   (snapshot 0.1 ms, 3-frame rollback 0.65 ms). Phase 1 done: UI commands join the local
   turn (`State::send_command` 0x485bd0), `Scene::turn_tick` dispatches them one frame
-  later (measured in 1.16.1: sent at f, run at f + 1). Next: phase 2, the rollback
-  session, tested in process (`scbw nettest`: one session per replay player).
+  later (measured in 1.16.1: sent at f, run at f + 1). Phase 2 done: `net::Session`
+  (rollback engine) and `scbw nettest`: 20 runs over 10 replays (2-3 players, delay /
+  latency / jitter 2/3/2 and 1/8/6) all MATCH straight playback. Next: phase 3a, QUIC
+  transport (wtransport) and `scbw netrep` across processes (net.md "Phase 3 plan").
 
 - Screenshot tests on all 1.16.1 replays (user 2026-10-21: "match a PvZ 100%, with the
   minimap UI"): tl1311 (PvZ) rng + draw count match native every frame to f42049.
