@@ -51,6 +51,19 @@ pub fn start(storm: &[u8], archives: js_sys::Array, name: &str, file: &[u8]) -> 
     Ok(())
 }
 
+/// The rollback oracle (src/rbtest.rs) on a replay, for its timing in the browser
+/// (index.html `?auto=<rep>&rbtest=<delay>`).
+#[wasm_bindgen]
+pub fn rbtest(storm: &[u8], archives: js_sys::Array, file: &[u8], delay: u32, frames: u32) -> Result<String, JsError> {
+    console_error_panic_hook::set_once();
+    let archives = archives.iter().map(|a| js_sys::Uint8Array::new(&a).to_vec()).collect();
+    let files = storage::Storage::from_mem(storm, archives).map_err(js)?;
+    let mut a = view::Assets::load(files).map_err(js)?;
+    let rep = replay::Replay::parse(file).map_err(js)?;
+    view::prepare_replay(&mut a, &rep);
+    crate::rbtest::run(&a, &rep, delay, frames).map_err(js)
+}
+
 /// minifb's wasm backend never calls `InputCallback::add_char`, so the game's typed
 /// characters (WM_CHAR: command card hotkeys, chat) come from the canvas's keydown
 /// events here, as Windows would translate them.

@@ -39,8 +39,8 @@ Delegate per agents.md: Haiku triage, Sonnet porting, Opus review / hard RE / co
   hosts reachable without our servers, browsers join over WebTransport):
   agent/areas/net.md (design, phases, 1.16.1 turn loop facts). Phase 0 done: `State:
   Clone`, `State::state_hash`, `scbw rbtest <rep> [delay]` (late commands + rollback ==
-  straight playback): all 90 1.16.1 replays MATCH at delay 3. Next: wasm clone / resim
-  timing, then phase 1 (commands through turns 0x485bd0 / 0x486f50; measure 1.16.1's
+  straight playback): all 90 1.16.1 replays MATCH at delay 3; wasm timing fine
+  (snapshot 0.1 ms, 3-frame rollback 0.65 ms). Next: phase 1 (commands through turns 0x485bd0 / 0x486f50; measure 1.16.1's
   single player click-to-run delay natively).
 
 - Screenshot tests on all 1.16.1 replays (user 2026-10-21: "match a PvZ 100%, with the

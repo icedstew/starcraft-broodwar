@@ -42,7 +42,7 @@ own networking); the 1.16.1 turn loop around them is.
 
 ## Phases
 
-0. (done 2026-10-22 but the wasm timing) No network: `State: Clone`, state hash (port of SB state_hash.rs), `scbw rbtest <rep>`:
+0. (done 2026-10-22) No network: `State: Clone`, state hash (port of SB state_hash.rs), `scbw rbtest <rep>`:
    play a replay with each player's commands arriving k frames late (empty-turn
    prediction, rollback on arrival); final hash / rng must equal straight playback. Runs
    over all local replays (suite check). Measure clone + 8-frame resim cost in wasm.
@@ -110,7 +110,13 @@ first player's commands arrive `delay` frames late (empty prediction, restore th
 `State` clone before that frame, re-simulate). 2026-10-22: tl1307 whole game (61725
 frames) MATCH at delay 1 / 3 / 8 (14560 rollbacks); all 90 replays of broodwar-reps-116
 MATCH at delay 3 (final `State` Debug dump and `state_hash` equal). Native cost:
-~0.2 ms per re-simulated frame; wasm cost not measured yet. Both games start from one cloned
+tl1307 whole game: step 0.108 ms, snapshot (`State` clone) 0.086 ms, a delay-3 rollback
+0.72 ms. Wasm in headless Chromium (`index.html?auto=r.rep&rbtest=3,20000`, web.rs
+`rbtest`; first 20000 frames): step 0.084 ms, snapshot 0.097 ms, rollback 0.65 ms. So a
+snapshot every frame and 8-frame rollbacks (~2 ms) fit a 42 ms tick easily.
+Headless run: serve web/ (auto/ links as build-and-run.sh), `chromium --headless=new
+--disable-extensions --user-data-dir=<tmp> --enable-logging=stderr --v=0 <url>`, grep
+'"rbtest '. Both games start from one cloned
 `State`: only a process's first game draws the music variant from the CRT rand.
 
 ## State hash

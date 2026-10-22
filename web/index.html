@@ -99,7 +99,7 @@ for (const type of ["pointerdown", "keydown"]) addEventListener(type, () => {
 }, true);
 </script>
 <script type="module">
-import init, { start } from "./pkg/scbw.js";
+import init, { start, rbtest } from "./pkg/scbw.js";
 
 // storage.rs ARCHIVES order; the CD archives (BroodWar.mpq, Starcraft.mpq: music,
 // ~600 MB each) are left out to keep memory down.
@@ -178,6 +178,15 @@ async function run(load) {
     status.textContent = "loading...";
     const [storm, archives, name, map] = await load();
     await init();
+    // ?rbtest=<delay>[,<frames>]: time the rollback oracle on the replay instead of playing it.
+    const rb = new URLSearchParams(location.search).get("rbtest");
+    if (rb) {
+      const [delay, frames] = rb.split(",").map(Number);
+      const out = rbtest(storm, archives, map, delay, frames || 0xffffffff);
+      console.log("rbtest " + out);
+      status.textContent = out;
+      return;
+    }
     start(storm, archives, name, map);
     document.getElementById("setup").remove();
     box.querySelector("canvas").focus({ preventScroll: true });
