@@ -35,6 +35,17 @@ Delegate per agents.md: Haiku triage, Sonnet porting, Opus review / hard RE / co
 
 ## In flight
 
+- Screenshot tests on all 1.16.1 replays (user 2026-10-21: "match a PvZ 100%, with the
+  minimap UI"): tl1311 (PvZ) rng + draw count match native every frame to f42049.
+  Native shots for 71 more replays (`re/native_all.sh`, 4 at a time, ~3.5 h; tl2101 does
+  not load in 1.16.1: post-1.18 recording). repshot over 72: map mean 0.29% on the 68
+  normal ones, full screen ~2.2% (0 exact). Outliers (likely desyncs, unchecked): tl1668
+  52%, tl1742 27%, tl2090 9.7%, tl2034 8.0%. Summary: agent/local/scratch/p1311/summary.txt.
+  Left on the map view: native redraws dirty 16 px cells only (0x4bd580 / 0x4bcdc0 /
+  0x497000): stale strips after camera jumps, mineral shadows darkened again next to
+  mining drones; we redraw everything. Full screen: minimap box drawn where the camera
+  already moved (capture timing?), a line above MENU, early map text / speed label.
+
 - Save / load (user 2026-10-18: "do the deferred functions, including saving/loading"):
   done end to end (agent/areas/save.md): every part of 0x4d02d0 / 0x4cfef0 in
   src/bw/save/, file level src/saveload.rs, in-game save / load dialogs (menu.rs), glue

@@ -96,7 +96,9 @@ impl Chk {
     /// The STR string as stored (bytes 0x80.. are the fonts' own glyphs).
     pub fn string_bytes(&self, id: u16) -> Option<&[u8]> {
         let s = self.section(b"STR ")?;
-        let n = u16::from_le_bytes([s[0], s[1]]) as usize;
+        // A STR chunk shorter than its count (1 byte in some protected maps; 0x4cc650
+        // copies any size) has no strings, as `setup::tbl_str` reads it.
+        let n = u16::from_le_bytes([*s.first()?, *s.get(1)?]) as usize;
         let i = (id as usize).checked_sub(1).filter(|&i| i < n)?;
         let o = u16::from_le_bytes([*s.get(2 + i * 2)?, *s.get(3 + i * 2)?]) as usize;
         let t = s.get(o..)?;
