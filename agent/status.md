@@ -35,6 +35,14 @@ Delegate per agents.md: Haiku triage, Sonnet porting, Opus review / hard RE / co
 
 ## In flight
 
+- Networking (user 2026-10-22: rollback netcode after ShieldBattery, N players, .exe
+  hosts reachable without our servers, browsers join over WebTransport):
+  agent/areas/net.md (design, phases, 1.16.1 turn loop facts). Phase 0 done: `State:
+  Clone`, `State::state_hash`, `scbw rbtest <rep> [delay]` (late commands + rollback ==
+  straight playback): all 90 1.16.1 replays MATCH at delay 3. Next: wasm clone / resim
+  timing, then phase 1 (commands through turns 0x485bd0 / 0x486f50; measure 1.16.1's
+  single player click-to-run delay natively).
+
 - Screenshot tests on all 1.16.1 replays (user 2026-10-21: "match a PvZ 100%, with the
   minimap UI"): tl1311 (PvZ) rng + draw count match native every frame to f42049.
   Native shots for 71 more replays (`re/native_all.sh`, 4 at a time, ~3.5 h; tl2101 does

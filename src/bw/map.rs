@@ -36,7 +36,7 @@ impl TilesetData {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct GameMap {
     /// 0x57f1d4 / 0x57f1d6: size in tiles.
     pub width: u16,

@@ -183,7 +183,7 @@ impl Default for CountSnapshot {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Triggers {
     /// 0x51a280: each player's triggers.
     pub lists: [Vec<Trigger>; 8],

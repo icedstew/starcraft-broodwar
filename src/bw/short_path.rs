@@ -17,7 +17,7 @@ pub struct Succ {
 const LOCAL_MAX: usize = 128;
 
 /// Walker context (0x6c1038).
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Walker {
     /// +0x00..: working contour lists are the local ones (+0x2d8..) instead of the
     /// map contours.

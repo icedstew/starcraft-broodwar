@@ -70,6 +70,7 @@ pub mod short_path;
 pub mod siege;
 pub mod spells;
 pub mod sprite;
+pub mod state_hash;
 pub mod train;
 pub mod transport;
 pub mod transform;
@@ -164,7 +165,7 @@ impl Data<'_> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct State {
     pub images: Vec<Image>,
     pub free_images: List,

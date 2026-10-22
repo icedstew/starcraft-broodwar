@@ -61,7 +61,7 @@ pub struct Split {
     pub rgn2: u16,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Sai {
     /// 0x0
     pub region_count: u16,

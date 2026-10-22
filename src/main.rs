@@ -588,6 +588,79 @@ fn main() -> std::io::Result<()> {
             }
             println!("MATCH {} frames after f{at}", more);
         }
+        Some("rbtest") => {
+            // rbtest <rep> [delay] [frames]: the rollback oracle (agent/areas/net.md). Plays
+            // the replay twice: straight, and with every player but the first seeing the
+            // others' commands `delay` frames late. Missing commands are predicted as none;
+            // when they arrive, the game goes back to the state before their frame and plays
+            // forward again. Both games must end in the same state.
+            let mut a = view::Assets::load(files)?;
+            let r = replay::Replay::parse(&std::fs::read(&args[1])?)?;
+            let k: u32 = args.get(2).and_then(|v| v.parse().ok()).unwrap_or(3);
+            let end: u32 = args.get(3).and_then(|v| v.parse().ok()).unwrap_or(r.header.frames).min(r.header.frames);
+            view::prepare_replay(&mut a, &r);
+            // The first human / computer slot, as ReplayPlay::new's follow.
+            let local = r.header.slots.iter().position(|s| s.kind == 1 || s.kind == 2).unwrap_or(0) as u8;
+            let mut at: Vec<Vec<usize>> = vec![Vec::new(); end as usize];
+            for (i, c) in r.commands.iter().enumerate() {
+                if let Some(v) = at.get_mut(c.frame as usize) {
+                    v.push(i);
+                }
+            }
+            // Frame `g`'s commands as known at frame `now`: the local player's at once, the
+            // others' from `g + k` on.
+            let run = |scene: &mut view::Scene, g: u32, now: u32| {
+                for &i in &at[g as usize] {
+                    let c = &r.commands[i];
+                    if c.owner == local || g + k <= now {
+                        scene.replay_command(c.owner, &c.data);
+                    }
+                }
+                scene.step();
+            };
+            let mut sa = view::Scene::from_replay(&a, &r)?;
+            // The same start: only a process's first game draws the music variant (0x4ee2d0).
+            let mut sb = view::Scene::from_replay(&a, &r)?;
+            sb.st = sa.st.clone();
+            for f in 0..end {
+                run(&mut sa, f, u32::MAX);
+            }
+            // snaps[f % (k + 1)]: the state before frame f's commands.
+            let mut snaps: Vec<Option<bw::State>> = vec![None; k as usize + 1];
+            let (mut rollbacks, mut resim) = (0u32, 0u32);
+            let t0 = std::time::Instant::now();
+            for now in 0..end + k {
+                // The others' commands of frame now - k arrive; any = a misprediction.
+                if let Some(g) = now.checked_sub(k).filter(|&g| g < end) {
+                    if at[g as usize].iter().any(|&i| r.commands[i].owner != local) && k > 0 {
+                        sb.st = snaps[(g % (k + 1)) as usize].clone().expect("snapshot");
+                        rollbacks += 1;
+                        for h in g..now.min(end) {
+                            snaps[(h % (k + 1)) as usize] = Some(sb.st.clone());
+                            run(&mut sb, h, now);
+                            resim += 1;
+                        }
+                    }
+                }
+                if now < end {
+                    snaps[(now % (k + 1)) as usize] = Some(sb.st.clone());
+                    run(&mut sb, now, now);
+                }
+            }
+            let ms = t0.elapsed().as_millis();
+            let (da, db) = (format!("{:#?}", sa.st), format!("{:#?}", sb.st));
+            match da.lines().zip(db.lines()).position(|(x, y)| x != y) {
+                None if da.len() == db.len() => println!("MATCH f{end} delay {k}: {rollbacks} rollbacks, {resim} frames again, {ms} ms, hash {:016x} / {:016x}", sa.st.state_hash(), sb.st.state_hash()),
+                p => {
+                    let p = p.unwrap_or(0);
+                    println!("DIFF f{end} delay {k} at dump line {p}\n  straight {:?}\n  rollback {:?}\n  hash {:016x} / {:016x}", da.lines().nth(p), db.lines().nth(p), sa.st.state_hash(), sb.st.state_hash());
+                    if let Ok(o) = std::env::var("SCBW_RBTEST_DUMP") {
+                        std::fs::write(format!("{o}.a"), &da)?;
+                        std::fs::write(format!("{o}.b"), &db)?;
+                    }
+                }
+            }
+        }
         Some("reprecord") => {
             // reprecord <in.rep> <out.rep>: play the replay headless with the recorder on
             // (0x4cde70) and write the replay file it makes (0x4dfab0's layout).
