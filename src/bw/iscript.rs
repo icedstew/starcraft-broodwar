@@ -133,7 +133,7 @@ pub fn run(st: &mut State, d: &Data, img: u32, nse: bool, mut distance: Option<&
                 p = a + 2;
                 if !nse {
                     let v = st.tileset.wrapping_add(u16_(a));
-                    let frames = d.grp_frames(st.images[img as usize].image_id) & 0x7fff;
+                    let frames = d.grp_frames(st.images[img as usize].grp) & 0x7fff;
                     if v < frames {
                         st.image_set_frameset(img, v);
                     }

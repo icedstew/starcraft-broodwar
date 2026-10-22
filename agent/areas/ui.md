@@ -71,6 +71,14 @@ Read when working on the HUD, dialogs, menus or glue screens.
   The tooltip says Tab, but no Tab was found in Local.dll accelerators (table at file
   0x5aa0) or the minimap procs: not wired yet.
 
+## Placement highlights (gas / addon spots)
+
+- 0x463a10 -> 0x4d6f90: the ghost is image 0x245 (draw fn 9, remap 5 trans50, its own
+  iscript) with the placed building's GRP (+0x2c, `Image::grp`), new head of the geyser's
+  image list; 0x4d6f00 adds image 0x247 (pool 0x51ee70, draw fn 0xf: 0x4d5280 outline in
+  0x6ceb32, the placement box size). 0x4d5b60 frees both. Right-click cancel must go
+  through 0x48e310 (`set_placing(None)`). Checked against recs/run5 (frames 233..239).
+
 ## Left
 
 - Dialog translucency: flag 0x40000 -> 0x416f30 blends the key color (0x4c8e80) through

@@ -19,7 +19,7 @@ impl State {
     /// 0x463a10 (BX = `t`, the unit type being placed): the highlight sprite of `t`'s
     /// footprint, offset from `u`'s sprite so that `t` lines up with `u` less its addon
     /// offset (half placement boxes, 0x662860 / 0x662538), made with the UI image
-    /// allocator 0x4d6f90. Returns whether it was made.
+    /// placement ghost 0x4d6f90. Returns whether it was made.
     pub fn footprint_sprite(&mut self, d: &Data, u: u32, t: u16) -> bool {
         let ut = self.units[u as usize].unit_type;
         let (puw, puh) = super::build::placement(d, ut);
@@ -30,7 +30,7 @@ impl State {
         let fl = d.dat.units.flingy[t as usize] as usize;
         let image = d.dat.sprites.image[d.dat.flingy.sprite[fl] as usize];
         let s = self.units[u as usize].sprite;
-        self.ui_image_at_tail(d, s, image, x as i8, y as i8).is_some()
+        self.placement_ghost(d, s, image, x as i8, y as i8, t).is_some()
     }
 
     /// 0x48e1e0 (EAX = geyser `u`; `placing` = 0x64088a): while placing a Refinery /

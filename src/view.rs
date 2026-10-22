@@ -1061,7 +1061,15 @@ impl<'a> Scene<'a> {
                 if img.flags & bw::sprite::iflag::HIDDEN != 0 {
                     continue;
                 }
-                let Some(g) = self.a.grp(img.image_id) else { continue };
+                if img.modifier == 0xf {
+                    // 0x4d5280: the placement box image, a rectangle outline in color
+                    // 0x6ceb32 the size of its one-frame GRP (w | h << 16, 0x4d6740).
+                    let (bw, bh) = (img.coloring as u16 as i32, (img.coloring >> 16) as u16 as i32);
+                    let (x, y) = (sp.x as i32 + img.x as i32 - bw / 2 - vx, sp.y as i32 + img.y as i32 - bh / 2 - vy);
+                    rect(out, vw, vh, (x, y, x + bw - 1, y + bh - 1), self.minimap.colors[0x12]);
+                    continue;
+                }
+                let Some(g) = self.a.grp(img.grp) else { continue };
                 let x = sp.x as i32 + img.x as i32 - g.w / 2 - vx;
                 // 0x4d57b0: a FREEZE_Y image stays at its kept map y (the frame's top-left).
                 let y = if img.flags & bw::sprite::iflag::FREEZE_Y != 0 {
@@ -3484,6 +3492,8 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
                 scene.build();
                 lmb_was_down = true;
                 drag_start = None;
+                // The press is consumed: its release does not select.
+                press_used = true;
             }
         }
         let down = down && scene.placing.is_none();
@@ -3536,8 +3546,9 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
             scene.release_select(from, to, (vx, vy), shift, ctrl, dbl_press);
         }
         let rdown = rmb;
-        if rdown && !rmb_was_down && (scene.end_targeting() || scene.placing.take().is_some()) {
-            // Right-click cancels targeting / placement.
+        if rdown && !rmb_was_down && (scene.end_targeting() || scene.placing.is_some()) {
+            // Right-click cancels targeting / placement (0x48e310: the highlights go too).
+            scene.set_placing(None);
         } else if replay.is_some() {
             // Watching a replay: no commands.
         } else if rdown && !rmb_was_down && cy < vh - 120 {

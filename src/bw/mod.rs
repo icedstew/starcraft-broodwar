@@ -169,9 +169,11 @@ pub struct State {
     pub images: Vec<Image>,
     pub free_images: List,
     /// UI image pools beside the 5000 sim images, in the same vec: 0x5244b8 (64, placement
-    /// highlights, indices MAX_IMAGES..) and 0x57d768 (80, selection circles, after those).
+    /// ghosts, indices MAX_IMAGES..), 0x57d768 (80, selection circles, after those) and
+    /// 0x51de70 (64, placement boxes, last).
     pub ui_hl_pool: List,
     pub ui_circle_pool: List,
+    pub ui_box_pool: List,
     pub sprites: Vec<Sprite>,
     pub free_sprites: List,
     /// Per tile-row sprite lists (heads 0x140e76c90, tails 0x140e77490).
@@ -465,9 +467,15 @@ impl State {
     pub fn new(map_tiles: (usize, usize), tileset: u16, max_units: u32) -> State {
         let (mut images, free_images) = pool_after_head::<Image>(MAX_IMAGES);
         images.resize(sprite::UI_HL_END, Image::default());
-        let (mut ui_hl_pool, mut ui_circle_pool) = (List::default(), List::default());
+        let (mut ui_hl_pool, mut ui_circle_pool, mut ui_box_pool) = (List::default(), List::default(), List::default());
         for i in MAX_IMAGES..sprite::UI_HL_END {
-            let l = if i < sprite::UI_HL_START + 64 { &mut ui_hl_pool } else { &mut ui_circle_pool };
+            let l = if i < sprite::UI_CIRCLE_START {
+                &mut ui_hl_pool
+            } else if i < sprite::UI_BOX_START {
+                &mut ui_circle_pool
+            } else {
+                &mut ui_box_pool
+            };
             list::insert_after_head(&mut images, i as u32, l);
         }
         let (sprites, free_sprites) = pool_after_head(MAX_SPRITES);
@@ -482,6 +490,7 @@ impl State {
             free_images,
             ui_hl_pool,
             ui_circle_pool,
+            ui_box_pool,
             sprites,
             free_sprites,
             sprite_rows: vec![List::default(); map_tiles.1.max(1)],

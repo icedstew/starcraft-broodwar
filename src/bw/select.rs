@@ -319,8 +319,8 @@ impl State {
 
     fn image_map_pos_now(&self, d: &Data, i: u32) -> (i16, i16) {
         let im = &self.images[i as usize];
-        let g = d.grp_file(im.image_id);
-        let (_, gw, gh) = (d.grp)(im.image_id);
+        let g = d.grp_file(im.grp);
+        let (_, gw, gh) = (d.grp)(im.grp);
         let h = 6 + im.frame as usize * 8;
         let f = |k: usize| g.get(h + k).copied().unwrap_or(0) as u16;
         let x = if im.flags & super::sprite::iflag::FLIPPED == 0 {
@@ -343,7 +343,7 @@ impl State {
             if im.flags & super::sprite::iflag::CLICKABLE != 0 {
                 let (x, y) = self.image_map_pos(d, i);
                 let h = 6 + im.frame as usize * 8;
-                let g = d.grp_file(im.image_id);
+                let g = d.grp_file(im.grp);
                 let (w, ht) = (g.get(h + 2).copied().unwrap_or(0) as i32, g.get(h + 3).copied().unwrap_or(0) as i32);
                 let b = [x as i32, y as i32, w - 1 + x as i32, ht - 1 + y as i32];
                 r = Some(match r {
@@ -360,10 +360,10 @@ impl State {
     fn image_hit(&self, d: &Data, i: u32, px: i32, py: i32) -> bool {
         let im = &self.images[i as usize];
         let (x, y) = self.image_map_pos(d, i);
-        let g = d.grp_file(im.image_id);
+        let g = d.grp_file(im.grp);
         let mut fx = px - x as i32;
         if im.flags & super::sprite::iflag::FLIPPED != 0 {
-            let gw = (d.grp)(im.image_id).1 as i32;
+            let gw = (d.grp)(im.grp).1 as i32;
             let frame_x = g.get(6 + im.frame as usize * 8).copied().unwrap_or(0) as i32;
             fx = gw - frame_x * 2 - fx;
         }

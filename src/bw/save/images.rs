@@ -99,6 +99,7 @@ impl State {
                 self.images[slot] = Image {
                     link: Link { prev: from1(u32_(0)), next: from1(u32_(4)) },
                     image_id: u16_(8),
+                    grp: u16_(8),
                     modifier,
                     direction: r[0xb],
                     flags: u16_(0xc),

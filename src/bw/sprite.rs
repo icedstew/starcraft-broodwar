@@ -7,8 +7,10 @@ use super::{Data, State};
 
 pub const MAX_IMAGES: usize = 5000;
 pub const UI_HL_START: usize = MAX_IMAGES;
-/// End of both UI pools: 64 highlight images, then 80 selection-circle images.
-pub const UI_HL_END: usize = MAX_IMAGES + 64 + 80;
+pub const UI_CIRCLE_START: usize = UI_HL_START + 64;
+pub const UI_BOX_START: usize = UI_CIRCLE_START + 80;
+/// End of the UI pools: 64 placement ghosts, 80 selection circles, 64 placement boxes.
+pub const UI_HL_END: usize = UI_BOX_START + 64;
 pub const MAX_SPRITES: usize = 2500;
 pub const MAX_THINGIES: usize = 500;
 
@@ -59,6 +61,9 @@ impl IscriptState {
 pub struct Image {
     pub link: Link,
     pub image_id: u16,    // +0x10
+    /// 1.16.1 +0x2c: the images.dat id whose GRP is drawn; `image_id` except for the
+    /// placement ghost (0x4d6f90: image 0x245 with the placed building's GRP).
+    pub grp: u16,
     pub modifier: u8,     // +0x12 draw function
     pub direction: u8,    // +0x13 frame direction 0..=16
     pub flags: u16,       // +0x14
@@ -219,6 +224,7 @@ impl State {
         let owner = self.sprites[s as usize].owner;
         let i = &mut self.images[img as usize];
         i.image_id = image_id;
+        i.grp = image_id;
         i.in_use = true;
         i.flags = ((im.gfx_turns[id] & 1) as u16) << 3 | ((im.clickable[id] & 1) as u16) << 5;
         i.frameset = 0;
@@ -720,40 +726,68 @@ impl State {
         // UI images return to their own pools (0x4d4f10 / 0x4d4fa0), after the pool head.
         let pool = if (img as usize) < MAX_IMAGES {
             &mut self.free_images
-        } else if (img as usize) < UI_HL_START + 64 {
+        } else if (img as usize) < UI_CIRCLE_START {
             &mut self.ui_hl_pool
-        } else {
+        } else if (img as usize) < UI_BOX_START {
             &mut self.ui_circle_pool
+        } else {
+            &mut self.ui_box_pool
         };
         list::insert_after_head(&mut self.images, img, pool);
     }
 }
 
 impl State {
-    /// 0x4d6f90 (EAX = sprite; image id, packed offsets x / y bytes): a UI image added at the
-    /// tail of the sprite's image list (drawn first, under the others): 0x4d5a50 init and
-    /// 0x4d66b0 post-init (the Init animation); 0x4d6f00 only adds its render node.
-    /// It comes from the UI pool 0x5244b8 (`ui_hl_pool`, 64 images stored after the sim's
-    /// in the same vec, so the draw loop finds them in the sprite's list) and is remembered
-    /// in `psi.hl_images` for 0x4d5b60.
-    pub fn ui_image_at_tail(&mut self, d: &Data, s: u32, image_id: u16, x: i8, y: i8) -> Option<u32> {
+    /// 0x4d6f90 (EAX = sprite; GRP of images.dat `grp`, packed offsets x / y bytes, the
+    /// placed type `t`): the placement ghost. An image from the UI pool 0x5244b8
+    /// (`ui_hl_pool`) becomes the new head of the sprite's list (drawn over the others),
+    /// initialized as image 0x245 (0x4d5a50 / 0x4d66b0: draw function 9 with remap 5,
+    /// trans50, and its iscript) with `grp`'s GRP (+0x2c). Then 0x4d6f00 puts the box
+    /// image over it. Both are remembered in `psi.hl_images` for 0x4d5b60.
+    pub fn placement_ghost(&mut self, d: &Data, s: u32, grp: u16, x: i8, y: i8, t: u16) -> Option<u32> {
         let mut pool = self.ui_hl_pool;
         let img = pop(&mut self.images, &mut pool);
         self.ui_hl_pool = pool;
         let img = img?;
-        let mut l = self.sprites[s as usize].images;
-        if l.tail == NIL {
-            list::insert_after_head(&mut self.images, img, &mut l);
-        } else {
-            list::insert_after(&mut self.images, l.tail, img, &mut l);
-        }
-        self.sprites[s as usize].images = l;
-        self.image_init(d, img, image_id, s, x, y);
-        self.psi.hl_images.push((img, image_id));
+        self.image_at_head(s, img);
+        self.initialize_image(d, img, 0x245, s, x, y);
+        self.images[img as usize].grp = grp;
+        self.image_post_init(d, img);
+        self.psi.hl_images.push((img, 0x245));
+        self.placement_box_image(d, s, x, y, t);
         Some(img)
     }
 
-    /// 0x4d5b60: free every UI image made by 0x4d6f90 (0x4d4f10).
+    /// 0x4d6f00 (EDX = sprite; packed offsets, the placement box size of `t` 0x662860): an
+    /// image from the UI pool 0x51ee70 (`ui_box_pool`, set up by 0x4d6930 as image 0x247,
+    /// draw function 0xf) as the new head of the sprite's list. 0x4d6740: its GRP is a
+    /// one-frame header of the box size (kept here in `coloring`, w | h << 16), drawn as a
+    /// rectangle outline (0x4d5280).
+    fn placement_box_image(&mut self, d: &Data, s: u32, x: i8, y: i8, t: u16) -> Option<u32> {
+        let mut pool = self.ui_box_pool;
+        let img = pop(&mut self.images, &mut pool);
+        self.ui_box_pool = pool;
+        let img = img?;
+        self.image_at_head(s, img);
+        self.initialize_image(d, img, 0x247, s, x, y);
+        self.images[img as usize].coloring = d.dat.units.placement_box[t as usize] as u64;
+        self.image_post_init(d, img);
+        self.psi.hl_images.push((img, 0x247));
+        Some(img)
+    }
+
+    /// The image insert of 0x4d6f90 / 0x4d6f00: before the sprite's head.
+    fn image_at_head(&mut self, s: u32, img: u32) {
+        let mut l = self.sprites[s as usize].images;
+        if l.head == NIL {
+            list::insert_after_head(&mut self.images, img, &mut l);
+        } else {
+            list::insert_before(&mut self.images, l.head, img, &mut l);
+        }
+        self.sprites[s as usize].images = l;
+    }
+
+    /// 0x4d5b60: free every UI image made by 0x4d6f90 (0x4d4f10 ghosts, 0x4d4e80 boxes).
     pub fn free_ui_images(&mut self) {
         for (img, id) in std::mem::take(&mut self.psi.hl_images) {
             let i = &self.images[img as usize];
@@ -785,6 +819,7 @@ impl State {
         self.sprites[s as usize].images = l;
         let i = &mut self.images[img as usize];
         i.image_id = base + d.dat.sprites.selection_circle[id] as u16;
+        i.grp = i.image_id;
         i.in_use = true;
         i.sprite = s;
         i.y = d.dat.sprites.selection_offset[id] as i8;
