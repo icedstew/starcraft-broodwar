@@ -6,7 +6,9 @@ edition = "2024"
 [dependencies]
 explode = "0.1.2"
 flate2 = "1.1.10"
-minifb = "0.29.0"
+# X11 only (Xwayland on a Wayland desktop): minifb 0.29's Wayland backend loses the mouse
+# wheel (an AxisStop in the same batch as its Axis zeroes the scroll before it is read).
+minifb = { version = "0.29.0", default-features = false, features = ["x11"] }
 png = "0.18.1"
 rodio = { version = "0.22.2", default-features = false, features = ["playback", "wav", "vorbis"] }
 

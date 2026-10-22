@@ -70,6 +70,14 @@ $S shot <map|rep> out.png x y [frames] [n_select]
 $S view <map|rep>
 ```
 
+Played by hand: `re/native_record.sh <dir>` (you play 1.16.1 in a 640x480 Xephyr window,
+menus and games; NATIVE_RECORD_HEADLESS=1: Xvfb :79 for xdotool). Input is polled every
+4 ms and the screen grabbed every 250 ms, each stamped with the game's in-game flag, frame
+and seed (re/bwmem: a winegcc helper that starts the game and keeps the CreateProcess
+handle, as the game denies OpenProcess). `re/record_glue.py replay <dir>` turns it into
+SCBW_GLUE_INPUT steps (glue in ms; game steps at frames, src/script.rs: the headless game
+loop never steps past a frame with events left) and writes `diff/` and `report.txt`.
+
 ## Emulator (re/emu.py, re/emu_game.py)
 
 `re/emu.py` is a unicorn x86 emulator for 1.16.1 functions with Storm/kernel32 shims

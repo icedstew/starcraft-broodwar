@@ -15,7 +15,8 @@ REP=$(realpath "$1"); OUT=$(realpath -m "$2"); EVERY=${3:-120}
 # default the first) writes <shots dir>/camera.txt, which the game then follows; set
 # NATIVE_CAMERA=<file> to use another, or NATIVE_CAMERA=none for the fixed start view.
 # Each shot is also saved as fNNNNNN_full.png, the whole screen with the interface
-# (NATIVE_FULL=0 to skip).
+# (NATIVE_FULL=0 to skip), with native/events.txt (the minimap's real-time timers and
+# the grabs in order, with the cursor, which `scbw repshot` replays). NATIVE_FULL_PROBE=1 grabs before and after the next draw.
 # NATIVE_MODE=trace writes <shots dir>/native/trace.txt (re/native_trace_gdb.py, frames
 # up to CAP_END) instead of screenshots.
 MODE=${NATIVE_MODE:-shots}
@@ -66,7 +67,7 @@ wait_for() { for _ in $(seq 60); do awk "BEGIN{exit !($(green "$@") > 0.06)}" &&
 (cd "$G" && winedbg --gdb --no-start 'C:\StarCraft\StarCraft.exe' > "$W/wdbg.txt" 2>&1 &)
 for _ in $(seq 30); do grep -q 'localhost:' "$W/wdbg.txt" && break; sleep 1; done
 PORT=$(grep -o 'localhost:[0-9]*' "$W/wdbg.txt" | cut -d: -f2)
-CAP_OUT=$W/cap CAP_EVERY=$EVERY CAP_FULL=$NATIVE_FULL CAP_CAMERA=${NATIVE_CAMERA:+$(realpath "$NATIVE_CAMERA")} gdb -q -batch -ex 'set debuginfod enabled off' -ex 'set architecture i386' \
+CAP_OUT=$W/cap CAP_EVERY=$EVERY CAP_FULL=$NATIVE_FULL CAP_FULL_PROBE=$NATIVE_FULL_PROBE CAP_CAMERA=${NATIVE_CAMERA:+$(realpath "$NATIVE_CAMERA")} gdb -q -batch -ex 'set debuginfod enabled off' -ex 'set architecture i386' \
   -ex "target remote localhost:$PORT" -ex "source $GDBPY" -ex continue > "$W/gdb.log" 2>&1 &
 
 wait_for 140 16 148 112         # main menu ("Single Player")
@@ -78,6 +79,7 @@ click 333 452 4                  # Load Replay
 click 150 140 1                  # the replay
 click 515 392 15                 # Ok
 for _ in $(seq 8); do click 613 457 0.3; done   # speed: Fastest x16
+xdotool mousemove 250 430        # the blank console text: arrow, no hover or tooltip
 
 # Done when no new shot (trace line) for a minute (the replay has finished).
 PROG=$W/cap/meta.txt
@@ -97,6 +99,6 @@ if [ "$MODE" = trace ]; then
 fi
 [ -s "$W/cap/meta.txt" ] || { echo "no shots captured" >&2; exit 1; }
 for f in "$W"/cap/*.raw; do python3 -I "$RE/raw2png.py" "$f" "$OUT/native/$(basename "$f" .raw).png"; done
-cp "$W"/cap/*_full.png "$OUT/native/" 2>/dev/null || true
+cp "$W"/cap/*_full*.png "$W"/cap/events.txt "$OUT/native/" 2>/dev/null || true
 cp "$W/cap/meta.txt" "$OUT/native/"
 echo "$(wc -l < "$OUT/native/meta.txt") shots in $OUT/native"
