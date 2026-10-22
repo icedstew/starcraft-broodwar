@@ -183,8 +183,8 @@ Delegate per agents.md: Haiku triage, Sonnet porting, Opus review / hard RE / co
   psi fields and geyser highlights while placing, command button pressed look and click
   sound (Misc\Button.wav), chat caret glyph. Left: status panel tooltips (0x457350,
   0x4575a0, 0x457b10, 0x457c20: none ported; check the training queue slots).
-- Leave-game desync (replay command 0x57): tl1313 f62308, tl1309 f83856, tl1363 f32442,
-  tl1488 f54254, tl1320 f20320 diverge; tl1427 / 1453 / 1460 leaves match.
+- Leave-game desyncs (tl1313, tl1309, tl1363, tl1488, tl1320) fixed by the 0x4cdff0 playback
+  port (the leave ran as the wrong player): all match native rng to the end (2026-10-22).
 
 ## Next steps
 

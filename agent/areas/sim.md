@@ -41,8 +41,9 @@ CAP_SITES=1 with a CAP_START window the per-site counters 0x51c610); `SCBW_TRACE
   reset frame).
 - Fixed 2026-10-18: Infesting / InfestedCommandCenter (0x4ea290 / 0x4ea4c0) count on
   +0xac (remaining build time), not the order timer: tl1313 matched to f62308.
-- Open: a replay's leave command 0x57 (tl1313 f62308, tl1309 f83856, tl1363 f32442):
-  ours sends the leaver's units to Guard, the real game draws far less.
+- Fixed 2026-10-22: replay leave command 0x57 desyncs (tl1313 / 1309 / 1363 / 1488 / 1320)
+  were commands run as the wrong player; replay playback 0x4cdff0 / 0x487100 (group buffer
+  0x6552b0 overflowing into storm ids 0x6554d8, storm-id -> player lookup) fixed them.
 - Debug: reptrace SCBW_TYPES_AT=<f> (unit index / type / player / order, visible and
   hidden lists), SCBW_RNGLOG_AT=<f> (each draw's site).
 
