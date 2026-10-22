@@ -3,3 +3,6 @@
 __pycache__/
 /agent/local
 /web/pkg
+/web/auto
+/re/bwmem/bwmem.exe
+/re/bwmem/bwmem.exe.so

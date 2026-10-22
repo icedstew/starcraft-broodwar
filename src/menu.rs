@@ -83,7 +83,7 @@ struct Sg {
     msg: Vec<u8>,
     cb: Option<Cb>,
     /// 0x685164: when the last save was made (multiplayer allows one per 2 minutes).
-    saved_at: Option<std::time::Instant>,
+    saved_at: Option<web_time::Instant>,
     /// 0x68ec88: the error text of the in-game error message (None = null pointer).
     fatal: Option<Vec<u8>>,
     /// An error was posted from outside the game loop and its dialog is still to open.
@@ -1188,7 +1188,7 @@ impl Menu {
                     r
                 } else {
                     // 0x4c0600, 0x685164 = GetTickCount
-                    g.saved_at = Some(std::time::Instant::now());
+                    g.saved_at = Some(web_time::Instant::now());
                     (None, Action::SaveGame(String::from_utf8_lossy(&name).into_owned()))
                 }
             }
@@ -1249,7 +1249,7 @@ impl Menu {
                     return Self::popup(Kind::Ok, msg, Cb::Reopen);
                 }
                 // 0x4c0600, 0x685164 = GetTickCount
-                sg().saved_at = Some(std::time::Instant::now());
+                sg().saved_at = Some(web_time::Instant::now());
                 (None, Action::SaveGame(String::from_utf8_lossy(&name).into_owned()))
             }
             None => (None, Action::Closed),

@@ -2,53 +2,242 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>scbw</title>
 <style>
-  body { margin: 0; background: #000; color: #ccc; font: 14px sans-serif; }
-  #setup { padding: 16px; display: grid; gap: 8px; max-width: 640px; }
-  #scbw canvas { width: 1280px; height: 960px; image-rendering: pixelated; outline: none; cursor: none; }
-  #status { color: #e88; white-space: pre-wrap; }
+  :root { --bar: 32px; --edge: #2a3658; --text: #b8c2dc; --dim: #66708c; --gold: #ffd24a; --blue: #6fc3ff; }
+  html, body { margin: 0; background: #03040b; color: var(--text); font: 12px/1.5 Verdana, Tahoma, sans-serif; }
+  /* A few fixed stars; painted once, nothing moves. */
+  body {
+    background-image:
+      radial-gradient(1px 1px at 30px 40px, #fff, transparent),
+      radial-gradient(1px 1px at 170px 110px, #9cf, transparent),
+      radial-gradient(1px 1px at 260px 210px, #fff, transparent),
+      radial-gradient(1px 1px at 90px 260px, #fc9, transparent);
+    background-size: 300px 300px;
+  }
+  a { color: var(--blue); }
+
+  header {
+    height: var(--bar); box-sizing: border-box; display: flex; align-items: center; gap: 16px; padding: 0 12px;
+    border-bottom: 1px solid var(--edge); background: #070a16;
+  }
+  .logo { font: italic 900 16px "Arial Black", Impact, sans-serif; letter-spacing: 2px; color: #dfe6f8; }
+  .logo span { color: var(--blue); }
+  header .hint { color: var(--dim); font-size: 11px; margin-left: auto; }
+  kbd { font: 11px "Courier New", monospace; color: #fff; border: 1px solid var(--edge); padding: 0 3px; }
+  button {
+    font: bold 11px Tahoma, Verdana, sans-serif; color: var(--gold); cursor: pointer; padding: 3px 12px;
+    background: #121a30; border: 1px solid; border-color: #5a6c96 #050810 #050810 #5a6c96;
+  }
+  button:hover { color: #fff; }
+  button:active { border-color: #050810 #5a6c96 #5a6c96 #050810; }
+
+  /* The game gets the whole screen under the bar; the stage's size (a whole multiple of
+     640x480 device pixels) is set by fit() below. */
+  main { height: calc(100vh - var(--bar)); display: flex; align-items: center; justify-content: center; }
+  #stage { position: relative; background: #000; outline: 1px solid var(--edge); contain: strict; }
+  #stage:fullscreen { outline: 0; }
+  #stage::backdrop { background: #000; }
+  #scbw, #scbw canvas { width: 100%; height: 100%; display: block; }
+  #scbw canvas { image-rendering: pixelated; outline: none; cursor: none; }
+
+  #setup {
+    position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 10px; padding: 16px; text-align: center;
+  }
+  #setup h1 { margin: 0; color: var(--gold); font: bold 15px Tahoma, sans-serif; letter-spacing: 3px; }
+  #setup label { display: block; }
+  #setup input { margin-top: 3px; color: var(--text); font: 11px Verdana, sans-serif; }
+  #status { color: #ff8a8a; white-space: pre-wrap; min-height: 1.5em; }
+  .dim { color: var(--dim); font-size: 11px; }
+
+  footer { max-width: 640px; margin: 0 auto; padding: 24px 16px 32px; color: var(--dim); font-size: 11px; }
+  footer h2 { font: bold 11px Tahoma, sans-serif; letter-spacing: 2px; color: var(--text); margin: 0 0 6px; }
+  footer p { margin: 0 0 14px; }
 </style>
 </head>
 <body>
-<div id="setup">
-  <label>StarCraft 1.16.1 install folder: <input id="install" type="file" webkitdirectory></label>
-  <label>Map or replay (.scm, .scx, .chk, .rep): <input id="map" type="file" accept=".scm,.scx,.chk,.rep"></label>
-  <button id="start">Start</button>
-  <div id="status"></div>
-</div>
-<div id="scbw"></div>
+<header>
+  <span class="logo">SC<span>BW</span></span>
+  <button id="fs">Fullscreen</button>
+  <span class="hint">Click to capture the mouse &middot; <kbd>Esc</kbd> frees it</span>
+</header>
+
+<main>
+  <div id="stage">
+    <div id="scbw"></div>
+    <div id="setup">
+      <h1>BROOD WAR 1.16.1</h1>
+      <label>StarCraft 1.16.1 install folder<br><input id="install" type="file" webkitdirectory></label>
+      <label>Map or replay (.scm, .scx, .chk, .rep)<br><input id="map" type="file" accept=".scm,.scx,.chk,.rep"></label>
+      <button id="start">Start</button>
+      <div id="status"></div>
+      <div class="dim">Files stay on your computer. Nothing is uploaded.</div>
+    </div>
+  </div>
+</main>
+
+<footer>
+  <h2>CONTROLS</h2>
+  <p>As in the original game: <kbd>Enter</kbd> chat, <kbd>Ctrl</kbd>+<kbd>1</kbd>&ndash;<kbd>0</kbd> set a group,
+  <kbd>1</kbd>&ndash;<kbd>0</kbd> select it, <kbd>F10</kbd> game menu. <kbd>Esc</kbd> releases the mouse.</p>
+  <p>scbw is an unofficial fan project. StarCraft and Brood War are trademarks of Blizzard Entertainment.
+  No game files are included: you load your own 1.16.1 install.</p>
+</footer>
+
+<script>
+// Before the module: scbw.js reads AudioContext when it is imported.
+// cpal resumes its AudioContext only once, when the stream starts; made before any user
+// gesture (?auto=) the browser keeps it suspended. Resume every context on each gesture.
+const audioContexts = [];
+window.AudioContext = class extends AudioContext {
+  constructor(...a) { super(...a); audioContexts.push(this); }
+};
+for (const type of ["pointerdown", "keydown"]) addEventListener(type, () => {
+  for (const c of audioContexts) if (c.state === "suspended") c.resume();
+}, true);
+</script>
 <script type="module">
 import init, { start } from "./pkg/scbw.js";
 
 // storage.rs ARCHIVES order; the CD archives (BroodWar.mpq, Starcraft.mpq: music,
 // ~600 MB each) are left out to keep memory down.
 const ARCHIVES = ["patch_rt.mpq", "broodat.mpq", "stardat.mpq"];
+// minifb's window: 640x480 at Scale::X2. It reads offsetX/offsetY in this space.
+const WIN_W = 1280, WIN_H = 960;
 const status = document.getElementById("status");
-document.getElementById("scbw").addEventListener("contextmenu", e => e.preventDefault());
+const box = document.getElementById("scbw");
+const stage = document.getElementById("stage");
+box.addEventListener("contextmenu", e => e.preventDefault());
 
-document.getElementById("start").onclick = async () => {
+// The largest whole scale of 640x480 in device pixels that fits the space (at least 1x).
+function fit() {
+  const dpr = devicePixelRatio || 1;
+  const full = document.fullscreenElement === stage;
+  const w = innerWidth, h = full ? innerHeight : stage.parentElement.clientHeight;
+  const n = Math.max(1, Math.floor(Math.min(w * dpr / 640, h * dpr / 480)));
+  stage.style.width = n * 640 / dpr + "px";
+  stage.style.height = n * 480 / dpr + "px";
+}
+fit();
+addEventListener("resize", fit);
+document.addEventListener("fullscreenchange", fit);
+document.getElementById("fs").onclick = () => stage.requestFullscreen().then(() => box.querySelector("canvas")?.focus());
+
+// Every mouse event goes to minifb as an untrusted copy whose offsetX/offsetY are in
+// its 1280x960 space, whatever size the canvas is drawn at.
+// Pointer lock: a click captures the mouse (Esc frees it), so the cursor stops at the
+// canvas edges for edge scrolling and Firefox's shift+right-click menu stays away. The
+// game draws its own cursor; locked moves become a virtual position.
+let vx = 0, vy = 0;
+for (const type of ["mousedown", "mousemove", "mouseup"]) box.addEventListener(type, e => {
+  const canvas = box.querySelector("canvas");
+  if (!e.isTrusted || !canvas) return;
+  e.stopPropagation();
+  const r = canvas.getBoundingClientRect();
+  if (document.pointerLockElement === canvas) {
+    vx = Math.min(Math.max(vx + e.movementX, 0), r.width - 1);
+    vy = Math.min(Math.max(vy + e.movementY, 0), r.height - 1);
+  } else {
+    vx = e.clientX - r.left; vy = e.clientY - r.top;
+    if (type === "mousedown") canvas.requestPointerLock();
+  }
+  const ev = new MouseEvent(type, {
+    clientX: r.left + vx, clientY: r.top + vy, button: e.button, buttons: e.buttons,
+    shiftKey: e.shiftKey, ctrlKey: e.ctrlKey, altKey: e.altKey, metaKey: e.metaKey,
+  });
+  // Firefox answers every event's client/offset coordinates with the point the lock
+  // started at while the pointer is locked, so set offsetX/offsetY on the event itself.
+  Object.defineProperties(ev, {
+    offsetX: { value: Math.floor(vx * WIN_W / r.width) },
+    offsetY: { value: Math.floor(vy * WIN_H / r.height) },
+  });
+  canvas.dispatchEvent(ev);
+}, true);
+
+// Esc also frees the lock, and the browser may keep that keypress from the page. Pass it
+// to the game ourselves unless it got through; the next click locks again. A lock lost to
+// a tab switch (no focus) is not an Esc.
+let lastEsc = 0;
+box.addEventListener("keydown", e => { if (e.code === "Escape") lastEsc = performance.now(); }, true);
+document.addEventListener("pointerlockchange", () => {
+  const canvas = box.querySelector("canvas");
+  if (!canvas || document.pointerLockElement || !document.hasFocus()) return;
+  setTimeout(() => {
+    if (performance.now() - lastEsc < 200) return;
+    const key = type => canvas.dispatchEvent(new KeyboardEvent(type, { code: "Escape", key: "Escape" }));
+    key("keydown");
+    // Held past a 24 fps frame so the game's per-frame key poll sees it.
+    setTimeout(() => key("keyup"), 100);
+  }, 50);
+});
+
+async function run(load) {
   try {
-    // Top-level files of the picked folder, by lowercase name.
-    const top = new Map();
-    for (const f of document.getElementById("install").files) {
-      if (f.webkitRelativePath.split("/").length === 2) top.set(f.name.toLowerCase(), f);
-    }
-    const map = document.getElementById("map").files[0];
-    if (!top.has("storm.dll")) throw new Error("pick the install folder (it has storm.dll)");
-    if (!map) throw new Error("pick a map or replay");
     status.textContent = "loading...";
-    const bytes = async f => new Uint8Array(await f.arrayBuffer());
-    const archives = [];
-    for (const name of ARCHIVES) if (top.has(name)) archives.push(await bytes(top.get(name)));
+    const [storm, archives, name, map] = await load();
     await init();
-    start(await bytes(top.get("storm.dll")), archives, map.name, await bytes(map));
+    start(storm, archives, name, map);
     document.getElementById("setup").remove();
-    document.querySelector("#scbw canvas").focus();
+    box.querySelector("canvas").focus({ preventScroll: true });
   } catch (e) {
     status.textContent = String(e.message ?? e);
   }
-};
+}
+
+// The install from a Google Drive folder shared "Anyone with the link":
+// #drive=<API key>/<folder id>[/<map or replay in the folder>]. In the fragment, so it
+// never reaches a server; bookmark it. Without a map the Start button uses the picked one.
+const drive = location.hash.match(/^#drive=([^/]+)\/([^/]+)(?:\/(.+))?$/);
+let driveFiles;
+async function driveGet(name) {
+  const [, key, folder] = drive;
+  const api = "https://www.googleapis.com/drive/v3/files";
+  driveFiles ??= fetch(`${api}?q='${folder}'+in+parents&fields=files(id,name)&pageSize=1000&key=${key}`)
+    .then(r => r.ok ? r.json() : Promise.reject(new Error(`drive folder: ${r.status}`)))
+    .then(j => new Map(j.files.map(f => [f.name.toLowerCase(), f.id])));
+  const id = (await driveFiles).get(name.toLowerCase());
+  if (!id) throw new Error(`drive folder has no ${name}`);
+  const r = await fetch(`${api}/${id}?alt=media&key=${key}`);
+  if (!r.ok) throw new Error(`drive ${name}: ${r.status}`);
+  return new Uint8Array(await r.arrayBuffer());
+}
+if (drive) document.querySelector("#install").parentElement.hidden = true;
+// Changing only the fragment does not reload the page.
+addEventListener("hashchange", () => location.reload());
+
+document.getElementById("start").onclick = () => run(async () => {
+  const map = document.getElementById("map").files[0];
+  if (!map) throw new Error("pick a map or replay");
+  const bytes = async f => new Uint8Array(await f.arrayBuffer());
+  if (drive) return [await driveGet("storm.dll"), await Promise.all(ARCHIVES.map(driveGet)), map.name, await bytes(map)];
+  // Top-level files of the picked folder, by lowercase name.
+  const top = new Map();
+  for (const f of document.getElementById("install").files) {
+    if (f.webkitRelativePath.split("/").length === 2) top.set(f.name.toLowerCase(), f);
+  }
+  if (!top.has("storm.dll")) throw new Error("pick the install folder (it has storm.dll)");
+  const archives = [];
+  for (const name of ARCHIVES) if (top.has(name)) archives.push(await bytes(top.get(name)));
+  return [await bytes(top.get("storm.dll")), archives, map.name, await bytes(map)];
+});
+
+if (drive?.[3]) {
+  const name = decodeURIComponent(drive[3]);
+  run(async () => [await driveGet("storm.dll"), await Promise.all(ARCHIVES.map(driveGet)), name, await driveGet(name)]);
+}
+
+// ?auto=<map>: files served from auto/ (see build-and-run.sh).
+const auto = new URLSearchParams(location.search).get("auto");
+if (auto) run(async () => {
+  const get = async name => {
+    const r = await fetch("auto/" + name);
+    if (!r.ok) throw new Error(`auto/${name}: ${r.status}`);
+    return new Uint8Array(await r.arrayBuffer());
+  };
+  return [await get("storm.dll"), await Promise.all(ARCHIVES.map(get)), auto, await get(auto)];
+});
 </script>
 </body>
 </html>

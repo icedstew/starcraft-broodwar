@@ -86,7 +86,7 @@ pub fn play(files: &Storage, idx: u32, win: Option<&mut minifb::Window>, audio: 
     let player = audio.filter(|_| v.want_audio).map(|a| a.video_player());
     let rate = std::num::NonZero::new(v.audio_rate & 0xffffff);
     let ch = std::num::NonZero::new(if v.audio_rate & 0x10000000 != 0 { 2 } else { 1 });
-    let start = std::time::Instant::now();
+    let start = web_time::Instant::now();
     let mut shown = 0usize;
     let mut skipped = false;
     // 0x4d44e0: the loop (0x4d1bf0 pumps the messages) until the keys or the end.

@@ -7,6 +7,19 @@ install (the MPQs and storm.dll); scbw reads the assets from it at runtime.
 
 Pure Rust, no platform-specific code: builds for any target Rust supports.
 
+## Running the game
+
+Point `SCBW_INSTALL` at the 1.16.1 install (the directory with `StarDat.mpq`; defaults to
+`~/Downloads/StarCraft-BroodWar_1.16.1`) and start the menus:
+
+    SCBW_INSTALL="$HOME/Downloads/StarCraft-BroodWar_1.16.1" cargo run --release -- glue
+
+This opens the 1.16.1 front end (640x480, shown at 2x): pick Single Player, then
+StarCraft or Brood War, make or choose an ID, and from there play the campaign, a
+custom game, load a saved game, or watch a replay. IDs, saves and replays live under
+`~/.local/share/scbw/` (`characters/`, `save/`, `maps/replays/`; set `SCBW_CHARACTERS`
+to move the `characters` directory, and the others go next to it).
+
 ## Usage
 
     cargo run --release -- view "/path/to/StarCraft/maps/(4)Blood Bath.scm"   # play a melee start
@@ -131,13 +144,27 @@ part of this repo:
 cd ~/src/decomp/scbw
 python3 -I re/coverage.py agent/local/scratch/dump/bw116n.c . | tail -11     # summary: in scope / reachable from game_step
 python3 -I re/coverage.py agent/local/scratch/dump/bw116n.c . --html cov.html  # per source file, as HTML
-python3 -I re/coverage.py agent/local/scratch/dump/bw116n.c . --missing both  # unported non-AI functions reachable from the sim
-python3 -I re/coverage.py agent/local/scratch/dump/bw116n.c . --missing ai    # unported computer-player AI functions
+python3 -I re/coverage.py agent/local/scratch/dump/bw116n.c . --missing both  # non-AI functions left to port, reachable from the sim
+python3 -I re/coverage.py agent/local/scratch/dump/bw116n.c . --missing ai    # computer-player AI functions left to port
+python3 -I re/coverage.py agent/local/scratch/dump/bw116n.c . --missing both --all  # also the replaced / deferred ones, tagged
 ```
+
+Unported functions are split by `re/buckets.txt` (addresses and ranges, each with its
+reason) into three groups:
+
+- **replaced**: the Rust port has its own equivalent, so there is nothing to port:
+  the C runtime, Storm / Win32 imports (any function Ghidra did not name `FUN_*`), the
+  UI engine's dirty-rect / DirectDraw plumbing, the Win32 shell, the sound loader cache,
+  and the selection-circle / health-bar image pools that scbw draws each frame.
+- **deferred**: planned for later: save / load (`agent/areas/saveload.md`) and
+  networking.
+- **left**: still to port. `--missing` lists only these unless `--all` is given.
 
 Each "reachable from" row is also split into "(no AI)" and "(AI only)": the walk from
 the simulation roots stops at the computer players' AI entry points (`AI_ROOTS` in
 `re/coverage.py`), and what is only reachable through them is the AI bucket.
+
+Each "reachable from" line ends with `unported: N replaced by Rust, N deferred, N left`.
 
 Summary as a table (`column -N` is util-linux):
 
@@ -146,8 +173,8 @@ cd ~/src/decomp/scbw
 python3 -I re/coverage.py agent/local/scratch/dump/bw116n.c . | sed -nE \
   's/^all functions: ([0-9]+) functions, ([0-9]+) ported \(([0-9]+%)\).*/All functions|\1|\2 (\3)/p;
    s/^in scope: ([0-9]+) functions, ([0-9]+) ported \(([0-9]+%)\).*/In scope|\1|\2 (\3)/p;
-   s/^reachable from (.*): ([0-9]+) functions, ([0-9]+) ported \(([0-9]+%)\).*/Reachable from \1|\2|\3 (\4)/p' \
-  | column -t -s'|' -N Scope,Functions,Ported
+   s/^reachable from (.*): ([0-9]+) functions, ([0-9]+) ported \(([0-9]+%)\).*unported: ([0-9]+) replaced by Rust, ([0-9]+) deferred, ([0-9]+) left/Reachable from \1|\2|\3 (\4)|\5|\6|\7/p' \
+  | column -t -s'|' -N Scope,Functions,Ported,Replaced,Deferred,Left
 ```
 
 ## Commands

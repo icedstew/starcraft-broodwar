@@ -1681,10 +1681,7 @@ fn new_game(a: &Assets, chk: &Chk, rep: Option<&crate::replay::Header>, gs: Opti
     let name = map::TILESETS[chk.tileset()];
     let vf4 = a.files.read(&format!("tileset/{name}.vf4"))?;
     let ts = bw::map::TilesetData { vf4: vf4.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect(), cv5: a.files.read(&format!("tileset/{name}.cv5"))? };
-    #[cfg(not(target_arch = "wasm32"))]
-    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |t| t.as_secs() as u32);
-    #[cfg(target_arch = "wasm32")] // std has no clock there
-    let secs = (js_sys::Date::now() / 1000.0) as u32;
+    let secs = web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map_or(0, |t| t.as_secs() as u32);
     // Debug: SCBW_SEED fixes the seed (reproducible runs).
     st.rng.seed = std::env::var("SCBW_SEED").ok().and_then(|s| s.parse().ok()).unwrap_or(secs);
     with_data(a, |d| {
@@ -2262,6 +2259,11 @@ fn draw_hud(scene: &Scene, ui: &crate::ui::Ui, vx: i32, vy: i32, cursor: Option<
             }
         }
     }
+    // 0x470040: the selection box, drawn by the game screen (0x4bd580), so the console
+    // dialog covers it.
+    if let Some(b) = scene.drag_box {
+        rect(out, w, h, b, scene.minimap.colors[0x12]);
+    }
     crate::ui::blit(&ui.console, 0, h - ui.console.h as i32, out, w, h);
     let (ox, oy, _) = minimap_geom(scene);
     let mm = &scene.minimap;
@@ -2398,9 +2400,6 @@ fn draw_hud(scene: &Scene, ui: &crate::ui::Ui, vx: i32, vy: i32, cursor: Option<
     // placement (0x48e730: 0x3f, "Select Location"), hidden when they end (0x48ca10 / 0x48e310).
     if let Some(t) = [(scene.targeting.is_some(), 0x3e), (scene.placing.is_some(), 0x3f)].iter().find(|p| p.0).and_then(|p| ui.network.get(p.1)) {
         scene.chat.draw_prompt(&ui.skin, t.split('\0').next().unwrap_or("").as_bytes(), scene.st.replay, out, w, h);
-    }
-    if let Some(b) = scene.drag_box {
-        rect(out, w, h, b, scene.minimap.colors[0x12]);
     }
     let lit = scene.card_highlight();
     for (i, slot) in scene.card().iter().enumerate() {
@@ -2891,6 +2890,8 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
     if let Some(w) = win.win.as_mut() {
         w.set_input_callback(Box::new(Typed(typed.clone())));
     }
+    #[cfg(target_arch = "wasm32")]
+    crate::web::typed_chars(typed.clone());
     let (mw, mh) = (scene.terrain.0 as i32, scene.terrain.1 as i32);
     // 0x4cb190 (the local player's start location unit while the map loads): the screen
     // tile 0x57f1d0/2 = the location's tile - (10, 6), at least 0.
@@ -2909,8 +2910,7 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
     // messages; 1.16.1 runs its mouse handlers as they arrive, not on the game tick).
     let mut edges = LeftEdges::default();
     let mut pend_up: Option<(i32, i32)> = None;
-    #[cfg(not(target_arch = "wasm32"))]
-    let t0 = std::time::Instant::now();
+    let t0 = web_time::Instant::now();
     // 0x57f270: the saved screen positions (Shift+F2..F4 save, F2..F4 recall).
     // 0x4bd3f0 (game start, 0x4eee00 after the start units): the screen goes to the position
     // the start units set (0x57f1d0/2; -1 = none: 0,0) via 0x49c440 (clamp, 8-pixel align,
@@ -2936,9 +2936,8 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
     let mut menu_btn_down = false;
     let mut last_scroll = 0u64;
     let mut terrain_btn_down = false;
-    // The next 42 ms tick of input and game logic (the browser build ticks per call).
-    #[cfg(not(target_arch = "wasm32"))]
-    let mut next_tick = std::time::Instant::now();
+    // The next 42 ms tick of input and game logic.
+    let mut next_tick = web_time::Instant::now();
     // Input between ticks: the window is redrawn (and its events taken) at the display
     // rate, the game reads input every 42 ms. Key presses and button downs of the frames
     // in between are kept for the next tick (as Windows queues the messages).
@@ -2964,10 +2963,7 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
         if drag_start.is_some() {
             (cx, cy) = (cx.clamp(0, vw - 1), cy.clamp(0, 399));
         }
-        #[cfg(not(target_arch = "wasm32"))]
         let now_ms = win.now(t0).duration_since(t0).as_millis() as u64;
-        #[cfg(target_arch = "wasm32")]
-        let now_ms = tick as u64 * 42;
         let l_level = win.get_mouse_down(minifb::MouseButton::Left);
         match edges.poll(l_level, (cx, cy), now_ms) {
             // 0x46fea0 at the release: a box the press started ends here, at once.
@@ -3011,7 +3007,6 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
         let mut v = (vx, vy);
         win.camera(&mut v);
         (vx, vy) = v;
-        #[cfg(not(target_arch = "wasm32"))]
         {
             let (now, dt) = (win.now(t0), std::time::Duration::from_millis(42));
             if now < next_tick {

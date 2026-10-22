@@ -33,26 +33,50 @@ pub fn start(storm: &[u8], archives: js_sys::Array, name: &str, file: &[u8]) -> 
         let a: &'static view::Assets = a;
         Box::new(view::frame_loop(a, view::Scene::new(a, chk).map_err(js)?, None).map_err(js)?)
     };
-    // requestAnimationFrame runs at the display rate; step at the native 24 fps
-    // (set_target_fps) instead.
+    // requestAnimationFrame runs at the display rate, as the native window loop: the
+    // cursor is redrawn every pass, the frame loop ticks the game every 42 ms.
     let win = web_sys::window().unwrap();
-    let perf = win.performance().unwrap();
-    let mut next = perf.now();
     let tick: Rc<RefCell<Option<Closure<dyn FnMut()>>>> = Rc::new(RefCell::new(None));
     let again = tick.clone();
     *tick.borrow_mut() = Some(Closure::new(move || {
-        let now = perf.now();
-        if now >= next {
-            next = (next + 1000.0 / 24.0).max(now - 100.0);
-            match frame() {
-                Ok(true) => {}
-                Ok(false) => return,
-                Err(e) => return web_sys::console::error_1(&e.to_string().into()),
-            }
+        match frame() {
+            Ok(true) => {}
+            Ok(false) => return,
+            Err(e) => return web_sys::console::error_1(&e.to_string().into()),
         }
         let w = web_sys::window().unwrap();
         w.request_animation_frame(again.borrow().as_ref().unwrap().as_ref().unchecked_ref()).unwrap();
     }));
     win.request_animation_frame(tick.borrow().as_ref().unwrap().as_ref().unchecked_ref()).unwrap();
     Ok(())
+}
+
+/// minifb's wasm backend never calls `InputCallback::add_char`, so the game's typed
+/// characters (WM_CHAR: command card hotkeys, chat) come from the canvas's keydown
+/// events here, as Windows would translate them.
+pub fn typed_chars(typed: Rc<RefCell<Vec<u32>>>) {
+    let doc = web_sys::window().unwrap().document().unwrap();
+    let Some(canvas) = doc.query_selector("canvas").ok().flatten() else { return };
+    let cb = Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |e: web_sys::KeyboardEvent| {
+        if e.alt_key() || e.meta_key() {
+            return; // WM_SYSCHAR, not WM_CHAR
+        }
+        let key = e.key();
+        let mut it = key.chars();
+        let c = match (it.next(), it.next()) {
+            (Some(c), None) if e.ctrl_key() && c.is_ascii_alphabetic() => c.to_ascii_lowercase() as u32 & 0x1f,
+            (Some(c), None) if !e.ctrl_key() => c as u32,
+            _ => match key.as_str() {
+                "Enter" => 13,
+                "Backspace" => 8,
+                "Escape" => 27,
+                "Tab" => 9,
+                _ => return,
+            },
+        };
+        typed.borrow_mut().push(c);
+    });
+    canvas.add_event_listener_with_callback("keydown", cb.as_ref().unchecked_ref()).unwrap();
+    // The game window lives for the page's lifetime.
+    cb.forget();
 }

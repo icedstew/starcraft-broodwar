@@ -2319,7 +2319,7 @@ impl Glue {
         }
         // 0x51ca10 = time (a debug seed from `set_seed` or SCBW_SEED); 0x51ca14 = 0x51ca10.
         let seed = SEED.with(|s| s.take()).or_else(|| std::env::var("SCBW_SEED").ok().and_then(|s| s.parse().ok())).unwrap_or_else(|| {
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |t| t.as_secs() as u32)
+            web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map_or(0, |t| t.as_secs() as u32)
         });
         self.create.seed = seed;
         self.create.rand_on = true;

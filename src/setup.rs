@@ -272,7 +272,7 @@ pub fn tbl_str(tbl: &[u8], idx: usize) -> &[u8] {
 }
 
 fn unix_time() -> u32 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as u32).unwrap_or(0)
+    web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map(|d| d.as_secs() as u32).unwrap_or(0)
 }
 
 /// 0x4c3280 on a whole file.

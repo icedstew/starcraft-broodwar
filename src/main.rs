@@ -1129,7 +1129,7 @@ fn main() -> std::io::Result<()> {
             let (w, h, walk) = map::walk_grid(&chk, &ts);
             let g = game::path::WalkGrid { w, h, walk };
             let n: Vec<i32> = args[2..6].iter().map(|v| v.parse().unwrap_or(0)).collect();
-            let t = std::time::Instant::now();
+            let t = web_time::Instant::now();
             println!("{:?} in {:?}", g.find((n[0], n[1]), (n[2], n[3])), t.elapsed());
         }
         Some("sndcheck") => {

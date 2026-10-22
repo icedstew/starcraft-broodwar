@@ -97,7 +97,7 @@ pub struct Cycle {
     /// 0x6ce320 (before gamma / grey).
     pub pal: Pal,
     /// 0x6d6374: GetTickCount of the last step.
-    last: Option<std::time::Instant>,
+    last: Option<web_time::Instant>,
 }
 
 impl Cycle {
@@ -115,7 +115,7 @@ impl Cycle {
     /// 0x4d93f0 (the palette part, run every pass of the game's loop): when the options'
     /// color cycling is on (0x5137d4) and 10 ms have passed, 0x41e900 steps the ranges.
     pub fn tick(&mut self, enabled: bool) {
-        let now = std::time::Instant::now();
+        let now = web_time::Instant::now();
         if enabled && self.last.map_or(true, |t| now.duration_since(t).as_millis() > 9) {
             self.last = Some(now);
             self.step();

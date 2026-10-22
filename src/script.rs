@@ -10,7 +10,8 @@
 use minifb::{Key, KeyRepeat, MouseButton, MouseMode, Window};
 use std::cell::RefCell;
 use std::collections::VecDeque;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use web_time::Instant;
 
 thread_local! {
     // SCBW_GLUE_INPUT="step;step;...", or SCBW_GLUE_SCRIPT=<file>, a step per line.

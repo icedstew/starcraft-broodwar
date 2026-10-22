@@ -40,7 +40,7 @@ pub struct Audio {
 /// Wall clock in ms (std has no clock on wasm32).
 fn now_ms() -> u128 {
     #[cfg(not(target_arch = "wasm32"))]
-    return std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |t| t.as_millis());
+    return web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map_or(0, |t| t.as_millis());
     #[cfg(target_arch = "wasm32")]
     return js_sys::Date::now() as u128;
 }

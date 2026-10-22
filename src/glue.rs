@@ -3099,7 +3099,7 @@ pub fn run(files: &Storage, shot: Option<&str>) -> std::io::Result<()> {
     }
     let mut audio = if shot.is_none() { crate::audio::Audio::open(files) } else { None };
     let dat = crate::dat::Dat::load(files).ok();
-    let mut last = std::time::Instant::now();
+    let mut last = web_time::Instant::now();
     // SCBW_CINE=<number>: plays that cinematic first (screenshot mode: its frame
     // SCBW_CINE_FRAME to the PNG).
     if let Some(i) = std::env::var("SCBW_CINE").ok().and_then(|s| s.parse::<u32>().ok()) {
