@@ -40,8 +40,10 @@ Delegate per agents.md: Haiku triage, Sonnet porting, Opus review / hard RE / co
   agent/areas/net.md (design, phases, 1.16.1 turn loop facts). Phase 0 done: `State:
   Clone`, `State::state_hash`, `scbw rbtest <rep> [delay]` (late commands + rollback ==
   straight playback): all 90 1.16.1 replays MATCH at delay 3; wasm timing fine
-  (snapshot 0.1 ms, 3-frame rollback 0.65 ms). Next: phase 1 (commands through turns 0x485bd0 / 0x486f50; measure 1.16.1's
-  single player click-to-run delay natively).
+  (snapshot 0.1 ms, 3-frame rollback 0.65 ms). Phase 1 done: UI commands join the local
+  turn (`State::send_command` 0x485bd0), `Scene::turn_tick` dispatches them one frame
+  later (measured in 1.16.1: sent at f, run at f + 1). Next: phase 2, the rollback
+  session, tested in process (`scbw nettest`: one session per replay player).
 
 - Screenshot tests on all 1.16.1 replays (user 2026-10-21: "match a PvZ 100%, with the
   minimap UI"): tl1311 (PvZ) rng + draw count match native every frame to f42049.

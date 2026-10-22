@@ -96,8 +96,15 @@ own networking); the 1.16.1 turn loop around them is.
   size) = min(caps +0x08, 0x200). L above = caps +0x1c. 0x6556e4 (extra in flight) from a
   command via 0x485e60 (<= 2). 0x6556e0 = 1 during any game (0x485bb0 from 0x4d9950).
   0x485a40 = one SNetSendTurn (ord 128) flush, no window check.
-- So single player runs a click ~2 frames later (append at F, sent F or F+1, received
-  and dispatched one 0x487070 later): unverified, measure natively in phase 1.
+- Single player runs a command 1 frame after it is sent: measured 2026-10-22 under
+  wine + gdb (agent/local/scratch/spdelay/: bp.py breakpoints 0x485bd0 / 0x4865d0 printing
+  0x57f23c; 8 of 8 commands, two game speeds): sent at counter f, run at f + 1. Every
+  frame also sends the 7-byte sync command 0x37 (`37 <seed u32> 00 00 00`); 0x4865d0 gets
+  EAX = bytes, [esp+4] = length, [esp+8] = flag. scbw: `Scene::turn_tick`,
+  LOCAL_TURNS = 1. The 0x37 sync command is not sent (SB turns it off in rollback too).
+- While a menu is open scbw's frame loop returns before stepping, so no `turn_tick`
+  runs; 1.16.1 keeps exchanging turns while paused (0x4d9550 runs before the pause
+  check in 0x4d9670). Must change for network games (phase 3): turns cannot stall.
   glue_ready.rs 813..930 models the single player provider (VecDeque, window 1) for the
   lobby; the in-game 0x486f50 path is todo there.
 - Today scbw runs local commands at once (view.rs `Scene::command` -> `execute_command`),
@@ -127,3 +134,17 @@ units referred to by handle. Viewer-local state stays out (camera, local player 
 selections, sounds), so peers can compare it; a whole-`State` compare (rbtest's Debug
 dump) is only valid inside one process. Not covered yet: crt_seed (creep tiles), fog,
 AI and trigger state (SB's list doesn't have them either).
+
+## Phase 2 notes (prep)
+
+- `replay_rec::record` runs inside `execute_command` (0x4865d0 -> writer): a re-simulated
+  frame would record its commands again. Record confirmed frames only (SB does the same).
+- `State` fields a restore must keep (viewer-local / UI): local_player, replay*,
+  selected (UI selection), selection_emptied, key_alt, marker_thingy / marker_shown,
+  ui_hl_pool / ui_circle_pool / ui_box_pool, last_error / shown_error, shown_text,
+  transmissions, center_view*, notices, chat, alert_*, local_vision_mask, screen_tile
+  (feeds the creep display only, else 1.16.1 games would desync), turn_out.
+  Once-per-frame outputs drained by the frame loop (sounds, ui_sounds, trigger_wavs,
+  speech, unit_sounds, talked, portrait_dropped, minimap_pings): discard what a
+  re-simulated frame produces (shortcut; SB matches them against the first run).
+  Check each against its readers before relying on this list.

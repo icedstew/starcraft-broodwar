@@ -221,8 +221,7 @@ impl bw::State {
             self.show_marker(d, x as i16, y as i16);
         }
         // 0x4c0380: the right click command (`queued` = the shift state).
-        let player = self.local_player;
-        self.command_right_click_packet(d, player, &self.selected.clone(), (x as i16, y as i16), t, 0xe4, queued);
+        self.command_right_click_packet((x as i16, y as i16), t, 0xe4, queued);
         let ack = self.right_click_accepted(d, &self.selected.clone(), active, t);
         Some(((x, y), 0xe4, ack))
     }

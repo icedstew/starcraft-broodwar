@@ -88,7 +88,7 @@ pub fn load_minimap(files: &Storage, chk: &Chk) -> std::io::Result<bw::minimap::
 }
 
 /// Run `f` with the engine's `Data` view over `a`.
-fn with_data<R>(a: &Assets, f: impl FnOnce(&bw::Data) -> R) -> R {
+pub(crate) fn with_data<R>(a: &Assets, f: impl FnOnce(&bw::Data) -> R) -> R {
     let g = |i: u16| a.bw.grp_size(i);
     let d = bw::load::data(&a.bw, &g);
     f(&d)
@@ -142,6 +142,8 @@ pub struct Scene<'a> {
     trans_left: Option<u32>,
     /// 0x59724c: the selection last sent to the simulation as select commands.
     sent_selection: Vec<u32>,
+    /// 0x57f090 turns in flight (Storm's queue): the local turns sent, not yet dispatched.
+    turns: std::collections::VecDeque<Vec<u8>>,
     /// Command card submenu (button set index) opened by a Menu button, e.g. SCV "Build".
     pub card_menu: Option<u16>,
     /// Building type being placed, and whether the spot under the cursor is valid.
@@ -365,7 +367,7 @@ impl<'a> Scene<'a> {
         for (id, ms) in bw::minimap::Minimap::TIMERS {
             minimap_timers.set(0, 0, id, ms, None);
         }
-        let mut scene = Scene { st, scroll: ScrollState::default(), creep_grp, minimap, minimap_timers, voices: crate::voices::Voices::new(), portrait: Default::default(), talk_left: 0, talk_unit: None, trans_left: None, sent_selection: Vec::new(), card_menu: None, placing: None, card_held: None, targeting: None, error: 0, msgs: Default::default(), chat: Default::default(), clock_ms: 0, timer_running: false, timer_base: 0, timer_start: 0, from_save: false, gamma: 100, pause_tick: 0, pause_replay_saved: false, place_ok: false, place_tile: (0, 0), place_err: 0, drag_box: None, a, chk, ts, terrain, player_colors, colors: std::array::from_fn(|p| colr.get(p).copied().unwrap_or(p as u8)), end_at: std::env::var("SCBW_END_AT").ok().and_then(|v| Some((v.trim_end_matches('d').parse().ok()?, if v.ends_with('d') { 0x40 } else { 0x80 }))), local, shadow, dark, fog: crate::fog::Fog::new(), parallax, tselect, thpbar, remaps };
+        let mut scene = Scene { st, scroll: ScrollState::default(), creep_grp, minimap, minimap_timers, voices: crate::voices::Voices::new(), portrait: Default::default(), talk_left: 0, talk_unit: None, trans_left: None, sent_selection: Vec::new(), turns: Default::default(), card_menu: None, placing: None, card_held: None, targeting: None, error: 0, msgs: Default::default(), chat: Default::default(), clock_ms: 0, timer_running: false, timer_base: 0, timer_start: 0, from_save: false, gamma: 100, pause_tick: 0, pause_replay_saved: false, place_ok: false, place_tile: (0, 0), place_err: 0, drag_box: None, a, chk, ts, terrain, player_colors, colors: std::array::from_fn(|p| colr.get(p).copied().unwrap_or(p as u8)), end_at: std::env::var("SCBW_END_AT").ok().and_then(|v| Some((v.trim_end_matches('d').parse().ok()?, if v.ends_with('d') { 0x40 } else { 0x80 }))), local, shadow, dark, fog: crate::fog::Fog::new(), parallax, tselect, thpbar, remaps };
         scene.timer_running = timer_running;
         if let Ok(d) = scene.a.files.read(&format!("rez/{}textbox.bin", ["z", "t", "p"][scene.local_race()])) {
             scene.chat.load(crate::dlg::Dialog::parse(&d));
@@ -456,20 +458,40 @@ impl<'a> Scene<'a> {
         }
     }
 
-    /// Send the local selection to the simulation (0x4c0860) and return the local
-    /// player's selection as the simulation sees it (0x6284e8).
-    fn sim_selection(&mut self) -> Vec<u32> {
-        let me = self.local;
+    /// Send the local selection to the simulation (0x4c0860): the select commands join the
+    /// local turn (0x485bd0).
+    fn sim_selection(&mut self) {
         let mut sent = std::mem::take(&mut self.sent_selection);
         let pkts = self.st.selection_packets(&mut sent, &self.st.selected);
         self.sent_selection = sent;
-        let st = &mut self.st;
-        with_data(self.a, |d| {
-            for p in &pkts {
-                st.execute_command(d, me, &[], p);
+        for p in &pkts {
+            self.st.send_command(p);
+        }
+    }
+
+    /// The single-player turn exchange runs this many turns behind the sending
+    /// (0x57f090 = 1 turn in flight): measured in 1.16.1 (agent/areas/net.md), a command
+    /// sent at frame counter f runs from 0x4865d0 at f + 1.
+    const LOCAL_TURNS: usize = 1;
+
+    /// 0x487070 / 0x485aa0 / 0x486f50 once per game frame, before its commands and the step:
+    /// the local turn 0x654880 is sent (queued), and the oldest turns beyond `LOCAL_TURNS` in
+    /// flight are dispatched: each command runs as the local player (0x512678) with that
+    /// player's selection (0x4865d0), as `replay_command` does.
+    pub fn turn_tick(&mut self) {
+        self.turns.push_back(std::mem::take(&mut self.st.turn_out));
+        while self.turns.len() > Self::LOCAL_TURNS {
+            let turn = self.turns.pop_front().unwrap();
+            for c in crate::replay::split_commands(&turn) {
+                self.replay_command(self.local, c);
             }
-        });
-        bw::select::selection_units(&self.st.selections[me as usize]).to_vec()
+        }
+    }
+
+    /// A command from the UI joins the local turn (0x485bd0), after the selection commands.
+    pub fn send(&mut self, p: &[u8]) {
+        self.sim_selection();
+        self.st.send_command(p);
     }
 
     /// 0x4967e0: the screen position centered on the selected group: the units' mean
@@ -492,17 +514,19 @@ impl<'a> Scene<'a> {
     /// to 0x59724c) of the same group within 500 ms of the last one returns true (native
     /// centers the screen, 0x4967e0, and clears the marker) else records group and `now` ms.
     pub fn hotkey(&mut self, action: u8, g: u8, now: usize, last: &mut (u8, usize)) -> bool {
-        self.sim_selection();
-        let me = self.local;
-        let st = &mut self.st;
-        with_data(self.a, |d| st.execute_command(d, me, &[], &[0x13, action, g]));
-        let sel = bw::select::selection_units(&self.st.selections[me as usize]).to_vec();
-        if sel != self.st.selected {
-            self.card_menu = None;
-            self.set_placing(None);
+        self.send(&[0x13, action, g]);
+        if action == 1 {
+            // 0x496b40: the UI selects the group's units itself (the sim's group table
+            // 0x57fe60 as the dispatched commands left it).
+            let sel = with_data(self.a, |d| self.st.hotkey_group_units(d, self.local, g));
+            if !sel.is_empty() {
+                if sel != self.st.selected {
+                    self.card_menu = None;
+                    self.set_placing(None);
+                }
+                self.set_selected(sel);
+            }
         }
-        self.set_selected(sel);
-        self.sent_selection = self.st.selected.clone();
         if action != 1 {
             last.0 = 0xff;
             return false;
@@ -1154,9 +1178,8 @@ impl<'a> Scene<'a> {
     pub fn right_click(&mut self, p: (i32, i32), queued: bool) {
         let t = self.unit_at(p.0, p.1).unwrap_or(NIL);
         self.click_feedback(p, t);
-        let (sel, me) = (self.sim_selection(), self.local);
-        let st = &mut self.st;
-        with_data(self.a, |d| st.command_right_click_packet(d, me, &sel, (p.0 as i16, p.1 as i16), t, 0xe4, queued));
+        self.sim_selection();
+        self.st.command_right_click_packet((p.0 as i16, p.1 as i16), t, 0xe4, queued);
         let (active, selected) = (self.client_selection().active, self.st.selected.clone());
         let st = &mut self.st;
         if with_data(self.a, |d| st.right_click_accepted(d, &selected, active, t)) {
@@ -1273,9 +1296,7 @@ impl<'a> Scene<'a> {
         match act {
             None => {}
             Send(p) => {
-                let (sel, me) = (self.sim_selection(), self.local);
-        let st = &mut self.st;
-                with_data(self.a, |d| st.execute_command(d, me, &sel, &p));
+                self.send(&p);
             }
             Target { ground, unit, fog } => self.targeting = Some((ground, unit, fog)),
             Place { order, unit_type } => self.set_placing(Some((order, unit_type))),
@@ -1331,9 +1352,10 @@ impl<'a> Scene<'a> {
         let Some(modes) = self.targeting.take() else { return };
         let t = self.unit_at(p.0, p.1).unwrap_or(NIL);
         self.click_feedback(p, t);
-        let (sel, me) = (self.sim_selection(), self.local);
+        self.sim_selection();
+        let sel = self.st.selected.clone();
         let st = &mut self.st;
-        let r = with_data(self.a, |d| st.target_click(d, me, &sel, modes, (p.0 as i16, p.1 as i16), t, 0xe4, queued));
+        let r = with_data(self.a, |d| st.target_click(d, &sel, modes, (p.0 as i16, p.1 as i16), t, 0xe4, queued));
         if let Err(e) = r {
             self.show_error(e);
         }
@@ -1407,7 +1429,6 @@ impl<'a> Scene<'a> {
     pub fn build(&mut self) {
         let Some((order, t)) = self.placing else { return };
         let (tx, ty) = self.place_tile;
-        let (sel, me) = (self.sim_selection(), self.local);
         if self.place_err != 0 {
             if order == 0x47 {
                 let u = self.client_selection().active;
@@ -1432,8 +1453,7 @@ impl<'a> Scene<'a> {
         // 0x48eff0: the building race's placement sound (sfx 4 + race).
         let race = with_data(self.a, |d| bw::State::supply_race_of(d, t));
         self.st.ui_sounds.push(4 + race);
-        let st = &mut self.st;
-        with_data(self.a, |d| st.execute_command(d, me, &sel, &pkt));
+        self.send(&pkt);
         self.card_menu = Option::None;
     }
 
@@ -1567,7 +1587,7 @@ impl<'a> Scene<'a> {
                     _ => crate::statdata::click(panel, id),
                 };
                 if let Some(pkt) = pkt {
-                    self.command(|st, d, me, sel| st.execute_command(d, me, sel, &pkt));
+                    self.send(&pkt);
                     return true;
                 }
             }
@@ -1583,11 +1603,6 @@ impl<'a> Scene<'a> {
         with_data(self.a, |d| st.execute_command(d, player, &sel, p));
     }
 
-    pub fn command(&mut self, f: impl FnOnce(&mut bw::State, &bw::Data, u8, &[u32])) {
-        let (sel, me) = (self.sim_selection(), self.local);
-        let st = &mut self.st;
-        with_data(self.a, |d| f(st, d, me, &sel));
-    }
 }
 
 /// What 0x4e0710 hands the game: the glue's game setup (the slot table 0x57eee0 after the
@@ -3194,14 +3209,14 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
                     // 0x4c0450: command 0x10 when the game is not paused (0x6509c4).
                     crate::menu::Action::Pause => {
                         if !scene.st.trig.paused {
-                            scene.command(|st, d, me, sel| st.execute_command(d, me, sel, &[0x10]));
+                            scene.send(&[0x10]);
                         }
                     }
                     // 0x4c0420: command 0x11 when paused. The command clears the flag; 0x488790(1)'s
                     // real-time adjust is `unpause_game`'s, so pause again for it.
                     crate::menu::Action::Resume => {
                         if scene.st.trig.paused {
-                            scene.command(|st, d, me, sel| st.execute_command(d, me, sel, &[0x11]));
+                            scene.send(&[0x11]);
                             scene.st.trig.paused = true;
                             scene.unpause_game(true);
                         }
@@ -3335,8 +3350,7 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
                             let mut act = crate::chat::Act::default();
                             // 0x4b23e0 returns 0 at once in a multiplayer game (0x57f0b4).
                             if replay.is_none() && !scene.st.multiplayer && crate::chat::cheat(&t, &mut opt, true, on, &mut act) && opt != scene.st.game_options {
-                                let me = scene.local;
-                                with_data(a, |d| scene.st.command_cheat_packet(d, me, opt));
+                                scene.st.command_cheat_packet(opt);
                             }
                             // 0x4f32d0: in a replay (0x6d0f14) the "/replay " command (0x4de6a0).
                             if replay.is_some() {
@@ -3598,6 +3612,9 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
         let steps = win.cap_steps(steps, scene.st.frame);
         let mut sounds = Vec::new();
         for k in 0..steps {
+            if replay.is_none() {
+                scene.turn_tick();
+            }
             if k > 0 {
                 if let Some(rp) = replay.as_mut() {
                     rp.commands(&mut scene);

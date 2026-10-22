@@ -235,6 +235,26 @@ const CMD_LEN: [i8; 0x77] = [
     -1, -1, -1, -1, -1, -1, -1,
 ];
 
+/// 0x4865d0: split a turn's command bytes into commands by the 0x5005f8 lengths (0x09..0x0b:
+/// 2 bytes per unit + 2); the rest after a byte that is not a command is dropped.
+pub fn split_commands(turn: &[u8]) -> Vec<&[u8]> {
+    let mut out = Vec::new();
+    let mut p = 0;
+    while let Some(&id) = turn.get(p) {
+        let n = match id {
+            0x09..=0x0b => turn.get(p + 1).map_or(0, |&k| k as usize * 2 + 2),
+            _ => match CMD_LEN.get(id as usize) {
+                Some(&n) if n > 0 => n as usize,
+                _ => break,
+            },
+        };
+        let Some(c) = turn.get(p..p + n) else { break };
+        out.push(c);
+        p += n;
+    }
+    out
+}
+
 /// 0x487100's player lookup: the 8 entries of the slot table 0x57eee0 (as the header
 /// stores it at 0xa1): +4 the storm id, +0 the player. A group starts from 0x512684, the
 /// local player: 0x596bac in a replay (0x4dbe50), 0 when read from the real game (tl1742).

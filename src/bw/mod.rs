@@ -219,6 +219,8 @@ pub struct State {
     pub tileset: u16,
     pub local_player: u8,
     pub replay: bool,
+    /// 0x654880: the local turn being filled (0x654aa0 = its length).
+    pub turn_out: Vec<u8>,
     /// Watching a replay: 0x6cdfd4 game speed (0..=6), 0x50e058 speed multiplier,
     /// 0x6d11b0 paused, 0x6d0f31 the replay's length in frames.
     pub replay_speed: u8,
@@ -525,6 +527,7 @@ impl State {
             tileset,
             local_player: 0,
             replay: false,
+            turn_out: Vec::new(),
             reveal_all: false,
             map_changed: false,
             frame: 0,

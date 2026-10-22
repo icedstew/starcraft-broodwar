@@ -1018,12 +1018,12 @@ fn main() -> std::io::Result<()> {
             // builds with it.
             if let Some(t) = std::env::var("SCBW_TRAIN").ok().and_then(|v| v.parse::<u16>().ok()) {
                 scene.st.selected.retain(|&u| scene.st.units[u as usize].status & 2 != 0);
-                scene.command(|st, d, me, sel| {
-                    if let Some(&u) = sel.first() {
-                        eprintln!("train check {:?}", st.can_make_unit(d, u, t, me));
-                    }
-                    st.command_train_sel(d, me, sel, t)
-                });
+                if let Some(&u) = scene.st.selected.first() {
+                    let me = scene.local_player();
+                    let st = &mut scene.st;
+                    eprintln!("train check {:?}", crate::view::with_data(&a, |d| st.can_make_unit(d, u, t, me)));
+                }
+                scene.send(&[0x1f, t as u8, (t >> 8) as u8]);
             }
             if let Some((t, bx, by)) = std::env::var("SCBW_BUILD").ok().and_then(|v| {
                 let n: Vec<i32> = v.split(',').filter_map(|x| x.parse().ok()).collect();
@@ -1032,16 +1032,17 @@ fn main() -> std::io::Result<()> {
                 scene.st.selected.retain(|&u| scene.st.units[u as usize].unit_type == 7);
                 scene.st.selected.truncate(1);
                 let (tx, ty) = ((bx / 32) as i16, (by / 32) as i16);
-                scene.command(|st, d, me, sel| {
-                    if let Some(&u) = sel.first() {
-                        eprintln!("build {tx},{ty} make {:?} order {:?} place {}", st.can_make_unit(d, u, t, me), st.can_issue_order(d, u, 0x1e, me), st.placement_check(d, u, me, tx, ty, t, 1, false, false, false));
-                    }
-                });
+                if let Some(&u) = scene.st.selected.first() {
+                    let me = scene.local_player();
+                    let st = &mut scene.st;
+                    crate::view::with_data(&a, |d| eprintln!("build {tx},{ty} make {:?} order {:?} place {}", st.can_make_unit(d, u, t, me), st.can_issue_order(d, u, 0x1e, me), st.placement_check(d, u, me, tx, ty, t, 1, false, false, false)));
+                }
                 scene.placing = Some((0x1e, t));
                 scene.check_placement_tile((tx, ty));
                 scene.build();
             }
             for f in 0..frames {
+                scene.turn_tick();
                 scene.step();
                 if std::env::var("SCBW_DEBUG").is_ok() && f % 50 == 0 {
                     for &u in &scene.st.selected {

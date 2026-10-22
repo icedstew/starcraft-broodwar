@@ -1253,7 +1253,7 @@ impl State {
     /// (`target` unit, a fog unit of type `ty`, or ground), checks it client side and
     /// sends the targeted-order command. Err holds the message shown instead.
     #[allow(clippy::too_many_arguments)]
-    pub fn target_click(&mut self, d: &Data, player: u8, sel: &[u32], modes: (u8, u8, u8), pos: (i16, i16), target: u32, mut ty: u16, queued: bool) -> Result<(), u16> {
+    pub fn target_click(&mut self, d: &Data, sel: &[u32], modes: (u8, u8, u8), pos: (i16, i16), target: u32, mut ty: u16, queued: bool) -> Result<(), u16> {
         let order = if target != NIL { modes.1 } else if ty == 0xe4 { modes.0 } else { modes.2 };
         let o = order as usize;
         let weapon = d.dat.orders.weapon[o];
@@ -1332,7 +1332,7 @@ impl State {
                     self.shown_error = msg;
                 }
                 let handle = if target != NIL { self.unit_handle(target) } else { 0 };
-                self.command_targeted_packet(d, player, sel, pos, handle, ty, order, queued);
+                self.command_targeted_packet(pos, handle, ty, order, queued);
                 return Ok(());
             }
             if energy != 0 && !has_energy {
@@ -1343,14 +1343,14 @@ impl State {
             return Err(e);
         }
         let handle = if target != NIL { self.unit_handle(target) } else { 0 };
-        self.command_targeted_packet(d, player, sel, pos, handle, ty, order, queued);
+        self.command_targeted_packet(pos, handle, ty, order, queued);
         Ok(())
     }
 
     /// 0x4c0300: send command 0x15 (x, y, target handle, type, order, queued), 11 bytes
     /// (the handle is the unit's index + 1 | its unique id << 11, 0 for no unit).
     #[allow(clippy::too_many_arguments)]
-    fn command_targeted_packet(&mut self, d: &Data, player: u8, sel: &[u32], pos: (i16, i16), handle: u32, ty: u16, order: u8, queued: bool) {
+    fn command_targeted_packet(&mut self, pos: (i16, i16), handle: u32, ty: u16, order: u8, queued: bool) {
         let mut p = vec![0x15];
         p.extend_from_slice(&(pos.0 as u16).to_le_bytes());
         p.extend_from_slice(&(pos.1 as u16).to_le_bytes());
@@ -1358,13 +1358,13 @@ impl State {
         p.extend_from_slice(&ty.to_le_bytes());
         p.push(order);
         p.push(queued as u8);
-        self.execute_command(d, player, sel, &p);
+        self.send_command(&p);
     }
 
     /// 0x4c0380: send the right click command 0x14 (x, y, target handle, type, queued), 10
     /// bytes (`target` is the unit or NIL).
     #[allow(clippy::too_many_arguments)]
-    pub fn command_right_click_packet(&mut self, d: &Data, player: u8, sel: &[u32], pos: (i16, i16), target: u32, ty: u16, queued: bool) {
+    pub fn command_right_click_packet(&mut self, pos: (i16, i16), target: u32, ty: u16, queued: bool) {
         let handle = if target != NIL { self.unit_handle(target) } else { 0 };
         let mut p = vec![0x14];
         p.extend_from_slice(&(pos.0 as u16).to_le_bytes());
@@ -1372,14 +1372,23 @@ impl State {
         p.extend_from_slice(&(handle as u16).to_le_bytes());
         p.extend_from_slice(&ty.to_le_bytes());
         p.push(queued as u8);
-        self.execute_command(d, player, sel, &p);
+        self.send_command(&p);
     }
 
     /// 0x4c0400: send the cheat command 0x12 with the new game options (5 bytes).
-    pub fn command_cheat_packet(&mut self, d: &Data, player: u8, options: u32) {
+    pub fn command_cheat_packet(&mut self, options: u32) {
         let mut p = vec![0x12];
         p.extend_from_slice(&options.to_le_bytes());
-        self.execute_command(d, player, &[], &p);
+        self.send_command(&p);
+    }
+
+    /// 0x485bd0 (ECX = the bytes): a command joins the local turn. A full buffer (0x200,
+    /// 0x57f0d8 in single player) is sent first by 0x485a40.
+    pub fn send_command(&mut self, p: &[u8]) {
+        if self.turn_out.len() + p.len() > 0x200 {
+            crate::todo_port!("0x485a40", "the command buffer is full: send it first");
+        }
+        self.turn_out.extend_from_slice(p);
     }
 
     /// Run one command packet as the turn loop does (0x487191): with the synced RNG on.

@@ -670,6 +670,27 @@ impl State {
         }
     }
 
+    /// 0x496b40 (the part before it selects): the units of hotkey group `g` of `player` that
+    /// 0x496940 would keep, without changing the group table.
+    pub fn hotkey_group_units(&self, d: &Data, player: u8, g: u8) -> Vec<u32> {
+        let slot = g as usize + player as usize * 18;
+        let Some(group) = self.hotkeys.get(slot) else { return Vec::new() };
+        let n = group.iter().position(|&h| h == 0).unwrap_or(12);
+        let mut out = Vec::new();
+        for &h in &group[..n] {
+            let Some(u) = self.unit_from_handle(h).filter(|&u| {
+                let un = &self.units[u as usize];
+                un.player == player
+                    && self.sprites[un.sprite as usize].flags & super::sprite::sflag::HIDDEN == 0
+                    && (self.multi_selectable(d, u) || n <= 1)
+            }) else {
+                continue;
+            };
+            out.push(u);
+        }
+        out
+    }
+
     /// Command 0x09 (0x4c2750): select the units of `handles`.
     pub fn command_select(&mut self, d: &Data, player: u8, handles: &[u16]) {
         let p = player as usize;
