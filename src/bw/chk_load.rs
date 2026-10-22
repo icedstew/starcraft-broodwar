@@ -265,7 +265,7 @@ impl State {
             let (serial, _, u) = addons[i];
             if let Some(&(_, _, o)) = addons[..i].iter().rev().find(|x| x.1 == serial) {
                 let (b, a) = if d.dat.units.flags[self.units[u as usize].unit_type as usize] & 2 != 0 { (o, u) } else { (u, o) };
-                if super::requirements::addon_parent_type(self.units[a as usize].unit_type) == self.units[b as usize].unit_type {
+                if self.addon_parent_type(self.units[a as usize].unit_type) == self.units[b as usize].unit_type {
                     self.attach_addon(d, b, a);
                 }
             }

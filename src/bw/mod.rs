@@ -366,6 +366,8 @@ pub struct State {
     /// 0x47eb70 for the front end: the screen scrolls to this top-left (x, y) and then calls
     /// `trigger_wait_end` (callback 0x4894a0).
     pub center_view: Option<(i32, i32)>,
+    /// 0x47eb30 for the front end: the screen move's second pass ends the scroll-to mode.
+    pub center_view_end: bool,
     /// A front end drives the real-time timers above (set by `Scene::portrait_tick` with a
     /// nonzero `ms`); headless runs have none.
     pub ui_attached: bool,
@@ -404,6 +406,9 @@ pub struct State {
     pub crt_seed: u32,
     /// 0x57f1d0 / 0x57f1d2: screen position in tiles (UI; read by 0x49c4c0).
     pub screen_tile: (u16, u16),
+    /// 0x59cb58: the shown terrain changed; the minimap's next redraw (0x4a4e00 /
+    /// 0x4a4e40 / 0x4a4f10) redraws its terrain first and clears it (UI).
+    pub minimap_terrain: bool,
     /// 0x58f440: playing Brood War (expansion) rules.
     pub is_expansion: bool,
     pub players: players::Players,
@@ -432,6 +437,9 @@ pub struct State {
     pub unit_sounds: Vec<(u16, u32, i32, i16, i16)>,
     /// 0x45efe0 calls this frame for the UI: (talking unit, sfx id).
     pub talked: Vec<(u32, u16)>,
+    /// 0x57fd34 / 0x57fd38: the screen position Space jumps to (0x45e9f0): the last alert's
+    /// (0x45e3a0, 0x45ee40), the start screen at first (0x45f66c).
+    pub alert_pos: (i32, i32),
     /// 0x49eb70(1) calls this frame for the UI: dead units (the portrait control 0x68ac98
     /// hides when its +0x26 unit is one of them).
     pub portrait_dropped: Vec<u32>,
@@ -557,6 +565,7 @@ impl State {
             next_scenario: Vec::new(),
             transmissions: Vec::new(),
             center_view: None,
+            center_view_end: false,
             ui_attached: false,
             notices: Vec::new(),
             palette_grey: false,
@@ -565,6 +574,7 @@ impl State {
             speech: Vec::new(),
             unit_sounds: Vec::new(),
             talked: Vec::new(),
+            alert_pos: (0, 0),
             portrait_dropped: Vec::new(),
             minimap_pings: Vec::new(),
             req_error: std::cell::Cell::new(0),
@@ -579,6 +589,7 @@ impl State {
             local_vision_mask: 1,
             crt_seed: 1,
             screen_tile: (0, 0),
+            minimap_terrain: false,
             is_expansion: true,
             players: players::Players::default(),
             psi: psi::Psi { providers: list::NIL, ..Default::default() },

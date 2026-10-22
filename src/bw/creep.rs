@@ -182,14 +182,14 @@ impl State {
         let i = (x + self.terrain.width as i32 * y) as usize;
         if kind == 2 {
             self.terrain.megatiles[i] |= 0x8000;
-            // 0x47d920: redraw (UI).
+            self.minimap_terrain = true; // 0x47d920
             return;
         }
         if self.tile_seen_locally(i) {
             self.terrain.megatiles[i] = self.terrain.tileset.megatile(tile);
             let f = &mut self.terrain.tile_flags[i];
             *f = if kind == 0 { *f | 0x4000_0000 } else { *f & !0x4000_0000 };
-            // 0x47d920: redraw (UI).
+            self.minimap_terrain = true; // 0x47d920
         }
         let mega = self.terrain.tileset.megatile(tile) as usize & 0x7fff;
         let new = ((self.terrain.tileset.group_flags(tile) as u32 & 0xffff_fffa) << 16) | self.terrain.megatile_flags.get(mega).copied().unwrap_or(0);
@@ -446,6 +446,7 @@ impl State {
                     && f & 0x800_0000 == 0
                 {
                     self.add_creep_tile(x as i32, y as i32);
+                    self.minimap_terrain = true;
                 }
             }
         }
@@ -556,7 +557,7 @@ impl State {
         let f = &mut self.terrain.tile_flags[i];
         *f = if raw & 0x7ff0 == 0x10 { *f | 0x4000_0000 } else { *f & !0x4000_0000 };
         self.creep_edges_around(x as i32, y as i32);
-        // 0x59cb58: redraw (UI).
+        self.minimap_terrain = true; // 0x59cb58
     }
 }
 

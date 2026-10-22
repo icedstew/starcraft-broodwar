@@ -471,13 +471,18 @@ impl State {
         }
     }
 
-    /// 0x476550: clear "nobrk", sprite flag 0x80 and the flingy STARTING flag; leave attack anims.
+    /// 0x476550: clear "nobrk", sprite flag 0x80 and the flingy STARTING flag; leave attack
+    /// anims, run with `u` as the iscript unit and order unit (0x6d11fc / 0x6d11f4 saved,
+    /// set and put back around the 0x497880 call; Ghidra's decompile drops this).
     pub(crate) fn order_start(&mut self, d: &Data, u: u32) {
         let un = &mut self.units[u as usize];
         un.status &= !super::unit::status::NO_BRK_CODE_START;
         let s = un.sprite;
         self.sprites[s as usize].flags &= 0x7f;
+        let saved = (self.iscript_unit, self.iscript_order_unit);
+        (self.iscript_unit, self.iscript_order_unit) = (Some(u), Some(u));
         self.sprite_end_attack_anim(d, s);
+        (self.iscript_unit, self.iscript_order_unit) = saved;
         self.units[u as usize].fl.flags &= !mflags::STARTING;
     }
 

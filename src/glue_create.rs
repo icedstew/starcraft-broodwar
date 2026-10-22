@@ -1851,11 +1851,11 @@ impl Glue {
         true
     }
 
-    /// 0x4dbbe0: the computer slots (5) get the random race (6).
-    fn race_computers_random(&mut self) {
-        for s in self.setup.slots[..12].iter_mut().rev() {
+    /// 0x4dbbe0: the computer slots (5) of slots 7..0 become open (6).
+    fn race_computers_open(&mut self) {
+        for s in self.setup.slots[..8].iter_mut().rev() {
             if s[slot::TYPE] == 5 {
-                s[slot::RACE] = 6;
+                s[slot::TYPE] = 6;
             }
         }
     }
@@ -1874,14 +1874,14 @@ impl Glue {
     }
 
     /// 0x4ee110: the races picked in the create screen (0x57f266 ..) go to the slots of a
-    /// melee-type game: the computers' become random, the local slot gets the first, and
+    /// melee-type game: the computers become open, the local slot gets the first, and
     /// open slots become computers of the others.
     fn race_picks_apply(&mut self) {
         let t = &self.setup.template;
         if self.setup.multiplayer || !self.create.race_picked || (t[8] == 0 && t[0xc] == 0 && t[0x12] == 0) {
             return;
         }
-        self.race_computers_random();
+        self.race_computers_open();
         let me = self.setup.local_slot[0] as usize;
         self.setup.slots[me][slot::RACE] = self.create.race_pick[0];
         for k in 1..9 {
@@ -2309,6 +2309,7 @@ impl Glue {
                 save: Some(save),
                 camp_cont: false,
                 mission: self.setup.map_dir_flag,
+                expansion: self.expansion,
             });
         }
         self.race_picks_apply();
@@ -2316,8 +2317,8 @@ impl Glue {
         if !self.setup.preset_slot_used {
             self.setup.snapshot_types();
         }
-        // 0x51ca10 = time (a debug seed from SCBW_SEED); 0x51ca14 = 0x51ca10.
-        let seed = std::env::var("SCBW_SEED").ok().and_then(|s| s.parse().ok()).unwrap_or_else(|| {
+        // 0x51ca10 = time (a debug seed from `set_seed` or SCBW_SEED); 0x51ca14 = 0x51ca10.
+        let seed = SEED.with(|s| s.take()).or_else(|| std::env::var("SCBW_SEED").ok().and_then(|s| s.parse().ok())).unwrap_or_else(|| {
             std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |t| t.as_secs() as u32)
         });
         self.create.seed = seed;
@@ -2347,6 +2348,16 @@ impl Glue {
             save: None,
             camp_cont: self.camp_cont,
             mission: self.setup.map_dir_flag,
+            expansion: self.expansion,
         })
     }
+}
+
+thread_local! {
+    static SEED: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+}
+
+/// The next game's seed instead of the time (a scripted "seed" step: the recorded game's).
+pub fn set_seed(seed: u32) {
+    SEED.with(|s| s.set(Some(seed)));
 }

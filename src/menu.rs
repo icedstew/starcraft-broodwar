@@ -34,9 +34,10 @@ pub struct Settings {
 
 impl Default for Settings {
     fn default() -> Self {
-        // ponytail: the registry defaults for speed / scroll / sound flags are not
-        // traced; fastest and middle scroll speeds, all sounds on.
-        Settings { game_speed: 6, mouse_scroll: 3, key_scroll: 3, music: 25, digital: 50, sound_flags: 7, cpu_throttle: false, gamma: 100, color_cycling: true, portraits: 2, tip: 1 }
+        // 0x420640 (table 0x519f68; the registry values 0x4206a0 are not read): speed 4,
+        // scrolls 3, flags 0x200 | 0x800 | 1 | 2 | 4 | 0x100 | 0x1000 (0x400 off). Music /
+        // digital are 0x4bc450's 25 / 50; the tip 0 (0x47e7b0 makes it 1, then steps).
+        Settings { game_speed: 4, mouse_scroll: 3, key_scroll: 3, music: 25, digital: 50, sound_flags: 0x1b07, cpu_throttle: false, gamma: 100, color_cycling: true, portraits: 2, tip: 0 }
     }
 }
 
@@ -328,8 +329,7 @@ pub enum Kind {
     Video,
     Help,
     /// Opened by 0x47ea30 (0x658ae0 = eax; dialog 0x5045f8, init 0x47e9a0) at the start of a
-    /// single player game by 0x4d9950 when 0x6cdfec & 0x100 (not wired: that flag is not
-    /// kept in `Settings`, whose default has it off).
+    /// single player game by 0x4d9950 when 0x6cdfec & 0x100 (view.rs, at the first tick).
     Tips,
     Objectives,
     EndMission,
@@ -721,14 +721,35 @@ impl Menu {
         Some(Menu { kind, dlg, depth, saved: *set, pressed: None, dragging: None, click: false, was_down: false, clock: None, last_press: None, timers, tick_count: 0, pump_ms: 0 })
     }
 
-    /// 0x47e480: step the tip by `d` (1..=0x67 in the expansion, wrapping) and show it
-    /// in label -10, in font16 when it fits in its lines but one, else font10.
-    pub fn show_tip(&mut self, skin: &Skin, tips: &[String], set: &mut Settings, d: i16) {
+    /// 0x47e7b0 (the tips open): a campaign mission's tips at the game start (0x47ea30 set
+    /// 0x658ae0; not multiplayer) start at its entry of 0x513ba0, shown as it is; otherwise
+    /// the tip kept (1 when 0 or past the last) steps to the next.
+    pub fn open_tip(&mut self, skin: &Skin, tips: &[String], set: &mut Settings, mission: Option<u16>, expansion: bool) {
+        // 0x513ba0: the first tip of each mission (0x57f244); 0xffff: none.
+        const MISSION_TIP: [u16; 0x40] = [
+            0xffff, 1, 2, 4, 8, 11, 14, 17, 20, 23, 26, 29, 32, 35, 38, 41, 44, 47, 50, 53, 56, 58, 60, 62, 64, 66, 68, 70, 72, 74, 76, 78,
+            81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 0xffff, 96, 97, 0xffff, 98, 99, 99, 99, 99, 99, 99, 100, 101, 102, 103, 0xffff, 0xffff,
+        ];
+        let mut d = 1;
+        if let Some(m) = mission.filter(|&m| m != 0) {
+            set.tip = MISSION_TIP.get(m as usize).copied().unwrap_or(0xffff) as i16;
+            d = 0;
+        }
+        if set.tip == 0 || set.tip as u16 >= if expansion { 0x68 } else { 0x51 } {
+            set.tip = 1;
+        }
+        self.show_tip(skin, tips, set, d, expansion);
+    }
+
+    /// 0x47e480: step the tip by `d` (1..=0x67 in the expansion, 0x50 without, wrapping)
+    /// and show it in label -10, in font16 when it fits in its lines but one, else font10.
+    pub fn show_tip(&mut self, skin: &Skin, tips: &[String], set: &mut Settings, d: i16, expansion: bool) {
+        let last = if expansion { 0x67 } else { 0x50 };
         set.tip += d;
-        if set.tip >= 0x68 {
+        if set.tip > last {
             set.tip = 1;
         } else if set.tip == 0 {
-            set.tip = 0x67;
+            set.tip = last;
         }
         let text = tips.get(set.tip as usize - 1).map_or(String::new(), |s| s.split('\0').next().unwrap_or("").to_string());
         let font = &skin.fonts[2];
@@ -741,10 +762,10 @@ impl Menu {
 
     /// The tips dialog's buttons (0x47e630): next (1), previous (3); the box (2) is
     /// "show tips at startup" (0x6cdfec 0x100).
-    pub fn tips_button(&mut self, skin: &Skin, tips: &[String], id: i16, set: &mut Settings) -> bool {
+    pub fn tips_button(&mut self, skin: &Skin, tips: &[String], id: i16, set: &mut Settings, expansion: bool) -> bool {
         match id {
-            1 => self.show_tip(skin, tips, set, 1),
-            3 => self.show_tip(skin, tips, set, -1),
+            1 => self.show_tip(skin, tips, set, 1, expansion),
+            3 => self.show_tip(skin, tips, set, -1, expansion),
             _ => return false,
         }
         true
@@ -784,6 +805,12 @@ impl Menu {
         // 0x418eb0: the control under the pointer becomes active; an edit keeps the focus.
         let edit = self.dlg.controls.iter().position(|c| c.ty == 8 && c.flags & flag::VISIBLE != 0);
         self.dlg.active = hit.filter(|&i| matches!(self.dlg.controls[i].ty, 1..=4 | 6)).or(edit);
+        // 0x418900 -> 0x418790: the control under the pointer has 0x80 (its text in color 4,
+        // 0x4ef870), the one before loses it.
+        let under = self.dlg.hit(x, y);
+        for (i, c) in self.dlg.controls.iter_mut().enumerate() {
+            if under == Some(i) { c.flags |= 0x80 } else { c.flags &= !0x80 }
+        }
         if let Some(id) = self.list_edit_mouse(skin, x, y, down, hit) {
             return id;
         }
@@ -1247,8 +1274,10 @@ impl Menu {
             (Kind::Game, 4) => (Some((Kind::Help, self.depth)), Action::None),
             // 0x4ca010
             (Kind::Help, 2) => (Some((Kind::Tips, self.depth)), Action::None),
-            // 0x47e690 (OK) / 0x47e630 (next, previous)
-            (Kind::Tips, -2 | -3) => back(Kind::Help),
+            // 0x47e690 (OK) / 0x47e630 (next, previous): back to the help menu, or closed when
+            // the tips are the only menu (depth 1: shown at the game start, 0x47ea30).
+            (Kind::Tips, -2 | -3) if self.depth > 1 => back(Kind::Help),
+            (Kind::Tips, -2 | -3) => (None, Action::Closed),
             // 0x462600
             (Kind::Game, 1) => {
                 // Only the lowest human saves (0x4c3db0), and 0x596877 must be 0.

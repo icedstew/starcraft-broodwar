@@ -94,8 +94,39 @@ fn with_data<R>(a: &Assets, f: impl FnOnce(&bw::Data) -> R) -> R {
     f(&d)
 }
 
+/// The globals of 0x47f0e0 (screen scrolling by mouse edge, keys and trigger moves).
+#[derive(Default, Clone, Copy)]
+pub struct ScrollState {
+    /// 0x6d63dc: acceleration step 0..6, the column of the speed table 0x513b68.
+    counter: usize,
+    /// 0x6d5c1c: the keys scrolled; edge scrolling waits until the mouse moves (0x4d12a0).
+    key_hold: bool,
+    /// 0x51a3e0 / 0x51a3dc: the mouse position 0x4d12a0 saw last.
+    mouse: (i32, i32),
+    /// 0x6d7574 / 0x6d7570: the last direction (x, y).
+    dir: (i32, i32),
+    /// 0x658ac0, 0x658abc / 0x658aa0: the scroll-to target (0x47eb70) while it holds.
+    pub target: Option<(i32, i32)>,
+    /// 0x658aa4: the callback (the trigger wait end 0x4894a0) pending for the target.
+    pending: bool,
+}
+
+/// 0x513b68: pixels per step by scroll speed (setting 0..6) and acceleration step 0..6.
+/// Row 6 (0x513b92) is also the distance table of 0x47eab0.
+const SCROLL_STEP: [[u8; 7]; 7] = [
+    [0, 0, 8, 8, 16, 16, 16],
+    [0, 0, 8, 8, 16, 16, 24],
+    [0, 8, 8, 16, 16, 24, 24],
+    [0, 8, 8, 16, 24, 24, 32],
+    [0, 8, 16, 16, 24, 32, 40],
+    [0, 8, 16, 24, 32, 40, 48],
+    [0, 8, 24, 32, 40, 56, 64],
+];
+
 pub struct Scene<'a> {
     pub st: bw::State,
+    /// The globals of the screen scroll 0x47f0e0.
+    pub scroll: ScrollState,
     /// 0x6d0c64: the tileset's creep edge pieces (`Tileset\<name>.grp`, 0x414100).
     creep_grp: Option<crate::grp::Grp>,
     /// Unit voices (selection and acknowledgement lines).
@@ -159,6 +190,8 @@ pub struct Scene<'a> {
     /// (defeat with `d`) cheat flag 0x6d5a6c & 0x80 (0x40), settled by 0x48a200.
     end_at: Option<(u32, u32)>,
     pub minimap: bw::minimap::Minimap,
+    /// The minimap dialog's timers (0x6d5ebc entries of dialog 0x59cc60).
+    pub minimap_timers: crate::dlg::DlgTimers<()>,
     local: u8,
     shadow: [u8; 256],
     /// The tileset's dark.pcx: 32 darkness levels x 256 colors (0x5973a0).
@@ -323,11 +356,16 @@ impl<'a> Scene<'a> {
                 st.game_step(d);
                 st.game_start_selection(d);
             }
-            minimap.refresh(d, &mut st)
+            minimap.refresh(d, &mut st);
+            minimap.box_tile = st.screen_tile;
         });
         let parallax = a.files.read("parallax/star.spk").ok().and_then(|f| crate::parallax::Parallax::load(&f)).map(std::cell::RefCell::new);
         let creep_grp = a.files.read(&format!("tileset/{}.grp", map::TILESETS[chk.tileset()])).ok().map(crate::grp::Grp::parse);
-        let mut scene = Scene { st, creep_grp, minimap, voices: crate::voices::Voices::new(), portrait: Default::default(), talk_left: 0, talk_unit: None, trans_left: None, sent_selection: Vec::new(), card_menu: None, placing: None, card_held: None, targeting: None, error: 0, msgs: Default::default(), chat: Default::default(), clock_ms: 0, timer_running: false, timer_base: 0, timer_start: 0, from_save: false, gamma: 100, pause_tick: 0, pause_replay_saved: false, place_ok: false, place_tile: (0, 0), place_err: 0, drag_box: None, a, chk, ts, terrain, player_colors, colors: std::array::from_fn(|p| colr.get(p).copied().unwrap_or(p as u8)), end_at: std::env::var("SCBW_END_AT").ok().and_then(|v| Some((v.trim_end_matches('d').parse().ok()?, if v.ends_with('d') { 0x40 } else { 0x80 }))), local, shadow, dark, fog: crate::fog::Fog::new(), parallax, tselect, thpbar, remaps };
+        let mut minimap_timers = crate::dlg::DlgTimers::default();
+        for (id, ms) in bw::minimap::Minimap::TIMERS {
+            minimap_timers.set(0, 0, id, ms, None);
+        }
+        let mut scene = Scene { st, scroll: ScrollState::default(), creep_grp, minimap, minimap_timers, voices: crate::voices::Voices::new(), portrait: Default::default(), talk_left: 0, talk_unit: None, trans_left: None, sent_selection: Vec::new(), card_menu: None, placing: None, card_held: None, targeting: None, error: 0, msgs: Default::default(), chat: Default::default(), clock_ms: 0, timer_running: false, timer_base: 0, timer_start: 0, from_save: false, gamma: 100, pause_tick: 0, pause_replay_saved: false, place_ok: false, place_tile: (0, 0), place_err: 0, drag_box: None, a, chk, ts, terrain, player_colors, colors: std::array::from_fn(|p| colr.get(p).copied().unwrap_or(p as u8)), end_at: std::env::var("SCBW_END_AT").ok().and_then(|v| Some((v.trim_end_matches('d').parse().ok()?, if v.ends_with('d') { 0x40 } else { 0x80 }))), local, shadow, dark, fog: crate::fog::Fog::new(), parallax, tselect, thpbar, remaps };
         scene.timer_running = timer_running;
         if let Ok(d) = scene.a.files.read(&format!("rez/{}textbox.bin", ["z", "t", "p"][scene.local_race()])) {
             scene.chat.load(crate::dlg::Dialog::parse(&d));
@@ -388,14 +426,19 @@ impl<'a> Scene<'a> {
         with_data(self.a, |d| st.load_head(d, &mut i) && st.load_state(d, &mut i))
     }
 
+    /// 0x4ee8c0 (after every game, quit too) -> 0x4dfab0 with 1: the recorded game becomes
+    /// LastReplay.rep.
+    pub fn write_last_replay(&self) {
+        let exe = crate::menu::save_env().exe_dir;
+        if crate::replay_rec::recording() && !exe.is_empty() {
+            crate::replay_rec::write_replay(&exe, "LastReplay", true, &self.st, &self.chk.raw);
+        }
+    }
+
     /// The finished game for the score screen (the glue's 0x4de200 state 6 / 7).
     pub fn game_end(&self) -> GameEnd {
         let st = &self.st;
-        // 0x4e0710's end (0x4dfab0 with 1): the recorded game becomes LastReplay.rep.
-        let exe = crate::menu::save_env().exe_dir;
-        if crate::replay_rec::recording() && !exe.is_empty() {
-            crate::replay_rec::write_replay(&exe, "LastReplay", true, st, &self.chk.raw);
-        }
+        self.write_last_replay();
         GameEnd {
             players: st.players.clone(),
             results: st.player_left,
@@ -405,6 +448,7 @@ impl<'a> Scene<'a> {
             colors: self.colors,
             local: st.local_player,
             frames: st.frame,
+            elapsed_ms: self.clock_ms,
             objectives: st.trig.objectives,
             next_scenario: st.next_scenario.clone(),
             camp_cont: st.camp_cont != 0,
@@ -476,6 +520,49 @@ impl<'a> Scene<'a> {
         let n = units.len();
         let st = &mut self.st;
         with_data(self.a, |d| st.selection_set(d, &mut units, n));
+        // 0x49aef0 with its last argument set: 0x4c0860 sends the select commands at once
+        // (not with the next order); a replay's viewer sends none.
+        if !self.st.replay {
+            self.sim_selection();
+        }
+    }
+
+    /// 0x46fea0 (left button up after a box started by 0x46ff70): the box from the press
+    /// `from` to the release `to` (screen points, the view at `view`) in map pixels, its
+    /// bottom clamped to the map (0x6284b4) and nothing when its top is below the map; at
+    /// most 4 x 4 it is a click at its top left (0x46fb40, `double` = 0x66ff58), else a box
+    /// (0x46fa40). The new selection is set at once (the client selection 0x6284b8).
+    pub fn release_select(&mut self, from: (i32, i32), to: (i32, i32), view: (i32, i32), shift: bool, ctrl: bool, double: bool) {
+        self.drag_box = None;
+        let (vx, vy) = view;
+        let (x0, x1) = ((from.0 + vx).min(to.0 + vx), (from.0 + vx).max(to.0 + vx));
+        let (y0, mut y1) = ((from.1 + vy).min(to.1 + vy), (from.1 + vy).max(to.1 + vy));
+        let h = self.st.map_px.1 as i32;
+        if y0 >= h {
+            return;
+        }
+        if y1 >= h {
+            y1 = h - 1;
+        }
+        let cur = self.st.selected.clone();
+        let st = &mut self.st;
+        let hits = if x1 - x0 <= 4 && y1 - y0 <= 4 {
+            let screen = [vx as i16, vy as i16, (vx + 640) as i16, (vy + 400) as i16];
+            with_data(self.a, |d| st.click_select(d, (x0 as i16, y0 as i16), shift, ctrl, double, screen, &cur))
+        } else {
+            let r = [x0 as i16, y0 as i16, x1 as i16, y1 as i16];
+            with_data(self.a, |d| st.box_select(d, r, shift, &cur))
+        }
+        .unwrap_or(cur);
+        let changed = self.st.selected != hits;
+        if changed {
+            self.card_menu = None;
+            self.set_placing(None);
+        }
+        self.set_selected(hits);
+        if changed || !self.st.selected.is_empty() {
+            self.voice_what();
+        }
     }
 
     /// 0x48ccb0: put stat_txt line `id` (1-based) up for 7 seconds (at the next
@@ -555,18 +642,136 @@ impl<'a> Scene<'a> {
         self.msgs.expire(self.clock_ms);
     }
 
+    /// The minimap dialog's timers (`Minimap::TIMERS`) at the clock `clock_ms`, as the
+    /// message pump's pass 0x415dc0 runs them.
+    pub fn run_minimap_timers(&mut self) {
+        let mut ids = Vec::new();
+        self.minimap_timers.run(self.clock_ms, |_, t| ids.push(t.id));
+        for id in ids {
+            self.minimap_timer(id);
+        }
+    }
+
+    /// One minimap timer firing (`Minimap::timer`).
+    pub fn minimap_timer(&mut self, id: u16) {
+        let (mm, st) = (&mut self.minimap, &mut self.st);
+        with_data(self.a, |d| mm.timer(id, d, st));
+    }
+
+    /// 0x4d12a0: the scroll direction (dx, dy) of the mouse at screen (x, y) with the screen
+    /// at (vx, vy): -1 / 1 at the screen edges unless the map ends there. The limits are
+    /// 0x628488 = map width - 20 tiles and 0x6284b0 = (map height - 12 tiles) * 32 + 8
+    /// (0x49bb90). While the keys scrolled (0x6d5c1c) it gives (0, 0) until the mouse moves.
+    fn edge_dir(&mut self, x: i32, y: i32, vx: i32, vy: i32) -> (i32, i32) {
+        let s = &mut self.scroll;
+        if s.key_hold {
+            if s.mouse == (x, y) {
+                return (0, 0);
+            }
+            s.key_hold = false;
+        }
+        s.mouse = (x, y);
+        let (mw, mh) = (self.st.map_px.0 as i32, self.st.map_px.1 as i32);
+        let dx = if x < 2 && vx != 0 { -1 } else if x < 0x27e || vx >= mw - SCREEN_W { 0 } else { 1 };
+        let dy = if y < 2 && vy != 0 { -1 } else if y < 0x1de || vy >= mh - 384 + 8 { 0 } else { 1 };
+        (dx, dy)
+    }
+
+    /// 0x47ef80: the scroll direction (dx, dy) of the screen at `v`: toward the scroll-to
+    /// target (0x658abc / 0x658aa0) while that holds, else from the key states (virtual
+    /// keys 0x21..0x28 = 0x596a39.. and the numpad 0x60..0x69 = 0x596a78..): the diagonals
+    /// (PgUp, PgDn, Home, End and numpad 9, 3, 7, 1) before the arrows and numpad 8, 2, 4, 6.
+    fn scroll_dir(&self, v: (i32, i32), key: &dyn Fn(minifb::Key) -> bool) -> (i32, i32) {
+        use minifb::Key::*;
+        if let Some((tx, ty)) = self.scroll.target {
+            return ((tx > v.0) as i32 - (tx < v.0) as i32, (ty > v.1) as i32 - (ty < v.1) as i32);
+        }
+        let k = |a, b| key(a) || key(b);
+        if k(NumPad3, PageDown) {
+            return (1, 1);
+        }
+        if k(NumPad1, End) {
+            return (-1, 1);
+        }
+        if k(NumPad7, Home) {
+            return (-1, -1);
+        }
+        if k(NumPad9, PageUp) {
+            return (1, -1);
+        }
+        let dy = if k(NumPad2, Down) { 1 } else if k(NumPad8, Up) { -1 } else { 0 };
+        let dx = if k(NumPad6, Right) { 1 } else if k(NumPad4, Left) { -1 } else { 0 };
+        (dx, dy)
+    }
+
+    /// 0x47eb70: scroll the screen to the top-left (x, y) & !7 over the next frames
+    /// (0x47f0e0); a move still running ends first (its callback). The callback is the trigger
+    /// wait end (0x4894a0), called on arrival. 0x47eb30 (`State::center_view_end`) ends the mode.
+    fn scroll_to(&mut self, x: i32, y: i32) {
+        if std::mem::take(&mut self.scroll.pending) {
+            self.st.trigger_wait_end();
+        }
+        self.scroll.target = Some((x & !7, y & !7));
+        self.scroll.pending = true;
+    }
+
+    /// 0x47f0e0 (once per loop pass, after the cursor update 0x4d14d0): scroll the screen
+    /// `v` by the mouse at the edges (0x4d12a0), the keys (0x47ef80) or toward the target
+    /// (0x47eab0), accelerating over 6 passes through the speed table 0x513b68 with the
+    /// speed setting (`mouse`, `keys`: 0x6cdfd8 / 0x6cdfdc; multiplayer uses the copies
+    /// 0x6cdff0 / 0x6cdff4, which scbw does not keep apart). The caller has checked the gates
+    /// (window active, not paused, no dialog or box drag). 0x49c0c0 / 0x49c1a0 / 0x49c280 /
+    /// 0x49c360 move the position by the step, stopped at the limits (0 and 0x628488 /
+    /// 0x6284b0, as `edge_dir`); their terrain-cache scroll and the redraw request 0x4bd350 are
+    /// not needed here, the screen is drawn whole each frame.
+    pub fn scroll_step(&mut self, v: &mut (i32, i32), mouse: (i32, i32), mouse_speed: i16, key_speed: i16, key: &dyn Fn(minifb::Key) -> bool) {
+        let (mw, mh) = (self.st.map_px.0 as i32, self.st.map_px.1 as i32);
+        let mut speed = key_speed;
+        let (mut dx, mut dy) = self.scroll_dir(*v, key);
+        // The counter rises while a direction holds, and falls to 0 when none does.
+        let moved = if dx != 0 || dy != 0 {
+            self.scroll.key_hold = true;
+            true
+        } else {
+            (dx, dy) = self.edge_dir(mouse.0, mouse.1, v.0, v.1);
+            speed = mouse_speed;
+            dx != 0 || dy != 0
+        };
+        let s = &mut self.scroll;
+        s.counter = if moved { (s.counter + 1).min(6) } else { 0 };
+        if let Some((tx, ty)) = s.target {
+            // 0x47eab0: the step falls while the distance is under the row 6 entry.
+            speed = 6;
+            for d in [(tx - v.0).unsigned_abs(), (ty - v.1).unsigned_abs()] {
+                if d != 0 {
+                    while s.counter > 0 && d < SCROLL_STEP[6][s.counter] as u32 {
+                        s.counter -= 1;
+                    }
+                }
+            }
+        }
+        if moved {
+            s.dir = (dx, dy);
+        }
+        if s.counter != 0 {
+            let amt = SCROLL_STEP[speed.clamp(0, 6) as usize][s.counter] as i32;
+            let (maxx, maxy) = ((mw - SCREEN_W).max(0), (mh - 384 + 8).max(0));
+            v.1 = (v.1 + s.dir.1 * amt).clamp(0, maxy);
+            v.0 = (v.0 + s.dir.0 * amt).clamp(0, maxx);
+        }
+        if s.target == Some(*v) {
+            if std::mem::take(&mut s.pending) {
+                self.st.trigger_wait_end();
+            }
+        }
+    }
+
     /// 0x4d14d0, 0x4d1460: which cursor shows with the mouse at screen (x, y): scrolling at the
     /// screen edges (0x4d12a0), else over the minimap (0x6556fc) or the map (0x4d1460),
     /// where units under it pick a magnifier or target color (0x4d13e0: 0 while placing,
     /// 0x640880 = 1 from 0x48e730 to 0x48e310).
     pub fn cursor_kind(&mut self, ui: Option<&crate::ui::Ui>, x: i32, y: i32, vx: i32, vy: i32, dragging: bool) -> usize {
-        let (mw, mh) = (self.st.map_px.0 as i32, self.st.map_px.1 as i32);
-        // 0x4d12a0: the scroll limits are 0x628488 = map width - 20 tiles and 0x6284b0 =
-        // (map height - 12 tiles) * 32 + 8 (0x49bb90). Native returns 0 first while 0x6d5c1c
-        // (set by 0x47f0e0 when the keys scroll the screen) holds and the mouse has not moved;
-        // scbw has no key scrolling, so the flag is never set.
-        let dx = if x < 2 && vx > 0 { -1 } else if x >= 0x27e && vx < mw - SCREEN_W { 1 } else { 0 };
-        let dy = if y < 2 && vy > 0 { -1 } else if y >= 0x1de && vy < mh - 384 + 8 { 1 } else { 0 };
+        let (dx, dy) = self.edge_dir(x, y, vx, vy);
         if dx != 0 || dy != 0 {
             // 0x51275c, indexed by dx + 3 * dy.
             const SCROLL: [usize; 9] = [18, 11, 12, 17, 0, 13, 16, 15, 14];
@@ -612,21 +817,13 @@ impl<'a> Scene<'a> {
             st.rng.enabled = true;
             st.run_triggers(d, bw::triggers::FRAME_MS[st.replay_speed.min(6) as usize]);
             st.rng.enabled = false;
-            self.minimap.update(d, st);
+            self.minimap.take_pings(st);
         });
         // 0x4bd580: the game screen is drawn every frame, its visible tiles refreshed
         // from MTXM first (creep).
         self.st.refresh_screen_tiles();
         self.st.alert_tick();
         self.voices.tick();
-        // 0x4a4e40 runs on a 200 ms timer: about every fifth frame at 42 ms.
-        if self.st.frame % 5 == 0 {
-            self.minimap.blink_phase = !self.minimap.blink_phase;
-        }
-        // 0x4a4f10 runs on a 100 ms timer: every 2nd or 3rd frame.
-        if self.st.frame % 5 == 0 || self.st.frame % 5 == 2 {
-            self.minimap.tick_pings();
-        }
         if self.st.shown_error != 0 {
             let e = std::mem::take(&mut self.st.shown_error);
             self.show_error(e);
@@ -866,7 +1063,12 @@ impl<'a> Scene<'a> {
                 }
                 let Some(g) = self.a.grp(img.image_id) else { continue };
                 let x = sp.x as i32 + img.x as i32 - g.w / 2 - vx;
-                let y = sp.y as i32 + img.y as i32 - g.h / 2 - vy;
+                // 0x4d57b0: a FREEZE_Y image stays at its kept map y (the frame's top-left).
+                let y = if img.flags & bw::sprite::iflag::FREEZE_Y != 0 {
+                    img.pos_y as i32 - g.frame(img.frame as usize).map_or(0, |f| f.y) - vy
+                } else {
+                    sp.y as i32 + img.y as i32 - g.h / 2 - vy
+                };
                 // 0x4d5cd0 (0x4d5c90 flipped): draw function 12 fills the image's shape with
                 // frame `coloring` of image 0xd2's GRP (DAT_0051d218).
                 let warp = (img.modifier == 12).then(|| self.a.grp(0xd2).and_then(|t| t.pixels(img.coloring as u32 as usize))).flatten();
@@ -946,7 +1148,7 @@ impl<'a> Scene<'a> {
         self.click_feedback(p, t);
         let (sel, me) = (self.sim_selection(), self.local);
         let st = &mut self.st;
-        with_data(self.a, |d| st.command_right_click(d, me, &sel, (p.0 as i16, p.1 as i16), t, 0xe4, queued));
+        with_data(self.a, |d| st.command_right_click_packet(d, me, &sel, (p.0 as i16, p.1 as i16), t, 0xe4, queued));
         let (active, selected) = (self.client_selection().active, self.st.selected.clone());
         let st = &mut self.st;
         if with_data(self.a, |d| st.right_click_accepted(d, &selected, active, t)) {
@@ -1056,6 +1258,10 @@ impl<'a> Scene<'a> {
         use bw::buttons::ButtonAction::*;
         let s = self.client_selection();
         let act = with_data(self.a, |d| self.st.button_action(d, btn, self.local, &s, queued));
+        // 0x423760 (return cargo): 0x48f4d0, the acknowledgement, before the command.
+        if btn.act == 0x423760 && matches!(act, Send(_)) {
+            self.voice_yes();
+        }
         match act {
             None => {}
             Send(p) => {
@@ -1071,6 +1277,8 @@ impl<'a> Scene<'a> {
                 self.end_targeting();
             }
             CancelPlacement => self.set_placing(Option::None),
+            // 0x423930: no larvae, no change (0x49aef0 only runs with some).
+            SelectLarvae(l) if l.is_empty() => {}
             SelectLarvae(l) => self.set_selected(l),
             Error(Option::None) => self.show_error(btn.disabled_str),
             Error(Some((sound, msg))) => {
@@ -1243,7 +1451,7 @@ impl<'a> Scene<'a> {
     /// talks (`st.talked`) takes it over, talking, for its sound's length (at least 1000 ms,
     /// 0x45ef50) unless a talk runs; then 0x45ec40 restores the selection's. `mode` is the
     /// video option (0 none, 1 still, 2 animating).
-    pub fn portrait_tick(&mut self, ui: &crate::ui::Ui, audio: Option<&crate::audio::Audio>, ms: u32, mode: i16) {
+    pub fn portrait_tick(&mut self, ui: &crate::ui::Ui, ms: u32, mode: i16) {
         let talked = std::mem::take(&mut self.st.talked);
         let dropped = std::mem::take(&mut self.st.portrait_dropped);
         // A front end with a clock drives the real-time timers of trigger waits (headless
@@ -1289,7 +1497,7 @@ impl<'a> Scene<'a> {
         if self.talk_left == 0 {
             if let Some(&(u, sfx)) = talked.first() {
                 if let Some(p) = portrait(self, u) {
-                    let len = audio.and_then(|au| au.duration_ms(files, self.a.dat(), sfx)).unwrap_or(0);
+                    let len = crate::audio::duration_ms(files, self.a.dat(), sfx).unwrap_or(0);
                     // ponytail: the callers' duration (EDI) also adds a per-sfx extra
                     // (0x68cd38) that is not read here.
                     self.talk_left = (len / 1000 * 1000).max(1000);
@@ -1392,6 +1600,8 @@ pub struct GameEnd {
     pub colors: [u8; 8],
     pub local: u8,
     pub frames: u32,
+    /// The game's wall-clock time (0x4a2ca0's timer; the loop's clock, a script's virtual one).
+    pub elapsed_ms: u32,
     /// 0x58d6c4 at the end: the next mission's briefing and game start with it.
     pub objectives: [u32; 8],
     /// 0x57f246 at the end: the next scenario a trigger named (0x4c50e0), empty for none.
@@ -1432,6 +1642,8 @@ pub struct GameSetup {
     pub camp_cont: bool,
     /// 0x57f244: the campaign mission (0 outside campaigns).
     pub mission: u16,
+    /// 0x58f440: Brood War rules (the glue's Original / Expansion choice).
+    pub expansion: bool,
 }
 
 /// Engine state for a new game on `chk` (map load, players, melee starting units), or
@@ -1455,6 +1667,9 @@ fn new_game(a: &Assets, chk: &Chk, rep: Option<&crate::replay::Header>, gs: Opti
     let loading = save_seed.is_some();
     let (w, h) = chk.dims();
     let mut st = bw::State::new((w, h), chk.tileset() as u16, 1700);
+    if let Some(g) = gs {
+        st.is_expansion = g.expansion;
+    }
     let name = map::TILESETS[chk.tileset()];
     let vf4 = a.files.read(&format!("tileset/{name}.vf4"))?;
     let ts = bw::map::TilesetData { vf4: vf4.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect(), cv5: a.files.read(&format!("tileset/{name}.cv5"))? };
@@ -1590,15 +1805,17 @@ fn new_game(a: &Assets, chk: &Chk, rep: Option<&crate::replay::Header>, gs: Opti
         // 0x4eec30 -> 0x489b30: trigger state for a new game (0x489790: who is in it).
         st.init_trigger_players();
         // 0x4ef100: srand(0x51ca10, the game seed) for the CRT rand creep tiles use; then
-        // 0x4ee2d0 draws once for the music variant 0x51a3b4 (outside campaigns, in the
-        // process's first game: 0x51a3b4 starts at -1). Games here are never campaign
-        // missions (0x57f244 = 0).
+        // 0x4ee2d0 draws once for the music variant 0x51a3b4 outside campaign missions
+        // (0x57f244 = 0), in the process's first game (0x51a3b4 starts at -1); a mission's
+        // track comes from 0x5122bc / 0x5122c0 and draws nothing.
         // A saved game's seed is the header's (0x596bb4 -> 0x51ca10).
         if let Some(s) = save_seed {
             st.rng.seed = s;
         }
         st.crt_seed = st.rng.seed;
-        crate::audio::next_music_variant(|| st.crt_rand());
+        if gs.map_or(0, |g| g.mission) == 0 {
+            crate::audio::next_music_variant(|| st.crt_rand());
+        }
         // A saved game (0x6d1218 set): 0x4eee00 skips the scenario (0x4bf520), the start
         // units, 0x4bd3f0, 0x437a70(1) and 0x446350; 0x4ef100 skips 0x4abaf0 (0x6d121c).
         if loading {
@@ -1836,10 +2053,9 @@ fn stat_button(ui: &crate::ui::Ui, gr: u16, icons: &crate::grp::Grp, icon: u16, 
     let (w, h) = (SCREEN_W, SCREEN_H);
     let (l, t, rr, b) = r;
     let (cw, ch) = (rr - l + 1, b - t + 1);
-    let mut colors = [0u8; 256];
-    for (i, v) in colors.iter_mut().enumerate() {
-        *v = ui.ticon.get(row * 16 + (i & 15)).copied().unwrap_or(i as u8);
-    }
+    // 0x456c30: the remap 0x50cdc1's first 16 colors take ticon row `row` (0x68c150); the
+    // others draw as they are.
+    let colors: [u8; 256] = std::array::from_fn(|i| if i < 16 { ui.ticon.get(row * 16 + i).copied().unwrap_or(i as u8) } else { i as u8 });
     let draw_icon = |out: &mut [u8]| {
         if let Some(f) = icons.frame(icon as usize) {
             blit_frame(icons, icon as usize, l + (cw - f.w) / 2, t + (ch - f.h) / 2, f.w, f.h, Some(&colors), out, w, h);
@@ -1916,6 +2132,66 @@ pub fn minimap_geom(scene: &Scene) -> (i32, i32, i32) {
     (mx + (ms - m.w as i32) / 2, my + (ms - m.h as i32) / 2, m.tile_px as i32)
 }
 
+/// 0x4a3ee0 (after the minimap image, 0x41d260) with 0x4a37a0: the screen's box at its
+/// tile (0x59cc70 / 0x59c19c, kept equal to 0x57f1d0 / 0x57f1d2 by 0x4a4a70), 20 x 13 tiles
+/// ((n << 0x59c1b0) / 0x59cc68 pixels; 0x59c184 is 0), in color 0x6ceb20. Its height is
+/// cut at the image's bottom; the top row is drawn whole, then the sides (0x41d7d0) and
+/// the bottom row at the cut height.
+fn minimap_view_box(mm: &crate::bw::minimap::Minimap, ox: i32, oy: i32, (tx, ty): (i32, i32), out: &mut [u8], w: i32, h: i32) {
+    let (s, d) = (mm.shift, mm.scale.max(1) as i32);
+    let px = |n: i32| (n << s) / d;
+    let (bw, bh) = (px(0x14), px(0xd));
+    let (x, y) = (ox + px(tx), oy + px(ty));
+    let limit = oy + mm.h as i32;
+    let ch = if y + bh > limit { limit - y } else { bh };
+    let col = mm.colors[0];
+    let mut put = |x: i32, y: i32| {
+        if (0..w).contains(&x) && (0..h).contains(&y) {
+            out[(y * w + x) as usize] = col;
+        }
+    };
+    for i in 0..bw {
+        put(x + i, y);
+    }
+    for j in 0..ch {
+        put(x, y + j);
+        put(x + bw - 1, y + j);
+    }
+    for i in 0..bw {
+        put(x + i, y + ch - 1);
+    }
+}
+
+/// 0x4a3570 (the minimap dialog's draw, after its controls): an image narrower or shorter
+/// than the 128-pixel control gets lines just outside it, in interface colors 2
+/// (0x6ceb22: right / top) and 5 (0x6ceb25: left / bottom); lines across both axes when
+/// both are short or while 0x5993ac is 1. Vertical lines are 0x41d7d0, horizontal 0x41d810.
+fn minimap_border(mm: &crate::bw::minimap::Minimap, ox: i32, oy: i32, out: &mut [u8], w: i32, h: i32) {
+    let (iw, ih) = (mm.w as i32, mm.h as i32);
+    let (c2, c5) = (mm.colors[2], mm.colors[5]);
+    let mut put = |x: i32, y: i32, col: u8| {
+        if (0..w).contains(&x) && (0..h).contains(&y) {
+            out[(y * w + x) as usize] = col;
+        }
+    };
+    let (narrow, short) = (iw < 0x80, ih < 0x80);
+    if mm.all_units != 1 && narrow && !short {
+        (0..ih).for_each(|j| put(ox + iw, oy + j, c2));
+        (0..ih).for_each(|j| put(ox - 1, oy + j, c5));
+    } else if mm.all_units != 1 && !narrow {
+        if !short {
+            return;
+        }
+        (0..iw).for_each(|i| put(ox + i, oy - 1, c2));
+        (0..iw).for_each(|i| put(ox + i, oy + ih, c5));
+    } else {
+        (0..ih + 2).for_each(|j| put(ox + iw, oy - 1 + j, c2));
+        (0..iw + 2).for_each(|i| put(ox - 1 + i, oy - 1, c2));
+        (0..ih + 2).for_each(|j| put(ox - 1, oy - 1 + j, c5));
+        (0..iw + 2).for_each(|i| put(ox - 1 + i, oy + ih, c5));
+    }
+}
+
 fn rect(out: &mut [u8], w: i32, h: i32, (x0, y0, x1, y1): (i32, i32, i32, i32), col: u8) {
     for x in x0.min(x1)..=x0.max(x1) {
         for y in [y0, y1] {
@@ -1979,15 +2255,15 @@ fn draw_hud(scene: &Scene, ui: &crate::ui::Ui, vx: i32, vy: i32, cursor: Option<
         }
     }
     crate::ui::blit(&ui.console, 0, h - ui.console.h as i32, out, w, h);
-    let (ox, oy, scale) = minimap_geom(scene);
+    let (ox, oy, _) = minimap_geom(scene);
     let mm = &scene.minimap;
     for y in 0..mm.h as i32 {
         for x in 0..mm.w as i32 {
             out[((oy + y) * w + ox + x) as usize] = mm.pixels[(y * mm.w as i32 + x) as usize];
         }
     }
-    let (rx, ry, rw, rh) = (ox + vx / scale, oy + vy / scale, w / scale, (h - 120) / scale);
-    rect(out, w, h, (rx, ry, rx + rw, ry + rh), scene.minimap.colors[0]);
+    minimap_view_box(mm, ox, oy, (mm.box_tile.0 as i32, mm.box_tile.1 as i32), out, w, h);
+    minimap_border(mm, ox, oy, out, w, h);
     draw_resources(scene, ui, out);
     crate::leaderboard::draw(scene, ui, out);
     if let Some((l, t, r, b)) = ui.statport.screen_rect(1) {
@@ -2002,7 +2278,13 @@ fn draw_hud(scene: &Scene, ui: &crate::ui::Ui, vx: i32, vy: i32, cursor: Option<
         draw_replay_panel(scene, ui, out, w, h);
     }
     // rez\stat_f10.bin: the MENU button (0x4f5300); rez\minimap.bin's buttons.
-    ui.skin.draw(&ui.stat_f10, &mut crate::dlg::Surf { px: out, w, h });
+    if std::env::var("SCBW_EXP_F10_CLIP").is_ok() {
+        let saved: Vec<u8> = out[(388 * w) as usize..(389 * w) as usize].to_vec();
+        ui.skin.draw(&ui.stat_f10, &mut crate::dlg::Surf { px: out, w, h });
+        out[(388 * w) as usize..(389 * w) as usize].copy_from_slice(&saved);
+    } else {
+        ui.skin.draw(&ui.stat_f10, &mut crate::dlg::Surf { px: out, w, h });
+    }
     ui.skin.draw(&ui.minimap, &mut crate::dlg::Surf { px: out, w, h });
     // Building panels of statdata.cpp (training queue, research, upgrade).
     if let Some((_, ctls)) = scene.status_panel(ui) {
@@ -2065,10 +2347,11 @@ fn draw_hud(scene: &Scene, ui: &crate::ui::Ui, vx: i32, vy: i32, cursor: Option<
                     ui.skin.fonts[0].draw_text(&format!("{level} "), l, t, 2, &o, crate::ui::TextDst { rows: &ui.text_colors, out, w, h });
                 }
                 crate::statdata::Show::Progress(v) => {
-                    // 0x456b40: the empty bar, then the full one clipped to the percentage.
-                    crate::ui::blit(&ui.pbar_empty, l, t, out, w, h);
+                    // 0x456b40: the empty bar, then the full one clipped to the percentage
+                    // (0x41d260: opaque copies).
                     let _ = ch;
-                    crate::ui::blit_w(&ui.pbar_full, l, t, cw * *v as i32 / 100, out, w, h);
+                    crate::ui::blit_opaque_w(&ui.pbar_empty, l, t, cw, out, w, h);
+                    crate::ui::blit_opaque_w(&ui.pbar_full, l, t, cw * *v as i32 / 100, out, w, h);
                 }
                 crate::statdata::Show::Slot { bg, icon, cmdicon, num } => {
                     // 0x456c30: ticon row 3 for an enabled slot, 4 for a disabled one (all
@@ -2103,9 +2386,9 @@ fn draw_hud(scene: &Scene, ui: &crate::ui::Ui, vx: i32, vy: i32, cursor: Option<
     }
     scene.msgs.draw(&ui.font, crate::ui::TextDst { rows: &ui.text_colors, out, w, h });
     scene.chat.draw(&ui.skin, scene.clock_ms, scene.st.replay, out, w, h);
-    // 0x4f31d0: the prompt of targeting (0x48caf0: stat_txt 0x3e) / placement (0x48e730: 0x3f),
-    // hidden when they end (0x48ca10 / 0x48e310).
-    if let Some(t) = [(scene.targeting.is_some(), 0x3e), (scene.placing.is_some(), 0x3f)].iter().find(|p| p.0).and_then(|p| ui.stat_txt.get(p.1)) {
+    // 0x4f31d0: the prompt of targeting (0x48caf0: network.tbl 0x3e, "Select Target") /
+    // placement (0x48e730: 0x3f, "Select Location"), hidden when they end (0x48ca10 / 0x48e310).
+    if let Some(t) = [(scene.targeting.is_some(), 0x3e), (scene.placing.is_some(), 0x3f)].iter().find(|p| p.0).and_then(|p| ui.network.get(p.1)) {
         scene.chat.draw_prompt(&ui.skin, t.split('\0').next().unwrap_or("").as_bytes(), scene.st.replay, out, w, h);
     }
     if let Some(b) = scene.drag_box {
@@ -2151,9 +2434,12 @@ fn draw_hud(scene: &Scene, ui: &crate::ui::Ui, vx: i32, vy: i32, cursor: Option<
 }
 
 /// 0x4593a0 / 0x459150 / 0x459030: a command button's tooltip: its stat_txt string
-/// (after the hotkey and kind bytes) and, for enabled buttons, the cost: minerals, gas
-/// and supply for units (kind 1), the current level's cost and the next level for
-/// upgrades (2), minerals, gas and energy for techs (3).
+/// (after the hotkey and kind bytes) and, for enabled buttons, the cost slots
+/// (0x458800: minerals, gas, energy protoss / terran / zerg, supply protoss / terran /
+/// zerg), chosen by the string's kind byte (jump table 0x459688): 1 a unit's minerals,
+/// gas and supply (0x4594ac), 2 an upgrade level's minerals and gas plus the next level
+/// (0x459544), 3 a spell's energy only (0x4595b6), 4 a research's minerals and gas
+/// (0x45960b), 5 a unit's minerals and gas without supply (0x45952b), else nothing.
 #[allow(clippy::too_many_arguments)]
 fn draw_tooltip(scene: &Scene, ui: &crate::ui::Ui, b: &bw::buttons::Button, enabled: bool, bx: i32, by: i32, out: &mut [u8], w: i32, h: i32) {
     let stat = |id: u16| (id as usize).checked_sub(1).and_then(|i| ui.stat_txt.get(i)).map(|s| s.split('\0').next().unwrap_or(""));
@@ -2172,50 +2458,55 @@ fn draw_tooltip(scene: &Scene, ui: &crate::ui::Ui, b: &bw::buttons::Button, enab
         return;
     }
     let mut text = btext;
-    // (minerals, gas, supply, energy)
-    let mut cost = (0i32, 0i32, 0i32, 0i32);
-    if enabled {
-        match kind {
-            1 if v < dat.units.mineral_cost.len() => {
-                let two = dat.units.flags[v] & 0x400 != 0;
-                let sup = dat.units.supply_required[v] as i32 * if two { 2 } else { 1 };
-                cost = (dat.units.mineral_cost[v] as i32, dat.units.gas_cost[v] as i32, sup / 2, 0);
-            }
-            2 if v < dat.upgrades.icon.len() => {
-                let (m, g, _) = with_data(scene.a, |d| scene.st.upgrade_cost(d, me, v as u8));
-                cost = (m, g, 0, 0);
-                if dat.upgrades.max_level[v] > 1 {
-                    let lvl = scene.st.players.upgrade_level(me, v) as i32 + 1;
-                    text = format!("{text}\n{} {lvl}", ui.stat_txt.get(0x31a).map_or("", |s| s.split('\0').next().unwrap_or("")));
+    let mut slots = [0i32; 8];
+    match kind {
+        // 0x4594ac: supply per race flag (0x6637a0: 4 protoss, 2 terran, 1 zerg) of
+        // 0x663ce8, doubled for two-unit eggs (0x664080 & 0x400), halved.
+        1 if v < dat.units.mineral_cost.len() => {
+            let g = dat.units.staredit_group_flags[v];
+            let n = if dat.units.flags[v] & 0x400 != 0 { 2 } else { 1 };
+            let sup = dat.units.supply_required[v] as i32 * n / 2;
+            slots[0] = dat.units.mineral_cost[v] as i32;
+            slots[1] = dat.units.gas_cost[v] as i32;
+            for (k, bit) in [(5, 4), (6, 2), (7, 1)] {
+                if g & bit != 0 {
+                    slots[k] = sup;
                 }
             }
-            3 if v < dat.techdata.icon.len() => {
-                cost = (dat.techdata.mineral_cost[v] as i32, dat.techdata.gas_cost[v] as i32, 0, dat.techdata.energy_cost[v] as i32);
-            }
-            _ => {}
         }
+        2 if v < dat.upgrades.icon.len() => {
+            let (m, g, _) = with_data(scene.a, |d| scene.st.upgrade_cost(d, me, v as u8));
+            slots[0] = m;
+            slots[1] = g;
+            if dat.upgrades.max_level[v] > 1 {
+                let lvl = scene.st.players.upgrade_level(me, v) as i32 + 1;
+                text = format!("{text}\n{} {lvl}", ui.stat_txt.get(0x31a).map_or("", |s| s.split('\0').next().unwrap_or("")));
+            }
+        }
+        // 0x4595b6: 0x656380 in the slot of the panel unit's race (0x47b150).
+        3 if v < dat.techdata.icon.len() => {
+            let caster = scene.st.selected.first().map(|&u| dat.units.staredit_group_flags[scene.st.units[u as usize].unit_type as usize]);
+            let k = match caster {
+                Some(g) if g & 1 != 0 => Some(4),
+                Some(g) if g & 4 != 0 => Some(2),
+                Some(g) if g & 2 != 0 => Some(3),
+                _ => None,
+            };
+            if let Some(k) = k {
+                slots[k] = dat.techdata.energy_cost[v] as i32;
+            }
+        }
+        4 if v < dat.techdata.icon.len() => {
+            slots[0] = dat.techdata.mineral_cost[v] as i32;
+            slots[1] = dat.techdata.gas_cost[v] as i32;
+        }
+        5 if v < dat.units.mineral_cost.len() => {
+            slots[0] = dat.units.mineral_cost[v] as i32;
+            slots[1] = dat.units.gas_cost[v] as i32;
+        }
+        _ => {}
     }
-    let race = scene.local_race() as i32;
-    let caster = scene.st.selected.first().map_or(4, |&u| with_data(scene.a, |d| bw::State::supply_race_of(d, scene.st.units[u as usize].unit_type)));
-    let supply_race = if kind == 1 && v < dat.units.mineral_cost.len() { with_data(scene.a, |d| bw::State::supply_race_of(d, v as u16)) } else { 4 };
-    let slots = cost_slots(cost, supply_race, caster);
-    tooltip_with_costs(ui, &text, &slots, race, bx, by, out, w, h);
-}
-
-/// 0x458800: the eight cost slots (icons 0x515228): minerals, gas, energy by the
-/// casting unit's race (0x47b150: zerg 4, terran 3, protoss 2) and supply by the
-/// unit's race (zerg 7, terran 6, protoss 5).
-fn cost_slots(cost: (i32, i32, i32, i32), supply_race: u16, caster: u16) -> [i32; 8] {
-    let mut slots = [0i32; 8];
-    slots[0] = cost.0;
-    slots[1] = cost.1;
-    if let Some(&k) = [7usize, 6, 5].get(supply_race as usize).filter(|_| cost.2 != 0) {
-        slots[k] = cost.2;
-    }
-    if let Some(&k) = [4usize, 3, 2].get(caster as usize).filter(|_| cost.3 != 0) {
-        slots[k] = cost.3;
-    }
-    slots
+    tooltip_with_costs(ui, &text, &slots, scene.local_race() as i32, bx, by, out, w, h);
 }
 
 /// 0x459030: tooltip text over interface color 0xf from (2, 0), then the cost line
@@ -2492,7 +2783,7 @@ impl<T> std::ops::DerefMut for Lent<T> {
 }
 
 /// Show a 0RGB frame. minifb's web canvas takes the buffer's bytes as RGBA instead.
-fn present(win: &mut minifb::Window, rgb: &[u32], w: usize, h: usize) -> io::Result<()> {
+pub(crate) fn present(win: &mut minifb::Window, rgb: &[u32], w: usize, h: usize) -> io::Result<()> {
     #[cfg(target_arch = "wasm32")]
     let rgb = &rgb.iter().map(|&c| 0xff00_0000 | (c & 0xff) << 16 | (c & 0xff00) | (c >> 16 & 0xff)).collect::<Vec<u32>>();
     win.update_with_buffer(rgb, w, h).map_err(|e| io::Error::other(e.to_string()))
@@ -2513,6 +2804,37 @@ pub fn frame_loop<'a>(a: &'a Assets, scene: Scene<'a>, replay: Option<ReplayPlay
 /// `frame_loop` that leaves the finished game in `end` when a victory / defeat dialog's OK
 /// ended it (0x460f30 / 0x460fa0).
 /// 0x4bd3f0: the start screen position and the 3 camera slots (inline here).
+/// The left button's edges between polls of its level, with the press point and the
+/// Windows double-click test (a press within GetDoubleClickTime, 500 ms, and the
+/// SM_CXDOUBLECLK / SM_CYDOUBLECLK 4 x 4 box of the last press; a double click does
+/// not start another).
+// ponytail: minifb only reports the level; a click shorter than one poll (~16 ms) is lost.
+#[derive(Default)]
+struct LeftEdges {
+    level: bool,
+    /// The first press since the last tick took it (0x66ff4c: the press point).
+    press: Option<(i32, i32)>,
+    /// 0x66ff58: the last press was a double click.
+    dbl: bool,
+    last_down: Option<(i32, i32, u64)>,
+}
+
+impl LeftEdges {
+    /// Some(true) on a press, Some(false) on a release.
+    fn poll(&mut self, level: bool, (x, y): (i32, i32), now_ms: u64) -> Option<bool> {
+        if level == self.level {
+            return None;
+        }
+        self.level = level;
+        if level {
+            self.press.get_or_insert((x, y));
+            self.dbl = self.last_down.is_some_and(|(lx, ly, t)| now_ms.saturating_sub(t) <= 500 && (x - lx).abs() <= 2 && (y - ly).abs() <= 2);
+            self.last_down = if self.dbl { None } else { Some((x, y, now_ms)) };
+        }
+        Some(level)
+    }
+}
+
 pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Option<ReplayPlay>, end: std::rc::Rc<std::cell::RefCell<Option<GameEnd>>>) -> io::Result<impl FnMut() -> io::Result<bool> + 'a> {
     use minifb::{Key, Scale, Window, WindowOptions};
     let mut following = replay.is_some();
@@ -2521,9 +2843,16 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
         scene.local = rp.follow.player;
     }
     let race = ["zerg", "terran", "protoss"][scene.local_race()];
-    let ui = crate::ui::Ui::load_with(&a.files, race, scene.st.replay).ok();
+    let mut ui = crate::ui::Ui::load_with(&a.files, race, scene.st.replay).ok();
+    if let Some(u) = ui.as_mut() {
+        u.skin.fx = Some(crate::dlg::Effects::in_game(&scene.ts.cycle.pal, &u.skin.tile, &crate::bw::minimap::excluded_colors(scene.st.tileset)));
+    }
     // The glue's audio when it started the game (`park_audio`), else a new output.
-    let mut audio = Lent(Some(take_audio().or_else(|| crate::audio::Audio::open(&a.files))), |a| {
+    // No window and steps left (`scbw glue <out.png>` with SCBW_GLUE_INPUT): the script
+    // plays the game, without sound.
+    let parked = take_window();
+    let scripted = parked.is_none() && crate::script::pending();
+    let mut audio = Lent(Some(take_audio().or_else(|| if scripted { None } else { crate::audio::Audio::open(&a.files) })), |a| {
         if let Some(a) = a {
             park_audio(a);
         }
@@ -2535,13 +2864,17 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
     let (vw, vh) = (SCREEN_W, SCREEN_H);
     let opts = WindowOptions { scale: Scale::X2, ..WindowOptions::default() };
     // The glue's window when it started the game (`park_window`), else a new one.
-    let mut win = Lent(Some(match take_window() {
-        Some(w) => w,
-        None => Window::new("scbw", vw as usize, vh as usize, opts).map_err(|e| io::Error::other(e.to_string()))?,
-    }), park_window);
+    let lent = match (parked, scripted) {
+        (_, true) => None,
+        (Some(w), _) => Some(w),
+        (None, _) => Some(Window::new("scbw", vw as usize, vh as usize, opts).map_err(|e| io::Error::other(e.to_string()))?),
+    };
+    let mut win = crate::script::Io::new(lent.map(|w| Lent(Some(w), park_window)));
     // The window loop runs at the display rate: the software cursor is redrawn on every
     // pass (as 1.16.1's main loop does), the game clock below ticks every 42 ms.
-    win.set_target_fps(60);
+    if let Some(w) = win.win.as_mut() {
+        w.set_target_fps(60);
+    }
     // Typed characters for the chat line (WM_CHAR).
     struct Typed(std::rc::Rc<std::cell::RefCell<Vec<u32>>>);
     impl minifb::InputCallback for Typed {
@@ -2550,25 +2883,38 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
         }
     }
     let typed = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-    win.set_input_callback(Box::new(Typed(typed.clone())));
+    if let Some(w) = win.win.as_mut() {
+        w.set_input_callback(Box::new(Typed(typed.clone())));
+    }
     let (mw, mh) = (scene.terrain.0 as i32, scene.terrain.1 as i32);
-    // Start with the view on the local player's start location.
+    // 0x4cb190 (the local player's start location unit while the map loads): the screen
+    // tile 0x57f1d0/2 = the location's tile - (10, 6), at least 0.
     let start = scene.st.start_locations[scene.local_player() as usize];
-    let (mut vx, mut vy) = (start.0 as i32 - vw / 2, start.1 as i32 - (vh - 120) / 2);
+    let (mut vx, mut vy) = ((((start.0 as i32) >> 5) - 10).max(0) * 32, (((start.1 as i32) >> 5) - 6).max(0) * 32);
     let mut idx = vec![0u8; (vw * vh) as usize];
     let mut rgb = vec![0u32; (vw * vh) as usize];
-    win.set_cursor_visibility(false);
+    if let Some(w) = win.win.as_mut() {
+        w.set_cursor_visibility(false);
+    }
     let mut tick = 0usize;
     let mut drag_start: Option<(i32, i32)> = None;
     let mut rmb_was_down = false;
     let mut lmb_was_down = false;
-    let mut last_click = 0usize;
+    // Left button edges at the window's poll rate (Windows' WM_LBUTTONDOWN / UP / DBLCLK
+    // messages; 1.16.1 runs its mouse handlers as they arrive, not on the game tick).
+    let mut edges = LeftEdges::default();
+    let mut pend_up: Option<(i32, i32)> = None;
+    #[cfg(not(target_arch = "wasm32"))]
+    let t0 = std::time::Instant::now();
     // 0x57f270: the saved screen positions (Shift+F2..F4 save, F2..F4 recall).
     // 0x4bd3f0 (game start, 0x4eee00 after the start units): the screen goes to the position
     // the start units set (0x57f1d0/2; -1 = none: 0,0) via 0x49c440 (clamp, 8-pixel align,
     // parallax 0x49bfd0 in draw_stars), then the 3 slots take it.
-    let (sx, sy) = (vx.clamp(0, (mw - vw).max(0)) & !7, vy.clamp(0, (mh - vh + 120).max(0)) & !7);
+    let (sx, sy) = (vx.clamp(0, (mw - vw).max(0)) & !7, vy.clamp(0, (mh - 384 + 8).max(0)) & !7);
+    (vx, vy) = (sx, sy);
     let mut camera_slots = [(sx, sy); 3];
+    // 0x45f66c (the portrait set up at the game start): Space's position is the screen's.
+    scene.st.alert_pos = (sx, sy);
     // 0x5999b4: the music volume Ctrl+M turned off; the same for Ctrl+S.
     let (mut saved_music, mut saved_digital) = (0i16, 0i16);
     // A press used for a targeted order is not also a minimap scroll until released.
@@ -2579,9 +2925,11 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
     let mut settings = crate::menu::Settings::default();
     let mut menu: Option<crate::menu::Menu> = None;
     let mut menu_paused = false;
+    let mut tips_checked = false;
     let mut game_acc = 0u32;
     let mut ctx = crate::menu::Ctx { replay: replay.is_some(), multiplayer: false, replay_speed: 0, ..Default::default() };
     let mut menu_btn_down = false;
+    let mut last_scroll = 0u64;
     let mut terrain_btn_down = false;
     // The next 42 ms tick of input and game logic (the browser build ticks per call).
     #[cfg(not(target_arch = "wasm32"))]
@@ -2594,40 +2942,102 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
     let mut pend_rep: Vec<Key> = Vec::new();
     let (mut pend_l, mut pend_r) = (false, false);
     Ok(move || {
+        if !win.step(scene.st.frame, &typed) {
+            // The script ran out or stopped: the game ends as a quit would (0x4ee8c0).
+            scene.write_last_replay();
+            return Ok(false);
+        }
         if !win.is_open() {
             return Ok(false);
         }
-        let (cx, cy) = win.get_mouse_pos(minifb::MouseMode::Clamp).map_or((vw / 2, vh / 2), |(x, y)| (x as i32, y as i32));
+        if let Some((g, m, k)) = win.take_settings() {
+            (settings.game_speed, settings.mouse_scroll, settings.key_scroll) = (g, m, k);
+        }
+        let (mut cx, mut cy) = win.get_mouse_pos(minifb::MouseMode::Clamp).map_or((vw / 2, vh / 2), |(x, y)| (x as i32, y as i32));
+        // 0x46ff70 -> 0x421690 (ClipCursor 0x5993b0): while a box is dragged the cursor stays
+        // in the map view (640 x 400), so the box never reaches the console.
+        if drag_start.is_some() {
+            (cx, cy) = (cx.clamp(0, vw - 1), cy.clamp(0, 399));
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        let now_ms = win.now(t0).duration_since(t0).as_millis() as u64;
+        #[cfg(target_arch = "wasm32")]
+        let now_ms = tick as u64 * 42;
+        let l_level = win.get_mouse_down(minifb::MouseButton::Left);
+        match edges.poll(l_level, (cx, cy), now_ms) {
+            // 0x46fea0 at the release: a box the press started ends here, at once.
+            Some(false) if menu.is_none() && drag_start.is_some() => {
+                let from = drag_start.take().unwrap();
+                let shift = win.is_key_down(Key::LeftShift) || win.is_key_down(Key::RightShift);
+                let ctrl = win.is_key_down(Key::LeftCtrl) || win.is_key_down(Key::RightCtrl);
+                scene.release_select(from, (cx, cy), (vx, vy), shift, ctrl, edges.dbl);
+                // The press this release ends is spent: the next tick must not see the button
+                // still down (it would start a box at the cursor and end it as a click).
+                pend_l = false;
+                edges.press = None;
+            }
+            Some(false) => pend_up = Some((cx, cy)),
+            _ => {}
+        }
+        // 0x46eef0 (mouse move while boxing): the box follows the cursor every pass.
+        if let (Some((sx, sy)), true, true) = (drag_start, l_level, menu.is_none()) {
+            scene.drag_box = Some((sx, sy, cx, cy));
+        }
+        // 0x4d9840: the scroll step (0x47f0e0) runs on a pass more than 10 ms after the last,
+        // apart from the game's tick. Its loop passes come far more often than the window's
+        // (60 a second here), so the steps it would have taken since are taken now: one per
+        // 11 ms (GetTickCount's whole ms).
+        if now_ms.saturating_sub(last_scroll) > 200 {
+            last_scroll = now_ms - 11;
+        }
+        while now_ms > last_scroll + 10 {
+            last_scroll += 11;
+            if scene.scroll.target.is_some() {
+                drag_start = None;
+                scene.drag_box = None;
+            }
+            if win.is_active() && (!scene.st.trig.paused || scene.st.multiplayer) && (scene.scroll.target.is_some() || (drag_start.is_none() && menu.is_none())) {
+                let mut v = (vx, vy);
+                scene.scroll_step(&mut v, (cx, cy), settings.mouse_scroll, settings.key_scroll, &|k| win.is_key_down(k));
+                (vx, vy) = v;
+            }
+        }
+        // A scripted "cam" step holds the screen at the recorded game's until its shot.
+        let mut v = (vx, vy);
+        win.camera(&mut v);
+        (vx, vy) = v;
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let (now, dt) = (std::time::Instant::now(), std::time::Duration::from_millis(42));
+            let (now, dt) = (win.now(t0), std::time::Duration::from_millis(42));
             if now < next_tick {
                 pend_keys.extend(win.get_keys_pressed(minifb::KeyRepeat::No));
                 pend_rep.extend(win.get_keys_pressed(minifb::KeyRepeat::Yes));
-                pend_l |= win.get_mouse_down(minifb::MouseButton::Left);
+                pend_l |= l_level;
                 pend_r |= win.get_mouse_down(minifb::MouseButton::Right);
                 // Between ticks: only the cursor moves.
                 let kind = if menu.is_some() { 0 } else { scene.cursor_kind(ui.as_ref(), cx, cy, vx, vy, drag_start.is_some()) };
                 scene.gamma = settings.gamma;
                 scene.ts.cycle.tick(settings.color_cycling); // 0x4d93f0
                 compose_with_cursor(&scene, ui.as_ref(), vx, vy, Some((kind, tick * 42 / 100, cx, cy)), menu.as_ref(), &mut idx, &mut rgb);
-                present(&mut *win, &rgb, vw as usize, vh as usize)?;
+                win.present(&rgb, vw as usize, vh as usize)?;
                 return Ok(true);
             }
             next_tick = if now > next_tick + dt { now + dt } else { next_tick + dt };
         }
         tick += 1;
+        let press_pos = edges.press.take().unwrap_or((cx, cy));
+        let dbl_press = edges.dbl;
         let mut keys_no: Vec<Key> = std::mem::take(&mut pend_keys);
         keys_no.extend(win.get_keys_pressed(minifb::KeyRepeat::No));
         let mut keys_rep: Vec<Key> = std::mem::take(&mut pend_rep);
         keys_rep.extend(win.get_keys_pressed(minifb::KeyRepeat::Yes));
-        let lmb = win.get_mouse_down(minifb::MouseButton::Left) || std::mem::take(&mut pend_l);
+        let lmb = l_level || std::mem::take(&mut pend_l);
         let rmb = win.get_mouse_down(minifb::MouseButton::Right) || std::mem::take(&mut pend_r);
         let shift = win.is_key_down(Key::LeftShift) || win.is_key_down(Key::RightShift);
         // The game menu (F10 or the console's MENU button) takes all input while open;
         // single player and replays pause under it (0x4f57a0 -> 0x488790).
         ctx.replay_speed = scene.st.replay_speed as i16;
-        let open_menu = |scene: &Scene, kind, depth, settings: &crate::menu::Settings| {
+        let open_plain = |scene: &Scene, kind, depth, settings: &crate::menu::Settings| {
             let u = ui.as_ref()?;
             let mut m = crate::menu::Menu::open(kind, depth, &a.files, &u.skin, ctx, settings)?;
             if kind == crate::menu::Kind::Objectives {
@@ -2635,11 +3045,11 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
             }
             Some(m)
         };
-        // 0x47e480 when the tips open.
+        // 0x47e7b0 when the tips open (from the help menu, 0x4ca010: 0x658ae0 = 0).
         let open_menu = |scene: &Scene, kind, depth, settings: &mut crate::menu::Settings| {
-            let mut m = open_menu(scene, kind, depth, settings)?;
+            let mut m = open_plain(scene, kind, depth, settings)?;
             if let (crate::menu::Kind::Tips, Some(u)) = (kind, ui.as_ref()) {
-                m.show_tip(&u.skin, &u.tips, settings, 0);
+                m.open_tip(&u.skin, &u.tips, settings, None, scene.st.is_expansion);
             }
             Some(m)
         };
@@ -2652,6 +3062,22 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
             menu_paused = menu.is_some();
             if menu_paused {
                 scene.pause_game();
+            }
+        }
+        // 0x4d9950 at the game start: single player, not a replay (0x6d0f14) or a loaded
+        // save (0x4ce6c0), and "show tips" (0x6cdfec 0x100) -> the tips (0x47ea30).
+        if !tips_checked {
+            tips_checked = true;
+            if !ctx.multiplayer && !ctx.replay && !scene.from_save && settings.sound_flags & 0x100 != 0 && menu.is_none() {
+                // 0x47ea30 (0x658ae0 = 1): a campaign mission starts at its own tip.
+                menu = open_plain(&scene, crate::menu::Kind::Tips, 0, &settings);
+                if let (Some(m), Some(u)) = (menu.as_mut(), ui.as_ref()) {
+                    m.open_tip(&u.skin, &u.tips, &mut settings, Some(scene.st.mission), scene.st.is_expansion);
+                }
+                menu_paused = menu.is_some();
+                if menu_paused {
+                    scene.pause_game();
+                }
             }
         }
         if menu.is_some() {
@@ -2700,7 +3126,7 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
             }
             lmb_was_down = ldown;
             let tips_step = match (menu.as_mut(), ui.as_ref(), act) {
-                (Some(m), Some(u), Some(id)) if m.kind == crate::menu::Kind::Tips => m.tips_button(&u.skin, &u.tips, id, &mut settings),
+                (Some(m), Some(u), Some(id)) if m.kind == crate::menu::Kind::Tips => m.tips_button(&u.skin, &u.tips, id, &mut settings, scene.st.is_expansion),
                 _ => false,
             };
             if let Some(id) = act.filter(|_| !tips_step) {
@@ -2714,7 +3140,10 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
                 let (next, action) = m.on_activate(id, &mut settings, ctx);
                 menu = next.and_then(|(k, depth)| open_menu(&scene, k, depth, &mut settings));
                 match action {
-                    crate::menu::Action::QuitMission => return Ok(false),
+                    crate::menu::Action::QuitMission => {
+                        scene.write_last_replay();
+                        return Ok(false);
+                    }
                     crate::menu::Action::ExitProgram => {
                         EXIT.store(true, std::sync::atomic::Ordering::Relaxed);
                         return Ok(false);
@@ -2762,6 +3191,21 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
                             scene.msgs.print(&u.font, text.as_bytes(), scene.clock_ms, 0, 0x17, &mut scene.st.ui_sounds);
                         }
                     }
+                    // 0x4c0450: command 0x10 when the game is not paused (0x6509c4).
+                    crate::menu::Action::Pause => {
+                        if !scene.st.trig.paused {
+                            scene.command(|st, d, me, sel| st.execute_command(d, me, sel, &[0x10]));
+                        }
+                    }
+                    // 0x4c0420: command 0x11 when paused. The command clears the flag; 0x488790(1)'s
+                    // real-time adjust is `unpause_game`'s, so pause again for it.
+                    crate::menu::Action::Resume => {
+                        if scene.st.trig.paused {
+                            scene.command(|st, d, me, sel| st.execute_command(d, me, sel, &[0x11]));
+                            scene.st.trig.paused = true;
+                            scene.unpause_game(true);
+                        }
+                    }
                     // ponytail: restarting rebuilds nothing yet; the menu just closes.
                     _ => {}
                 }
@@ -2784,7 +3228,7 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
             scene.gamma = settings.gamma;
             scene.ts.cycle.tick(settings.color_cycling); // 0x4d93f0
             compose_with_cursor(&scene, ui.as_ref(), vx, vy, Some((0, counter, cx, cy)), menu.as_ref(), &mut idx, &mut rgb);
-            present(&mut *win, &rgb, vw as usize, vh as usize)?;
+            win.present(&rgb, vw as usize, vh as usize)?;
             return Ok(true);
         }
         let mdown = lmb;
@@ -2816,12 +3260,11 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
         if terrain_btn_down {
             lmb_was_down = mdown;
         }
-        // ponytail: scroll speed 0x6cdfd8 / 0x6cdfdc picks among 7 rates; 8 + 4 per step.
-        let sp = 8 + 4 * settings.mouse_scroll as i32;
-        if cx <= 1 { vx -= sp }
-        if cx >= vw - 2 { vx += sp }
-        if cy <= 1 { vy -= sp }
-        if cy >= vh - 2 { vy += sp }
+        // 0x47f0e0 (4d98de, after the cursor update): the mouse edges and the keys scroll the
+        // screen, or the target of a trigger's screen move (0x47eb70) does. The gates:
+        // window active (0x51bfa8), not paused unless multiplayer (0x6509c4 / 0x57f0b4), and
+        // outside a target move no box drag (0x66ff5c) or dialog (0x6d1214); a target move
+        // ends the box drag (0x46efa0).
         let (ox, oy, scale) = minimap_geom(&scene);
         let map_pt = (cx + vx, cy + vy);
         let down = lmb;
@@ -2866,6 +3309,11 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
         // card (letters, digits, symbols; Ctrl makes control codes, Alt sends no WM_CHAR).
         // Not while the chat edit box has the keys.
         let hot_chars: Vec<u8> = if scene.chat.open || ctrl || alt { Vec::new() } else { typed_chars.iter().filter(|&&c| c < 0x80).map(|&c| (c as u8).to_ascii_lowercase()).collect() };
+        // 0x45e9f0 (the portrait dialog's character event): a character of statport.bin's
+        // label -10 (" ") moves the screen to 0x57fd34 / 0x57fd38 (0x49c440: 8-pixel steps).
+        if hot_chars.contains(&b' ') && menu.is_none() {
+            (vx, vy) = (scene.st.alert_pos.0 & !7, scene.st.alert_pos.1 & !7);
+        }
         for c in hot_chars {
             if let Some((b, _)) = card.iter().flatten().find(|(b, en)| *en && hotkey(ui.as_ref(), b) == Some(c as char)) {
                 pressed = Some(*b);
@@ -3063,44 +3511,32 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
         if !down {
             hud_press = None;
         } else if hud_press.is_none() {
-            hud_press = Some(ui.as_ref().is_some_and(|u| u.hud_hit(cx, cy)));
+            hud_press = Some(ui.as_ref().is_some_and(|u| u.hud_hit(press_pos.0, press_pos.1)));
         }
         if down && on_minimap_pt(cx, cy) && drag_start.is_none() {
-            let (mx, my) = scene.minimap.screen_to_map(cx, cy, (ox as i16, (oy - 0x13b) as i16));
-            vx = mx - vw / 2;
-            vy = my - (vh - 120) / 2;
+            // 0x4a4d20: the cursor less half the screen box (20 x 13 tiles in minimap
+            // pixels), as a map point (0x4a3d70), its tile (0x49c440 when it changed).
+            let mm = &scene.minimap;
+            let d = (mm.scale.max(1) << 1) as i32;
+            let (hx, hy) = ((0x14 << mm.shift) / d, (0xd << mm.shift) / d);
+            let (mx, my) = mm.screen_to_map(cx - hx, cy - hy, (ox as i16, (oy - 0x13b) as i16));
+            vx = (mx >> 5) << 5;
+            vy = (my >> 5) << 5;
         } else if down && cy < vh - 120 && (drag_start.is_some() || hud_press == Some(false)) {
-            let (sx, sy) = *drag_start.get_or_insert((cx, cy));
+            let (sx, sy) = *drag_start.get_or_insert(press_pos);
             scene.drag_box = Some((sx, sy, cx, cy));
         } else if !down {
-            if let Some((sx, sy)) = drag_start.take() {
-                scene.drag_box = None;
-                let (x0, y0, x1, y1) = (sx + vx, sy + vy, cx + vx, cy + vy);
-                let hits = if (x1 - x0).abs() < 4 && (y1 - y0).abs() < 4 {
-                    let ctrl = win.is_key_down(Key::LeftCtrl) || win.is_key_down(Key::RightCtrl);
-                    let double = tick.saturating_sub(last_click) < 8;
-                    last_click = tick;
-                    let screen = [vx as i16, vy as i16, (vx + 640) as i16, (vy + 400) as i16];
-                    let cur = scene.st.selected.clone();
-                    let st = &mut scene.st;
-                    let p = (map_pt.0 as i16, map_pt.1 as i16);
-                    with_data(scene.a, |d| st.click_select(d, p, shift, ctrl, double, screen, &cur)).unwrap_or(cur)
-                } else {
-                    let r = [x0.min(x1) as i16, y0.min(y1) as i16, x0.max(x1) as i16, y0.max(y1) as i16];
-                    let cur = scene.st.selected.clone();
-                    let st = &mut scene.st;
-                    with_data(scene.a, |d| st.box_select(d, r, shift, &cur)).unwrap_or(cur)
-                };
-                if scene.st.selected != hits {
-                    scene.card_menu = None;
-                    scene.set_placing(None);
-                }
-                let changed = scene.st.selected != hits;
-                scene.set_selected(hits);
-                if changed || !scene.st.selected.is_empty() {
-                    scene.voice_what();
-                }
+            if let Some(from) = drag_start.take() {
+                let ctrl = win.is_key_down(Key::LeftCtrl) || win.is_key_down(Key::RightCtrl);
+                scene.release_select(from, (cx, cy), (vx, vy), shift, ctrl, dbl_press);
             }
+        }
+        // A whole click between two ticks: the press above started the box, the release
+        // ends it at the release point.
+        if let (Some(to), Some(from)) = (pend_up.take(), drag_start.filter(|_| !l_level)) {
+            drag_start = None;
+            let ctrl = win.is_key_down(Key::LeftCtrl) || win.is_key_down(Key::RightCtrl);
+            scene.release_select(from, to, (vx, vy), shift, ctrl, dbl_press);
         }
         let rdown = rmb;
         if rdown && !rmb_was_down && (scene.end_targeting() || scene.placing.take().is_some()) {
@@ -3120,12 +3556,8 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
                 scene.pause_game();
             }
         }
-        if win.is_key_down(Key::Left) { vx -= sp }
-        if win.is_key_down(Key::Right) { vx += sp }
-        if win.is_key_down(Key::Up) { vy -= sp }
-        if win.is_key_down(Key::Down) { vy += sp }
         vx = vx.clamp(0, (mw - vw).max(0));
-        vy = vy.clamp(0, (mh - vh + 120).max(0)); // console covers the bottom
+        vy = vy.clamp(0, (mh - 384 + 8).max(0)); // 0x6284b0 (0x49bb90): (map height - 12 tiles) * 32 + 8
         // 0x57f1d0: the screen position in tiles.
         scene.st.screen_tile = ((vx.max(0) / 32) as u16, (vy.max(0) / 32) as u16);
         // Replay speed: game frames per window tick (42 ms) at the chosen speed and
@@ -3157,9 +3589,10 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
             if following {
                 (vx, vy) = rp.camera_step((vx, vy), vw, vh - 120);
                 vx = vx.clamp(0, (mw - vw).max(0));
-                vy = vy.clamp(0, (mh - vh + 120).max(0));
+                vy = vy.clamp(0, (mh - 384 + 8).max(0));
             }
         }
+        let steps = win.cap_steps(steps, scene.st.frame);
         let mut sounds = Vec::new();
         for k in 0..steps {
             if k > 0 {
@@ -3230,24 +3663,31 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
             }
         }
         // 0x4c6de0 -> 0x47eb70: the trigger's screen move, then its wait ends (0x4894a0).
-        // ponytail: 1.16.1 scrolls there over a few frames; this jumps.
+        // The screen then scrolls to it over the next passes (0x47f0e0, above). ponytail: the
+        // position is snapped to a multiple of 8 first so the target is reachable by 8 px steps.
         if let Some((x, y)) = scene.st.center_view.take() {
-            (vx, vy) = (x, y);
-            scene.st.trigger_wait_end();
+            (vx, vy) = (vx & !7, vy & !7);
+            scene.scroll_to(x, y);
+        }
+        // 0x47eb30 (the action's second pass): the scroll-to mode ends (the original also
+        // puts the mouse back to the screen center, which scbw cannot).
+        if std::mem::take(&mut scene.st.center_view_end) {
+            scene.scroll.target = None;
         }
         if let Some(au) = audio.as_mut() {
             au.music_check(&a.files); // 0x4d1d05 -> 0x4a6250
         }
         if let Some(u) = ui.as_ref() {
-            scene.portrait_tick(u, audio.as_ref(), 42, settings.portraits);
+            scene.portrait_tick(u, 42, settings.portraits);
             scene.text_tick(u, 42, settings.sound_flags & 0x400 != 0);
+            scene.run_minimap_timers();
         }
         let kind = scene.cursor_kind(ui.as_ref(), cx, cy, vx, vy, drag_start.is_some());
         let counter = tick * 42 / 100;
         scene.gamma = settings.gamma;
         scene.ts.cycle.tick(settings.color_cycling); // 0x4d93f0
         compose_with_cursor(&scene, ui.as_ref(), vx, vy, Some((kind, counter, cx, cy)), None, &mut idx, &mut rgb);
-        present(&mut *win, &rgb, vw as usize, vh as usize)?;
+        win.present(&rgb, vw as usize, vh as usize)?;
         Ok(true)
     })
 }
@@ -3470,8 +3910,9 @@ fn draw_replay_panel(scene: &Scene, ui: &crate::ui::Ui, out: &mut [u8], w: i32, 
     label(-45, &format!("\x03{}", stat(0x609)), &mut s);
     if let Some((l, t, r, _)) = dlg.screen_rect(10) {
         let pct = (st.frame * 100).checked_div(st.replay_frames).unwrap_or(0).min(100) as i32;
-        crate::ui::blit(&ui.pbar_empty, l, t, s.px, w, h);
-        crate::ui::blit_w(&ui.pbar_full, l, t, (r - l + 1) * pct / 100, s.px, w, h);
+        // 0x456b40 (0x41d260: opaque copies).
+        crate::ui::blit_opaque_w(&ui.pbar_empty, l, t, r - l + 1, s.px, w, h);
+        crate::ui::blit_opaque_w(&ui.pbar_full, l, t, (r - l + 1) * pct / 100, s.px, w, h);
     }
     let ms = bw::triggers::FRAME_MS[st.replay_speed.min(6) as usize] as u64;
     let secs = ms * st.frame as u64 / 1000;
@@ -3480,4 +3921,20 @@ fn draw_replay_panel(scene: &Scene, ui: &crate::ui::Ui, out: &mut [u8], w: i32, 
     let mult = if st.replay_mult > 1 { format!(" {} {}", if st.replay_speed > 2 { "x" } else { "/" }, st.replay_mult) } else { String::new() };
     let speed = if st.replay_paused { stat(0x60a) } else { format!("{} {}{}", glu(0x5d), glu(st.replay_speed as usize + 0x55), mult) };
     label(-47, &speed, &mut s);
+}
+
+#[test]
+fn left_edges_double_click() {
+    let mut e = LeftEdges::default();
+    assert_eq!(e.poll(true, (10, 10), 0), Some(true));
+    assert_eq!(e.poll(true, (10, 10), 16), None);
+    assert_eq!(e.poll(false, (10, 10), 80), Some(false));
+    assert_eq!(e.poll(true, (12, 9), 300), Some(true));
+    assert!(e.dbl && e.press == Some((10, 10)));
+    e.poll(false, (12, 9), 350);
+    e.poll(true, (12, 9), 400); // a third press is not another double click
+    assert!(!e.dbl);
+    e.poll(false, (12, 9), 450);
+    e.poll(true, (12, 9), 1000);
+    assert!(!e.dbl);
 }

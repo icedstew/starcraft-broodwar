@@ -290,9 +290,34 @@ fn grp_pixel(grp: &[u8], frame: u16, fx: u32, fy: u32) -> bool {
 }
 
 impl State {
-    /// 0x4d57b0 (position part): an image's top-left in map coordinates.
-    /// ponytail: computed on demand; 1.16.1 keeps the last drawn y while FREEZE_Y is set.
+    /// 0x4d57b0 (position part): an image's top-left in map coordinates; y is the kept
+    /// `pos_y` while FREEZE_Y is set.
     fn image_map_pos(&self, d: &Data, i: u32) -> (i16, i16) {
+        let (x, y) = self.image_map_pos_now(d, i);
+        let im = &self.images[i as usize];
+        (x, if im.flags & super::sprite::iflag::FREEZE_Y != 0 { im.pos_y } else { y })
+    }
+
+    /// 0x4d57b0's y (+0x26), unless FREEZE_Y keeps the old one.
+    pub(crate) fn image_update_pos_y(&mut self, d: &Data, i: u32) {
+        if self.images[i as usize].flags & super::sprite::iflag::FREEZE_Y == 0 {
+            self.images[i as usize].pos_y = self.image_map_pos_now(d, i).1;
+        }
+    }
+
+    /// The callers of 0x4d57b0 (sprite moves 0x4983a0, frame / offset changes, image
+    /// init) keep +0x26 current: refreshed for every image after each step.
+    /// ponytail: per step, not at each call; differs only if an image moves and is frozen
+    /// in the same step.
+    pub fn images_update_pos_y(&mut self, d: &Data) {
+        for i in 0..self.images.len() {
+            if self.images[i].in_use && self.images[i].sprite != NIL {
+                self.image_update_pos_y(d, i as u32);
+            }
+        }
+    }
+
+    fn image_map_pos_now(&self, d: &Data, i: u32) -> (i16, i16) {
         let im = &self.images[i as usize];
         let g = d.grp_file(im.image_id);
         let (_, gw, gh) = (d.grp)(im.image_id);

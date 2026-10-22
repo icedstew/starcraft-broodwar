@@ -46,9 +46,9 @@ pub struct Minimap {
     pub w: u16,
     pub h: u16,
     /// 0x59c1b0: 1 when a tile is two pixels wide.
-    shift: u32,
+    pub shift: u32,
     /// 0x59cc68: tiles per pixel.
-    scale: u32,
+    pub scale: u32,
     /// 0x59cc6c: map pixels per minimap pixel.
     pub tile_px: u16,
     /// 0x59c190: terrain colors.
@@ -72,6 +72,8 @@ pub struct Minimap {
     /// 0x6d5bc0: blink phase for units under attack; 0x6d5bc1: some unit is blinking.
     pub blink_phase: bool,
     pub blinking: bool,
+    /// 0x59cc70 / 0x59c19c: the screen's tile the box is drawn at (0x4a4a70 keeps it).
+    pub box_tile: (u16, u16),
     /// 0x5993ac: draw all units without the vision test (set by 0x4b9ac0 around 0x4a5d10).
     pub all_units: u32,
     /// 0x6d0f1c: in a replay, draw every player's units.
@@ -130,7 +132,7 @@ impl Minimap {
         let n = w as usize * h as usize;
         Minimap {
             w, h, shift, scale, tile_px, terrain: vec![0; n], pixels: vec![0; n], remap, fog, colors, player_colors, vx4, vr4,
-            ally_colors: false, hide_terrain: false, blink_phase: false, blinking: false, all_units: 0, replay_all: 0, checksum: 0, boxes: 0,
+            ally_colors: false, hide_terrain: false, blink_phase: false, blinking: false, box_tile: (0, 0), all_units: 0, replay_all: 0, checksum: 0, boxes: 0,
             pings: [Ping::default(); 16], blink_grp: None, tblink: Vec::new(),
         }
     }
@@ -418,14 +420,20 @@ impl Minimap {
         *p = Ping { active: true, x: conv(x), y: conv(y), age: 0, kind };
     }
 
-    /// 0x4a4f10 (timer every 100 ms): each ping ages a frame; after frame 0x13 it ends.
-    pub fn tick_pings(&mut self) {
+    /// 0x4a4f10 (timer 6, every 100 ms): each ping ages a frame (after frame 0x13 it
+    /// ends); while any was active the minimap is redrawn.
+    fn tick_pings(&mut self, d: &Data, st: &mut State) {
+        let mut any = false;
         for p in self.pings.iter_mut().filter(|p| p.active) {
             if p.age == 0x13 {
                 p.active = false;
             } else {
                 p.age += 1;
             }
+            any = true;
+        }
+        if any {
+            self.redraw(d, st);
         }
     }
 
@@ -443,14 +451,46 @@ impl Minimap {
         }
     }
 
-    /// 0x4a5200 (each game frame): fog and units over the current terrain, then the pings.
-    pub fn update(&mut self, d: &Data, st: &mut State) {
-        self.draw_fog(st);
-        self.draw_units(d, st);
+    /// The pings the game started this frame (0x4a34c0 at once in the original).
+    pub fn take_pings(&mut self, st: &mut State) {
         for (x, y, kind) in std::mem::take(&mut st.minimap_pings) {
             self.add_ping(x, y, kind);
         }
+    }
+
+    /// The redraw of the timers 0x4a4e00 / 0x4a4e40 / 0x4a4f10 (and 0x4a5200, each
+    /// multiplayer turn): the terrain when it changed (0x59cb58, then cleared), the fog
+    /// (0x4a4150), the units (0x4a4ac0) and the pings (0x4a3870).
+    pub fn redraw(&mut self, d: &Data, st: &mut State) {
+        if st.minimap_terrain {
+            self.draw_terrain(st);
+        }
+        self.draw_fog(st);
+        self.draw_units(d, st);
         self.draw_pings();
+        st.minimap_terrain = false;
+    }
+
+    /// The minimap dialog's timers (0x4a5770 sets them with 0x416090): `id` 1 is 0x4a4e00
+    /// (every 1000 ms, 2000 in multiplayer: redraw), 2 is 0x4a4a70 (200 ms: the screen box
+    /// follows the screen's tile 0x57f1d0), 3 is 0x4a4e40 (200 ms: the blink phase 0x6d5bc0
+    /// turns; while some unit blinks (0x6d5bc1) and no ping is up, redraw) and 6 is
+    /// 0x4a4f10 (100 ms: the pings age).
+    pub const TIMERS: [(u16, u32); 4] = [(1, 1000), (2, 200), (3, 200), (6, 100)];
+
+    pub fn timer(&mut self, id: u16, d: &Data, st: &mut State) {
+        match id {
+            1 => self.redraw(d, st),
+            2 => self.box_tile = st.screen_tile,
+            3 => {
+                self.blink_phase = !self.blink_phase;
+                if self.blinking && self.pings.iter().all(|p| !p.active) {
+                    self.redraw(d, st);
+                }
+            }
+            6 => self.tick_pings(d, st),
+            _ => {}
+        }
     }
 
     /// 0x4a54f0 (button 2): terrain hidden / shown (0x6d5bbf), then fog (0x4a4150),

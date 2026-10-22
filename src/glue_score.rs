@@ -575,10 +575,9 @@ impl Glue {
     /// 0x4b42d0: the seconds of the game: 0x4a2ca0, or with 0x6d5a60 the frames
     /// (0x57f23c) at the game speed 0x6d0f6a.
     fn score_seconds(&self) -> u32 {
-        let by_frames = |frames: u32| (FRAME_MS[self.create.speed as usize % FRAME_MS.len()] as u64 * frames as u64 / 1000) as u32;
         match self.game_end.as_ref() {
-            // The wall-clock timer 0x59cc7c is not run by the game here: the game's frames.
-            Some(g) => by_frames(g.frames),
+            // 0x4a2ca0: the wall-clock timer 0x59cc7c, run by the game loop here.
+            Some(g) => g.elapsed_ms / 1000,
             None if self.g6d5a60 != 0 => 0,
             None => self.setup.elapsed_seconds(self.clock_ms),
         }
@@ -610,6 +609,7 @@ impl Glue {
             colors: [0, 1, 2, 3, 4, 5, 6, 7],
             local: 0,
             frames: 24 * 60 * 14 + 24 * 31,
+            elapsed_ms: (14 * 60 + 31) * 1000,
             objectives: [0; 8],
             next_scenario: Vec::new(),
             camp_cont: false,

@@ -187,9 +187,8 @@ fn unit_offsets() -> &'static [u16] {
     static O: OnceLock<Vec<u16>> = OnceLock::new();
     O.get_or_init(|| offsets(UNITS, 228, 0xffff))
 }
-/// 0x46e170: the type an addon is built from (its unit requirement list starts with
-/// "current unit is"), 0xe4 for others.
-pub fn addon_parent_type(t: u16) -> u16 {
+/// 0x46e170 without its `req_error` clear (see `State::addon_parent_type`).
+fn addon_parent(t: u16) -> u16 {
     let off = unit_offsets().get(t as usize).copied().unwrap_or(0) as usize;
     if off != 0 && UNITS[off] == 0xff02 {
         UNITS[off + 1]
@@ -212,6 +211,13 @@ fn research_offsets() -> &'static [u16] {
 }
 
 impl State {
+    /// 0x46e170: the type an addon is built from (its unit requirement list starts with
+    /// "current unit is"), 0xe4 for others. Clears the requirement error 0x66ff60 first.
+    pub fn addon_parent_type(&self, t: u16) -> u16 {
+        self.req_error.set(0);
+        addon_parent(t)
+    }
+
     pub(super) fn disabled(&self, u: u32) -> bool {
         let un = &self.units[u as usize];
         un.status & 0x400 != 0 || un.lockdown_timer != 0 || un.stasis_timer != 0 || un.maelstrom_timer != 0

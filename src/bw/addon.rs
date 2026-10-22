@@ -46,7 +46,7 @@ impl State {
     /// `active` (0x597248; the 0x473ef0 check).
     pub fn placebox_addon(&mut self, d: &Data, placing: u16, active: u32, u: u32) {
         let ut = self.units[u as usize].unit_type;
-        if super::requirements::addon_parent_type(ut) != placing {
+        if self.addon_parent_type(ut) != placing {
             return;
         }
         let (puw, puh) = super::build::placement(d, ut);
@@ -293,7 +293,7 @@ impl State {
         found.into_iter().find(|&c| {
             let cu = &self.units[c as usize];
             let ct = cu.unit_type;
-            if d.dat.units.flags[ct as usize] & 2 == 0 || cu.player != 0xb || super::requirements::addon_parent_type(ct) != bt {
+            if d.dat.units.flags[ct as usize] & 2 == 0 || cu.player != 0xb || self.addon_parent_type(ct) != bt {
                 return false;
             }
             let (cx, cy) = self.unit_sprite_pos(c);

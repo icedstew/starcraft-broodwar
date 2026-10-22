@@ -88,6 +88,23 @@ impl Glue {
         self.slide = s;
     }
 
+    /// A slide-in under way: the controls after the sliding ones that the dialog's init
+    /// showed hide too, till the slide ends (as the real game's score screen shows them).
+    pub(super) fn slide_rehide(&mut self) {
+        let (Some(from), Some((dlg, _))) = (self.slide.tail, self.dlg.as_mut()) else { return };
+        if self.slide.timer.is_none() {
+            return;
+        }
+        for k in from..dlg.controls.len() {
+            if dlg.controls[k].flags & flag::VISIBLE != 0 {
+                dlg.controls[k].flags &= !flag::VISIBLE;
+                if !self.slide.hidden.contains(&k) {
+                    self.slide.hidden.push(k);
+                }
+            }
+        }
+    }
+
     /// The 20 ms timer 7 (0x4dd220 / 0x4dcd00) of the open dialog, `ms` passed.
     pub(super) fn slide_tick(&mut self, files: &Storage, ms: u32) {
         if self.dlg.is_none() {

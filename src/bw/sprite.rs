@@ -72,6 +72,9 @@ pub struct Image {
     /// +0x40 modifier data: player color, remap table id, cloak state...
     pub coloring: u64,
     pub sprite: u32,      // +0x50
+    /// 1.16.1 +0x26: the map y of the frame's top-left (0x4d57b0), not rewritten while
+    /// FREEZE_Y is set (a lifting building's shadow stays on the ground).
+    pub pos_y: i16,
 }
 
 impl Node for Image {
@@ -249,7 +252,8 @@ impl State {
         let script = d.dat.images.iscript[id];
         i.iscript.header = d.iscript_header(script).unwrap_or_else(|| panic!("script {script} does not exist"));
         self.image_run_anim(d, img, 0);
-        // 0x14018e3f0 only refreshes the image's screen-space bounds (render cache).
+        // 0x4d57b0 (at 0x4d6736): the image's map position.
+        self.image_update_pos_y(d, img);
     }
 
     /// 0x4010e0: initialize_image (0x4d5a50) then image_post_init (0x4d66b0), no direction.
@@ -499,11 +503,11 @@ impl State {
     pub fn sprite_run_anim(&mut self, d: &Data, s: u32, anim: u8, force: bool) {
         let mut cur = self.sprites[s as usize].images.head;
         while cur != NIL {
-            let next = self.images[cur as usize].link.next;
             if force || (self.sprites[s as usize].flags as i8) >= 0 {
                 self.image_run_anim(d, cur, anim);
             }
-            cur = next;
+            // 0x499d28: next is read after the iscript ran (it may free or add images).
+            cur = self.images[cur as usize].link.next;
         }
     }
 

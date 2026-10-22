@@ -1149,6 +1149,26 @@ impl Setup {
         std::fs::remove_file(self.profile_path(name)).is_ok()
     }
 
+    /// 0x485980: the length (with the terminator) of the NUL-terminated `text` when it ends
+    /// within min(`maximum`, `limit`) bytes, else 0. Without `allow` (EBX) the color/control
+    /// codes 1-8, 0xe-0x11, 0x15-0x19, 0x1b-0x1f are refused; without `flags` the other
+    /// control characters (< 0x20) are refused as well.
+    pub fn text_length(text: &[u8], maximum: u32, limit: u32, flags: bool, allow: bool) -> u32 {
+        let code = |c: u8| matches!(c, 1..=8 | 0xe..=0x11 | 0x15..=0x19 | 0x1b..=0x1f);
+        let mut count = 0;
+        for i in 0..maximum.min(limit) as usize {
+            let ch = text.get(i).copied().unwrap_or(0);
+            count += 1;
+            if ch == 0 {
+                return count;
+            }
+            if (!allow && code(ch)) || (!flags && ch < 0x20 && !code(ch)) {
+                return 0;
+            }
+        }
+        0
+    }
+
     /// 0x4f3f20 (param_1 = 0): whether the file name `name` is unusable (control
     /// characters, a character of rez\network.tbl string 0x10 (0x6d1220), a reserved
     /// device name).

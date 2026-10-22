@@ -384,7 +384,7 @@ impl State {
             0x59 => {
                 let g = self.script_find_caster(p as u8, 1, 0);
                 if g != NIL {
-                    let silo = self.script_find_silo(g);
+                    let silo = self.find_free_silo(g, true, g);
                     if silo != NIL {
                         let a = self.ai.scripts.items[s as usize].area;
                         let b = [a[0] as i16, a[1] as i16, a[2] as i16, a[3] as i16];
@@ -673,7 +673,7 @@ impl State {
                 let y = self.script_u16(d, s);
                 let g = self.script_find_caster(p as u8, 1, 0);
                 if g != NIL {
-                    let silo = self.script_find_silo(g);
+                    let silo = self.find_free_silo(g, true, g);
                     if silo != NIL {
                         self.order_at(d, g, 0x7e, (x as i16, y as i16));
                         let nuke = self.units[silo as usize].ptr_at(0xd0);
@@ -814,27 +814,6 @@ impl State {
             let un = &self.units[u as usize];
             if un.unit_type == ty && energy <= (un.energy >> 8) as u32 && matches!(un.order, 0x9c | 0xa0 | 2) {
                 return u;
-            }
-            u = un.player_next;
-        }
-        NIL
-    }
-
-    /// 0x463360 (with the flag set): the owner's silo whose nuke is ready and not yet on
-    /// its way for another ghost than `ghost`.
-    fn script_find_silo(&self, ghost: u32) -> u32 {
-        let mut u = self.player_units[self.units[ghost as usize].player as usize];
-        while u != NIL {
-            let un = &self.units[u as usize];
-            if un.unit_type == 0x6c && un.u32_at(0xd4) != 0 {
-                let nuke = un.ptr_at(0xd0);
-                if nuke == NIL {
-                    return u;
-                }
-                let c = self.units[nuke as usize].connected_unit;
-                if c == NIL || c == ghost || self.units[c as usize].unit_type == 0x6c {
-                    return u;
-                }
             }
             u = un.player_next;
         }

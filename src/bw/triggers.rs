@@ -108,7 +108,7 @@ impl Condition {
 }
 
 /// An action (0x20 bytes).
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct Action {
     pub location: u32,
     pub string: u32,
@@ -1268,26 +1268,7 @@ impl State {
                 true
             }
             // 0x4c5520: leaderboards (what they show; UI).
-            0x11..=0x15 | 0x21..=0x25 | 0x28 => {
-                self.trig.leaderboard_timer = 1;
-                let lb = &mut self.trig.leaderboard;
-                if a.id == 0x12 || a.id == 0x22 {
-                    if a.location as u8 == 0 {
-                        return true;
-                    }
-                    lb.1 = a.location as u8 - 1;
-                } else if a.id == 0x28 {
-                    lb.0 = a.id;
-                    lb.3 = a.number;
-                    lb.2 = 2;
-                    return true;
-                }
-                lb.4 = a.string;
-                lb.3 = a.number;
-                lb.2 = a.unit_type;
-                lb.0 = a.id;
-                true
-            }
+            0x11..=0x15 | 0x21..=0x25 | 0x28 => crate::chat::leaderboard_action(&mut self.trig, &a),
             // 0x4c5210: leaderboard computer players.
             0x20 => {
                 match a.modifier {
@@ -1536,7 +1517,8 @@ impl State {
                 let fl = self.trig.lists[p][i].action_flags_mut(k);
                 if *fl & 1 != 0 {
                     *fl &= !1;
-                    // 0x47eb30: puts the mouse back to the screen center (UI only).
+                    // 0x47eb30: ends the scroll-to mode, mouse back to the screen center (UI only).
+                    self.center_view_end = true;
                     return true;
                 }
                 if self.trig.lists[p][i].flags() & 0x10 != 0 {
@@ -1612,9 +1594,11 @@ impl State {
                     at = Some((x, y));
                 }
                 // 0x45edd0: the talking portrait and the timer.
-                // ponytail: its (x, y) hint (0x57fd34 / 0x57fd38, `at` clamped at 0x140 / 200)
-                // and the campaign-only portrait swaps are not kept.
-                let _ = at;
+                // 0x45ee40: Space's position (0x57fd34 / 0x57fd38), `at` less (0x140, 200), at
+                // least 0. ponytail: the campaign-only portrait swaps are not kept.
+                if let Some((x, y)) = at {
+                    self.alert_pos = ((x - 0x140).max(0), (y - 0xc8).max(0));
+                }
                 self.transmissions.push((a.unit_type, ms));
                 // Subtitles (0x6cdfec & 0x400, decided by the front end) or the action's
                 // "always display" flag; stays for the longer of the length and the text's

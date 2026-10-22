@@ -9,6 +9,7 @@ mod storage;
 mod storm;
 mod dat;
 mod dlg;
+mod script;
 mod scrollbar;
 mod menu;
 mod msgs;
@@ -830,10 +831,11 @@ fn main() -> std::io::Result<()> {
             }
             let camera = load_camera_or(Some(&dir.join("camera.txt")));
             let last = shots.iter().map(|s| s.0).max().unwrap_or(0);
-            let (w, h) = (640usize, 400usize);
             let mut report = String::new();
             let mut ci = 0;
             let mut total = 0.0;
+            let events = load_events(&dir.join("native/events.txt"));
+            let mut ei = 0;
             for frame in 0..last {
                 // 0x4d9670: commands of frame F run while the counter is F, then it advances
                 // and the game steps.
@@ -851,70 +853,73 @@ fn main() -> std::io::Result<()> {
                     scene.st.screen_tile = ((x >> 5) as u16, (y >> 5) as u16);
                 }
                 let f = scene.st.frame;
-                let Some(&(_, sx, sy)) = shots.iter().find(|s| s.0 == f) else { continue };
-                let mut idx = vec![0u8; w * h];
-                scene.draw(sx, sy, w as i32, h as i32, &mut idx);
-                let pal = scene.palette();
-                let ours: Vec<[u8; 3]> = idx.iter().map(|&i| pal[i as usize]).collect();
-                let name = format!("f{f:06}.png");
-                write_png(dir.join("ours").join(&name).to_str().unwrap(), w, h, &idx, pal)?;
-                let dec = png::Decoder::new(std::io::BufReader::new(std::fs::File::open(dir.join("native").join(&name))?));
-                let mut rd = dec.read_info()?;
-                let mut buf = vec![0; rd.output_buffer_size().unwrap_or(0)];
-                let info = rd.next_frame(&mut buf)?;
-                let nw = info.width as usize;
-                let native = |x: usize, y: usize| [buf[(y * nw + x) * 3], buf[(y * nw + x) * 3 + 1], buf[(y * nw + x) * 3 + 2]];
-                let mut side = vec![0u32; w * 3 * h];
-                let mut bad = 0;
-                for y in 0..h {
-                    for x in 0..w {
-                        let (n, o) = (native(x, y), ours[y * w + x]);
-                        let rgb = |c: [u8; 3]| (c[0] as u32) << 16 | (c[1] as u32) << 8 | c[2] as u32;
-                        side[y * w * 3 + x] = rgb(n);
-                        side[y * w * 3 + w + x] = rgb(o);
-                        side[y * w * 3 + 2 * w + x] = if n == o { rgb(n) >> 2 & 0x3f3f3f } else { 0xff0000 };
-                        bad += (n != o) as usize;
-                    }
+                if events.is_empty() {
+                    scene.run_minimap_timers();
                 }
-                write_png_rgb(dir.join("diff").join(&name).to_str().unwrap(), w * 3, h, &side)?;
-                let pct = bad as f64 * 100.0 / (w * h) as f64;
-                total += pct;
-                report += &format!("f{f} {pct:.2}%\n");
-                // The whole screen with the interface, when native_shots.sh saved it
-                // (NATIVE_FULL=1).
-                let full = dir.join("native").join(format!("f{f:06}_full.png"));
-                if let (Ok(file), Some(ui)) = (std::fs::File::open(&full), ui.as_ref()) {
-                    let mut dec = png::Decoder::new(std::io::BufReader::new(file));
-                    // ImageMagick writes paletted / gray PNGs: expand to RGB(A).
-                    dec.set_transformations(png::Transformations::EXPAND);
-                    let mut rd = dec.read_info()?;
-                    let mut nb = vec![0; rd.output_buffer_size().unwrap_or(0)];
-                    let info = rd.next_frame(&mut nb)?;
-                    let (fw, fh) = (640usize, 480usize);
-                    let ch = info.line_size / info.width as usize;
-                    let mut idx2 = vec![0u8; fw * fh];
-                    let mut ours = vec![0u32; fw * fh];
-                    view::compose(&scene, Some(ui), sx, sy, &mut idx2, &mut ours);
-                    let mut side = vec![0u32; fw * 3 * fh];
-                    let mut fbad = 0;
-                    for y in 0..fh.min(info.height as usize) {
-                        for x in 0..fw.min(info.width as usize) {
-                            let o = (y * info.width as usize + x) * ch;
-                            let n = (nb[o] as u32) << 16 | (nb[o + 1] as u32) << 8 | nb[o + 2] as u32;
-                            let us = ours[y * fw + x] & 0xffffff;
-                            side[y * fw * 3 + x] = n;
-                            side[y * fw * 3 + fw + x] = us;
-                            side[y * fw * 3 + 2 * fw + x] = if n == us { n >> 2 & 0x3f3f3f } else { 0xff0000 };
-                            fbad += (n != us) as usize;
+                // native/events.txt (native_shots.sh, NATIVE_FULL): the minimap's timers
+                // where 1.16.1 ran them, and its whole-screen grabs, in order.
+                let mut map_done = false;
+                while let Some(e) = events.get(ei).filter(|e| e.frame() <= f) {
+                    ei += 1;
+                    match e {
+                        // 256: a palette cycling step (0x41e900).
+                        Event::Timer(_, 256) => scene.ts.cycle.step(),
+                        Event::Timer(_, id) => scene.minimap_timer(*id),
+                        Event::Grab { name, cursor, mouse, .. } => {
+                            // The screen of the captured frame (in the file name): at the grab
+                            // 0x62848c has already moved on for the camera's next step.
+                            let shot: Option<u32> = name.get(1..7).and_then(|n| n.parse().ok());
+                            // The buffer dump of that frame was taken at the same point: the
+                            // timers logged after it run after the map-only compare too.
+                            if let (Some(sf), false) = (shot, map_done) {
+                                if let Some(&(_, sx, sy)) = shots.iter().find(|s| s.0 == sf && sf == f) {
+                                    let pct = map_compare(&scene, dir, f, (sx, sy))?;
+                                    total += pct;
+                                    report += &format!("f{f} {pct:.2}%\n");
+                                    map_done = true;
+                                }
+                            }
+                            if let (Some(ui), Some(&(_, sx, sy))) = (ui.as_ref(), shots.iter().find(|s| Some(s.0) == shot)) {
+                                let pct = full_compare(&scene, ui, dir, name, (0, *cursor as usize, mouse.0, mouse.1), (sx, sy))?;
+                                report += &format!("{} {pct:.2}%\n", name.trim_end_matches(".png"));
+                            }
                         }
                     }
-                    std::fs::create_dir_all(dir.join("diff_full"))?;
-                    write_png_rgb(dir.join("diff_full").join(&name).to_str().unwrap(), fw * 3, fh, &side)?;
-                    report += &format!("f{f} full {:.2}%\n", fbad as f64 * 100.0 / (fw * fh) as f64);
                 }
-                println!("f{f}: {pct:.2}% of pixels differ");
+                // Debug: SCBW_SHOT_SPRITES="frame,x0,y0,x1,y1": the sprites in that map box
+                // with their images (row lists), as re/ probes print 1.16.1's.
+                if let Some(v) = std::env::var("SCBW_SHOT_SPRITES").ok().map(|v| v.split(',').filter_map(|n| n.parse::<i32>().ok()).collect::<Vec<_>>()).filter(|v| v.len() == 5 && v[0] as u32 == f) {
+                    eprintln!("frame {f}");
+                    for (row, l) in scene.st.sprite_rows.iter().enumerate() {
+                        let mut sp = l.head;
+                        while sp != bw::list::NIL {
+                            let s = &scene.st.sprites[sp as usize];
+                            if (v[1]..=v[3]).contains(&(s.x as i32)) && (v[2]..=v[4]).contains(&(s.y as i32)) {
+                                eprintln!("row {row} sprite idx {sp} type {} vis {:#x} elev {} flags {:#x} pos ({},{})", s.sprite_id, s.visibility, s.elevation, s.flags, s.x, s.y);
+                                if let Some((ui_, un)) = scene.st.units.iter().enumerate().find(|(_, un)| un.sprite == sp) {
+                                    eprintln!("  (unit {ui_} type {:#x} status {:#x} order {:#x})", un.unit_type, un.status, un.order);
+                                }
+                                let mut c = s.images.head;
+                                while c != bw::list::NIL {
+                                    let im = &scene.st.images[c as usize];
+                                    eprintln!("  image {} mod {} flags {:#x} off ({},{}) frameset {} frame {}", im.image_id, im.modifier, im.flags, im.x, im.y, im.frameset, im.frame);
+                                    c = im.link.next;
+                                }
+                            }
+                            sp = s.link.next;
+                        }
+                    }
+                }
+                // The map-only shot: here unless the frame's grab came first (below).
+                if !map_done {
+                    if let Some(&(_, sx, sy)) = shots.iter().find(|s| s.0 == f) {
+                        let pct = map_compare(&scene, dir, f, (sx, sy))?;
+                        total += pct;
+                        report += &format!("f{f} {pct:.2}%\n");
+                    }
+                }
             }
-            let n = report.lines().filter(|l| !l.contains(" full ")).count().max(1);
+            let n = report.lines().filter(|l| !l.contains("_full")).count().max(1);
             report += &format!("mean {:.2}% over {n} shots\n", total / n as f64);
             std::fs::write(dir.join("report.txt"), &report)?;
             println!("mean {:.2}% over {n} shots; ours/, diff/ (native | ours | red = differs), report.txt in {}", total / n as f64, dir.display());
@@ -1108,7 +1113,7 @@ fn main() -> std::io::Result<()> {
                     m.set_text(2, &view::objectives_text(&scene, u));
                 }
                 if let (Some(m), Some(u)) = (m.as_mut().filter(|m| m.kind == Tips), ui.as_ref()) {
-                    m.show_tip(&u.skin, &u.tips, &mut set, 0);
+                    m.open_tip(&u.skin, &u.tips, &mut set, None, scene.st.is_expansion);
                 }
                 // SCBW_MENU_INPUT="c x y;k s;..." clicks / presses keys (k esc, k enter).
                 for step in std::env::var("SCBW_MENU_INPUT").unwrap_or_default().split(';').filter(|s| !s.is_empty()) {
@@ -1125,12 +1130,12 @@ fn main() -> std::io::Result<()> {
                         ["k", c] => cur.key(c.as_bytes()[0], &mut set),
                         _ => None,
                     };
-                    if let Some(id) = id.filter(|&id| !(cur.kind == Tips && cur.tips_button(skin, &ui.as_ref().unwrap().tips, id, &mut set))) {
+                    if let Some(id) = id.filter(|&id| !(cur.kind == Tips && cur.tips_button(skin, &ui.as_ref().unwrap().tips, id, &mut set, scene.st.is_expansion))) {
                         let (next, action) = cur.on_activate(id, &mut set, ctx);
                         eprintln!("menu {:?}: {id} -> {next:?} {action:?}", cur.kind);
                         m = next.and_then(|(k, depth)| menu::Menu::open(k, depth, &a.files, skin, ctx, &set));
                         if let Some(t) = m.as_mut().filter(|m| m.kind == Tips) {
-                            t.show_tip(skin, &ui.as_ref().unwrap().tips, &mut set, 0);
+                            t.open_tip(skin, &ui.as_ref().unwrap().tips, &mut set, None, scene.st.is_expansion);
                         }
                     }
                 }
@@ -1138,7 +1143,7 @@ fn main() -> std::io::Result<()> {
                 m
             });
             if let Some(u) = ui.as_ref() {
-                scene.portrait_tick(u, None, 0, 2);
+                scene.portrait_tick(u, 0, 2);
                 scene.text_tick(u, 0, true);
             }
             view::compose_with_cursor(&scene, ui.as_ref(), x, y, cursor, menu.as_ref(), &mut idx, &mut rgb);
@@ -1514,7 +1519,7 @@ pub(crate) fn write_png(path: &str, w: usize, h: usize, idx: &[u8], pal: &[[u8; 
     Ok(())
 }
 
-fn write_png_rgb(path: &str, w: usize, h: usize, px: &[u32]) -> std::io::Result<()> {
+pub(crate) fn write_png_rgb(path: &str, w: usize, h: usize, px: &[u32]) -> std::io::Result<()> {
     let mut enc = png::Encoder::new(std::fs::File::create(path)?, w as u32, h as u32);
     enc.set_color(png::ColorType::Rgb);
     let rgb: Vec<u8> = px.iter().flat_map(|&p| [(p >> 16) as u8, (p >> 8) as u8, p as u8]).collect();
@@ -1692,4 +1697,102 @@ fn map_ver(chk: &[u8]) -> u16 {
         o += 8 + len as usize;
     }
     0
+}
+
+/// A line of native/events.txt (re/native_shots_gdb.py).
+enum Event {
+    /// "T frame id": a minimap timer fired.
+    Timer(u32, u16),
+    /// "G frame file cursor mx my sx sy": the X screen was grabbed.
+    Grab { frame: u32, name: String, cursor: u32, mouse: (i32, i32), screen: (i32, i32) },
+}
+
+impl Event {
+    fn frame(&self) -> u32 {
+        match self {
+            Event::Timer(f, _) | Event::Grab { frame: f, .. } => *f,
+        }
+    }
+}
+
+fn load_events(p: &std::path::Path) -> Vec<Event> {
+    let text = std::fs::read_to_string(p).unwrap_or_default();
+    text.lines()
+        .filter_map(|l| {
+            let v: Vec<&str> = l.split_whitespace().collect();
+            let n = |i: usize| v.get(i).and_then(|s| s.parse::<i64>().ok());
+            match v.first()? {
+                &"T" => Some(Event::Timer(n(1)? as u32, n(2)? as u16)),
+                &"G" => Some(Event::Grab { frame: n(1)? as u32, name: v.get(2)?.to_string(), cursor: n(3)? as u32, mouse: (n(4)? as i32, n(5)? as i32), screen: (n(6)? as i32, n(7)? as i32) }),
+                _ => None,
+            }
+        })
+        .collect()
+}
+
+/// Compare native/<name> (a whole-screen grab) with our whole screen now (screen at
+/// `screen`, the cursor drawn): writes diff_full/<name>, returns the share that differs.
+fn full_compare(scene: &view::Scene, ui: &ui::Ui, dir: &std::path::Path, name: &str, cursor: (usize, usize, i32, i32), screen: (i32, i32)) -> std::io::Result<f64> {
+    let file = std::fs::File::open(dir.join("native").join(name))?;
+    let mut dec = png::Decoder::new(std::io::BufReader::new(file));
+    // ImageMagick writes paletted / gray PNGs: expand to RGB(A).
+    dec.set_transformations(png::Transformations::EXPAND);
+    let mut rd = dec.read_info()?;
+    let mut nb = vec![0; rd.output_buffer_size().unwrap_or(0)];
+    let info = rd.next_frame(&mut nb)?;
+    let (fw, fh) = (640usize, 480usize);
+    let ch = info.line_size / info.width as usize;
+    let mut idx = vec![0u8; fw * fh];
+    let mut ours = vec![0u32; fw * fh];
+    view::compose_with_cursor(scene, Some(ui), screen.0, screen.1, Some(cursor), None, &mut idx, &mut ours);
+    let mut side = vec![0u32; fw * 3 * fh];
+    let mut bad = 0;
+    for y in 0..fh.min(info.height as usize) {
+        for x in 0..fw.min(info.width as usize) {
+            let o = (y * info.width as usize + x) * ch;
+            let n = (nb[o] as u32) << 16 | (nb[o + 1] as u32) << 8 | nb[o + 2] as u32;
+            let us = ours[y * fw + x] & 0xffffff;
+            side[y * fw * 3 + x] = n;
+            side[y * fw * 3 + fw + x] = us;
+            side[y * fw * 3 + 2 * fw + x] = if n == us { n >> 2 & 0x3f3f3f } else { 0xff0000 };
+            bad += (n != us) as usize;
+        }
+    }
+    std::fs::create_dir_all(dir.join("diff_full"))?;
+    write_png_rgb(dir.join("diff_full").join(name).to_str().unwrap(), fw * 3, fh, &side)?;
+    Ok(bad as f64 * 100.0 / (fw * fh) as f64)
+}
+
+/// Compare native/fNNNNNN.png (1.16.1's game buffer: the map, rows 0..400) with ours at
+/// `screen`: writes ours/ and diff/, returns the share that differs.
+fn map_compare(scene: &view::Scene, dir: &std::path::Path, f: u32, (sx, sy): (i32, i32)) -> std::io::Result<f64> {
+    let (w, h) = (640usize, 400usize);
+    let mut idx = vec![0u8; w * h];
+    scene.draw(sx, sy, w as i32, h as i32, &mut idx);
+    let pal = scene.palette();
+    let ours: Vec<[u8; 3]> = idx.iter().map(|&i| pal[i as usize]).collect();
+    let name = format!("f{f:06}.png");
+    write_png(dir.join("ours").join(&name).to_str().unwrap(), w, h, &idx, pal)?;
+    let dec = png::Decoder::new(std::io::BufReader::new(std::fs::File::open(dir.join("native").join(&name))?));
+    let mut rd = dec.read_info()?;
+    let mut buf = vec![0; rd.output_buffer_size().unwrap_or(0)];
+    let info = rd.next_frame(&mut buf)?;
+    let nw = info.width as usize;
+    let native = |x: usize, y: usize| [buf[(y * nw + x) * 3], buf[(y * nw + x) * 3 + 1], buf[(y * nw + x) * 3 + 2]];
+    let mut side = vec![0u32; w * 3 * h];
+    let mut bad = 0;
+    for y in 0..h {
+        for x in 0..w {
+            let (n, o) = (native(x, y), ours[y * w + x]);
+            let rgb = |c: [u8; 3]| (c[0] as u32) << 16 | (c[1] as u32) << 8 | c[2] as u32;
+            side[y * w * 3 + x] = rgb(n);
+            side[y * w * 3 + w + x] = rgb(o);
+            side[y * w * 3 + 2 * w + x] = if n == o { rgb(n) >> 2 & 0x3f3f3f } else { 0xff0000 };
+            bad += (n != o) as usize;
+        }
+    }
+    write_png_rgb(dir.join("diff").join(&name).to_str().unwrap(), w * 3, h, &side)?;
+    let pct = bad as f64 * 100.0 / (w * h) as f64;
+    println!("f{f}: {pct:.2}% of pixels differ");
+    Ok(pct)
 }

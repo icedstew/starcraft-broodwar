@@ -43,7 +43,7 @@ impl Glue {
 /// stops instead of playing. A movie that can't be opened is a fatal error (0x4212c0) except
 /// the two intros (1, 0x18).
 pub fn play(files: &Storage, idx: u32, win: Option<&mut minifb::Window>, audio: Option<&Audio>, shot: Option<&str>) -> std::io::Result<bool> {
-    use minifb::{Key, KeyRepeat};
+    use minifb::{Key, KeyRepeat, MouseButton};
     // 0x4be0b0 (hides the cursor) is `Glue::flush_notice`, run by the caller; 0x4d2ff0 clears
     // the input handlers and the window's handlers 0x5968dc / 0x5968b4 / 0x5968c0 are set to
     // 0x4d4410: the modal loop here reads the keys itself.
@@ -108,7 +108,10 @@ pub fn play(files: &Storage, idx: u32, win: Option<&mut minifb::Window>, audio: 
         }
         draw(&v, &mut rgb);
         win.update_with_buffer(&rgb, sw, sh).map_err(|e| std::io::Error::other(e.to_string()))?;
-        skipped = [Key::Escape, Key::Enter, Key::NumPadEnter, Key::Space].iter().any(|&k| win.get_keys_pressed(KeyRepeat::Yes).contains(&k));
+        // 0x4d4410: a char event of Escape, Enter or Space, or any event that is not a char
+        // event (a mouse click).
+        skipped = [Key::Escape, Key::Enter, Key::NumPadEnter, Key::Space].iter().any(|&k| win.get_keys_pressed(KeyRepeat::Yes).contains(&k))
+            || [MouseButton::Left, MouseButton::Right, MouseButton::Middle].iter().any(|&b| win.get_mouse_down(b));
     }
     // The last frame's sound plays out (0x4100ee / Ordinal_458 closes the video).
     if let Some(p) = player.filter(|_| !skipped) {

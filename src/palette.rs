@@ -124,7 +124,7 @@ impl Cycle {
 
     /// 0x41e900 / 0x41e7b0: each range that is on counts down; at 0 it restarts and
     /// 0x41e4b0 rotates its colors by one (the last becomes the first).
-    fn step(&mut self) {
+    pub fn step(&mut self) {
         for r in self.ranges.iter_mut().take_while(|r| r.delay != 0) {
             if r.on {
                 r.left = r.left.wrapping_sub(1);

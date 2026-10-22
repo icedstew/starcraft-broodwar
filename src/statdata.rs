@@ -435,19 +435,19 @@ pub fn unit_panel(st: &State, d: &Data, strings: &[String], u: u32) -> Vec<(i16,
     } else {
         None
     };
-    let status = if (0xb0..=0xb2).contains(&t) || (t == 0xbc) || (un.status & 1 != 0 && matches!(t, 0x6e | 0x95 | 0x9d)) {
-        // 0x426190: resources left.
+    if (0xb0..=0xb2).contains(&t) || (t == 0xbc) || (un.status & 1 != 0 && matches!(t, 0x6e | 0x95 | 0x9d)) {
+        // 0x426190: resources left, in label -11 (the right column's second line; -10, -12
+        // and -13 are emptied).
         let n = un.u16_at(0xd0);
-        if (0xb0..=0xb2).contains(&t) {
-            Some(format!("{} {n}", stat(strings, 0x31c)))
+        let text = if (0xb0..=0xb2).contains(&t) {
+            format!("{} {n}", stat(strings, 0x31c))
         } else if n == 0 {
-            Some(stat(strings, 0x31e))
+            stat(strings, 0x31e)
         } else {
-            Some(format!("{} {n}", stat(strings, 0x31d)))
-        }
-    } else {
-        status
-    };
+            format!("{} {n}", stat(strings, 0x31d))
+        };
+        out.push((-11, Show::Text(text)));
+    }
     if let Some(s) = status {
         out.push((-20, Show::Text(s)));
     }

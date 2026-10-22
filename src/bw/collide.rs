@@ -249,7 +249,7 @@ impl State {
             }
         }
         self.search.put(out, 0);
-        self.search.top = out;
+        self.search.top = out + 1;
         start
     }
 
@@ -648,7 +648,7 @@ impl State {
             out += 1;
         }
         self.search.put(out, 0);
-        self.search.top = out;
+        self.search.top = out + 1;
         start
     }
 
@@ -1054,7 +1054,7 @@ impl State {
             out += 1;
         }
         self.search.put(out, 0);
-        self.search.top = out;
+        self.search.top = out + 1;
         start
     }
 

@@ -110,6 +110,8 @@ impl State {
                     in_use: u32_(0x2c) != 0,
                     coloring: if modifier == 0xb { 0 } else { u32_(0x30) as u64 }, // 0xb: unit handle, not kept
                     sprite: from1(u32_(0x3c)),
+                    // +0x24 (map position) is saved as 0.
+                    pos_y: 0,
                 };
             }
         }

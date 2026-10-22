@@ -287,6 +287,11 @@ pub struct Dialog {
 }
 
 impl Ctl {
+    /// 0x418010: a button (type 1) that is shown (8) and enabled (not 2).
+    pub fn is_default_button(&self) -> bool {
+        self.ty == 1 && self.flags & flag::VISIBLE != 0 && self.flags & flag::DISABLED == 0
+    }
+
     /// 0x4e1970 (ESI = the button, ECX = the mouse event; `inside` = the mouse, taken from the
     /// dialog's origin, is in the control's rect), the mouse-move part of the default
     /// dispatcher 0x4e1a70 (events 3, 4, 5, 6): the pressed flag 0x40000000 follows the mouse.
@@ -785,6 +790,18 @@ impl Ctl {
 }
 
 impl Dialog {
+    /// 0x418600 (ECX = the dialog; after a focus change) with 0x417eb0 (EBX = 0x418010): unless the
+    /// active control is a button (type 1), the first control of the list that is a shown, enabled
+    /// button (0x418010) gets the redraw flag 1 (its 0x41c400 redraw is the caller's).
+    pub fn mark_default_button(&mut self) {
+        if self.active.is_some_and(|a| self.controls[a].ty == 1) {
+            return;
+        }
+        if let Some(c) = self.controls.iter_mut().find(|c| c.is_default_button()) {
+            c.flags |= 1;
+        }
+    }
+
     pub fn parse(d: &[u8]) -> Dialog {
         let i16_at = |o: usize| d.get(o..o + 2).map_or(0, |b| i16::from_le_bytes([b[0], b[1]]));
         let u32_at = |o: usize| d.get(o..o + 4).map_or(0, |b| u32::from_le_bytes(b.try_into().unwrap()));
@@ -1006,6 +1023,8 @@ pub struct Effects {
     pub shade: u8,
     /// 0x6d5e24: the light percentage translucent image controls (type 5) use.
     pub image_pct: i32,
+    /// 0x6d05a4: the blend level shaded dialog bitmaps (flag 0x40000) use.
+    pub shade_level: u8,
 }
 
 /// 0x51b2f0: the 26 neighbor cells 0x4174a0 searches.
@@ -1018,18 +1037,33 @@ const NEIGHBORS: [[i32; 3]; 26] = [
 impl Effects {
     /// 0x4178b0 (no excluded colors): the three tables by 0x4174a0 for p = 1..=3.
     pub fn new(pal: &[[u8; 3]; 256], shade: u8, image_pct: i32) -> Effects {
-        Effects { tables: [1, 2, 3].map(|p| Self::table(pal, p)), shade, image_pct }
+        Effects { tables: [1, 2, 3].map(|p| Self::table(pal, p, &[false; 256])), shade, image_pct, shade_level: level(image_pct) }
+    }
+
+    /// 0x4c90c0 (an in-game menu opens): the shade color is dlgs\tile.grp frame 4's
+    /// pixel (0, 0) (0x4c8e80), the level 0x6d0aa8 (4 in the running game; nothing in
+    /// the executable writes it directly).
+    pub fn in_game(pal: &[[u8; 3]; 256], tile: &Grp, excluded: &[bool; 256]) -> Effects {
+        let shade = tile.pixels(4).and_then(|(px, _, _)| px.first().copied()).unwrap_or(0);
+        // 0x417d39 -> 0x4178b0 with the game's descriptor: a level's table is built with
+        // its own fraction (level 4: slot 2 with p = 4), not the glue's p = slot + 1.
+        // The descriptor's excluded colors (+4 count, +8 list, 0x6d0b50): the tileset's
+        // cycling entries, so a blended pixel never animates.
+        let mut fx = Self::new(pal, shade, 0);
+        fx.tables[2] = Self::table(pal, 4, excluded);
+        Effects { shade_level: 4, ..fx }
     }
 
     /// 0x4174a0: the nearest-color table for the blend fraction p / 8. The palette is
     /// bucketed in 18 x 18 x 18 cells of 16 levels (the lists newest first); a color is
     /// the nearest in its cell, or in the first neighbor cell with a match within 0x400.
-    fn table(pal: &[[u8; 3]; 256], p: u32) -> Vec<u8> {
+    fn table(pal: &[[u8; 3]; 256], p: u32, excluded: &[bool; 256]) -> Vec<u8> {
         let cell = |c: [u32; 3]| ((c[0] >> 4) + 1, (c[1] >> 4) + 1, (c[2] >> 4) + 1);
         let key = |x: i32, y: i32, z: i32| ((x * 18 + y) * 18 + z) as usize;
         let mut grid: Vec<Vec<u8>> = vec![Vec::new(); 18 * 18 * 18];
         for i in 0..256usize {
-            if i == 0 || pal[i] != pal[i - 1] {
+            // 0x417580: an excluded color (the sorted list 0x6d0b50) is never picked.
+            if !excluded[i] && (i == 0 || pal[i] != pal[i - 1]) {
                 let (x, y, z) = cell(pal[i].map(|c| c as u32));
                 grid[key(x as i32, y as i32, z as i32)].push(i as u8);
             }
@@ -1306,9 +1340,10 @@ impl Skin {
         }
         if let Some((bw, bh, bg)) = &dlg.bg {
             // 0x4ef590 -> 0x4ef440: the dialog bitmap; index 0 is transparent. Flag
-            // 0x40000 with the glue's effects: mode 4 (0x416f30), the shade color blends.
+            // 0x40000 (the glue's dialogs, every in-game menu): mode 4 (0x416f30), the
+            // shade color blends.
             if let Some(fx) = self.fx.as_ref().filter(|_| dlg.this.flags & 0x40000 != 0) {
-                let remap = fx.shade_remap(level(fx.image_pct));
+                let remap = fx.shade_remap(fx.shade_level);
                 let r = (ox, oy, ox + bw - 1, oy + bh - 1);
                 self.blit_shade(bg, *bw, *bh, ox, oy, r, fx.shade, &remap, s);
             } else {
@@ -1562,7 +1597,9 @@ impl Skin {
                 if t.flags & 0x8000_0000 != 0 {
                     t.flags |= 0x80;
                 } else if let Some(img) = c.image.as_ref() {
-                    self.blit(&img.px, img.w, img.h, r.0, r.1, r, None, true, s);
+                    // 0x4b3820 -> 0x4ef440: untab.pcx (93 x 4) closes the tab's bottom edge (as
+                    // the real game's screen shows it).
+                    self.blit(&img.px, img.w, img.h, r.0, r.3 - img.h + 1, r, None, true, s);
                 }
                 if !c.text.is_empty() {
                     self.ctl_text(&t, &t.text, r, 0, 0, 0x22, s);

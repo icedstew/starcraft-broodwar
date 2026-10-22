@@ -770,6 +770,8 @@ impl State {
         un.last_event_color = 0x11;
         let sp = &self.sprites[un.sprite as usize];
         self.minimap_pings.push((sp.x as i32, sp.y as i32, 0x11));
+        // 0x45e3a0: Space's position, the unit less (0x140, 200), at least 0.
+        self.alert_pos = ((sp.x as i32 - 0x140).max(0), (sp.y as i32 - 0xc8).max(0));
     }
 
     /// 0x48f310: the local player's construction or morph is complete: zerg 0x87,

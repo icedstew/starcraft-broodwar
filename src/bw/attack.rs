@@ -59,9 +59,16 @@ impl State {
         t.status & 0x300 != 0 && t.visibility & (1 << (self.units[u as usize].player & 0x1f)) == 0
     }
 
-    /// 0x4e5e30: `target` is visible to `u`'s owner.
+    /// 0x4e5e30: `target` is visible to `u`'s owner; with no target, the tile of `u`'s order
+    /// target position is.
     pub(super) fn target_visible(&self, target: u32, u: u32) -> bool {
         let bit = 1u32 << (self.units[u as usize].player & 0x1f);
+        if target == NIL {
+            let (x, y) = self.units[u as usize].order_target_pos;
+            let i = (y as i32 / 32) * self.terrain.width as i32 + x as i32 / 32;
+            let f = self.terrain.tile_flags.get(i as usize).copied().unwrap_or(0);
+            return !f & 0xff & bit != 0;
+        }
         let t = &self.units[target as usize];
         if t.status & 0x300 != 0 && t.visibility & bit == 0 {
             return false;

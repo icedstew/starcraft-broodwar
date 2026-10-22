@@ -25,6 +25,7 @@ impl State {
         self.update_free_flingies(d);
         self.update_thingies(d);
         self.rng.set_enabled(false); // 0x4dc540(0)
+        self.images_update_pos_y(d);
     }
 
     /// 0x47e410: random event timer (draws from the RNG inside 0x47e130).

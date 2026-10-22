@@ -21,6 +21,23 @@ pub fn blit(img: &Pcx, x: i32, y: i32, dst: &mut [u8], dw: i32, dh: i32) {
     blit_w(img, x, y, img.w as i32, dst, dw, dh)
 }
 
+/// 0x41d260 (SBltROP3, SRCCOPY): the left `cols` columns of `img` at (x, y), index 0
+/// included.
+pub fn blit_opaque_w(img: &Pcx, x: i32, y: i32, cols: i32, dst: &mut [u8], dw: i32, dh: i32) {
+    for sy in 0..img.h as i32 {
+        let py = y + sy;
+        if py < 0 || py >= dh {
+            continue;
+        }
+        for sx in 0..cols.min(img.w as i32) {
+            let px = x + sx;
+            if px >= 0 && px < dw {
+                dst[(py * dw + px) as usize] = img.px[sy as usize * img.w + sx as usize];
+            }
+        }
+    }
+}
+
 /// Blit the left `cols` columns of `img` at (x, y), skipping index 0.
 pub fn blit_w(img: &Pcx, x: i32, y: i32, cols: i32, dst: &mut [u8], dw: i32, dh: i32) {
     for sy in 0..img.h as i32 {

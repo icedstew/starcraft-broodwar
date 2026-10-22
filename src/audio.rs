@@ -271,10 +271,6 @@ impl Audio {
     }
 
     /// The sound's length in ms (the 0x6d1278 table of 0x45ef50), if known.
-    pub fn duration_ms(&self, files: &Storage, dat: &Dat, id: u16) -> Option<u32> {
-        let src = rodio::Decoder::new(Cursor::new(self.wav(files, dat, id)?)).ok()?;
-        Some(src.total_duration()?.as_millis() as u32)
-    }
 
     /// The linear gain of the digital volume's table attenuation.
     fn digital_gain(&self) -> f32 {
@@ -442,4 +438,16 @@ impl Audio {
         }
         p.stop();
     }
+}
+
+/// The length of sound `id` (sfxdata.dat's file, sfxdata.tbl's name), without a sound
+/// output: a game played without one (scripted, `scbw glue <out.png>`) times the talking
+/// portraits the same.
+pub fn duration_ms(files: &Storage, dat: &Dat, id: u16) -> Option<u32> {
+    let file = *dat.sfxdata.file.get(id as usize)? as usize;
+    let names = dat::parse_tbl(&files.read("arr/sfxdata.tbl").ok()?);
+    let name = names.get(file.checked_sub(1)?)?;
+    let wav = files.read(&format!("sound/{}", name.replace('\\', "/"))).ok()?;
+    let src = rodio::Decoder::new(Cursor::new(wav)).ok()?;
+    Some(src.total_duration()?.as_millis() as u32)
 }

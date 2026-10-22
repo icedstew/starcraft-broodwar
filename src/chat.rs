@@ -394,36 +394,44 @@ const SHOW: [(&[u8], u8, u16); 12] = [
     (b"score user", 0x15, 7),
 ];
 
-/// 0x4c5520 for a trigger action with no location, string or number (id `id`, unit type
-/// `ty`): the leaderboard settings 0x58d70c.. and the refresh flag 0x65097c. The caller then
-/// refreshes the dialog 0x597284 (0x4be670 / 0x4be860 / 0x4beb40); `leaderboard::draw` draws
-/// it from these settings every frame.
-fn leaderboard_action(trig: &mut crate::bw::triggers::Triggers, id: u8, ty: u16) {
+/// 0x4c5520 (ECX = the trigger action): the leaderboard settings 0x58d70c.. (mode = action
+/// +0x1a, goal +0x14, string +4, type +0x18) and the refresh flag 0x65097c. Modes 0x12 and
+/// 0x22 take the location label (+0, 0 = nothing changes) as 0x58d70d = label - 1; mode 0x28
+/// stores only the mode, goal and type 2. The caller then refreshes the dialog 0x597284
+/// (0x4be670 / 0x4be860 / 0x4beb40); `leaderboard::draw` draws it from these settings
+/// every frame.
+pub fn leaderboard_action(trig: &mut crate::bw::triggers::Triggers, a: &crate::bw::triggers::Action) -> bool {
     trig.leaderboard_timer = 1;
     let lb = &mut trig.leaderboard;
-    if id == 0x28 {
-        lb.0 = id;
-        lb.3 = 0;
+    if a.id == 0x12 || a.id == 0x22 {
+        if a.location as u8 == 0 {
+            return true;
+        }
+        lb.1 = a.location as u8 - 1;
+    } else if a.id == 0x28 {
+        lb.0 = a.id;
+        lb.3 = a.number;
         lb.2 = 2;
-        return;
+        return true;
     }
-    lb.4 = 0;
-    lb.3 = 0;
-    lb.2 = ty;
-    lb.0 = id;
+    lb.4 = a.string;
+    lb.3 = a.number;
+    lb.2 = a.unit_type;
+    lb.0 = a.id;
+    true
 }
 
 /// 0x4df3b0 ("/replay show <what>", ECX = `rest`): shows the leaderboard named by the
 /// table 0x4ff948. 0 when no name matches.
 fn replay_show(trig: &mut crate::bw::triggers::Triggers, rest: &[u8]) -> bool {
     let Some(&(_, id, ty)) = SHOW.iter().find(|e| e.0 == rest) else { return false };
-    leaderboard_action(trig, id, ty);
+    leaderboard_action(trig, &crate::bw::triggers::Action { id, unit_type: ty, ..Default::default() });
     true
 }
 
 /// 0x4df360 ("/replay hide"): a zeroed action, which clears the leaderboard.
 fn replay_hide(trig: &mut crate::bw::triggers::Triggers, _rest: &[u8]) -> bool {
-    leaderboard_action(trig, 0, 0);
+    leaderboard_action(trig, &crate::bw::triggers::Action::default());
     true
 }
 

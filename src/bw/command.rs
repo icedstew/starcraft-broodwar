@@ -1642,7 +1642,8 @@ impl State {
         if let Some(sel) = self.selections.get_mut(player as usize) {
             *sel = [NIL; 12];
         }
-        todo_port!("0x4c40f0", "storm net status check");
+        // 0x4c40f0: Storm's player count (Ordinal_109) into 0x57f1e1, which nothing reads
+        // (refs.py: the one write at 0x4c4135); its failure popup 0x4bb0b0 is networking.
     }
 
     /// 0x4865d0: run one command packet from `player`, whose selection is `sel`.

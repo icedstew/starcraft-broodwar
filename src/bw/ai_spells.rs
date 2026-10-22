@@ -62,16 +62,21 @@ impl State {
         u == self.ai.players[self.units[u as usize].player as usize].free_medic
     }
 
-    /// 0x463360: the first of `u`'s player's silos holding a ready nuke that no other
-    /// ghost has claimed (0x463360 with EDI = 1).
-    fn find_free_silo(&self, u: u32) -> u32 {
+    /// 0x463360: the first of `u`'s player's silos with a ready nuke (+0xd4); with
+    /// `check_target` its nuke's link target (+0x80) must also be none, `excluded` or a
+    /// silo (0x6c).
+    pub(super) fn find_free_silo(&self, u: u32, check_target: bool, excluded: u32) -> u32 {
         let mut s = self.player_units[self.units[u as usize].player as usize];
         while s != NIL {
             let su = &self.units[s as usize];
             if su.unit_type == 0x6c && su.u32_at(0xd4) != 0 {
+                if !check_target {
+                    return s;
+                }
                 let nuke = su.ptr_at(0xd0);
-                let owner = self.units[nuke as usize].connected_unit;
-                if owner == NIL || owner == u || self.units[owner as usize].unit_type == 0x6c {
+                // The C dereferences the link unchecked; no nuke counts as no target.
+                let t = if nuke == NIL { NIL } else { self.units[nuke as usize].connected_unit };
+                if t == NIL || t == excluded || self.units[t as usize].unit_type == 0x6c {
                     return s;
                 }
             }
@@ -134,7 +139,7 @@ impl State {
                     }
                 }
                 if self.nuke_ready(p) {
-                    let silo = self.find_free_silo(u);
+                    let silo = self.find_free_silo(u, true, u);
                     if silo != NIL {
                         let t = self.ai_nuke_target(d, u);
                         if self.cast_on(d, u, 0x7e, 1, t) {

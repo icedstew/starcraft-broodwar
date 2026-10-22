@@ -1623,6 +1623,7 @@ impl Glue {
         // The event proc's slide-in (0x4b4a00: 0x4dd5e0 over list 0x51a844, 500 ms).
         self.slide_in(0x51a844, 1, 500);
         self.score_init(files);
+        self.slide_rehide();
     }
 
     /// 0x4b4af0 (after 0x41a080): 7 (continue) goes to the provider's screen in a network
@@ -2682,7 +2683,7 @@ impl Glue {
             e.blink = Some(500);
             c.flags |= 0x4000_0000;
         }
-        todo_port!("0x418600", "after a focus change: the tooltip (0x417eb0)");
+        dlg.mark_default_button(); // 0x418600
     }
 
     /// 0x4182f0: the button (type 1 / 2) with id `id` is pressed when it can be.
@@ -2707,8 +2708,15 @@ impl Glue {
         let (mx, my) = self.mouse;
         let clock = self.clock_ms;
         let Some((dlg, _)) = self.top() else { return };
-        let Some(i) = dlg.hit(mx, my) else { return };
         let (ox, oy) = dlg.origin();
+        // A list's scroll bar (0x414c90) is a control of its own beside the list: event 4
+        // goes to it by its own rect (0x415af0), not through the list's.
+        for c in dlg.controls.iter_mut().filter(|c| c.flags & crate::dlg::flag::VISIBLE != 0) {
+            if c.list_scroll_click(mx - ox, my - oy) {
+                return;
+            }
+        }
+        let Some(i) = dlg.hit(mx, my) else { return };
         let (id, ty) = (dlg.controls[i].id, dlg.controls[i].ty);
         let dbl = self.last_press.is_some_and(|(t, last)| last == id && clock.wrapping_sub(t) < 500);
         self.last_press = if dbl { None } else { Some((clock, id)) };
@@ -2907,9 +2915,12 @@ impl Glue {
             look.skin.draw(dlg, &mut s);
         }
         let screen_pal = if credits { *self.credits.palette() } else { look.pal };
-        // 0x4be120: the frame's grp box sits at the mouse minus 0x3f.
-        let n = look.arrow.frame_count().max(1);
-        look.arrow.draw(self.cursor_frame % n, false, self.mouse.0 - 0x3f, self.mouse.1 - 0x3f, s.px, 640, 480, Blend::Normal);
+        // 0x4be120: the frame's grp box sits at the mouse minus 0x3f. The credits and mission
+        // text (0x4d8df0, its own loop 0x41a080) show none (as the real game's screen).
+        if !credits {
+            let n = look.arrow.frame_count().max(1);
+            look.arrow.draw(self.cursor_frame % n, false, self.mouse.0 - 0x3f, self.mouse.1 - 0x3f, s.px, 640, 480, Blend::Normal);
+        }
         // 0x41e5c0: the fade's blend, then the gamma (0x41dc20).
         let pal = match &self.fade {
             Some(f) => {
@@ -3079,8 +3090,9 @@ pub fn run(files: &Storage, shot: Option<&str>) -> std::io::Result<()> {
     let mut was_down = false;
     let mut was_rdown = false;
     let mut held: Option<i16> = None;
-    let mut script: std::collections::VecDeque<String> = std::env::var("SCBW_GLUE_INPUT").map(|v| v.split(';').map(str::to_string).collect()).unwrap_or_default();
     let mut popped = false;
+    let mut game_wait = 0u32;
+    let mut keys_held = crate::script::Held::default();
     let typed = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
     if let Some(w) = win.as_mut() {
         w.set_input_callback(Box::new(Typed(typed.clone())));
@@ -3171,7 +3183,8 @@ pub fn run(files: &Storage, shot: Option<&str>) -> std::io::Result<()> {
                     }
                     continue;
                 }
-                if let Some(out) = shot {
+                // Screenshot mode: steps left play the game (script.rs), else one shot of it.
+                if let Some(out) = shot.filter(|_| !crate::script::pending()) {
                     return crate::shot_setup(&mut a, g, out);
                 }
                 // 0x4e0710: the next state is the game's result 0x51ce90 (0x4d9950): 6 / 7 after
@@ -3180,10 +3193,13 @@ pub fn run(files: &Storage, shot: Option<&str>) -> std::io::Result<()> {
                 // 0x4ef100 -> 0x4a5f50: the front-end music fades out (the game's `fade_out`
                 // on the shared audio).
                 glue.music_playing = false;
-                glue.game_end = hand_over(&mut win, &mut audio, &typed, |w| {
-                    crate::view::park_window(w);
-                    crate::view::run_setup(&mut a, g)
-                })?;
+                glue.game_end = match win {
+                    Some(_) => hand_over(&mut win, &mut audio, &typed, |w| {
+                        crate::view::park_window(w);
+                        crate::view::run_setup(&mut a, g)
+                    })?,
+                    None => crate::view::run_setup(&mut a, g)?,
+                };
                 // 0x4d9950 ends with 0x4be0b0.
                 glue.flush_notice();
                 glue.objectives = glue.game_end.as_ref().map_or(glue.objectives, |e| e.objectives);
@@ -3259,9 +3275,26 @@ pub fn run(files: &Storage, shot: Option<&str>) -> std::io::Result<()> {
             *o = (r as u32) << 16 | (g as u32) << 8 | b as u32;
         }
         let Some(win) = win.as_mut() else {
-            // SCBW_GLUE_INPUT="c x y;k vk;t text;w ms" (screenshot mode): clicks, keys,
-            // typed text and waits, one per pass, then the shot.
-            if let Some(step) = script.pop_front() {
+            // SCBW_GLUE_INPUT="c x y;k vk;t text;w ms;p x y;s file;seed n" (screenshot mode):
+            // clicks, keys, typed text, waits, moves, shots and the next game's seed, one per
+            // pass, then the shot. Game steps (script.rs) wait for the game to start; after
+            // 30 s of glue passes (the recorded game ended later than ours, or ours never
+            // started) they are dropped.
+            if let Some(step) = crate::script::pop() {
+                if crate::script::is_game_step(&step) {
+                    game_wait += 1;
+                    if game_wait < 30_000 / 16 {
+                        crate::script::push_front(step);
+                        glue.tick(files, 16);
+                        continue;
+                    }
+                    crate::script::pop();
+                    let n = 1 + crate::script::drop_game_steps();
+                    eprintln!("script: {n} game steps from {step:?} in the glue, dropped");
+                    game_wait = 0;
+                    continue;
+                }
+                game_wait = 0;
                 let a: Vec<&str> = step.split_whitespace().collect();
                 let num = |i: usize| a.get(i).and_then(|v| v.parse::<i32>().ok()).unwrap_or(0);
                 match a.first().copied() {
@@ -3309,7 +3342,19 @@ pub fn run(files: &Storage, shot: Option<&str>) -> std::io::Result<()> {
                             glue.char_in(files, c);
                         }
                     }
-                    Some("w") => glue.tick(files, num(1) as u32),
+                    // A pass at a time (16 ms, the window's rate), as the screens step per pass.
+                    Some("w") => {
+                        glue.tick(files, num(1).clamp(0, 16) as u32);
+                        if num(1) > 16 {
+                            crate::script::push_front(format!("w {}", num(1) - 16));
+                        }
+                    }
+                    // p x y: the mouse moves (no button); s file: the screen so far to a PNG.
+                    Some("p") => glue.mouse_to(num(1), num(2)),
+                    Some("s") => crate::write_png(a.get(1).copied().unwrap_or("s.png"), w, h, &idx, &pal)?,
+                    Some("seed") => create::set_seed(num(1) as u32),
+                    // wh 1 / wh 0: the mouse wheel down / up.
+                    Some("wh") => glue.create_wheel(num(1) != 0),
                     _ => {}
                 }
                 continue;
@@ -3323,8 +3368,9 @@ pub fn run(files: &Storage, shot: Option<&str>) -> std::io::Result<()> {
         // Escape, Backspace and Tab come as their control characters).
         {
             use minifb::{Key, KeyRepeat};
-            let alt = win.is_key_down(Key::LeftAlt) || win.is_key_down(Key::RightAlt);
-            glue.shift = win.is_key_down(Key::LeftShift) || win.is_key_down(Key::RightShift);
+            keys_held.sync(win);
+            let alt = keys_held.down(Key::LeftAlt) || keys_held.down(Key::RightAlt);
+            glue.shift = keys_held.down(Key::LeftShift) || keys_held.down(Key::RightShift);
             for k in win.get_keys_pressed(KeyRepeat::Yes) {
                 let vk = match k {
                     Key::PageUp => 0x21,

@@ -597,15 +597,15 @@ impl State {
         self.units[u as usize].resource_type = if mineral { 2 } else { 1 };
         let s = self.units[u as usize].sprite;
         let main = self.sprites[s as usize].main_image;
-        let saved = self.iscript_unit;
-        if let Some(img) = self.create_overlay(d, main, image, 0, 0, true) {
+        // 0x498e00(0, 0, 0): before the main image, direction 0 (it turns with the worker
+        // only from its next turn on).
+        if let Some(img) = self.create_image(d, s, main, image, 0, 0, 0) {
             if self.images[img as usize].flags & 0x80 == 0 {
                 // 0x4d5a00: follow the worker's special overlay (LO kind 2) offset.
                 self.images[img as usize].flags |= 0x80;
                 self.image_update_special_offset(d, img);
             }
         }
-        self.iscript_unit = saved;
         self.units[u as usize].set_u8_at(0xcf, amount);
     }
 
