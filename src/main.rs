@@ -443,6 +443,7 @@ fn main() -> std::io::Result<()> {
             sa.st.random_event_timer = 0;
             // The CRT rand (creep tile variants): srand(the header's seed) at game init (0x4ef100).
             sa.st.crt_seed = seed0;
+            sa.st.game_seed = seed0;
             // Test only: replay commands name units by handle (slot | unique id << 11), but a
             // load rebuilds the free list (0x49e1f0) and zeroes the free slots, so units made
             // after it get other handles. The loaded game takes the original's free list
@@ -938,6 +939,13 @@ fn main() -> std::io::Result<()> {
             let chk = load_chk(&args[1])?;
             view::prepare_map(&mut a, &chk);
             let mut scene = view::Scene::new(&a, chk)?;
+            // A .rep as the map: its header's players (the real game has them in 0x57eee0).
+            if let Ok(r) = std::fs::read(&args[1]).and_then(|d| replay::Replay::parse(&d)) {
+                for (p, s) in r.header.slots.iter().enumerate().take(8) {
+                    scene.st.player_types[p] = s.kind;
+                    scene.st.player_names[p] = s.name.clone();
+                }
+            }
             eprintln!("local player {} start {:?}", scene.local_player(), scene.st.start_locations[scene.local_player() as usize]);
             let frames: usize = args.get(5).and_then(|f| f.parse().ok()).unwrap_or(24);
             let (x, y) = (args[3].parse().unwrap_or(0), args[4].parse().unwrap_or(0));
@@ -1098,11 +1106,14 @@ fn main() -> std::io::Result<()> {
             // (SCBW_MENU_REPLAY=1: as while watching a replay).
             let menu = std::env::var("SCBW_MENU").ok().and_then(|k| {
                 use menu::Kind::*;
-                let kind = match k.as_str() { "game" => Game, "options" => Options, "speed" => Speed, "sound" => Sound, "video" => Video, "help" => Help, "end" => EndMission, "objectives" => Objectives, "tips" => Tips, "save" => SaveGame, "load" => LoadGame, "fatal" => { menu::set_fatal(Some(b"The save failed.".to_vec())); Fatal }, _ => return None };
+                let kind = match k.as_str() { "game" => Game, "options" => Options, "speed" => Speed, "sound" => Sound, "video" => Video, "help" => Help, "end" => EndMission, "objectives" => Objectives, "tips" => Tips, "vision" => ReplayVision, "save" => SaveGame, "load" => LoadGame, "fatal" => { menu::set_fatal(Some(b"The save failed.".to_vec())); Fatal }, _ => return None };
                 let ctx = menu::Ctx { replay: std::env::var("SCBW_MENU_REPLAY").is_ok(), multiplayer: false, replay_speed: 6, ..Default::default() };
                 let skin = &ui.as_ref()?.skin;
                 let mut set = menu::Settings::default();
                 let mut m = menu::Menu::open(kind, 0, &a.files, skin, ctx, &set);
+                if let Some(m) = m.as_mut().filter(|m| m.kind == ReplayVision) {
+                    scene.init_vision_menu(m, ctx.replay);
+                }
                 if let (Some(m), Some(u)) = (m.as_mut().filter(|m| m.kind == Objectives), ui.as_ref()) {
                     m.set_text(2, &view::objectives_text(&scene, u));
                 }

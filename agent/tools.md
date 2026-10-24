@@ -67,7 +67,10 @@ coverage.py reachable sets match the original Linux dump. `analyzeHeadless.bat` 
 paths with spaces: run through a junction (here `C:\src\scbwre` -> `C:\src\scbw reverse`).
 `env.sh` falls back to `venv/Scripts/python.exe` (Windows venv).
 `data116/` on a new box: `agent/tools/fill_data116.py "$PY" "$EXE" "$DATA" "$W/md/cur" "$SCBW" "$W"`
-(after one `scbw mapdump` into `$W/md/cur`; reruns the emulator, extracting what it misses: 746 files).
+(after a `scbw mapdump` into `$W/md/cur`; reruns the emulator, extracting what it misses:
+~760 files). Run it once per tileset (the suite's maps), and extract `tileset/<name>/dark.pcx`
+for all 8 tilesets by hand (`SCBW_MINIMAP` reads them outside the storm hooks; use `/`
+in `scbw extract` paths). Missing data shows as a suite diff with an empty emulator trace.
 
 ## scbw commands useful for RE
 

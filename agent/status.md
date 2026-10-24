@@ -48,7 +48,10 @@ pause gates on hotkeys / minimap / tooltips, Help / menus in replays, Alt+click 
 paused click flashes 0x4d9460, portrait per unit + static 0x45ebc0 / 0x45e650, leaderboard
 Ctrl+R 0x4bec00 (key from Local.dll's accelerators), score second shade 0x4dfa30, dialog
 capture / delayed-event tables (dlg.rs `Captures`, no caller yet). Neither wave run in a
-window yet. frontier.tsv: 37 ported / 6 fixed; left 5 port (replay vision dialog), 4
+window yet. Replay vision dialog (2026-10-24): minimap button 4 -> allyfltr.bin
+(`Kind::ReplayVision`, 0x4913d0 / 0x490e90 / 0x491310 / 0x490000, OK = 0x490fe0
+`set_replay_vision`), button 3 / 4 tooltips 0x4a5110; `SCBW_MENU=vision SCBW_MENU_REPLAY=1
+scbw shot <rep>`; not compared with native. frontier.tsv: 42 ported / 6 fixed; left 4
 partial, 5 persist, 4 unsure. Suite runs on Windows now (data116 extracted, suite.sh uses $PY).
 Coverage fix 2026-10-17: a `///` line that only mentions an address in prose no longer
 counts; only a doc block's first line or a doc line starting with `/// 0x...` does

@@ -241,6 +241,9 @@ pub enum Update {
     /// 0x4e4770: the in-game error message's button: two outlines (0x6ceb20 pressed, else
     /// 0x6ceb30) and its text (flags 0x22).
     Fatal,
+    /// 0x4901f0: a replay vision dialog row: a 12 x 12 swatch of this palette index (0x581dd6
+    /// of the row's player), left of the player name.
+    Player(u8),
     /// 0x46c6e0: the ready room's message buffer from its scroll row, over the control.
     BriefText,
     /// 0x44e9e0: a ready room portrait's video buffer, copied into the control.
@@ -1580,6 +1583,23 @@ impl Skin {
             (Update::Align(align), _) => {
                 if !c.text.is_empty() {
                     self.ctl_text(c, &c.text, r, 0, 0, align, s);
+                }
+                return;
+            }
+            (Update::Player(col), _) => {
+                // 0x4901f0: 0x4e1d20 fills 12 x 12 at the left, centered vertically; the name
+                // (flags 0x11) starts 9 past the control's height.
+                let height = b - t;
+                let y0 = t + (height + 1 - 12) / 2;
+                for y in y0..y0 + 12 {
+                    for x in l..l + 12 {
+                        if x >= 0 && y >= 0 && x < s.w && y < s.h {
+                            s.px[(y * s.w + x) as usize] = col;
+                        }
+                    }
+                }
+                if !c.text.is_empty() {
+                    self.ctl_text(c, &c.text, r, height + 9, 0, 0x11, s);
                 }
                 return;
             }

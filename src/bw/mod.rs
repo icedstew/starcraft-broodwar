@@ -416,6 +416,8 @@ pub struct State {
     pub local_vision_mask: u8,
     /// MSVC `rand` state (`_holdrand`), seeded with the game seed by 0x4a2c20.
     pub crt_seed: u32,
+    /// 0x51ca10: the game seed (the start value of the sim RNG; 0x490000 reseeds the CRT rand with it).
+    pub game_seed: u32,
     /// 0x57f1d0 / 0x57f1d2: screen position in tiles (UI; read by 0x49c4c0).
     pub screen_tile: (u16, u16),
     /// 0x59cb58: the shown terrain changed; the minimap's next redraw (0x4a4e00 /
@@ -610,6 +612,7 @@ impl State {
             alert_tick_counter: 0,
             local_vision_mask: 1,
             crt_seed: 1,
+            game_seed: 0,
             screen_tile: (0, 0),
             minimap_terrain: false,
             is_expansion: true,

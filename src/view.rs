@@ -446,6 +446,22 @@ impl<'a> Scene<'a> {
     }
 
     /// The finished game for the score screen (the glue's 0x4de200 state 6 / 7).
+    /// 0x4913d0 (the vision button) + 0x490e90 (the dialog's init) in a replay: 0x63ff74 = the
+    /// shown players 0x6d0f18; the rows follow 0x490000's shuffled order.
+    pub fn init_vision_menu(&mut self, m: &mut crate::menu::Menu, replay: bool) {
+        if bw::players::is_team_game(self.st.multiplayer, &self.st.template) {
+            todo_port!("0x490570", "team games use rez\teamfltr.bin (0x5042d0) and its rows");
+        }
+        let order = self.st.vision_player_order();
+        let mut names: [Vec<u8>; 12] = Default::default();
+        for (n, s) in names.iter_mut().zip(self.st.player_names.iter()) {
+            *n = s.as_bytes().to_vec();
+        }
+        let glu = self.a.files.read("rez/gluAll.tbl").unwrap_or_default();
+        let mask = self.st.local_vision_mask as u16;
+        m.vision_init(&order, &names, &self.minimap.player_colors, mask, replay, &glu);
+    }
+
     pub fn game_end(&self) -> GameEnd {
         let st = &self.st;
         self.write_last_replay();
@@ -1873,6 +1889,7 @@ fn new_game(a: &Assets, chk: &Chk, rep: Option<&crate::replay::Header>, gs: Opti
             st.rng.seed = s;
         }
         st.crt_seed = st.rng.seed;
+        st.game_seed = st.rng.seed;
         if gs.map_or(0, |g| g.mission) == 0 {
             crate::audio::next_music_variant(|| st.crt_rand());
         }
@@ -2488,6 +2505,17 @@ fn draw_hud(scene: &Scene, ui: &crate::ui::Ui, vx: i32, vy: i32, cursor: Option<
             tooltip(ui, s, r, t, out, w, h);
         }
     }
+    // 0x4a5110: control 4's tooltip (replay vision: stat_txt entry 0x604 in a replay, else 0x32c;
+    // 0-based strings 0x603 / 0x32b) and
+    // control 3's (entry 0x32d; diplomacy, hidden in single player).
+    for (id, i) in [(4, if scene.st.replay { 0x603 } else { 0x32b }), (3, 0x32c)] {
+        if let (Some((_, _, cx, cy)), Some((l, t, r, b))) = (hover, ui.minimap.get(id).filter(|c| c.flags & crate::dlg::flag::VISIBLE != 0).and(ui.minimap.screen_rect(id))) {
+            if (l..=r).contains(&cx) && (t..=b).contains(&cy) {
+                let s = ui.stat_txt.get(i).map_or("", |s| s.split('\0').next().unwrap_or(""));
+                tooltip(ui, s, r, t, out, w, h);
+            }
+        }
+    }
     // 0x4f4f70: the MENU button's tooltip (stat_txt 0x32d) right of it.
     if let (Some((_, _, cx, cy)), Some((l, t, r, b))) = (hover, ui.stat_f10.screen_rect(1)) {
         if (l..=r).contains(&cx) && (t..=b).contains(&cy) {
@@ -3007,6 +3035,7 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
     let mut menu_btn_down = false;
     let mut last_scroll = 0u64;
     let mut terrain_btn_down = false;
+    let mut vision_btn_down = false;
     // The next 42 ms tick of input and game logic.
     let mut next_tick = web_time::Instant::now();
     // Input between ticks: the window is redrawn (and its events taken) at the display
@@ -3299,6 +3328,12 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
                             scene.send(&[8]);
                         }
                     }
+                    // 0x490fe0: the replay vision (0x6d0f18 / 0x57f0b0, all players 0x6d0f1c).
+                    crate::menu::Action::ReplayVision(mask, all) => {
+                        let Scene { a, st, minimap, .. } = &mut scene;
+                        with_data(a, |d| st.set_replay_vision(d, mask, all));
+                        minimap.replay_all = all as u32;
+                    }
                     _ => {}
                 }
             }
@@ -3360,6 +3395,13 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
         if terrain_btn_down {
             lmb_was_down = mdown;
         }
+        // rez\minimap.bin button 4 (0x4a54f0 -> 0x4913d0): the replay vision dialog, on release.
+        let on_vision_btn = ui.as_ref().and_then(|u| u.minimap.get(4).filter(|c| c.flags & crate::dlg::flag::VISIBLE != 0).and(u.minimap.screen_rect(4))).is_some_and(|(l, t, r, b)| (l..=r).contains(&cx) && (t..=b).contains(&cy));
+        let vision_clicked = vision_btn_down && !mdown && on_vision_btn;
+        vision_btn_down = mdown && (vision_btn_down || (on_vision_btn && !lmb_was_down));
+        if vision_btn_down {
+            lmb_was_down = mdown;
+        }
         // 0x47f0e0 (4d98de, after the cursor update): the mouse edges and the keys scroll the
         // screen, or the target of a trigger's screen move (0x47eb70) does. The gates:
         // window active (0x51bfa8), not paused unless multiplayer (0x6509c4 / 0x57f0b4), and
@@ -3401,6 +3443,9 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
         let alt = win.is_key_down(Key::LeftAlt) || win.is_key_down(Key::RightAlt);
         scene.st.key_alt = alt;
         let mut want_menu = None;
+        if vision_clicked {
+            want_menu = Some(crate::menu::Kind::ReplayVision);
+        }
         // Chat line: Enter opens it (0x4f32d0), then the edit control (0x416980) takes the
         // keys; Enter submits and Esc cancels (0x4f36fa).
         let typed_chars: Vec<u32> = typed.borrow_mut().drain(..).collect();
@@ -3703,6 +3748,9 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
             scene.set_placing(None);
             scene.end_targeting();
             menu = open_menu(&scene, kind, 0, &mut settings);
+            if let Some(m) = menu.as_mut().filter(|m| m.kind == crate::menu::Kind::ReplayVision) {
+                scene.init_vision_menu(m, scene.st.replay);
+            }
             menu_paused = menu.is_some();
             if menu_paused {
                 scene.pause_game();

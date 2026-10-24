@@ -369,6 +369,9 @@ pub enum Kind {
     Ok,
     /// 0x4e4a10: the in-game error message, rez\dlgFatal.bin (event proc 0x4e4980).
     Fatal,
+    /// 0x4913d0: the minimap's replay vision button (control 4, 0x4a54f0): rezllyfltr.bin
+    /// (0x5042bc), event proc 0x491310, init 0x490e90 (`Menu::vision_init`).
+    ReplayVision,
 }
 
 impl Kind {
@@ -397,6 +400,8 @@ impl Kind {
             Kind::OkCancel => "rez/okcancel.bin",
             Kind::Ok => "rez/ok.bin",
             Kind::Fatal => "rez/dlgFatal.bin",
+            // 0x5042bc (0x5042d0 rez	eamfltr.bin in a team game, not ported)
+            Kind::ReplayVision => "rez/allyfltr.bin",
         }
     }
 }
@@ -436,6 +441,9 @@ pub enum Action {
     /// a message line (7 s, sound 0x17): rez\network.tbl string 0x10 (index 0xf) when the
     /// table has more than 0xf strings, else the empty string 0x501b7d (sound only).
     Message,
+    /// 0x490fe0 (the replay vision dialog's OK): the shown players (0x63ff74) and the all
+    /// players box; the caller runs `State::set_replay_vision`.
+    ReplayVision(u16, bool),
 }
 
 /// The open menu (0x6d5bf4) and the depth counter 0x6d1224.
@@ -471,6 +479,8 @@ pub struct Menu {
     pump_ms: u32,
     /// What the menu opened with (the 200 ms refreshes of the game and end-mission menus read it).
     ctx: Ctx,
+    /// 0x63ff74: the replay vision dialog's shown players (a bit per player).
+    vision: u16,
 }
 
 /// 0x512768: button graphics by style (0 minimap, 3 OK, 4 menu buttons, 5 Cancel, ...).
@@ -576,7 +586,7 @@ impl Menu {
         // call 0x47e96e) restyles only OK, with style 3.
         let (ok, cancel) = match kind {
             Kind::Tips => (Some(3), None),
-            Kind::Speed | Kind::Sound | Kind::Video | Kind::SaveGame | Kind::LoadGame | Kind::OkCancel | Kind::Ok => (Some(3), Some(5)),
+            Kind::ReplayVision | Kind::Speed | Kind::Sound | Kind::Video | Kind::SaveGame | Kind::LoadGame | Kind::OkCancel | Kind::Ok => (Some(3), Some(5)),
             _ => (Some(4), Some(4)),
         };
         for (id, style) in [(-2, ok), (-3, cancel)] {
@@ -778,7 +788,48 @@ impl Menu {
         }
         // The edit has the focus (0x418580).
         dlg.active = dlg.controls.iter().position(|c| c.ty == 8 && c.flags & flag::VISIBLE != 0);
-        Some(Menu { kind, dlg, depth, saved: *set, pressed: None, dragging: None, click: false, was_down: false, clock: None, last_press: None, timers, tick_count: 0, pump_ms: 0, ctx })
+        Some(Menu { kind, dlg, depth, saved: *set, pressed: None, dragging: None, click: false, was_down: false, clock: None, last_press: None, timers, tick_count: 0, pump_ms: 0, ctx, vision: 0 })
+    }
+
+    /// 0x490e90 (the replay vision dialog's init) with 0x490d70 (event 10) in a replay, and
+    /// 0x4913d0's 0x63ff74 = `mask` (0x6d0f18). `order` is 0x490000's player order
+    /// (`State::vision_player_order`); `names` / `colors` are per player (0x57eeeb, 0x581dd6);
+    /// `glu` is rez\gluAll.tbl. 0x490300 pops the order from its end: row k (label -10-k, ally
+    /// box 1+k, vision box 13+k) shows that player: the name with its color swatch (0x490250,
+    /// 0x4901f0), the ally box hidden (0x418700), the vision box shown, graphic 0xb, checked by
+    /// the mask bit (0x490850 event 0). Not a replay (alliance rows) and team games
+    /// (0x490570) are not ported.
+    pub fn vision_init(&mut self, order: &[u32], names: &[Vec<u8>; 12], colors: &[u8; 12], mask: u16, replay: bool, glu: &[u8]) {
+        self.vision = mask;
+        if !replay {
+            crate::todo_port!("0x490300", "the alliance rows outside a replay");
+            return;
+        }
+        // 0x490d70: label 0x1a takes gluAll 0xb6, label 0x1b is hidden; 0x490c40 event 10: box
+        // 0x19 takes gluAll 0xb7.
+        if let Some(c) = find(&mut self.dlg, 0x1a) {
+            c.text = crate::setup::tbl_str(glu, 0xb6 - 1).to_vec();
+        }
+        show(&mut self.dlg, 0x1b, false);
+        if let Some(c) = find(&mut self.dlg, 0x19) {
+            c.text = crate::setup::tbl_str(glu, 0xb7 - 1).to_vec();
+        }
+        for (k, &p) in order.iter().rev().enumerate() {
+            let p = p as usize & 15;
+            if let Some(c) = find(&mut self.dlg, -10 - k as i16) {
+                c.text = names[p].clone();
+                c.value.0 = p as i16;
+                c.update = crate::dlg::Update::Player(colors[p]);
+                c.flags |= flag::VISIBLE;
+            }
+            show(&mut self.dlg, 1 + k as i16, false);
+            if let Some(c) = find(&mut self.dlg, 13 + k as i16) {
+                c.flags |= flag::VISIBLE;
+                c.graphic = 0xb;
+                c.value.0 = p as i16;
+                c.checked = mask >> p & 1 != 0;
+            }
+        }
     }
 
     /// 0x47e7b0 (the tips open): a campaign mission's tips at the game start (0x47ea30 set
@@ -1115,6 +1166,10 @@ impl Menu {
             4 => {
                 let c = &mut self.dlg.controls[i];
                 c.checked = !c.checked;
+                // 0x490850 user 2 (the vision boxes, ids 13..24): 0x63ff74 ^= 1 << player (+0x26).
+                if self.kind == Kind::ReplayVision && (13..=24).contains(&id) {
+                    self.vision ^= 1 << (c.value.0 & 15);
+                }
                 self.store(set);
                 None
             }
@@ -1334,6 +1389,10 @@ impl Menu {
             (Kind::SaveGame | Kind::LoadGame, _) => return self.save_activate(id),
             (Kind::OkCancel | Kind::Ok, _) => return Self::popup_activate(id),
             // 0x4e4980 event 0xe code 2 (0x419ea0): the dialog closes.
+            // 0x491310 event 0xe code 2 -> 0x490fe0 (OK, id -2): the shown players and the all-players
+            // box (0x19) set the vision; Cancel (-3) just closes it (0x4f5700).
+            (Kind::ReplayVision, -2) => (None, Action::ReplayVision(self.vision, self.dlg.get(0x19).is_some_and(|c| c.checked))),
+            (Kind::ReplayVision, -3) => (None, Action::Closed),
             (Kind::Fatal, _) => {
                 sg().fatal = None;
                 return (None, Action::Closed);

@@ -485,3 +485,54 @@ mod tests {
         }
     }
 }
+
+impl State {
+    /// 0x490000: the order the replay vision dialog lists the players in. The players of the
+    /// game (0x484ff0, `next_trigger_player`) are collected, the CRT rand is reseeded with the
+    /// game seed (0x40c7b0 srand 0x51ca10, which also restarts the creep tile rand), and each
+    /// pick is `rand() % left` of the remaining ones (the rest shift down, 0x40c9ad memmove).
+    pub fn vision_player_order(&mut self) -> Vec<u32> {
+        let mut left = Vec::new();
+        let mut it = u32::MAX;
+        loop {
+            let p = self.next_trigger_player(&mut it);
+            if p >= 8 {
+                break;
+            }
+            left.push(p);
+        }
+        self.crt_seed = self.game_seed;
+        let mut order = Vec::with_capacity(left.len());
+        while !left.is_empty() {
+            let i = self.crt_rand() as usize % left.len();
+            order.push(left.remove(i));
+        }
+        order
+    }
+
+    /// 0x490fe0 in a replay (the replay vision dialog's OK, 0x6d051c == -2): the shown
+    /// players `mask` (0x63ff74) become the vision 0x6d0f18 / 0x57f0b0 (`local_vision_mask`;
+    /// 0x57eeb8 is that << 8, derived where it is used). `all` (the dialog's check box 0x19)
+    /// shows everything instead: 0x6d0f1c (`reveal_all`) set and the mask 0xff. Computers and
+    /// defeated humans (0x57eee8 type 10 / 11, or 1 / 2 with 0x58d700 1 / 2) lose their bit,
+    /// then every visible unit refreshes its visibility (0x4ebe10).
+    pub fn set_replay_vision(&mut self, d: &Data, mask: u16, all: bool) {
+        self.local_vision_mask = mask as u8;
+        self.reveal_all = all;
+        if all {
+            self.local_vision_mask = 0xff;
+        }
+        for p in 0..8usize {
+            let ty = self.player_types[p];
+            if ty == 10 || ty == 11 || ((ty == 2 || ty == 1) && matches!(self.player_left[p], 1 | 2)) {
+                self.local_vision_mask &= !(1u8 << p);
+            }
+        }
+        let mut u = self.visible_units.head;
+        while u != NIL {
+            let next = self.units[u as usize].link.next;
+            self.update_unit_visibility(d, u);
+            u = next;
+        }
+    }
+}
