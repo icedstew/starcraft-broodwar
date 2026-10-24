@@ -1227,9 +1227,23 @@ impl State {
                 self.action_play_wav(p, i, a);
                 true
             }
-            // 0x4c54b0 minimap ping,
-            // 0x4c6990 / 0x4c6940 mute / unmute unit speech: UI only (local player's audio).
-            0x1c | 0x1e | 0x1f => true,
+            // 0x4c54b0 minimap ping: UI only.
+            0x1c => true,
+            // 0x4c6990: mute unit speech (0x48ebc0) for the current player 0x6509b0 when it is
+            // the local one (0x512684) and the trigger was not skipped (0x10).
+            0x1e => {
+                if cur == self.local_player as usize && self.trig.lists[p][i].flags() & 0x10 == 0 {
+                    self.speech_mute.push(true);
+                }
+                true
+            }
+            // 0x4c6940: unmute unit speech for the local player (no skip test).
+            0x1f => {
+                if cur == self.local_player as usize {
+                    self.speech_mute.push(false);
+                }
+                true
+            }
             // 0x4c50e0: next scenario: the map string (id in the action's string field, 0 = no
             // change) is copied (SStrCopy, 0x20 bytes) into 0x57f246 for the campaign flow
             // (0x4dc1c0 via the front end); no table or id 0 (low word) clears it.

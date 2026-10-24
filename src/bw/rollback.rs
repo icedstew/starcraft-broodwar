@@ -6,7 +6,7 @@ use super::State;
 /// add to them again (`out_lens` before, `truncate_outs` after).
 macro_rules! outs {
     ($m:ident) => {
-        $m!(ui_sounds, trigger_wavs, speech, unit_sounds, talked, portrait_dropped, transmissions, shown_text, notices, chat)
+        $m!(ui_sounds, trigger_wavs, speech_mute, speech, unit_sounds, talked, portrait_dropped, transmissions, shown_text, notices, chat)
     };
 }
 

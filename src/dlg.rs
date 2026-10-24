@@ -1186,7 +1186,7 @@ impl Effects {
     /// pixel (0, 0) (0x4c8e80), the level 0x6d0aa8 (4 in the running game; nothing in
     /// the executable writes it directly).
     pub fn in_game(pal: &[[u8; 3]; 256], tile: &Grp, excluded: &[bool; 256]) -> Effects {
-        let shade = tile.pixels(4).and_then(|(px, _, _)| px.first().copied()).unwrap_or(0);
+        let shade = tile.sample(4, 0, 0);
         // 0x417d39 -> 0x4178b0 with the game's descriptor: a level's table is built with
         // its own fraction (level 4: slot 2 with p = 4), not the glue's p = slot + 1.
         // The descriptor's excluded colors (+4 count, +8 list, 0x6d0b50): the tileset's
@@ -1202,7 +1202,7 @@ impl Effects {
     /// (0x4c8e80); the remap built from them is recomputed per use (0x51a190 dirty).
     pub fn set_second_shade(&mut self, tile: &Grp) {
         self.level2 = level(80);
-        self.shade2 = tile.pixels(4).and_then(|(px, _, _)| px.first().copied()).unwrap_or(0);
+        self.shade2 = tile.sample(4, 0, 0);
     }
 
     /// 0x4174a0: the nearest-color table for the blend fraction p / 8. The palette is

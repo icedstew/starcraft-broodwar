@@ -370,7 +370,11 @@ pub struct Glue {
 impl Glue {
     /// 0x4e0820 (before its loop): state 4 (glue), settings, cursor at (320, 240).
     pub fn new(files: &Storage) -> Glue {
-        todo_port!("0x4e0820", "0x4daf30 / 0x4d2ff0 / 0x4e05b0 / 0x4db060 / 0x4f6100 init, CPUThrottle");
+        todo_port!("0x4e0820", "0x4daf30 / 0x4d2ff0 / 0x4e05b0 / 0x4f6100 init, CPUThrottle");
+        // 0x4db060: 0x480c20, the 640x480 screen buffer (0x4b000, 0x6ceff0), 0x41d930, the palette copy
+        // 0x5994e0 -> 0x6ceb40, 0x41ca00, arr\sfxdata.dat (0x4d2e80), arr\sfxdata.tbl (0x415cc0, loaded
+        // by Audio::open) and the 0x4bcb70 sound init: only the sfx table load is modelled.
+        todo_port!("0x4db060", "video buffer / palette init, sfxdata.dat load, 0x4bcb70 sound init");
         let network_raw = files.read("rez/network.tbl").unwrap_or_default();
         let network = if network_raw.is_empty() { Vec::new() } else { crate::dat::parse_tbl(&network_raw) };
         let glu_all_raw = files.read("rez/gluAll.tbl").unwrap_or_default();
@@ -1898,6 +1902,8 @@ impl Glue {
         // 0x4bccf0 preloads the list into the sound cache (Audio loads on demand).
     }
 
+    // 0x4ad0b0 is the same kind of hook (hover 0xa6, click 0xa7 via 0x4bc2c0) but only in the Storm
+    // provider-UI callback table 0x4ad190 (gluBNRes dialogs, Storm's own networking UI): not ported.
     /// 0x4dd1d0: the dialogs' sound hook (0x6d5eac): event 0 (hover) is sound 0xa6 at most
     /// every 200 ms (`clock_ms` is GetTickCount), event 1 (click) 0xa5, both through
     /// 0x4bc2c0.

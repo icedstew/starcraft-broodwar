@@ -442,6 +442,9 @@ pub struct State {
     /// Trigger wavs for the local player (0x4c77d0): the map string id of the file's path
     /// in the scenario archive.
     pub trigger_wavs: Vec<u16>,
+    /// Trigger actions mute (true, 0x4c6990 -> 0x48ebc0) / unmute (false, 0x4c6940) unit
+    /// speech for the local player; the front end applies them to its audio.
+    pub speech_mute: Vec<bool>,
     /// Advisor and unit speech (0x48ed50): sfx id and the sound option bit it needs
     /// (0x6cdfec: 1 unit speech, 4 building sounds; 0 = always), the speaking unit (NIL for
     /// none) and the base volume.
@@ -647,6 +650,7 @@ impl State {
             sounds: Vec::new(),
             ui_sounds: Vec::new(),
             trigger_wavs: Vec::new(),
+            speech_mute: Vec::new(),
         };
         st.path_pool_init();
         st

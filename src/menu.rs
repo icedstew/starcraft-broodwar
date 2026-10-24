@@ -744,7 +744,9 @@ impl Menu {
             }
             Kind::Defeat => {
                 // 0x461020: -20 unless a multiplayer team result (0x581d61 == 2), which shows -21;
-                // button 1 is hidden. Then a 20 s dialog timer (0x416090).
+                // button 1 is hidden. Then a 20 s dialog timer (0x416090). Also: plays "sound\%s" of the
+                // string pointer 0x68daf8 when set; nothing in the exe writes it (its only reference is
+                // this read), so it is null and no sound plays.
                 let team = ctx.multiplayer && ctx.team_result;
                 show(&mut dlg, 1, false);
                 show(&mut dlg, -0x14, !team);

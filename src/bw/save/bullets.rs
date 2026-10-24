@@ -107,20 +107,21 @@ impl State {
         o.packed(&buf)
     }
 
-    /// 0x48ae40 (0x48ab00 for save version >= 3, which is all we write; 0x48abd0 reads the
-    /// older 0x6e-byte records, todo): clear the bullets, read the records, resolve the
+    /// 0x48ae40 (0x48ab00 for save version >= 3; 0x48abd0 below 3 reads u16 slot + 0x6c bytes
+    /// = 0x6e-byte records, the bullet without the spread index at +0x6c, left 0): clear the bullets, read the records, resolve the
     /// pointers (0x48a8d0) and rebuild the free / active lists (0x48a720).
     /// 0x48a720: both lists relinked in slot order (inline here).
     pub(super) fn load_bullets(&mut self, _d: &Data, i: &mut In) -> bool {
         let zero = Bullet { sprite: NIL, move_target_unit: NIL, target: NIL, source: NIL, previous_bounce_target: NIL, ..Bullet::default() };
         self.bullets.pool = vec![zero.clone(); MAX_BULLETS];
         let Some(count) = i.u16() else { return false };
+        let rec_len = if i.format < 3 { 0x6e } else { 0x72 }; // 0x48abd0 / 0x48ab00
         let mut recs = Vec::new();
         if count != 0 {
-            let Some(buf) = i.packed(count as usize * 0x72) else { return false };
+            let Some(buf) = i.packed(count as usize * rec_len) else { return false };
             recs = buf;
         }
-        for r in recs.chunks_exact(0x72) {
+        for r in recs.chunks_exact(rec_len) {
             let slot = get16(r, 0) as usize;
             if slot >= MAX_BULLETS {
                 return false;
@@ -163,7 +164,7 @@ impl State {
             nb.bounces = r[0x63];
             nb.source = unit(get32(r, 0x64));
             nb.previous_bounce_target = unit(get32(r, 0x68));
-            nb.spread_index = r[0x6c];
+            nb.spread_index = r.get(0x6c).copied().unwrap_or(0);
             self.bullets.pool[slot] = nb;
         }
         // 0x48a720: both lists in slot order (the saved links are not used).

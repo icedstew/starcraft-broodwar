@@ -3726,6 +3726,10 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
             }
             if ctrl && k == S {
                 (settings.digital, saved_digital) = if settings.digital == 0 { (saved_digital, 0) } else { (0, settings.digital) };
+                // 0x4bc110 muting stops the playing sounds (0x4bbf50); the volume goes to 0x6d5e3c via set_volumes.
+                if let (Some(au), 0) = (audio.as_ref(), settings.digital) {
+                    au.stop_sounds();
+                }
                 continue;
             }
             if let Some(rp) = replay.as_mut() {
@@ -3928,9 +3932,19 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
                 scene.pause_game();
             }
         }
+        // 0x4c6990 / 0x4c6940 (trigger actions): unit speech muted / unmuted.
+        for mute in std::mem::take(&mut scene.st.speech_mute) {
+            if let Some(au) = audio.as_mut() {
+                if mute {
+                    au.mute_unit_speech();
+                } else {
+                    au.unmute_unit_speech();
+                }
+            }
+        }
         for (id, x, y) in sounds {
             if let Some(au) = audio.as_ref() {
-                if let Some((v, pan)) = position_sound(&scene, a.dat(), settings.digital, id, x, y, vx, vy) {
+                if let Some((v, pan)) = position_sound(&scene, a.dat(), au.speech_muted(), settings.digital, id, x, y, vx, vy) {
                     au.play_pan(&a.files, a.dat(), id, v as i32, pan, None);
                 }
             }
@@ -3938,7 +3952,7 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
         // 0x48ed50: speech and building sounds only with their sound option on.
         for (id, bit, u, base) in std::mem::take(&mut scene.st.speech) {
             if let Some(au) = audio.as_ref().filter(|_| bit == 0 || settings.sound_flags & bit != 0) {
-                if let Some((v, pan)) = unit_sound(&scene, a.dat(), settings.digital, id, u, base, vx, vy) {
+                if let Some((v, pan)) = unit_sound(&scene, a.dat(), au.speech_muted(), settings.digital, id, u, base, vx, vy) {
                     au.play_pan(&a.files, a.dat(), id, v as i32, pan, (u != NIL).then_some(u));
                 }
             }
@@ -4041,13 +4055,16 @@ fn sound_pan(x: i32, left: i32) -> i32 {
 /// 0x48ec10: a sound id at map point (x, y) with the screen at (left, top): the volume
 /// (base 0, distance volume, sfxdata.dat minimum; played above 10) and pan, or None
 /// when the sound is dropped (id 0, digital volume 0, outside the map or unseen).
-// ponytail: the 0x64086c flag (volume / 5) is not ported (its meaning is unknown).
-fn position_sound(scene: &Scene, dat: &Dat, digital: i16, id: u16, x: i32, y: i32, left: i32, top: i32) -> Option<(u32, i32)> {
+/// `muted` (0x64086c, unit speech muted by a trigger) divides the volume by 5.
+fn position_sound(scene: &Scene, dat: &Dat, muted: bool, digital: i16, id: u16, x: i32, y: i32, left: i32, top: i32) -> Option<(u32, i32)> {
     if id == 0 || digital == 0 || !scene.st.sound_audible(x, y) {
         return None;
     }
     let m = dat.sfxdata.volume.get(id as usize).copied().unwrap_or(0) as i32;
-    let v = sound_distance_volume(x, y, left, top).max(m);
+    let mut v = sound_distance_volume(x, y, left, top).max(m);
+    if muted {
+        v /= 5;
+    }
     (v > 10).then(|| (v as u32, sound_pan(x, left)))
 }
 
@@ -4055,8 +4072,8 @@ fn position_sound(scene: &Scene, dat: &Dat, digital: i16, id: u16, x: i32, y: i3
 /// volume `base`, the screen at left `left`: the volume and pan, or None when dropped (id 0,
 /// digital volume 0, the unit unseen by the local player, volume <= 10). The caller checks
 /// the option flag.
-// ponytail: the 0x64086c flag (volume / 5) is not ported (its meaning is unknown).
-fn unit_sound(scene: &Scene, dat: &Dat, digital: i16, id: u16, u: u32, base: i32, left: i32, top: i32) -> Option<(u32, i32)> {
+/// `muted` (0x64086c) divides the volume by 5.
+fn unit_sound(scene: &Scene, dat: &Dat, muted: bool, digital: i16, id: u16, u: u32, base: i32, left: i32, top: i32) -> Option<(u32, i32)> {
     if id == 0 || digital == 0 {
         return None;
     }
@@ -4072,6 +4089,9 @@ fn unit_sound(scene: &Scene, dat: &Dat, digital: i16, id: u16, u: u32, base: i32
         pan = sound_pan(sp.x as i32, left);
     }
     v = base.max(v).max(m);
+    if muted {
+        v /= 5;
+    }
     (v > 10).then(|| (v as u32, pan))
 }
 

@@ -26,6 +26,10 @@ pub struct Audio {
     fade_in: Option<(i32, u128)>,
     /// 0x6d638c: the music was started (set by 0x4bc320).
     music_started: bool,
+    /// 0x64086c: unit speech is muted (set by 0x48ebc0, cleared by 0x48fb40).
+    speech_muted: bool,
+    /// 0x6d5bbd: the music is ducked by 0x2ee (set by 0x48ebc0, cleared when 0x4a6140 starts a track).
+    music_duck: bool,
     /// 0x5008f0: DirectSound attenuations (hundredths of a dB) by volume 0..=99, read from
     /// the install's StarCraft.exe (not stored in the repo).
     table: [i32; 100],
@@ -123,7 +127,7 @@ impl Audio {
         let mut sink = rodio::DeviceSinkBuilder::open_default_sink().ok()?;
         sink.log_on_drop(false);
         let names = dat::parse_tbl(&files.read("arr/sfxdata.tbl").ok()?);
-        Some(Audio { sink, names, cache: RefCell::new(HashMap::new()), music: None, music_track: 0, music_checked: 0, volumes: (25, 50), credits_volume: None, fade_in: None, music_started: true,
+        Some(Audio { sink, names, cache: RefCell::new(HashMap::new()), music: None, music_track: 0, music_checked: 0, volumes: (25, 50), credits_volume: None, fade_in: None, music_started: true, speech_muted: false, music_duck: false,
             table: volume_table(), slots: RefCell::new(Default::default()), last: RefCell::new(HashMap::new()), files: RefCell::new(Vec::new()) })
     }
 
@@ -317,6 +321,8 @@ impl Audio {
                 if let Some(p) = self.music.as_ref() {
                     p.set_volume(music as f32 / 50.0);
                 }
+                // 0x4a5ef0's level (ducked by 0x48ebc0) as a ratio to the volume's own.
+                self.set_fade_volume(self.music_level());
             }
             if !self.music_started {
                 self.music_started = true;
@@ -349,6 +355,46 @@ impl Audio {
         }
     }
 
+    /// 0x4a5ef0: the music's attenuation: the volume's table level, minus 0x2ee (not below
+    /// -10000) once 0x48ebc0 ducked it.
+    fn music_level(&self) -> i32 {
+        let own = self.table[(self.volumes.0 as i32 * 99 / 100).clamp(0, 99) as usize];
+        if self.music_duck { (own - 0x2ee).max(-10000) } else { own.max(-10000) }
+    }
+
+    /// 0x48ebc0 (the trigger action 0x4c6990, mute unit speech): sets the speech flag 0x64086c
+    /// and, the first time (latch 0x6d5bbd), ducks the playing music by 0x2ee.
+    pub fn mute_unit_speech(&mut self) {
+        self.speech_muted = true;
+        if !self.music_duck {
+            self.music_duck = true;
+            self.set_fade_volume(self.music_level());
+        }
+    }
+
+    /// 0x4c6940 (the trigger action unmute unit speech): clears 0x64086c; when the music was
+    /// ducked (0x6d5bbd) the latch clears and a playing track (0x6d5bac) gets its volume
+    /// 0x6d5bb4 back (0x410268).
+    pub fn unmute_unit_speech(&mut self) {
+        self.speech_muted = false;
+        if self.music_duck {
+            self.music_duck = false;
+            self.set_fade_volume(self.music_level());
+        }
+    }
+
+    /// 0x64086c: unit speech is muted (0x48ed50 / 0x48ec10 scale the volume by it).
+    pub fn speech_muted(&self) -> bool {
+        self.speech_muted
+    }
+
+    /// 0x48fb40's resets (before the 0x4bccf0 glue sound init): the flag 0x64086c and the
+    /// unit sound state 0x640870 .. 0x64087c (not modelled) go to 0; the id tables
+    /// 0x640550 / 0x63ff78 / 0x6402b8 (once, 0x6d5bdc) are filled from the sfx data on demand.
+    pub fn reset_sound_tables(&mut self) {
+        self.speech_muted = false;
+    }
+
     /// The music volume at attenuation `level`: the volume's own level is 1.0 of it.
     fn set_fade_volume(&self, level: i32) {
         let own = self.table[(self.volumes.0 as i32 * 99 / 100).clamp(0, 99) as usize].max(-10000);
@@ -361,7 +407,7 @@ impl Audio {
     pub fn tick_fade(&mut self) {
         let Some((mut level, mut last)) = self.fade_in else { return };
         let now = now_ms();
-        let own = self.table[(self.volumes.0 as i32 * 99 / 100).clamp(0, 99) as usize].max(-10000);
+        let own = self.music_level();
         while now >= last + 20 {
             last += 20;
             level += 400;
@@ -391,6 +437,7 @@ impl Audio {
             return;
         }
         self.music_track = i;
+        self.music_duck = false; // 0x4a6140 clears 0x6d5bbd when it starts the stream (0x4a5e70 false)
         self.music = None; // 0x4a6140: Ordinal_257 / 253 close the old stream
         let Some((path, _)) = game_track(i) else { return };
         let Ok(data) = files.read(path) else { return };
@@ -425,7 +472,7 @@ impl Audio {
     /// from the current level until below -4000), then close it (0x4a5e40).
     pub fn fade_out(&mut self) {
         let Some(p) = self.music.take() else { return };
-        let mut level = self.table[(self.volumes.0 as i32 * 99 / 100).clamp(0, 99) as usize].max(-10000);
+        let mut level = self.music_level();
         let mut step = 5;
         loop {
             std::thread::sleep(std::time::Duration::from_millis(20));

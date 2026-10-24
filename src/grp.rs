@@ -106,6 +106,35 @@ impl Grp {
         Some((buf, f.w, f.h))
     }
 
+    /// 0x4c8e80: the color of the pixel (x, y) of frame `i`, in the grp's own coordinates
+    /// (outside the frame's box, or in a transparent run: 0). Reads the frame header's
+    /// width byte (not the +256 of `Frame::w`), as the exe does.
+    pub fn sample(&self, i: usize, x: i32, y: i32) -> u8 {
+        let Some(f) = self.frames.get(i) else { return 0 };
+        let (mut x, y) = (x - f.x, y - f.y);
+        if x < 0 || y < 0 || x >= f.w & 0xff || y >= f.h {
+            return 0;
+        }
+        if self.raw {
+            // An uncompressed frame (see `raw`): w*h bitmap.
+            return self.data.get(f.off + (y * f.w + x) as usize).copied().unwrap_or(0);
+        }
+        let Some(b) = self.data.get(f.off + y as usize * 2..f.off + y as usize * 2 + 2) else { return 0 };
+        let mut p = f.off + u16::from_le_bytes([b[0], b[1]]) as usize;
+        loop {
+            let Some(&c) = self.data.get(p) else { return 0 };
+            let n = (c & 0x3f) as i32;
+            if x < n {
+                if c & 0x80 != 0 {
+                    return 0;
+                }
+                return self.data.get(if c & 0x40 != 0 { p + 1 } else { p + 1 + x as usize }).copied().unwrap_or(0);
+            }
+            x -= n;
+            p += if c & 0x80 != 0 { 1 } else if c & 0x40 != 0 { 2 } else { 1 + n as usize };
+        }
+    }
+
     /// Draw frame `i` with its grp-box top-left at (x, y) in `dst` (w*h indexed pixels).
     pub fn draw(&self, i: usize, flip: bool, x: i32, y: i32, dst: &mut [u8], dw: i32, dh: i32, blend: Blend) {
         let Some(f) = self.frames.get(i) else { return };
