@@ -1191,7 +1191,8 @@ impl Effects {
         // its own fraction (level 4: slot 2 with p = 4), not the glue's p = slot + 1.
         // The descriptor's excluded colors (+4 count, +8 list, 0x6d0b50): the tileset's
         // cycling entries, so a blended pixel never animates.
-        let mut fx = Self::new(pal, shade, 0);
+        // 0x4c99c0 (the in-game palette setup) sets 0x6d5e24 / 0x6d5e28 to 60.
+        let mut fx = Self::new(pal, shade, 60);
         fx.tables[2] = Self::table(pal, 4, excluded);
         Effects { shade_level: 4, ..fx }
     }
@@ -1492,6 +1493,17 @@ impl Skin {
             }
             self.outline((l, t, r, b), col[0x10], s);
             self.outline((l + 1, t + 1, r - 1, b - 1), col[0x10], s);
+        }
+        if dlg.bg.is_none() {
+            // 0x4ef590 (no bitmap): the rect filled by 0x4e1d20 with the 0x6ceb2c color,
+            // or 0 with flag 0x2000.
+            let c = if dlg.this.flags & 0x2000 != 0 { 0 } else { self.colors.get()[0xc] };
+            let (l, t, r, b) = dlg.this.rect;
+            for y in t.max(0)..=b.min(s.h - 1) {
+                for x in l.max(0)..=r.min(s.w - 1) {
+                    s.px[(y * s.w + x) as usize] = c;
+                }
+            }
         }
         if let Some((bw, bh, bg)) = &dlg.bg {
             // 0x4ef590 -> 0x4ef440: the dialog bitmap; index 0 is transparent. Flag

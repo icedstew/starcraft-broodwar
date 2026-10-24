@@ -1912,6 +1912,16 @@ fn new_game(a: &Assets, chk: &Chk, rep: Option<&crate::replay::Header>, gs: Opti
             for b in chk.sections(b"PUNI") {
                 st.chk_puni(b);
             }
+            // Map versions 0x3b / 0x3f list the original-StarCraft UPGR / PTEC before the
+            // BW ones (tables 0x5002a0 / 0x500388); the other versions' lists lack them.
+            if old_map_lists(&chk) {
+                for b in chk.sections(b"UPGR") {
+                    st.chk_upgr(b);
+                }
+                for b in chk.sections(b"PTEC") {
+                    st.chk_ptec(b);
+                }
+            }
             for b in chk.sections(b"PUPx") {
                 st.chk_pupx(b);
             }
@@ -2004,6 +2014,17 @@ fn apply_map_dat(a: &mut Assets, chk: &Chk, rep: Option<&crate::replay::Header>,
     if m.flag_59686d || m.flag_596871 || m.flag_596877 {
         return;
     }
+    if old_map_lists(chk) {
+        for b in chk.sections(b"UNIS") {
+            bw::chk_load::apply_dat_settings_sc(&mut a.bw.dat, Some(b), None, None);
+        }
+        for b in chk.sections(b"UPGS") {
+            bw::chk_load::apply_dat_settings_sc(&mut a.bw.dat, None, Some(b), None);
+        }
+        for b in chk.sections(b"TECS") {
+            bw::chk_load::apply_dat_settings_sc(&mut a.bw.dat, None, None, Some(b));
+        }
+    }
     for b in chk.sections(b"UNIx") {
         bw::chk_load::apply_dat_settings(&mut a.bw.dat, Some(b), None, None);
     }
@@ -2013,6 +2034,14 @@ fn apply_map_dat(a: &mut Assets, chk: &Chk, rep: Option<&crate::replay::Header>,
     for b in chk.sections(b"TECx") {
         bw::chk_load::apply_dat_settings(&mut a.bw.dat, None, None, Some(b));
     }
+}
+
+/// 0x4cc060: map versions 0x3b / 0x3f (original StarCraft) pick the chunk lists 0x5002a0 /
+/// 0x500388 (UNIS UPGS TECS PUNI UPGR PTEC, then the optional BW ones); the BW version
+/// 0xcd's list (0x5004a8) has only the BW chunks.
+fn old_map_lists(chk: &Chk) -> bool {
+    let v = chk.section(b"VER ").filter(|s| s.len() >= 2).map_or(0, |s| u16::from_le_bytes([s[0], s[1]]));
+    matches!(v, 0x3b | 0x3f)
 }
 
 /// 0x4aaea0: the template (Templates\\*.got, listed in templates.lst) of a game type
@@ -2301,8 +2330,7 @@ pub fn compose_with_cursor(
     scene.draw(vx, vy, w, h, idx);
     // The pause command's grey (0x41e930), then the options' gamma (0x41e870), which
     // every palette shown goes through.
-    let pal = if scene.st.palette_grey { crate::palette::grey(&scene.ts.cycle.pal) } else { scene.ts.cycle.pal };
-    let pal = crate::palette::gamma(&pal, scene.gamma);
+    let pal = shown_palette(scene);
     if let Some(ui) = ui {
         draw_hud(scene, ui, vx, vy, cursor, menu, idx);
     }
@@ -2885,6 +2913,74 @@ impl<T> std::ops::DerefMut for Lent<T> {
     }
 }
 
+/// The palette on screen: the pause command's grey (0x41e930), then the options' gamma
+/// (0x41e870).
+fn shown_palette(scene: &Scene) -> [[u8; 3]; 256] {
+    let pal = if scene.st.palette_grey { crate::palette::grey(&scene.ts.cycle.pal) } else { scene.ts.cycle.pal };
+    crate::palette::gamma(&pal, scene.gamma)
+}
+
+/// 0x4d1b40 (PrintScreen, in a game): the screen saved as SCScrnShot_mmddyy_hhmmss.pcx in
+/// the working directory by Storm's SDrawCaptureScreen (ordinal 342, a 256 color PCX: the
+/// 128 byte header, the run length coded rows, 0x0c and the palette), then network.tbl
+/// string 0x6e with the file name for 2 s (0x48d0c0). The executable reads the local time
+/// (GetLocalTime); std has none, so this is UTC.
+fn screenshot(scene: &mut Scene, ui: Option<&crate::ui::Ui>, idx: &[u8]) {
+    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    let (days, sod) = ((secs / 86400) as i64, secs % 86400);
+    // Civil date from the day count (days since 1970-01-01).
+    let z = days + 719468;
+    let era = z.div_euclid(146097);
+    let doe = z.rem_euclid(146097);
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let (day, month) = (doy - (153 * mp + 2) / 5 + 1, if mp < 10 { mp + 3 } else { mp - 9 });
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    let name = format!("SCScrnShot_{:02}{:02}{:02}_{:02}{:02}{:02}.pcx", month, day, year % 100, sod / 3600, sod / 60 % 60, sod % 60);
+    let (w, h) = (SCREEN_W as usize, SCREEN_H as usize);
+    let mut f = vec![0u8; 128];
+    f[0] = 0x0a; // manufacturer
+    f[1] = 5; // version
+    f[2] = 1; // RLE
+    f[3] = 8; // bits per pixel
+    f[8..10].copy_from_slice(&((w - 1) as u16).to_le_bytes());
+    f[10..12].copy_from_slice(&((h - 1) as u16).to_le_bytes());
+    f[12..14].copy_from_slice(&(w as u16).to_le_bytes());
+    f[14..16].copy_from_slice(&(h as u16).to_le_bytes());
+    f[65] = 1; // planes
+    f[66..68].copy_from_slice(&(w as u16).to_le_bytes()); // bytes per line
+    f[68] = 1; // palette type
+    for row in idx.chunks(w).take(h) {
+        let mut x = 0;
+        while x < row.len() {
+            let v = row[x];
+            let mut n = 1;
+            while x + n < row.len() && row[x + n] == v && n < 63 {
+                n += 1;
+            }
+            if n > 1 || v >= 0xc0 {
+                f.push(0xc0 | n as u8);
+            }
+            f.push(v);
+            x += n;
+        }
+    }
+    f.push(0x0c);
+    for c in shown_palette(scene) {
+        f.extend_from_slice(&c);
+    }
+    if std::fs::write(&name, &f).is_err() {
+        return;
+    }
+    if let Some(u) = ui {
+        // string 0x6e (1-based); the empty 0x501b7d when the table is shorter.
+        let fmt = if u.network.len() >= 0x6e { u.network[0x6d].split('\0').next().unwrap_or("") } else { "" };
+        let t = fmt.replacen("%s", &name, 1);
+        scene.msgs.print(&u.font, t.as_bytes(), scene.clock_ms, 2000, 0x17, &mut scene.st.ui_sounds);
+    }
+}
+
 /// Show a 0RGB frame. minifb's web canvas takes the buffer's bytes as RGBA instead.
 pub(crate) fn present(win: &mut minifb::Window, rgb: &[u32], w: usize, h: usize) -> io::Result<()> {
     #[cfg(target_arch = "wasm32")]
@@ -3363,6 +3459,10 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
             scene.gamma = settings.gamma;
             scene.ts.cycle.tick(settings.color_cycling); // 0x4d93f0
             compose_with_cursor(&scene, ui.as_ref(), vx, vy, Some((0, counter, cx, cy)), menu.as_ref(), &mut idx, &mut rgb);
+            // minifb has no PrintScreen key (VK 0x2c): ScrollLock, its neighbor, stands in.
+            if keys_no.contains(&Key::ScrollLock) {
+                screenshot(&mut scene, ui.as_ref(), &idx);
+            }
             win.present(&rgb, vw as usize, vh as usize)?;
             return Ok(true);
         }

@@ -645,59 +645,98 @@ impl State {
 /// units.dat / weapons.dat / upgrades.dat / techdata.dat are): UNIx (0x4cacd0), UPGx
 /// (0x4ca9f0), TECx (0x4ca7d0). Only Use Map Settings games read them (no melee flag).
 pub fn apply_dat_settings(dat: &mut crate::dat::Dat, unix: Option<&[u8]>, upgx: Option<&[u8]>, tecx: Option<&[u8]>) {
-    let u16s = |b: &[u8], o: usize, i: usize| u16::from_le_bytes([b[o + i * 2], b[o + i * 2 + 1]]);
     if let Some(b) = unix.filter(|b| b.len() == 0x1048) {
-        // use default [228], hp u32 [228], shields, armor u8, time, minerals, gas,
-        // string id (u16 [228] each), weapon damage and bonus (u16 [130] each).
-        let (hp, sh, ar, tm, mi, ga, st, dm, bo) = (0xe4, 0x474, 0x63c, 0x720, 0x8e8, 0xab0, 0xc78, 0xe40, 0xf44);
-        let u = &mut dat.units;
-        for i in (0..0xe4usize).rev() {
-            if b[i] != 0 {
-                continue;
-            }
-            u.hit_points[i] = u32::from_le_bytes(b[hp + i * 4..hp + i * 4 + 4].try_into().unwrap());
-            u.shields[i] = u16s(b, sh, i);
-            u.armor[i] = b[ar + i];
-            u.build_time[i] = u16s(b, tm, i);
-            u.mineral_cost[i] = u16s(b, mi, i);
-            u.gas_cost[i] = u16s(b, ga, i);
-            u.name_string[i] = u16s(b, st, i);
-            // The weapons of the unit's turret when it has one.
-            let s = u.subunit1[i];
-            let w_of = if s != 0xe4 { s as usize } else { i };
-            for w in [u.ground_weapon[w_of], u.air_weapon[w_of]] {
-                if w != 0x82 {
-                    dat.weapons.damage[w as usize] = u16s(b, dm, w as usize);
-                    dat.weapons.damage_bonus[w as usize] = u16s(b, bo, w as usize);
-                }
-            }
-        }
+        apply_unit_settings(dat, b, 0xf44);
     }
     if let Some(b) = upgx.filter(|b| b.len() == 0x31a) {
         // use default [61] + pad, then minerals, mineral factor, gas, gas factor, time,
         // time factor (u16 [61] each).
-        let g = &mut dat.upgrades;
-        for i in (0..61usize).rev() {
-            if b[i] == 0 {
-                g.mineral_base[i] = u16s(b, 0x3e, i);
-                g.mineral_factor[i] = u16s(b, 0xb8, i);
-                g.gas_base[i] = u16s(b, 0x132, i);
-                g.gas_factor[i] = u16s(b, 0x1ac, i);
-                g.time_base[i] = u16s(b, 0x226, i);
-                g.time_factor[i] = u16s(b, 0x2a0, i);
-            }
-        }
+        apply_upgrade_settings(dat, b, 61, 0x3e);
     }
     if let Some(b) = tecx.filter(|b| b.len() == 0x18c) {
         // use default [44], minerals, gas, time, energy (u16 [44] each).
-        let t = &mut dat.techdata;
-        for i in (0..44usize).rev() {
-            if b[i] == 0 {
-                t.mineral_cost[i] = u16s(b, 0x2c, i);
-                t.gas_cost[i] = u16s(b, 0x84, i);
-                t.research_time[i] = u16s(b, 0xdc, i);
-                t.energy_cost[i] = u16s(b, 0x134, i);
+        apply_tech_settings(dat, b, 44, 0x2c);
+    }
+}
+
+/// The original StarCraft versions of the dat sections (map versions 0x3b / 0x3f list
+/// them at 0x5002a0 / 0x500388, before the BW ones): UNIS (0x4cab10), UPGS (0x4ca8d0),
+/// TECS (0x4ca6d0). The same targets as UNIx / UPGx / TECx with the original counts
+/// (100 weapons, 46 upgrades, 24 techs).
+pub fn apply_dat_settings_sc(dat: &mut crate::dat::Dat, unis: Option<&[u8]>, upgs: Option<&[u8]>, tecs: Option<&[u8]>) {
+    if let Some(b) = unis.filter(|b| b.len() == 0xfd0) {
+        apply_unit_settings(dat, b, 0xf08);
+    }
+    if let Some(b) = upgs.filter(|b| b.len() == 0x256) {
+        // use default [46], then minerals, mineral factor, gas, gas factor, time, time
+        // factor (u16 [46] each).
+        apply_upgrade_settings(dat, b, 46, 0x2e);
+    }
+    if let Some(b) = tecs.filter(|b| b.len() == 0xd8) {
+        // use default [24], minerals, gas, time, energy (u16 [24] each).
+        apply_tech_settings(dat, b, 24, 0x18);
+    }
+}
+
+/// 0x4cacd0 / 0x4cab10: use default [228], hp u32 [228], shields, armor u8, time,
+/// minerals, gas, string id (u16 [228] each), weapon damage then bonus (u16 [130] / [100]
+/// each; `bo` is where the bonus array starts). A weapon index past the original 100
+/// reads on into the section (and past its end, where the game reads its stack: 0 here).
+fn apply_unit_settings(dat: &mut crate::dat::Dat, b: &[u8], bo: usize) {
+    let u16s = |o: usize, i: usize| b.get(o + i * 2..o + i * 2 + 2).map_or(0, |c| u16::from_le_bytes([c[0], c[1]]));
+    let (hp, sh, ar, tm, mi, ga, st, dm) = (0xe4, 0x474, 0x63c, 0x720, 0x8e8, 0xab0, 0xc78, 0xe40);
+    let u = &mut dat.units;
+    for i in (0..0xe4usize).rev() {
+        if b[i] != 0 {
+            continue;
+        }
+        u.hit_points[i] = u32::from_le_bytes(b[hp + i * 4..hp + i * 4 + 4].try_into().unwrap());
+        u.shields[i] = u16s(sh, i);
+        u.armor[i] = b[ar + i];
+        u.build_time[i] = u16s(tm, i);
+        u.mineral_cost[i] = u16s(mi, i);
+        u.gas_cost[i] = u16s(ga, i);
+        u.name_string[i] = u16s(st, i);
+        // The weapons of the unit's turret when it has one.
+        let s = u.subunit1[i];
+        let w_of = if s != 0xe4 { s as usize } else { i };
+        for w in [u.ground_weapon[w_of], u.air_weapon[w_of]] {
+            if w != 0x82 {
+                dat.weapons.damage[w as usize] = u16s(dm, w as usize);
+                dat.weapons.damage_bonus[w as usize] = u16s(bo, w as usize);
             }
+        }
+    }
+}
+
+/// 0x4ca9f0 / 0x4ca8d0: `n` upgrades; `o` is where the first of the six u16 [n] arrays
+/// (minerals, mineral factor, gas, gas factor, time, time factor) starts.
+fn apply_upgrade_settings(dat: &mut crate::dat::Dat, b: &[u8], n: usize, o: usize) {
+    let u16s = |k: usize, i: usize| u16::from_le_bytes([b[o + (k * n + i) * 2], b[o + (k * n + i) * 2 + 1]]);
+    let g = &mut dat.upgrades;
+    for i in (0..n).rev() {
+        if b[i] == 0 {
+            g.mineral_base[i] = u16s(0, i);
+            g.mineral_factor[i] = u16s(1, i);
+            g.gas_base[i] = u16s(2, i);
+            g.gas_factor[i] = u16s(3, i);
+            g.time_base[i] = u16s(4, i);
+            g.time_factor[i] = u16s(5, i);
+        }
+    }
+}
+
+/// 0x4ca7d0 / 0x4ca6d0: `n` techs; `o` is where the first of the four u16 [n] arrays
+/// (minerals, gas, time, energy) starts.
+fn apply_tech_settings(dat: &mut crate::dat::Dat, b: &[u8], n: usize, o: usize) {
+    let u16s = |k: usize, i: usize| u16::from_le_bytes([b[o + (k * n + i) * 2], b[o + (k * n + i) * 2 + 1]]);
+    let t = &mut dat.techdata;
+    for i in (0..n).rev() {
+        if b[i] == 0 {
+            t.mineral_cost[i] = u16s(0, i);
+            t.gas_cost[i] = u16s(1, i);
+            t.research_time[i] = u16s(2, i);
+            t.energy_cost[i] = u16s(3, i);
         }
     }
 }
@@ -744,6 +783,48 @@ impl State {
                     self.players.upgrade_bw[p][u - 46] = level;
                 }
                 self.players.upgrade_max[p][u] = max;
+            }
+        }
+    }
+
+    /// 0x4cb940: UPGR, the original StarCraft upgrade levels and limits per player (map
+    /// versions 0x3b / 0x3f; PUPx's layout with 46 upgrades).
+    pub fn chk_upgr(&mut self, b: &[u8]) {
+        if b.len() != 0x6d4 {
+            return;
+        }
+        // max [12][46], start [12][46], default max [46], default start [46], use default
+        // [12][46]
+        for p in (0..12usize).rev() {
+            for u in (0..46usize).rev() {
+                let (level, max) = if b[0x4ac + p * 46 + u] == 0 {
+                    (b[0x228 + p * 46 + u], b[p * 46 + u])
+                } else {
+                    (b[0x47e + u], b[0x450 + u])
+                };
+                self.players.upgrade_sc[p][u] = level;
+                self.players.upgrade_max[p][u] = max;
+            }
+        }
+    }
+
+    /// 0x4cb670: PTEC, the original StarCraft techs available and researched per player
+    /// (map versions 0x3b / 0x3f; PTEx's layout with 24 techs).
+    pub fn chk_ptec(&mut self, b: &[u8]) {
+        if b.len() != 0x390 {
+            return;
+        }
+        // available [12][24], researched [12][24], default available [24], default
+        // researched [24], use default [12][24]
+        for p in (0..12usize).rev() {
+            for t in (0..24usize).rev() {
+                let (avail, done) = if b[0x270 + p * 24 + t] == 0 {
+                    (b[p * 24 + t], b[0x120 + p * 24 + t])
+                } else {
+                    (b[0x240 + t], b[0x258 + t])
+                };
+                self.players.tech_available[p][t] = avail;
+                self.players.tech_researched[p][t] = done;
             }
         }
     }
