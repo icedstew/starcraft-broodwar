@@ -83,7 +83,12 @@ Delegate per agents.md: Haiku triage, Sonnet porting, Opus review / hard RE / co
   latency / jitter 2/3/2 and 1/8/6) all MATCH straight playback. Phase 3a done (2026-10-24):
   src/net/transport.rs (wtransport 0.7.2 + tokio, localhost, cert pinned by hash) and
   `scbw netrep <rep> all [port] [delay]` (host + joins as processes): 3 replays x delay 2 / 3
-  MATCH (~10 s each); 3+ player relay untested. Next: phase 3b (live game over a Session).
+  MATCH (~10 s each); 3+ player relay untested. Phase 3b done (2026-10-24): `scbw nethost
+  <map> [port] [players] [delay]` / `netjoin <code>` play a live melee game over the
+  Session (src/net/live.rs, view.rs NetDriver; menus do not pause net games);
+  agent/tools/netlive.sh runs host + join headless (SCBW_NET_HEADLESS / SCBW_NET_SCRIPT):
+  equal hashes at delay 1 / 2 / 4 with rollbacks. Not tried in a window yet. Next: browser
+  join (WebTransport client in web.rs); wasm vs native determinism being checked.
   2026-10-23, moved to a Windows box (16 cores; no wine harness yet): ShieldBattery
   cloned for reference (`reference/shieldbattery`, fba29b3, next to the repo).
   New replay set (user: >= 200, >= 50 games per race, dated while 1.16.1 was live):
@@ -252,7 +257,7 @@ Delegate per agents.md: Haiku triage, Sonnet porting, Opus review / hard RE / co
 
 ## Next steps
 
-0. Next session: phase 3b (net.md); netsuite long replays (re/netsuite.py resumes; 62 of 180
+0. Next: browser join (net.md phase 5); netsuite long replays (re/netsuite.py resumes; 62 of 180
    long runs MATCH so far, 0 non-MATCH); the 10-18 user reports below; the partial rows.
 1. Re-run `agent/tools/aistress.sh 25000 <seed> agent/local/tgt/debug/scbw` with new
    seeds / longer; fix what it finds. Then 0x4a6250 and the glue event procs.

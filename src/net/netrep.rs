@@ -27,7 +27,7 @@ pub fn run_peer(a: &view::Assets, r: &replay::Replay, delay: u32, role: Role) ->
         Role::Host { port } => {
             let me = *all.iter().min().expect("a player");
             let clients: Vec<u8> = all.iter().copied().filter(|&p| p != me).collect();
-            let (tr, target) = Transport::host(port, me, &clients, delay).map_err(std::io::Error::other)?;
+            let (tr, target) = Transport::host(port, me, &clients, delay, Vec::new()).map_err(std::io::Error::other)?;
             println!("LISTEN {target}");
             std::io::stdout().flush()?;
             (tr, me)
@@ -53,7 +53,7 @@ pub fn run_peer(a: &view::Assets, r: &replay::Replay, delay: u32, role: Role) ->
     while !started {
         for e in tr.poll() {
             match e {
-                Event::Start => started = true,
+                Event::Start { .. } => started = true,
                 Event::Error(m) => return Err(std::io::Error::other(m)),
                 Event::Turn { player, frame, bytes } => early.push((player, frame, bytes)),
             }
@@ -83,7 +83,7 @@ pub fn run_peer(a: &view::Assets, r: &replay::Replay, delay: u32, role: Role) ->
                     se.remote_turn(player, frame, bytes)
                 }
                 Event::Error(m) => eprintln!("netrep player {me}: {m}"),
-                Event::Start => {}
+                Event::Start { .. } => {}
             }
         }
         if verbose && last_report.elapsed() > Duration::from_secs(2) {

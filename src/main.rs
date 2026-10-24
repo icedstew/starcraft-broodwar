@@ -610,6 +610,17 @@ fn main() -> std::io::Result<()> {
             println!("{}", net::nettest(&a, &r, n(2, 2), n(3, 3), n(4, 2))?);
         }
         #[cfg(not(target_arch = "wasm32"))]
+        Some("nethost") => {
+            // nethost <map> [port] [players] [delay]: host a live networked melee game (src/net/live.rs).
+            let n = |i: usize, d: u32| args.get(i).and_then(|v| v.parse().ok()).unwrap_or(d);
+            net::live::nethost(files, &args[1], n(2, 0) as u16, n(3, 2) as usize, n(4, 2))?;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        Some("netjoin") => {
+            // netjoin <ip:port#hash> [delay]: join a game hosted with nethost.
+            net::live::netjoin(files, &args[1], args.get(2).and_then(|v| v.parse().ok()).unwrap_or(2))?;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
         Some("netrep") => {
             // netrep <rep> host <port> [delay] | join <addr#hash> <map player> [delay] | all [port] [delay]:
             // the nettest check across processes over QUIC (src/net/netrep.rs).
@@ -946,6 +957,58 @@ fn main() -> std::io::Result<()> {
             report += &format!("mean {:.2}% over {n} shots\n", total / n as f64);
             std::fs::write(dir.join("report.txt"), &report)?;
             println!("mean {:.2}% over {n} shots; ours/, diff/ (native | ours | red = differs), report.txt in {}", total / n as f64, dir.display());
+        }
+        Some("repview") => {
+            // repview <rep> <out dir> <frame>...: debug: play the replay as the viewer sees it
+            // (commands, steps, message lines, minimap timers) and write the whole screen
+            // at each listed frame (the camera follows SCBW_CAMERA_TILE x,y or the start).
+            let mut a = view::Assets::load(files)?;
+            let r = replay::Replay::parse(&std::fs::read(&args[1])?)?;
+            let dir = std::path::Path::new(&args[2]);
+            std::fs::create_dir_all(dir)?;
+            let want: Vec<u32> = args[3..].iter().filter_map(|v| v.parse().ok()).collect();
+            view::prepare_replay(&mut a, &r);
+            let mut scene = view::Scene::from_replay(&a, &r)?;
+            let mut ui = ui::Ui::load_with(&a.files, ["zerg", "terran", "protoss"][scene.local_race()], true)?;
+            ui.skin.fx = Some(dlg::Effects::in_game(&scene.ts.cycle.pal, &ui.skin.tile, &bw::minimap::excluded_colors(scene.st.tileset)));
+            eprintln!("slot colors {:?}, unit rows {:?}, minimap {:?}", r.header.slots.iter().take(8).map(|s| s.color).collect::<Vec<_>>(), (0..8).map(|p| scene.player_colors[p][4]).collect::<Vec<_>>(), &scene.minimap.player_colors[..8]);
+            eprintln!("rgb unit {:?} minimap {:?}", (0..8).map(|p| scene.palette()[scene.player_colors[p][4] as usize]).collect::<Vec<_>>(), (0..8).map(|p| scene.palette()[scene.minimap.player_colors[p] as usize]).collect::<Vec<_>>());
+            let (cx, cy) = std::env::var("SCBW_CAMERA_TILE").ok().and_then(|v| { let (x, y) = v.split_once(',')?; Some((x.parse::<i32>().ok()?, y.parse::<i32>().ok()?)) }).unwrap_or_else(|| { let s = scene.st.start_locations[std::env::var("SCBW_FOLLOW").ok().and_then(|v| v.parse::<usize>().ok()).unwrap_or(0)]; ((s.0 as i32 / 32 - 10).max(0), (s.1 as i32 / 32 - 6).max(0)) });
+            let mut ci = 0;
+            for frame in 0..=want.iter().copied().max().unwrap_or(0) {
+                while ci < r.commands.len() && r.commands[ci].frame <= frame {
+                    let c = &r.commands[ci];
+                    if c.data[0] == 0x5c {
+                        eprintln!("chat at frame {} owner {} sender {} {:?}", c.frame, c.owner, c.data[1], String::from_utf8_lossy(&c.data[2..]));
+                    }
+                    scene.replay_command(c.owner, &c.data);
+                    ci += 1;
+                }
+                scene.st.screen_tile = (cx as u16, cy as u16);
+                scene.step();
+                scene.text_tick(&ui, bw::triggers::replay_frame_ms(scene.st.replay_speed as usize, scene.st.replay_mult as u32), true);
+                scene.run_minimap_timers();
+                if want.contains(&frame) {
+                    let (mut idx, mut out) = (vec![0u8; 640 * 480], vec![0u32; 640 * 480]);
+                    view::compose_with_cursor(&scene, Some(&ui), cx * 32, cy * 32, None, None, &mut idx, &mut out);
+                    { let mut h = std::collections::BTreeMap::new(); for &v in &scene.minimap.pixels { *h.entry(v).or_insert(0) += 1; } eprintln!("minimap hist {h:?} geom {:?} wh {}x{}", view::minimap_geom(&scene), scene.minimap.w, scene.minimap.h); }
+                    eprintln!("map rows nonzero {} terrain {:?} vis {}", idx[..640 * 380].iter().filter(|&&v| v != 0).count(), (scene.terrain.0, scene.terrain.1), scene.st.local_vision_mask);
+                    eprintln!("frame {frame}: idx nonzero {} pal[100] {:?} mm nonzero {} cyc {:?} grey {}", idx.iter().filter(|&&v| v != 0).count(), scene.palette()[100], scene.minimap.pixels.iter().filter(|&&v| v != 0).count(), scene.ts.cycle.pal[100], scene.st.palette_grey);
+                    {
+                        let pal = scene.palette();
+                        let (mw, mh) = (scene.minimap.w as usize, scene.minimap.h as usize);
+                        let mut big = vec![0u32; mw * 4 * mh * 4];
+                        for y in 0..mh * 4 {
+                            for x in 0..mw * 4 {
+                                let [r, g, b] = pal[scene.minimap.pixels[(y / 4) * mw + x / 4] as usize];
+                                big[y * mw * 4 + x] = (r as u32) << 16 | (g as u32) << 8 | b as u32;
+                            }
+                        }
+                        write_png_rgb(dir.join(format!("mm{frame:06}.png")).to_str().unwrap(), mw * 4, mh * 4, &big)?;
+                    }
+                    write_png_rgb(dir.join(format!("f{frame:06}.png")).to_str().unwrap(), 640, 480, &out)?;
+                }
+            }
         }
         Some("smk") => {
             // smk <mpq path> <out prefix>: decode a Smacker video's frames to PNGs.

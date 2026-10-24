@@ -206,6 +206,29 @@ pub struct Scene<'a> {
     /// game/thpbar.pcx: health bar colors (0x66fbe4).
     thpbar: [u8; 19],
     remaps: [Vec<u8>; 7],
+    /// A live network game drives this scene (phase 3b): menus do not pause it.
+    pub live_net: bool,
+}
+
+/// A networked game for `frame_loop_end` (phase 3b, src/net/live.rs): the rollback session
+/// and transport behind one object. Handed over with `set_net_driver` before the loop starts.
+pub trait NetDriver {
+    /// Run without a window (SCBW_NET_HEADLESS): `pump_headless` is the whole loop.
+    fn headless(&self) -> bool;
+    /// One game frame: the UI's queued commands are the local turn, sent; the remote turns
+    /// are taken; the session steps (or rolls back). `None` when it did not step (stalled).
+    fn frame(&mut self, scene: &mut Scene<'_>) -> Option<Vec<(u16, i32, i32)>>;
+    /// One pass of the headless loop; false once the game is over.
+    fn pump_headless(&mut self, scene: &mut Scene<'_>) -> bool;
+}
+
+thread_local! {
+    static NET_DRIVER: std::cell::RefCell<Option<Box<dyn NetDriver>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// The next `frame_loop_end` plays through this networked game.
+pub fn set_net_driver(d: Box<dyn NetDriver>) {
+    NET_DRIVER.with(|n| *n.borrow_mut() = Some(d));
 }
 
 /// Melee maps: only start locations and neutral units.
@@ -369,7 +392,7 @@ impl<'a> Scene<'a> {
         }
         // 0x4bed70 sets 0x597288 := 1 when it creates the leaderboard dialog.
         crate::leaderboard::reset_rows();
-        let mut scene = Scene { st, scroll: ScrollState::default(), creep_grp, minimap, minimap_timers, voices: crate::voices::Voices::new(), portrait: Default::default(), talk_left: 0, talk_unit: None, trans_left: None, sent_selection: Vec::new(), turns: Default::default(), card_menu: None, placing: None, card_held: None, targeting: None, error: 0, msgs: Default::default(), chat: Default::default(), clock_ms: 0, timer_running: false, timer_base: 0, timer_start: 0, from_save: false, gamma: 100, pause_tick: 0, pause_replay_saved: false, place_ok: false, place_tile: (0, 0), place_err: 0, drag_box: None, a, chk, ts, terrain, player_colors, colors: std::array::from_fn(|p| colr.get(p).copied().unwrap_or(p as u8)), end_at: std::env::var("SCBW_END_AT").ok().and_then(|v| Some((v.trim_end_matches('d').parse().ok()?, if v.ends_with('d') { 0x40 } else { 0x80 }))), local, shadow, dark, fog: crate::fog::Fog::new(), parallax, tselect, thpbar, remaps };
+        let mut scene = Scene { st, scroll: ScrollState::default(), creep_grp, minimap, minimap_timers, voices: crate::voices::Voices::new(), portrait: Default::default(), talk_left: 0, talk_unit: None, trans_left: None, sent_selection: Vec::new(), turns: Default::default(), card_menu: None, placing: None, card_held: None, targeting: None, error: 0, msgs: Default::default(), chat: Default::default(), clock_ms: 0, timer_running: false, timer_base: 0, timer_start: 0, from_save: false, gamma: 100, pause_tick: 0, pause_replay_saved: false, place_ok: false, place_tile: (0, 0), place_err: 0, drag_box: None, a, chk, ts, terrain, player_colors, colors: std::array::from_fn(|p| colr.get(p).copied().unwrap_or(p as u8)), end_at: std::env::var("SCBW_END_AT").ok().and_then(|v| Some((v.trim_end_matches('d').parse().ok()?, if v.ends_with('d') { 0x40 } else { 0x80 }))), local, shadow, dark, fog: crate::fog::Fog::new(), parallax, tselect, thpbar, remaps, live_net: false };
         scene.timer_running = timer_running;
         if let Ok(d) = scene.a.files.read(&format!("rez/{}textbox.bin", ["z", "t", "p"][scene.local_race()])) {
             scene.chat.load(crate::dlg::Dialog::parse(&d));
@@ -639,7 +662,8 @@ impl<'a> Scene<'a> {
 
     /// 0x488800: pause the game (0x6509c4) when it is not.
     pub fn pause_game(&mut self) {
-        if self.st.trig.paused {
+        // A network game never pauses under a menu (0x57f0b4; the pause flag is simulation state).
+        if self.st.trig.paused || self.live_net {
             return;
         }
         self.st.trig.paused = true;
@@ -1723,6 +1747,8 @@ pub struct GameSetup {
     pub mission: u16,
     /// 0x58f440: Brood War rules (the glue's Original / Expansion choice).
     pub expansion: bool,
+    /// 0x57f0b4: a network game (phase 3b: menus do not pause it, speed commands are ignored).
+    pub multiplayer: bool,
 }
 
 /// Engine state for a new game on `chk` (map load, players, melee starting units), or
@@ -1748,6 +1774,7 @@ fn new_game(a: &Assets, chk: &Chk, rep: Option<&crate::replay::Header>, gs: Opti
     let mut st = bw::State::new((w, h), chk.tileset() as u16, 1700);
     if let Some(g) = gs {
         st.is_expansion = g.expansion;
+        st.multiplayer = g.multiplayer;
     }
     let name = map::TILESETS[chk.tileset()];
     let vf4 = a.files.read(&format!("tileset/{name}.vf4"))?;
@@ -3050,7 +3077,10 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
     // No window and steps left (`scbw glue <out.png>` with SCBW_GLUE_INPUT): the script
     // plays the game, without sound.
     let parked = take_window();
-    let scripted = parked.is_none() && crate::script::pending();
+    let mut net = NET_DRIVER.with(|n| n.borrow_mut().take());
+    let net_headless = net.as_ref().is_some_and(|n| n.headless());
+    scene.live_net = net.is_some();
+    let scripted = parked.is_none() && (crate::script::pending() || net_headless);
     let mut audio = Lent(Some(take_audio().or_else(|| if scripted { None } else { crate::audio::Audio::open(&a.files) })), |a| {
         if let Some(a) = a {
             park_audio(a);
@@ -3142,6 +3172,9 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
     let mut pend_rep: Vec<Key> = Vec::new();
     let (mut pend_l, mut pend_r) = (false, false);
     Ok(move || {
+        if net_headless {
+            return Ok(net.as_mut().is_some_and(|n| n.pump_headless(&mut scene)));
+        }
         if !win.step(scene.st.frame, &typed) {
             // The script ran out or stopped: the game ends as a quit would (0x4ee8c0).
             scene.write_last_replay();
@@ -3452,7 +3485,12 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
             let ms = if replay.is_some() { bw::triggers::replay_frame_ms(scene.st.replay_speed as usize, scene.st.replay_mult as u32) } else { bw::triggers::FRAME_MS[settings.game_speed.clamp(0, 6) as usize] };
             game_acc += 42;
             for _ in 0..game_acc / ms {
-                scene.paused_selection_flash();
+                // A network game does not pause under the menu: its turns keep flowing and
+                // the frames step (the sounds of these are dropped).
+                match net.as_mut() {
+                    Some(n) => drop(n.frame(&mut scene)),
+                    None => scene.paused_selection_flash(),
+                }
             }
             game_acc %= ms;
             let counter = tick * 42 / 100;
@@ -3901,6 +3939,11 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
         let steps = win.cap_steps(steps, scene.st.frame);
         let mut sounds = Vec::new();
         for k in 0..steps {
+            if let Some(n) = net.as_mut() {
+                // Phase 3b: the session replaces turn_tick + step (a stall steps nothing).
+                sounds.extend(n.frame(&mut scene).unwrap_or_default());
+                continue;
+            }
             if replay.is_none() {
                 scene.turn_tick();
             }

@@ -102,7 +102,7 @@ own networking); the 1.16.1 turn loop around them is.
   frame also sends the 7-byte sync command 0x37 (`37 <seed u32> 00 00 00`); 0x4865d0 gets
   EAX = bytes, [esp+4] = length, [esp+8] = flag. scbw: `Scene::turn_tick`,
   LOCAL_TURNS = 1. The 0x37 sync command is not sent (SB turns it off in rollback too).
-- While a menu is open scbw's frame loop returns before stepping, so no `turn_tick`
+- (Fixed for net games in 3b.) While a menu is open scbw's frame loop returns before stepping, so no `turn_tick`
   runs; 1.16.1 keeps exchanging turns while paused (0x4d9550 runs before the pause
   check in 0x4d9670). Must change for network games (phase 3): turns cannot stall.
   glue_ready.rs 813..930 models the single player provider (VecDeque, window 1) for the
@@ -189,8 +189,31 @@ PRED_LIMIT stalls, ~30% more ticks); tl2071 INVALID (a command at frame 0 < dela
   `netrep <rep> join <addr#hash> <map player> [delay]`. `NETREP_DEBUG=1` prints progress.
   Needs delay >= 1. Short 2-player replays take ~10 s wall. Gotcha: events delivered with
   or before Start must all be applied (turns are not redelivered).
-- 3b: live game: frame loop drives `Session::tick` instead of `turn_tick` + step, turns
-  keep flowing while a menu is open; game start from the received GameSetup.
+- **3b done** (`src/net/live.rs`, `view::NetDriver`; native only): `scbw nethost <map> [port]
+  [players] [delay]` prints `LISTEN ip:port#hash` (the join code) and waits for players - 1
+  joins; `scbw netjoin <code>` takes the next free slot. The host builds a melee `GameSetup`
+  (humans = the map's first N OWNR-human slots with a start location, other slots empty;
+  races from SCBW_NET_RACES `t,z,p,r` or dealt from the seed; names "Player n"; FORC forces;
+  colors 0..7; template melee (2, 1); `multiplayer` true = 0x57f0b4, a new `GameSetup` field),
+  serializes it (`encode_setup`, no serde) and sends it with Start (lobby messages are now
+  `len u32`; Start = slot, the host's delay, setup bytes: the host's delay wins). Hello's
+  player 255 = any slot. Every peer builds its Scene from the same setup with its own
+  `local`. `view::set_net_driver` hands a `NetGame` (Session + Transport) to the next
+  `frame_loop_end`; per game frame `NetDriver::frame` = UI-queued commands (`st.turn_out`)
+  as the local turn -> send, poll -> `remote_turn`, `Session::tick` replaces `turn_tick` +
+  `step`. A menu does not pause a net game (`Scene::live_net`: `pause_game` is a no-op; the
+  menu branch calls `frame` per 42 ms game tick, its sounds are dropped); a stall just does
+  not step. Single player and replays do not touch the driver. `SCBW_NET_BIND` (host address,
+  default 127.0.0.1; `0.0.0.0` for a LAN: the join code then shows 0.0.0.0, use the host's
+  IP). Headless check `agent/tools/netlive.sh [map] [frames] [delay]`: SCBW_NET_HEADLESS=K
+  runs no window / audio / UI (still `frame_loop_end`'s setup) and prints `frame K hash H`;
+  SCBW_NET_SCRIPT="<frame>:<hex>;..." injects replay-format commands (`selw` = select a
+  worker) into the local turn at that frame. 2026-10-24, (2)Bottleneck, Terran vs Zerg, one
+  scripted worker move per player: MATCH at 400 f / delay 1, 1500 f / delay 1 and 4, 800 f /
+  delay 2 (delay 1 unpaced: 1..3 rollbacks per peer, a few stalls).
+  Left: map archive sounds do not travel (clients have no map wavs); replay recording is
+  still every simulated frame (3d: confirmed only); no leaves / desync hashes (3d); no lobby
+  UI (3c); drops: a peer that quits stalls the others.
 - 3c: minimal lobby (host: map, slots; join: address field), LAN broadcast discovery.
 - 3d: UPnP, leaves (fence), desync hashes every 8 confirmed frames, confirmed-only
   replay recording.

@@ -1,9 +1,11 @@
 //! Phase 3a transport (agent/areas/net.md): QUIC/WebTransport on a tokio thread, star
 //! topology (the host is also a player), driven from the game loop through channels.
 //!
-//! Lobby: one reliable bidirectional stream per client. The client sends `Hello{player}`;
-//! once every expected client said hello the host sends `Start` to all. Messages are
-//! `len u16 LE` (of what follows) + `type u8` + body: Hello = 1 + `player u8`; Start = 2.
+//! Lobby: one reliable bidirectional stream per client. The client sends `Hello{player}`
+//! (`ANY` = the host gives it the next free expected slot); once every expected client said
+//! hello the host sends `Start{slot, setup}` to all. Messages are `len u32 LE` (of what
+//! follows) + `type u8` + body: Hello = 1 + `player u8`; Start = 2 + `slot u8` + `first u32`
+//! (the host's input delay: every peer must use the same) + the setup bytes (opaque here: phase 3b's serialized `GameSetup`, empty for `netrep`).
 //!
 //! Turns: unreliable datagrams, resent every flush until acked. One datagram:
 //! `kind u8 = 1`, `nacks u8`, nacks x (`player u8`, `next u32`: the sender has every turn
@@ -31,13 +33,15 @@ use wtransport::{ClientConfig, Connection, Endpoint, Identity, RecvStream, Serve
 
 /// The peer id of the host, as a client sees it.
 pub const HOST: u8 = 255;
+/// Hello's player for "any free slot".
+pub const ANY: u8 = 255;
 const DGRAM: u8 = 1;
 /// Most frames of one player in one datagram.
 const MAX_RUN: usize = 64;
 
 pub enum Event {
-    /// The host sent Start: play.
-    Start,
+    /// The host sent Start: play as `slot` (the host's own Start carries its slot and setup).
+    Start { slot: u8, first: u32, setup: Vec<u8> },
     /// A turn of `player` for `frame` arrived for the first time.
     Turn { player: u8, frame: u32, bytes: Vec<u8> },
     /// The runtime thread failed or the link closed.
@@ -45,7 +49,7 @@ pub enum Event {
 }
 
 enum Inbound {
-    Start,
+    Start { slot: u8, first: u32, setup: Vec<u8> },
     Dgram { from: u8, data: Vec<u8> },
     Error(String),
 }
@@ -53,6 +57,8 @@ enum Inbound {
 pub struct Transport {
     me: u8,
     host: bool,
+    /// Host: the setup bytes sent with Start.
+    setup: Vec<u8>,
     /// Peers this side exchanges datagrams with: the clients' players, or `[HOST]`.
     peers: Vec<u8>,
     /// Frames below this are known empty and never sent.
@@ -130,16 +136,22 @@ impl Transport {
     fn new(me: u8, host: bool, peers: Vec<u8>, first: u32, rx: mpsc::Receiver<Inbound>, tx: tmpsc::UnboundedSender<(u8, Vec<u8>)>, max_dgram: Arc<AtomicUsize>) -> Transport {
         let mut got = HashMap::new();
         got.insert(me, Vec::new());
-        Transport { me, host, peers, first, got, next: HashMap::new(), acked: HashMap::new(), dirty: HashMap::new(), sent_acks: HashMap::new(), rx, tx, max_dgram, stats: (0, 0, 0) }
+        Transport { me, host, setup: Vec::new(), peers, first, got, next: HashMap::new(), acked: HashMap::new(), dirty: HashMap::new(), sent_acks: HashMap::new(), rx, tx, max_dgram, stats: (0, 0, 0) }
     }
 
     /// Listen on `127.0.0.1:port` (0: any free port). Returns `ip:port#certhash` for the
     /// clients. `clients`: the players that will join; `first`: see the module doc.
-    pub fn host(port: u16, me: u8, clients: &[u8], first: u32) -> Result<(Transport, String), String> {
+    /// `setup` goes to every client (and back to the host's own Start event). The address is
+    /// `127.0.0.1` unless `SCBW_NET_BIND` names another (`0.0.0.0` for a LAN).
+    pub fn host(port: u16, me: u8, clients: &[u8], first: u32, setup: Vec<u8>) -> Result<(Transport, String), String> {
+        let bind: std::net::IpAddr = match std::env::var("SCBW_NET_BIND") {
+            Ok(b) => b.parse().map_err(|_| format!("bad SCBW_NET_BIND {b:?}"))?,
+            Err(_) => [127, 0, 0, 1].into(),
+        };
         let identity = Identity::self_signed(["localhost", "127.0.0.1"]).map_err(|e| e.to_string())?;
         let hash = identity.certificate_chain().as_slice()[0].hash();
         let config = ServerConfig::builder()
-            .with_bind_address(SocketAddr::from(([127, 0, 0, 1], port)))
+            .with_bind_address(SocketAddr::new(bind, port))
             .with_identity(identity)
             .keep_alive_interval(Some(Duration::from_secs(3)))
             .build();
@@ -153,11 +165,14 @@ impl Transport {
         let (itx, rx) = mpsc::channel();
         let (tx, orx) = tmpsc::unbounded_channel();
         let max_dgram = Arc::new(AtomicUsize::new(1000));
-        spawn_runtime(itx.clone(), rt, host_run(ep, clients.to_vec(), itx, orx, max_dgram.clone()))?;
-        Ok((Transport::new(me, true, clients.to_vec(), first, rx, tx, max_dgram), format!("{addr}#{}", hex(&hash))))
+        spawn_runtime(itx.clone(), rt, host_run(ep, clients.to_vec(), Arc::new(setup.clone()), first, itx, orx, max_dgram.clone()))?;
+        let mut tr = Transport::new(me, true, clients.to_vec(), first, rx, tx, max_dgram);
+        tr.setup = setup;
+        Ok((tr, format!("{addr}#{}", hex(&hash))))
     }
 
-    /// Connect to a host (`target` = `ip:port#certhash`) and say hello as `me`.
+    /// Connect to a host (`target` = `ip:port#certhash`) and say hello as `me` (`ANY`: the
+    /// Start event says which slot the host gave).
     pub fn join(target: &str, me: u8, first: u32) -> Result<Transport, String> {
         let (addr, hash) = target.split_once('#').ok_or("expected addr#hash")?;
         let hash = unhex(hash)?;
@@ -211,7 +226,18 @@ impl Transport {
         let mut ev = Vec::new();
         while let Ok(m) = self.rx.try_recv() {
             match m {
-                Inbound::Start => ev.push(Event::Start),
+                Inbound::Start { slot, first, setup } => {
+                    let (slot, setup) = if self.host { (self.me, self.setup.clone()) } else { (slot, setup) };
+                    if !self.host {
+                        self.first = first;
+                    }
+                    if self.me != slot {
+                        self.got.remove(&self.me);
+                        self.me = slot;
+                        self.got.entry(slot).or_default();
+                    }
+                    ev.push(Event::Start { slot, first: self.first, setup })
+                }
                 Inbound::Error(e) => ev.push(Event::Error(e)),
                 Inbound::Dgram { from, data } => self.ingest(from, &data, &mut ev),
             }
@@ -256,6 +282,9 @@ impl Transport {
     }
 
     fn flush(&mut self) {
+        if !self.host && self.me == ANY {
+            return; // no slot yet
+        }
         let cap = self.max_dgram.load(Ordering::Relaxed).saturating_sub(8);
         let mut players: Vec<u8> = self.got.keys().copied().collect();
         players.sort();
@@ -320,9 +349,13 @@ impl Transport {
 type Conns = Arc<Mutex<HashMap<u8, Connection>>>;
 
 async fn read_msg(r: &mut RecvStream) -> Result<(u8, Vec<u8>), String> {
-    let mut len = [0u8; 2];
+    let mut len = [0u8; 4];
     r.read_exact(&mut len).await.map_err(|e| e.to_string())?;
-    let mut body = vec![0u8; u16::from_le_bytes(len) as usize];
+    let len = u32::from_le_bytes(len) as usize;
+    if len > 64 << 20 {
+        return Err("lobby message too long".into());
+    }
+    let mut body = vec![0u8; len];
     r.read_exact(&mut body).await.map_err(|e| e.to_string())?;
     if body.is_empty() {
         return Err("empty lobby message".into());
@@ -330,7 +363,7 @@ async fn read_msg(r: &mut RecvStream) -> Result<(u8, Vec<u8>), String> {
     Ok((body[0], body[1..].to_vec()))
 }
 
-async fn host_run(ep: Endpoint<Server>, expected: Vec<u8>, itx: mpsc::Sender<Inbound>, mut orx: tmpsc::UnboundedReceiver<(u8, Vec<u8>)>, md: Arc<AtomicUsize>) -> Result<(), String> {
+async fn host_run(ep: Endpoint<Server>, expected: Vec<u8>, setup: Arc<Vec<u8>>, first: u32, itx: mpsc::Sender<Inbound>, mut orx: tmpsc::UnboundedReceiver<(u8, Vec<u8>)>, md: Arc<AtomicUsize>) -> Result<(), String> {
     let conns: Conns = Default::default();
     let count = Arc::new(AtomicUsize::new(0));
     let (ready, _) = tokio::sync::watch::channel(false);
@@ -338,9 +371,9 @@ async fn host_run(ep: Endpoint<Server>, expected: Vec<u8>, itx: mpsc::Sender<Inb
     let accept = async {
         loop {
             let inc = ep.accept().await;
-            let (expected, conns, count, ready, itx, md) = (expected.clone(), conns.clone(), count.clone(), ready.clone(), itx.clone(), md.clone());
+            let (expected, setup, first, conns, count, ready, itx, md) = (expected.clone(), setup.clone(), first, conns.clone(), count.clone(), ready.clone(), itx.clone(), md.clone());
             tokio::spawn(async move {
-                if let Err(e) = host_conn(inc, expected, conns, count, ready, itx.clone(), md).await {
+                if let Err(e) = host_conn(inc, expected, setup, first, conns, count, ready, itx.clone(), md).await {
                     let _ = itx.send(Inbound::Error(e));
                 }
             });
@@ -366,6 +399,8 @@ async fn host_run(ep: Endpoint<Server>, expected: Vec<u8>, itx: mpsc::Sender<Inb
 async fn host_conn(
     inc: IncomingSession,
     expected: Vec<u8>,
+    setup: Arc<Vec<u8>>,
+    first: u32,
     conns: Conns,
     count: Arc<AtomicUsize>,
     ready: Arc<tokio::sync::watch::Sender<bool>>,
@@ -375,27 +410,33 @@ async fn host_conn(
     let conn = inc.await.map_err(|e| e.to_string())?.accept().await.map_err(|e| e.to_string())?;
     let (mut send, mut recv) = conn.accept_bi().await.map_err(|e| e.to_string())?;
     let (ty, body) = read_msg(&mut recv).await?;
-    let player = match (ty, body.as_slice()) {
-        (1, &[p]) if expected.contains(&p) => p,
-        _ => return Err("bad hello".into()),
-    };
-    {
+    let player = {
         let mut c = conns.lock().unwrap();
+        let player = match (ty, body.as_slice()) {
+            (1, &[ANY]) => expected.iter().copied().find(|p| !c.contains_key(p)).ok_or("game full")?,
+            (1, &[p]) if expected.contains(&p) => p,
+            _ => return Err("bad hello".into()),
+        };
         if c.contains_key(&player) {
             return Err(format!("player {player} joined twice"));
         }
         c.insert(player, conn.clone());
-    }
+        player
+    };
     if let Some(n) = conn.max_datagram_size() {
         md.fetch_min(n, Ordering::Relaxed);
     }
     let mut rdy = ready.subscribe();
     if count.fetch_add(1, Ordering::SeqCst) + 1 == expected.len() {
         let _ = ready.send(true);
-        let _ = itx.send(Inbound::Start);
+        let _ = itx.send(Inbound::Start { slot: 0, first, setup: Vec::new() });
     }
     rdy.wait_for(|v| *v).await.map_err(|e| e.to_string())?;
-    send.write_all(&[1, 0, 2]).await.map_err(|e| e.to_string())?;
+    let mut start = ((setup.len() + 6) as u32).to_le_bytes().to_vec();
+    start.extend_from_slice(&[2, player]);
+    start.extend_from_slice(&first.to_le_bytes());
+    start.extend_from_slice(&setup);
+    send.write_all(&start).await.map_err(|e| e.to_string())?;
     loop {
         let d = conn.receive_datagram().await.map_err(|e| e.to_string())?;
         let _ = itx.send(Inbound::Dgram { from: player, data: d.payload().to_vec() });
@@ -406,14 +447,15 @@ async fn client_run(config: ClientConfig, url: String, me: u8, itx: mpsc::Sender
     let ep = Endpoint::client(config).map_err(|e| e.to_string())?;
     let conn = ep.connect(url).await.map_err(|e| e.to_string())?;
     let (mut send, mut recv) = conn.open_bi().await.map_err(|e| e.to_string())?.await.map_err(|e| e.to_string())?;
-    send.write_all(&[2, 0, 1, me]).await.map_err(|e| e.to_string())?;
-    if read_msg(&mut recv).await?.0 != 2 {
+    send.write_all(&[2, 0, 0, 0, 1, me]).await.map_err(|e| e.to_string())?;
+    let (ty, body) = read_msg(&mut recv).await?;
+    if ty != 2 || body.len() < 5 {
         return Err("expected Start".into());
     }
     if let Some(n) = conn.max_datagram_size() {
         md.fetch_min(n, Ordering::Relaxed);
     }
-    let _ = itx.send(Inbound::Start);
+    let _ = itx.send(Inbound::Start { slot: body[0], first: u32::from_le_bytes([body[1], body[2], body[3], body[4]]), setup: body[5..].to_vec() });
     loop {
         tokio::select! {
             d = conn.receive_datagram() => {
