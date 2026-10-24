@@ -9,6 +9,10 @@ use crate::bw::save::{In, Out};
 use crate::bw::{Data, State};
 use std::path::{Path, PathBuf};
 
+/// The registry stand-in (src/registry.rs; declared here until main.rs lists it).
+#[path = "registry.rs"]
+pub mod registry;
+
 /// The exe dir with a trailing `\` (GetModuleFileNameA cut after its last `\`, 0x4ce5b0).
 pub fn exe_dir(characters_dir: &Path) -> String {
     let p = characters_dir.parent().unwrap_or(Path::new(""));

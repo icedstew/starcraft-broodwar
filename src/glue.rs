@@ -375,6 +375,9 @@ impl Glue {
         let network = if network_raw.is_empty() { Vec::new() } else { crate::dat::parse_tbl(&network_raw) };
         let glu_all_raw = files.read("rez/gluAll.tbl").unwrap_or_default();
         let glu_all = if glu_all_raw.is_empty() { Vec::new() } else { crate::dat::parse_tbl(&glu_all_raw) };
+        // The registry values (Storm's; src/registry.rs) are in the exe dir with the saves.
+        let setup = Setup::default();
+        crate::saveload::registry::init(setup.characters_dir.parent().unwrap_or(std::path::Path::new("")));
         Glue {
             state: state::GLUE,
             screen: screen::MAIN,
@@ -400,7 +403,7 @@ impl Glue {
             network_raw,
             glu_all,
             glu_all_raw,
-            setup: Setup::default(),
+            setup,
             campaign_advice: [[0; 3]; 2],
             sound_list: None,
             sound_tick: 0,
@@ -1073,7 +1076,7 @@ impl Glue {
         d[0x27] = hdr[0x1c];
         d[0x28..0x2c].copy_from_slice(&packed.to_le_bytes());
         self.load_templates(files);
-        self.create.speed = crate::menu::Settings::default().game_speed as u8;
+        self.create.speed = crate::menu::Settings::load().game_speed as u8;
         let rc = self.check_template(&mut d);
         if rc != 0 {
             return rc;
@@ -1220,7 +1223,7 @@ impl Glue {
         let mut d = [0u8; 0x8d];
         sstr_copy(&mut d[4..], &self.setup.local_name, 0x18);
         sstr_copy(&mut d[0x4d..], &self.setup.map_title, 0x20);
-        d[0x26] = crate::menu::Settings::default().game_speed as u8;
+        d[0x26] = crate::menu::Settings::load().game_speed as u8;
         d[0x24] = 1;
         d[0x25] = 1;
         let (mut a, mut b) = ([0u8; 0x20], [0u8; 0x20]);

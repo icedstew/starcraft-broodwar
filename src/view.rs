@@ -3026,7 +3026,7 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
     let mut hud_press: Option<bool> = None;
     // 0x597280 / 0x59727c: the hotkey group last selected and when (0x4c07b0).
     let mut last_group: (u8, usize) = (0xff, 0);
-    let mut settings = crate::menu::Settings::default();
+    let mut settings = crate::menu::Settings::load();
     let mut menu: Option<crate::menu::Menu> = None;
     let mut menu_paused = false;
     let mut tips_checked = false;

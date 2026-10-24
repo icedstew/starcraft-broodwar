@@ -10,10 +10,10 @@
 use super::{Glue, Open};
 use crate::dlg::{flag, Ctl, Dialog, Icon, Update};
 use crate::grp::Grp;
+use crate::saveload::registry;
 use crate::setup::{slot, sstr_copy, MapHeader, Setup, Slot};
 use crate::storage::Storage;
 use crate::todo_port;
-use std::collections::HashMap;
 
 /// The controls of gluCustm.bin / gluCreat.bin.
 mod ids {
@@ -154,9 +154,6 @@ pub(super) struct Create {
     /// The replay file started from the list (0x6d0f24 holds its data natively); the game
     /// start has to play it.
     pub(super) replay: Option<Vec<u8>>,
-    /// The registry values ("Custom Type", "Game Subtype", "Game Speed") Storm keeps; here
-    /// for the session only.
-    prefs: HashMap<&'static str, Vec<u8>>,
 }
 
 impl Default for Create {
@@ -186,7 +183,6 @@ impl Default for Create {
             seed: 0,
             game_desc: Vec::new(),
             replay: None,
-            prefs: HashMap::new(),
         }
     }
 }
@@ -514,7 +510,7 @@ impl Glue {
         self.create.sub = 1;
         // 0x4af510 (event 10): 0x59b840 / 0x59bc74 / 0x59bc80 are controls 19 / 18 / 17.
         if !self.setup.multiplayer {
-            self.create.speed = crate::menu::Settings::default().game_speed as u8;
+            self.create.speed = crate::menu::Settings::load().game_speed as u8;
         }
         // 0x41bc40 event 10 starts a combo's rows like a list box's 0x41b140.
         let p = self.palette_id();
@@ -712,6 +708,103 @@ impl Glue {
         }
     }
 
+    /// 0x4a6490: the registry's "Recent Maps" (Ordinal_421, 0x80): the paths, each NUL
+    /// terminated, then one more NUL. None when there is no value or it is empty.
+    fn load_recent_maps() -> Option<Vec<u8>> {
+        registry::load_data("Recent Maps").filter(|d| !d.is_empty())
+    }
+
+    /// 0x4a6ee0: the recent maps of the registry (up to 5) added to the node list: a path
+    /// that is a valid string and a file that exists is the node of that path moved last
+    /// with the flag 0x10, else a new node (flags 0x14) of its folder and file name.
+    fn add_recent_nodes(&mut self) {
+        let Some(buf) = Self::load_recent_maps() else { return };
+        let size = buf.len() as i32;
+        let (mut pos, mut remaining, mut count) = (0usize, size, 5);
+        while remaining > 0 {
+            if buf.get(pos).copied().unwrap_or(0) == 0 {
+                break;
+            }
+            if count == 0 {
+                break;
+            }
+            count -= 1;
+            let text = &buf[pos..];
+            let len = text.iter().position(|&c| c == 0).unwrap_or(text.len());
+            let step = len as i32 + 1;
+            let path = String::from_utf8_lossy(&text[..len]).into_owned();
+            // 0x485980 (EBX = 0, flags 0), then GetFileAttributesA != -1.
+            if Setup::text_length(text, size as u32, remaining as u32, false, false) != 0 && std::path::Path::new(&path.replace('\\', "/")).exists() {
+                if let Some(i) = self.create.nodes.iter().position(|n| n.path.eq_ignore_ascii_case(&path)) {
+                    // 0x4a6a30 found it: unlinked and added last.
+                    let mut n = self.create.nodes.remove(i);
+                    n.flags |= 0x10;
+                    self.create.nodes.push(n);
+                } else {
+                    // 0x40c530 (the last '\\'; here '/' too); 0x4a6a70 with the folder, EBX the
+                    // file name: the path is the folder, a '\\' and the name.
+                    let (dir, name) = match path.rfind(['\\', '/']) {
+                        Some(k) => (&path[..k], &path[k + 1..]),
+                        None => (path.as_str(), path.as_str()),
+                    };
+                    let full = if path.contains(['\\', '/']) { path.clone() } else { format!("{dir}\\{name}") };
+                    self.create.nodes.push(MapNode {
+                        flags: 0x14,
+                        path: String::from_utf8_lossy(&sstr(full.as_bytes(), 0x104)).into_owned(),
+                        name: sstr(name.as_bytes(), 0x104),
+                        disp: sstr(name.as_bytes(), 0x41),
+                        ..Default::default()
+                    });
+                }
+            }
+            pos += step as usize;
+            remaining -= step;
+        }
+    }
+
+    /// 0x4a7210 (`idx` the map's node, EAX): the recent maps of the registry are added to the
+    /// list, the node goes first with the flag 0x10, and the paths of the first 5 maps with
+    /// that flag are saved as "Recent Maps" (Ordinal_424, 0x80).
+    fn save_recent_maps(&mut self, idx: usize) {
+        let Some(path) = self.create.nodes.get(idx).map(|n| n.path.clone()) else { return };
+        self.add_recent_nodes();
+        if let Some(i) = self.create.nodes.iter().position(|n| n.path.eq_ignore_ascii_case(&path)) {
+            let mut n = self.create.nodes.remove(i);
+            n.flags |= 0x10;
+            self.create.nodes.insert(0, n);
+        }
+        let mut out = Vec::new();
+        let mut count = 0;
+        for n in self.create.nodes.iter().filter(|n| n.flags & 4 != 0 && n.flags & 0x10 != 0) {
+            if count == 5 {
+                break;
+            }
+            count += 1;
+            out.extend_from_slice(&sstr(n.path.as_bytes(), 0x104));
+            out.push(0);
+        }
+        if count != 0 {
+            // The string ends with one more NUL.
+            out.push(0);
+            registry::save_data("Recent Maps", &out);
+        }
+    }
+
+    /// 0x4ae320: the game speed of last time (the registry's "Game Speed", a gluAll.tbl
+    /// string 85 .. 91 of the speed 0 .. 6, compared without case): its index, else 3.
+    fn saved_game_speed(&self) -> u8 {
+        let Some(v) = registry::load_string("Game Speed", 0x80) else { return 3 };
+        (0..7u8).find(|&i| self.glu(85 + i as usize).as_bytes().eq_ignore_ascii_case(&v)).unwrap_or(3)
+    }
+
+    /// 0x4ae3c0 (`speed`, the slider's value +0x3a): saves the name of the game speed as
+    /// "Game Speed" (Ordinal_425).
+    fn save_game_speed(&self, speed: i16) {
+        if (0..7).contains(&speed) {
+            registry::save_string("Game Speed", self.glu(85 + speed as usize).as_bytes());
+        }
+    }
+
     /// 0x4a73c0 (`param`, the folder 0x59bb70, `name` the row to select): list the folder and
     /// add a row per node (the callback 0x4adee0: flags 3, the node as data); the row of
     /// the node called `name`, else of the first map, else row 0 (0xff when empty).
@@ -722,7 +815,7 @@ impl Glue {
         if param & 0x10 == 0 {
             self.scan_dir(param);
         } else {
-            todo_port!("0x4a6ee0", "the recent maps list of the registry");
+            self.add_recent_nodes();
         }
         let rows: Vec<(Vec<u8>, u32)> = self.create.nodes.iter().enumerate().map(|(i, n)| (n.disp.clone(), (n.flags as u32) << 24 | i as u32)).collect();
         let mut row_of = Vec::new();
@@ -1122,7 +1215,9 @@ impl Glue {
         if count == 0 {
             return false;
         }
-        if let Some(v) = self.create.prefs.get("Custom Type").cloned() {
+        // The registry value "Game Type" (a network game) or "Custom Type" (Ordinal_422, 0x20 bytes).
+        let key = if self.setup.multiplayer { "Game Type" } else { "Custom Type" };
+        if let Some(v) = registry::load_string(key, 0x20) {
             if self.find_text(ids::GAME_TYPE, &v) != 0xff {
                 return true;
             }
@@ -1246,7 +1341,7 @@ impl Glue {
         if count == 0 {
             return;
         }
-        if let Some(v) = self.create.prefs.get("Game Subtype").cloned() {
+        if let Some(v) = registry::load_string("Game Subtype", 0x20) {
             if self.find_text(ids::SUBTYPE, &v) != 0xff {
                 return;
             }
@@ -1379,7 +1474,7 @@ impl Glue {
                 let key = if self.setup.multiplayer { "Game Type" } else { "Custom Type" };
                 let text = self.cctl(cid).and_then(|c| c.list.as_ref()).and_then(|l| l.items.get(l.sel as usize)).map(|i| i.0.clone());
                 if let Some(t) = text {
-                    self.create.prefs.insert(key, t);
+                    registry::save_string(key, &t);
                 }
                 self.game_type_changed();
             }
@@ -1387,7 +1482,7 @@ impl Glue {
                 // 0x4ad400 (its code 1) remembers the text ("Game Subtype").
                 let text = self.cctl(cid).and_then(|c| c.list.as_ref()).and_then(|l| l.items.get(l.sel as usize)).map(|i| i.0.clone());
                 if let Some(t) = text {
-                    self.create.prefs.insert("Game Subtype", t);
+                    registry::save_string("Game Subtype", &t);
                 }
                 if let Some(d) = self.csel_data(cid) {
                     self.create.sub = d;
@@ -1614,7 +1709,7 @@ impl Glue {
         if !self.create_game(&d) {
             return -0x7fff_fff9;
         }
-        todo_port!("0x4a7210", "put the map first in the recent maps list of the registry");
+        self.save_recent_maps(idx);
         0
     }
 

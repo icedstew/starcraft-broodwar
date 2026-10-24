@@ -41,6 +41,85 @@ impl Default for Settings {
     }
 }
 
+/// 0x519f68 (16 entries read by 0x4206a0): kind 1 a number in `lo..=hi` (else `def`) or kind 2
+/// a flag bit `mask` of 0x6cdfec, and the registry value name; the targets are 0x6cdfd4..
+const OPTION_TABLE: [(u8, &str, u32, u32, u32, u32); 16] = [
+    (1, "speed", 0, 6, 4, 0),
+    (1, "mscroll", 0, 6, 3, 0),
+    (1, "kscroll", 0, 6, 3, 0),
+    (1, "m_mscroll", 0, 6, 3, 0),
+    (1, "m_kscroll", 0, 6, 3, 0),
+    (1, "music", 0, 100, u32::MAX, 0),
+    (1, "sfx", 0, 100, u32::MAX, 0),
+    (1, "tipnum", 0, u32::MAX, 0, 0),
+    (2, "intro", 0, 0, 1, 0x200),
+    (2, "introX", 0, 0, 1, 0x800),
+    (2, "unitspeech", 0, 0, 1, 1),
+    (2, "unitnoise", 0, 0, 1, 2),
+    (2, "bldgnoise", 0, 0, 1, 4),
+    (2, "tip", 0, 0, 1, 0x100),
+    (2, "trigtext", 0, 0, 0, 0x400),
+    (2, "usechatcolors", 0, 0, 1, 0x1000),
+];
+
+impl Settings {
+    /// The settings at the start: the defaults (0x420640), then the registry values
+    /// (0x4206a0, the "Starcraft" key), the options of 0x480c20 and the CPUThrottle of
+    /// 0x481cf0. 1.16.1 never writes these values itself; they are set outside the game.
+    pub fn load() -> Settings {
+        let mut s = Settings::default();
+        s.read_table();
+        s.read_options();
+        if let Some(v) = crate::saveload::registry::load_value("CPUThrottle") {
+            // 0x481cf0
+            s.cpu_throttle = v != 0;
+        }
+        s
+    }
+
+    /// 0x4206a0: each entry of 0x519f68 that has a registry value: a number out of its range
+    /// becomes the entry's default (-1 for the volumes: 0x4bc450 sets 25 / 50 then, the
+    /// defaults here); a flag is set or cleared by the value being nonzero.
+    fn read_table(&mut self) {
+        for &(kind, name, lo, hi, def, mask) in OPTION_TABLE.iter() {
+            let Some(mut v) = crate::saveload::registry::load_value(name) else { continue };
+            if kind == 1 {
+                if v < lo || hi < v {
+                    v = def;
+                }
+                match name {
+                    "speed" => self.game_speed = v as i16,
+                    "mscroll" => self.mouse_scroll = v as i16,
+                    "kscroll" => self.key_scroll = v as i16,
+                    // 0x6cdff0 / 0x6cdff4 (the network game's scrolling) are not kept.
+                    "music" if v != u32::MAX => self.music = v as i16,
+                    "sfx" if v != u32::MAX => self.digital = v as i16,
+                    "tipnum" => self.tip = v as i16,
+                    _ => {}
+                }
+            } else if v == 0 {
+                self.sound_flags &= !mask;
+            } else {
+                self.sound_flags |= mask;
+            }
+        }
+    }
+
+    /// 0x480c20: Gamma (60 ..= 140, else 100), ColorCycle (default 1) and UnitPortraits
+    /// (default 2, at most 2). The portrait refresh it ends with (wire_type,
+    /// unit_portrait, show_talking) runs only while a game has its portrait (0x68ac98,
+    /// 0x597248), which the callers here do not have.
+    pub fn read_options(&mut self) {
+        use crate::saveload::registry::load_value;
+        if let Some(v) = load_value("Gamma") {
+            self.gamma = if (60..=140).contains(&v) { v as i16 } else { 100 };
+        }
+        self.color_cycling = load_value("ColorCycle").unwrap_or(1) != 0;
+        self.portraits = load_value("UnitPortraits").unwrap_or(2).min(2) as i16;
+        crate::todo_port!("0x480c20", "the portrait refresh (wire_type, unit_portrait, show_talking) of a running game");
+    }
+}
+
 /// Where the saves live: the inputs of 0x4ce5b0 / 0x4cee60 (the caller sets them once with
 /// `set_save_env`; the defaults list nothing).
 #[derive(Clone, Debug)]
