@@ -70,7 +70,7 @@ impl Settings {
         let mut s = Settings::default();
         s.read_table();
         s.read_options();
-        if let Some(v) = crate::saveload::registry::load_value("CPUThrottle") {
+        if let Some(v) = crate::registry::load_value("CPUThrottle") {
             // 0x481cf0
             s.cpu_throttle = v != 0;
         }
@@ -82,7 +82,7 @@ impl Settings {
     /// defaults here); a flag is set or cleared by the value being nonzero.
     fn read_table(&mut self) {
         for &(kind, name, lo, hi, def, mask) in OPTION_TABLE.iter() {
-            let Some(mut v) = crate::saveload::registry::load_value(name) else { continue };
+            let Some(mut v) = crate::registry::load_value(name) else { continue };
             if kind == 1 {
                 if v < lo || hi < v {
                     v = def;
@@ -110,7 +110,7 @@ impl Settings {
     /// unit_portrait, show_talking) runs only while a game has its portrait (0x68ac98,
     /// 0x597248), which the callers here do not have.
     pub fn read_options(&mut self) {
-        use crate::saveload::registry::load_value;
+        use crate::registry::load_value;
         if let Some(v) = load_value("Gamma") {
             self.gamma = if (60..=140).contains(&v) { v as i16 } else { 100 };
         }

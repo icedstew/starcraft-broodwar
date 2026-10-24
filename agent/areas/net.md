@@ -179,6 +179,16 @@ PRED_LIMIT stalls, ~30% more ticks); tl2071 INVALID (a command at frame 0 < dela
   headless processes each play one replay player's commands as local input over real
   QUIC on localhost; final hashes must equal straight playback (the nettest check
   across processes).
+- **3a done** (`src/net/transport.rs`, `src/net/netrep.rs`; native only): wtransport 0.7.2
+  (ring backend, no cmake/nasm) + tokio 1.48 current-thread runtime on a `net` thread;
+  star topology, host also plays; per-run self-signed cert pinned by SHA-256 (`addr#hash`).
+  Lobby = Hello/Start on a reliable bi stream; turns = redundant datagrams with acks (wire
+  format in the transport.rs module doc). `scbw netrep <rep> all [port] [delay]` spawns a
+  host + one `join` per other player and prints MATCH only if every peer's hash equals
+  straight playback (exit code 1 otherwise); manual: `netrep <rep> host <port> [delay]`,
+  `netrep <rep> join <addr#hash> <map player> [delay]`. `NETREP_DEBUG=1` prints progress.
+  Needs delay >= 1. Short 2-player replays take ~10 s wall. Gotcha: events delivered with
+  or before Start must all be applied (turns are not redelivered).
 - 3b: live game: frame loop drives `Session::tick` instead of `turn_tick` + step, turns
   keep flowing while a menu is open; game start from the received GameSetup.
 - 3c: minimal lobby (host: map, slots; join: address field), LAN broadcast discovery.

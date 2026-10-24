@@ -381,7 +381,7 @@ impl Glue {
         let glu_all = if glu_all_raw.is_empty() { Vec::new() } else { crate::dat::parse_tbl(&glu_all_raw) };
         // The registry values (Storm's; src/registry.rs) are in the exe dir with the saves.
         let setup = Setup::default();
-        crate::saveload::registry::init(setup.characters_dir.parent().unwrap_or(std::path::Path::new("")));
+        crate::registry::init(setup.characters_dir.parent().unwrap_or(std::path::Path::new("")));
         Glue {
             state: state::GLUE,
             screen: screen::MAIN,

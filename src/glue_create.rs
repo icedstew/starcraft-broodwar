@@ -10,7 +10,7 @@
 use super::{Glue, Open};
 use crate::dlg::{flag, Ctl, Dialog, Icon, Update};
 use crate::grp::Grp;
-use crate::saveload::registry;
+use crate::registry;
 use crate::setup::{slot, sstr_copy, MapHeader, Setup, Slot};
 use crate::storage::Storage;
 use crate::todo_port;

@@ -4,6 +4,7 @@ mod audio;
 mod chat;
 mod bw;
 mod saveload;
+mod registry;
 mod setup;
 mod storage;
 mod storm;
@@ -607,6 +608,34 @@ fn main() -> std::io::Result<()> {
             let n = |i: usize, d: u32| args.get(i).and_then(|v| v.parse().ok()).unwrap_or(d);
             view::prepare_replay(&mut a, &r);
             println!("{}", net::nettest(&a, &r, n(2, 2), n(3, 3), n(4, 2))?);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        Some("netrep") => {
+            // netrep <rep> host <port> [delay] | join <addr#hash> <map player> [delay] | all [port] [delay]:
+            // the nettest check across processes over QUIC (src/net/netrep.rs).
+            let n = |i: usize, d: u32| args.get(i).and_then(|v| v.parse().ok()).unwrap_or(d);
+            let mode = args.get(2).map(|s| s.as_str()).unwrap_or("");
+            if mode == "all" {
+                let (report, ok) = net::netrep::run_all(&args[1], n(3, 0) as u16, n(4, 2))?;
+                println!("{report}");
+                if !ok {
+                    std::process::exit(1);
+                }
+            } else {
+                let mut a = view::Assets::load(files)?;
+                let r = replay::Replay::parse(&std::fs::read(&args[1])?)?;
+                view::prepare_replay(&mut a, &r);
+                let (role, delay) = match mode {
+                    "host" => (net::netrep::Role::Host { port: n(3, 0) as u16 }, n(4, 2)),
+                    "join" => (net::netrep::Role::Join { target: &args[3], player: n(4, 0) as u8 }, n(5, 2)),
+                    _ => return Err(std::io::Error::other("netrep <rep> host <port> | join <addr#hash> <player> | all").into()),
+                };
+                let line = net::netrep::run_peer(&a, &r, delay, role)?;
+                println!("{line}");
+                if !line.starts_with("MATCH") {
+                    std::process::exit(1);
+                }
+            }
         }
         Some("reprecord") => {
             // reprecord <in.rep> <out.rep>: play the replay headless with the recorder on

@@ -20,3 +20,9 @@ js-sys = "0.3.106"
 wasm-bindgen = "0.2.129"
 web-sys = { version = "0.3.106", features = ["Window", "Performance", "console", "Document", "Element", "EventTarget", "KeyboardEvent"] }
 console_error_panic_hook = "0.1"
+
+# Native networking (src/net/transport.rs): WebTransport over QUIC, ring crypto backend
+# (no cmake/nasm), a tokio runtime on a thread.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+wtransport = { version = "=0.7.2", default-features = false, features = ["ring", "self-signed", "dangerous-configuration"] }
+tokio = { version = "=1.48.0", features = ["rt", "net", "time", "sync", "macros"] }

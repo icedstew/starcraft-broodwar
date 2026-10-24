@@ -9,6 +9,11 @@
 
 use crate::{bw, replay, view};
 
+#[cfg(not(target_arch = "wasm32"))]
+pub mod netrep;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod transport;
+
 /// Frames a peer may simulate past the first frame with a missing turn.
 pub const PRED_LIMIT: u32 = 8;
 
@@ -150,10 +155,24 @@ impl Session {
     }
 }
 
-/// `scbw nettest`: one `Session` per replay player in one process, each with the others'
-/// turns arriving over a simulated link (`latency` ticks plus a pseudo-random 0..=jitter);
-/// every final state must equal a straight playback's. Returns the result lines.
-pub fn nettest(a: &view::Assets, r: &replay::Replay, delay: u32, latency: u32, jitter: u32) -> std::io::Result<String> {
+/// What a replay-driven net test needs: the players, each one's recorded turn per frame
+/// and the straight playback's final hash.
+pub struct Plan {
+    pub end: u32,
+    /// (map player, storm id) of every player.
+    pub players: Vec<(u8, u8)>,
+    /// Per player (as `players`), the commands of each frame, concatenated.
+    pub turns: Vec<Vec<Vec<u8>>>,
+    /// Commands of owners that are not players, or past the end.
+    pub dropped: usize,
+    /// The state before frame 0.
+    pub start: bw::State,
+    /// The straight playback's final state hash.
+    pub want: u64,
+}
+
+/// Build the `Plan`; `Err` is an INVALID message (a command before `delay`).
+pub fn plan(a: &view::Assets, r: &replay::Replay, delay: u32) -> std::io::Result<Result<Plan, String>> {
     let end = r.header.frames;
     let players: Vec<(u8, u8)> =
         r.header.slots.iter().filter(|s| s.kind == 1 || s.kind == 2).map(|s| (s.slot_id as u8, s.player_id)).collect();
@@ -166,7 +185,7 @@ pub fn nettest(a: &view::Assets, r: &replay::Replay, delay: u32, latency: u32, j
             continue;
         };
         if c.frame < delay {
-            return Ok(format!("INVALID: a command of player {} at frame {} < delay {delay}", c.owner, c.frame));
+            return Ok(Err(format!("INVALID: a command of player {} at frame {} < delay {delay}", c.owner, c.frame)));
         }
         turns[i][c.frame as usize].extend_from_slice(&c.data);
     }
@@ -185,6 +204,17 @@ pub fn nettest(a: &view::Assets, r: &replay::Replay, delay: u32, latency: u32, j
         straight.step();
     }
     let want = straight.st.state_hash();
+    Ok(Ok(Plan { end, players, turns, dropped, start, want }))
+}
+
+/// `scbw nettest`: one `Session` per replay player in one process, each with the others'
+/// turns arriving over a simulated link (`latency` ticks plus a pseudo-random 0..=jitter);
+/// every final state must equal a straight playback's. Returns the result lines.
+pub fn nettest(a: &view::Assets, r: &replay::Replay, delay: u32, latency: u32, jitter: u32) -> std::io::Result<String> {
+    let Plan { end, players, turns, dropped, start, want } = match plan(a, r, delay)? {
+        Ok(p) => p,
+        Err(m) => return Ok(m),
+    };
     let mut scenes = Vec::new();
     let mut sessions = Vec::new();
     for &(p, _) in &players {

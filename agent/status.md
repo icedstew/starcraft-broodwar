@@ -25,6 +25,12 @@ frontier is now `--missing rest` (every unported in-scope function, ported calle
 dialog procs, tables and other indirect calls the reachability misses).
 2026-10-23 (dump rebuilt on Windows, tools.md "Rebuilding the dump"; reachable sets equal
 the old dump's): all functions 2758/4644 ported, in scope 2742/4494, `--missing rest` 771.
+2026-10-24: all 2817/4644, in scope 2801/4494. Every frontier.tsv row now has a verdict
+(the 278 "later" ones triaged 2026-10-24); left: 265 wait-net, ~30 partial (notes say what),
+4 unsure. Ported 10-24: waves 1-2, replay vision dialog, registry stand-in
+(src/registry.rs: settings / recent maps / game type; 1.16.1 never writes the options),
+old-version map chunks UNIS / UPGS / TECS / UPGR / PTEC (VER 0x3b / 0x3f lists), dialog
+fallback, screenshots (ScrollLock), unit speech mute triggers, old bullet records.
 2026-10-23 triage of those 771: agent/frontier.tsv (addr, area, purpose, verdict, notes;
 our notes only). Areas sim / hud / glue (362) triaged by Haiku, every equivalent /
 not-needed / unsure checked by Sonnet. Work list: 5 fix (Rust differs: trigger give unit
@@ -74,8 +80,10 @@ Delegate per agents.md: Haiku triage, Sonnet porting, Opus review / hard RE / co
   turn (`State::send_command` 0x485bd0), `Scene::turn_tick` dispatches them one frame
   later (measured in 1.16.1: sent at f, run at f + 1). Phase 2 done: `net::Session`
   (rollback engine) and `scbw nettest`: 20 runs over 10 replays (2-3 players, delay /
-  latency / jitter 2/3/2 and 1/8/6) all MATCH straight playback. Next: phase 3a, QUIC
-  transport (wtransport) and `scbw netrep` across processes (net.md "Phase 3 plan").
+  latency / jitter 2/3/2 and 1/8/6) all MATCH straight playback. Phase 3a done (2026-10-24):
+  src/net/transport.rs (wtransport 0.7.2 + tokio, localhost, cert pinned by hash) and
+  `scbw netrep <rep> all [port] [delay]` (host + joins as processes): 3 replays x delay 2 / 3
+  MATCH (~10 s each); 3+ player relay untested. Next: phase 3b (live game over a Session).
   2026-10-23, moved to a Windows box (16 cores; no wine harness yet): ShieldBattery
   cloned for reference (`reference/shieldbattery`, fba29b3, next to the repo).
   New replay set (user: >= 200, >= 50 games per race, dated while 1.16.1 was live):
@@ -244,6 +252,8 @@ Delegate per agents.md: Haiku triage, Sonnet porting, Opus review / hard RE / co
 
 ## Next steps
 
+0. Next session: phase 3b (net.md); netsuite long replays (re/netsuite.py resumes; 62 of 180
+   long runs MATCH so far, 0 non-MATCH); the 10-18 user reports below; the partial rows.
 1. Re-run `agent/tools/aistress.sh 25000 <seed> agent/local/tgt/debug/scbw` with new
    seeds / longer; fix what it finds. Then 0x4a6250 and the glue event procs.
 2. Glue -> game start (0x4d3fc0 then state START into view.rs), score, ready rooms.
