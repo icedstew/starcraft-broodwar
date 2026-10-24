@@ -67,7 +67,11 @@ public class DumpAll extends GhidraScript {
             List<Function> all = new ArrayList<>(funcs);
             for (int i = 0; i < all.size() && !monitor.isCancelled(); i += batch) {
                 List<Function> chunk = all.subList(i, Math.min(all.size(), i + batch));
-                for (String s : ParallelDecompiler.decompileFunctions(cb, chunk, monitor)) {
+                // Results come back in completion order; sort by the fixed-width address header
+                // so repeated dumps are identical.
+                List<String> res = new ArrayList<>(ParallelDecompiler.decompileFunctions(cb, chunk, monitor));
+                Collections.sort(res);
+                for (String s : res) {
                     w.println(s);
                 }
                 w.flush();

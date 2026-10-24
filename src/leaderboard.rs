@@ -4,8 +4,23 @@
 //! labels draw through 0x4be3d0, the player boxes through 0x4be370 and the two icons
 //! through 0x4be280.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use crate::ui::{TextDst, TextOpts, Ui};
 use crate::view::{blit_frame, Scene, SCREEN_H, SCREEN_W};
+
+/// 0x597288: all rows shown (1, set when 0x4bed70 creates the dialog) or only the first.
+static ALL_ROWS: AtomicBool = AtomicBool::new(true);
+
+/// 0x4bec00 (the leaderboard key): toggles 0x597288 and refills the rows (the next `draw`).
+pub fn toggle_rows() {
+    ALL_ROWS.fetch_xor(true, Ordering::Relaxed);
+}
+
+/// 0x4bed70 sets 0x597288 := 1 when it creates the dialog.
+pub fn reset_rows() {
+    ALL_ROWS.store(true, Ordering::Relaxed);
+}
 
 /// 0x4be3d0: a label's text, left and vertically centered in its rect, color 7.
 fn label(ui: &Ui, id: i16, text: &[u8], out: &mut [u8]) {
@@ -53,8 +68,9 @@ pub fn draw(scene: &Scene, ui: &Ui, out: &mut [u8]) {
     if !exists(scene) {
         return;
     }
-    // 0x597288 (the key 0x4bec00 toggles it) starts at 1: all rows are shown.
-    let rows: Vec<(usize, u32, u32)> = st.trig.leaderboard_table.iter().enumerate().filter(|(_, r)| r.0 != crate::bw::leaderboard::NO_PLAYER).map(|(i, r)| (i, r.0, r.1)).collect();
+    // 0x4be670 / 0x4be860: only the first row while 0x597288 (`toggle_rows`) is 0.
+    let all = ALL_ROWS.load(Ordering::Relaxed);
+    let rows: Vec<(usize, u32, u32)> = st.trig.leaderboard_table.iter().enumerate().filter(|(i, r)| (*i == 0 || all) && r.0 != crate::bw::leaderboard::NO_PLAYER).map(|(i, r)| (i, r.0, r.1)).collect();
     for &(i, p, v) in &rows {
         let i = i as i16;
         color_box(ui, -10 - i, scene.minimap.player_colors[p as usize & 7], out);

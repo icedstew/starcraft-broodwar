@@ -225,9 +225,15 @@ pub struct State {
     /// Watching a replay: 0x6cdfd4 game speed (0..=6), 0x50e058 speed multiplier,
     /// 0x6d11b0 paused, 0x6d0f31 the replay's length in frames.
     pub replay_speed: u8,
+    /// 0x6cdfd4 outside replays: the game speed the speed command 0x0f (0x4bf7f0) set; the view
+    /// copies it to its settings.
+    pub game_speed: u8,
     pub replay_mult: u8,
     pub replay_paused: bool,
     pub replay_frames: u32,
+    /// 0x51ce90 == 5 (set by command 0x08, 0x4bfb10): the game loop (0x6d11ec) ends and the
+    /// glue starts the mission again.
+    pub game_restart: bool,
     /// 0x58d700: a player's game result once settled (2 defeated / left, 3 victorious,
     /// 4 ignored, 5 draw).
     pub player_left: [u8; 12],
@@ -562,9 +568,11 @@ impl State {
             trig: Default::default(),
             ai: Default::default(),
             replay_speed: 6,
+            game_speed: 4,
             replay_mult: 1,
             replay_paused: false,
             replay_frames: 0,
+            game_restart: false,
             dead_removal_counter: 0,
             lurker_hits: [[0; 0x20]; 0x20],
             lurker_hits_count: 0,

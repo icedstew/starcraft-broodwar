@@ -1,0 +1,777 @@
+# 1.16.1 functions still to port (coverage.py --missing rest, 2026-10-23), by area. Our notes only (no decompile).
+# addr	area	purpose	verdict	notes
+# area: sim hud glue net gfx sys map audio data replay saveload ai unknown (first pass by Haiku, from strings/callees/decompile)
+# verdict: ported | port | fix (Rust differs: must change) | partial (Rust covers part; notes say what is missing) | fixed | equivalent | replaced (Rust-native by design) | not-needed (dead / plumbing) | persist (settings / MRU saving) | unsure | wait-net (multiplayer, decided with our networking) | later (area not triaged yet)
+# triaged 2026-10-23 (Haiku: sim, hud, glue); equivalent / not-needed / unsure checked by Sonnet (notes start with 'checked:')
+0x424ba0	hud	status panel buttons for transported units	equivalent	checked: confirmed: src/statdata.rs:537 transport_panel | Size passes 4,2,1 over 8 slots, id bases and increments (>>2,>>1,1), bg 0x11/0xf/0xd +parasite 0xc, hero and hallucination bgs all match; unused controls simply not emitted. || triage: small; Rust statdata.rs:537 transport_panel (documented 0x424ba0). Callers draw_replay_panel and supply/transport paths; view.rs:1468 uses it.
+0x425ec0	hud	selected unit name via morph-name lookup (replays)	fixed	2026-10-23 wave 1 (reviewed vs asm) || checked: mismatch: Panel name label -5 should be unit_morph_name (0x47b5a0): incomplete unit whose queue head is 0x84/0x85/0x89/0x90/0x92 shows the target's name. statdata.rs:481 uses unit_type; fix to unit_morph_name (statdata.rs:260). Visible in replays. || triage: trivial; Rust unit_panel name (statdata.rs:481) uses unit_type, not unit_morph_name (statdata.rs:260). Differs only for morphing units. Decide by checking whether replay panel can show morphing units.
+0x425ee0	hud	hide panel controls, then morph-name display	fixed	2026-10-23 wave 1 (reviewed vs asm) || checked: mismatch: Same name call as 0x425ec0 after hiding children; same fix at statdata.rs:481. || triage: small; Table entry in .data 0x5193a0 row 4 (draw proc). Same morph-name vs unit_type question as 0x425ec0 (statdata.rs:260 vs 481). Rust per-frame model replaces the hide loop.
+0x426190	hud	resources left line in unit panel	equivalent	checked: confirmed: src/statdata.rs:439-446 | Mineral type 0xb0-0xb2 uses stat 0x31c with amount; others 0x31e when zero else 0x31d; same "%s %d" text in label -11. || triage: trivial; Rust statdata.rs:439-446 (label -11, "%s %d" with stat_txt 0x31c/0x31d/0x31e). Called from supply_panel (ported statdata.rs:139).
+0x426ff0	hud	Nuclear Silo panel: nuke build progress bar and label	ported	2026-10-23 wave 1 || checked: not-equivalent-port: src/statdata.rs:111 building_panel | Real 0x426ff0 is the Nuclear Silo (0x6c) nuke-in-production panel (called 0x42793e). Rust building_panel returns None for 0x6c, so no progress bar or label; claimed training_panel is 0x4268d0, a different function. || triage: medium; Rust statdata.rs:96 building_panel and statdata.rs:172 training_panel. The queue >0x69 test not traced line by line; verify before relying on it.
+0x4297b0	unknown	Binary search over sorted entries	later	
+0x44e1d0	glue	Battle.net port dialog proc	wait-net	medium; Opened by 44e390 (ref from 4ad190, network game setup). Ordinal_211 end, port state. No Rust equivalent; waits for networking.
+0x44e390	glue	Battle.net port dialog open	wait-net	small; Stores six dialog globals and opens the dialog with 44e1d0. Only caller 4ad190 (network game setup). Stack args, no register args.
+0x44e950	glue	Profile encrypt wrapper (IDEA block)	not-needed	checked: dead: No call/jmp/dword ref in any section; padded boundary. Profile save is plain (setup.rs:1114). || triage: trivial; Calls encrypt 0x44e550 (IDEA, chat.rs:37, network). No direct caller in dump, no absolute refs in exe: dead. Profile save is plain packed (setup.rs:1114).
+0x44eb20	glue	Battle.net port dialog destroy	wait-net	small; Frees port dialog state (gluBrfPort.cpp) then kill twice. Reached only through the dialog proc. No Rust port; networking waits.
+0x44ee40	glue	Battle.net port dialog ready handler	wait-net	trivial; Sets port state 2 and calls ready_44edb0; dialog pointer in EDI. Part of the Battle.net port dialog; networking waits.
+0x44eed0	glue	Battle.net port dialog helper	wait-net	trivial; Sets flag bit 1 at +0xc and installs ready_44ee80 via set(). Thiscall. Part of the Battle.net port dialog; networking waits.
+0x451760	net	Chat slot visibility toggle	wait-net	
+0x451940	net	Chat slot visibility toggle	wait-net	
+0x451aa0	net	Chat slot show and hide	wait-net	
+0x451d40	net	Chat slot switch handler	wait-net	
+0x451fb0	net	Chat slot switch handler	wait-net	
+0x452250	net	Open combo box for slot	wait-net	
+0x452460	net	Multiplayer dialog init	wait-net	
+0x452530	net	Delete profile files	wait-net	
+0x4525c0	net	Multiplayer dialog helper	wait-net	
+0x4525e0	net	Confirm dialog open	wait-net	
+0x452680	net	Multiplayer dialog helper	wait-net	
+0x4526d0	net	Multiplayer dialog helper	wait-net	
+0x452ab0	net	Load gateways list	wait-net	
+0x452f00	net	Battle.net gateway helper	wait-net	
+0x452f40	net	Battle.net gateway helper	wait-net	
+0x452f80	net	Battle.net gateway helper	wait-net	
+0x453020	net	Battle.net gateway config text	wait-net	
+0x453ae0	net	Battle.net gateway helper	wait-net	
+0x453dc0	net	Battle.net gateway helper	wait-net	
+0x454070	net	Battle.net gateway helper	wait-net	
+0x454090	net	Battle.net gateway helper	wait-net	
+0x4559c0	net	Battle.net click handler	wait-net	
+0x4568b0	net	Battle.net dialog show hide	wait-net	
+0x456a90	hud	load wireframe graphic game\twire.pcx	equivalent	checked: confirmed: src/ui.rs:579 (twire.pcx load) | Source only loads game\twire.pcx, fatal on failure; Rust reads it at UI init and errors if missing. || triage: trivial; Rust ui.rs:579-581 loads game/twire.pcx, grpwire.grp, tranwire.grp at init. Called from game init FUN_004c3bb0 (ported).
+0x456b00	hud	free two statdata buffers	replaced	trivial; Rust owns the Grp/pcx buffers in ui.rs:579-581; no free needed. Caller FUN_00458120 status dispatcher (ported).
+0x456ef0	hud	status dialog close: free stat buffers, credits close	replaced	small; Rust drops owned state at game teardown; credits close is glue_credits.rs:502. Caller FUN_004c3780 (game cleanup, not ported as such).
+0x456f50	hud	group selection wireframe draw with colors	equivalent	checked: confirmed: src/view.rs:2343-2363 | Frame 0x1f hallucinated, 0x13 hero, 0x19 parasited, else 0xd, then wireframe in colors; matches decompile. || triage: small; Rust view.rs:2343-2363 Show::GroupWire (frame, wireframe_colors, twire). Called via control callback from statdata dialog.
+0x4570a0	hud	passenger wireframe draw (tranwire) with colors	equivalent	checked: confirmed: src/view.rs:2331 Show::Cargo/Wireframe; src/ui.rs:692 wireframe_colors | Wireframe frame by wire type (0 past frame count) plus hp/shield/energy colour remap; live via dword ref at 0x457eb5. || triage: small; Rust view.rs:2331-2340 Show::Wireframe / Show::Cargo with ui::wireframe_colors. Callback set in dialog init (0x457eb5 region).
+0x457480	hud	enabled command button draw with frame	partial	wave 2: button_frame wired; status buttons have no pressed state (todo_port) | checked: partial: src/view.rs:2395 Show::Button -> stat_button | Row 3 enabled icon matches. Source bg frame is +0x24 plus 1 when flag 0x40000000 (pressed); Rust has no pressed variant for passenger buttons. || triage: trivial; Rust view.rs:2395 Show::Button -> stat_button(..., 3). Callback set at 0x457cb8 (FUN_00457ca0, ported dialog).
+0x457ca0	hud	Status button init: pick click/draw callbacks	replaced	trivial; Callback pick and 12-byte alloc; no caller in dump (dialog table). Port: statdata::click (statdata.rs:316), view.rs:2066-2069 stat_button draw order.
+0x458120	hud	Status panel dispatcher: show/hide group or unit panel	equivalent	checked: confirmed: src/view.rs:1460 status_panel | Immediate-mode choice of group/unit panel by selection; no selection shows nothing; same outcome as dispatcher. || triage: small; view.rs:1460 status_panel (group/transport/morph/building/unit); statdata.rs:99 cites 0x458120; StatCache refresh statdata.rs:606-651. Caller tick 0x4d93f0 is in view/palette.
+0x458220	hud	Status multi-select: shift/ctrl unit pick	ported	wave 2 2026-10-24 | checked: partial: src/view.rs:1566 GroupWire click | Shift drop, ctrl same-type keep, plain single pick match. Missing: Alt (0x596a2a) recent-group shortcut when result is one unit (recent_group_of), exe returns early to select the group. || triage: small; view.rs:1566-1572 GroupWire click: shift drops, ctrl keeps shown units of type. Reached via view.rs status click path.
+0x458570	hud	Load rez\statdata.bin and status dialog init	replaced	small; ui.rs:592 Dialog::parse(rez/statdata.bin) at load. Caller 0x4c3bb0 is in bw/select.rs. Rust-native file loading; no state needed.
+0x4586f0	hud	Free progress bar surfaces	replaced	trivial; Ordinal_403 frees pbar buffers; ui.rs:485-487 owns pbar_empty/pbar_full, freed on drop.
+0x458730	hud	Draw status progress bars by percent	equivalent	checked: confirmed: src/view.rs:2378 Show::Progress | Empty bar full width, full bar clipped to width*pct/100; same as source. || triage: trivial; view.rs:2378-2379 Show::Progress blits ui.pbar_empty/pbar_full; also view.rs:3934-3935. Callback-only, no caller in dump.
+0x458800	hud	Store command-card cost slots	equivalent	checked: confirmed: src/view.rs:2458-2470; src/statcmd.rs:7-16 | Pure store of 8 cost words into globals; port computes tooltip costs on demand with the same slots. || triage: small; Port computes costs on demand: view.rs:2458-2470 tooltip cost lines (minerals/gas/energy/supply); statcmd.rs:7-16 CmdTip cost array.
+0x458b30	hud	Status command hotkey: fire matching button	equivalent	checked: confirmed: src/view.rs:3288-3333 hot_chars loop | Lowercased typed char matched to first byte of enabled visible card button, fires button press (event 3); same as 0x417eb0 walk. || triage: small; view.rs:3288-3333 command card click/hotkey on enabled buttons; view.rs:2640-2642 hotkey byte from stat_txt. Dialog walk 0x417eb0 replaced by card iteration.
+0x458e70	hud	Hide status command panel	replaced	trivial; Panel hidden by view.rs:1460 status_panel returning None for no panel; command card drawn separately by view.rs (0x4591d0 comment at 1278).
+0x4596a0	hud	Load pbrempt/pbrfull progress bar PCX	replaced	trivial; ui.rs:594-595 pcx8 of game/<race>pbrempt.pcx and pbrfull.pcx at load.
+0x459ad0	hud	Status command redraw helper	replaced	trivial; Calls dialog-tree walk 0x418100 and status.cpp buffer blit 0x4c35f0; port draws the card directly (view.rs:1278 command card), no offscreen buffer.
+0x45a4a0	glue	Network map/user file lookup	wait-net	small; Opens a file through 4d2d10 (fatal on error) and returns a value. Callers 472c90 (maps\download name helper) and 45a520. Waits for network map transfer.
+0x45a520	glue	Network user file validity check	wait-net	trivial; Calls 45a4a0 and compares its value with arg+0x10. One absolute ref in exe, no other callers. Part of network map transfer; no Rust port.
+0x45a570	data	Find file by name	later	
+0x45a600	glue	Create user record from network message	wait-net	large; Case 1 of 4eafe0, reached from the Storm receive loop 470a30. Builds a list node, copies a 0x20-byte name, saves a file. setup.rs:1197 new_profile is only a local analogue.
+0x45b1d0	ai	Start AI script	later	
+0x45cc90	gfx	Clip rectangle to screen	later	
+0x45e360	gfx	Free image surfaces	later	
+0x45e400	unknown	Unknown helper	later	
+0x45e650	hud	Draw portrait: video frame and conover overlay	ported	wave 2 2026-10-24 | checked: partial: src/view.rs:2295 + src/portrait.rs:141 | Video then conover overlay done. Static (draw_static while DAT_0068ac9c<0x50) exists but is never called; the ponytail comment admits it is not ported. || triage: small; view.rs:2295 comment: video then conover.pcx over it; portrait.rs:141 draw_static and portrait.rs:252 draw.
+0x45ebc0	hud	Status portrait and talking update	ported	wave 2 2026-10-24 | checked: partial: src/view.rs:1544-1546; src/portrait.rs:210 | Hide on empty selection works; but original restarts portrait when a different unit is selected even with the same portrait; Rust show() only compares portrait id. || triage: small; view.rs:1544-1546 selection portrait update; portrait.rs:210-226 show/show_talking. Callers tick 0x4d93f0 and view.rs.
+0x45ec40	hud	Portrait talking timer and event handler	equivalent	checked: confirmed: src/portrait.rs:232 tick; src/view.rs:1480 portrait_tick | Event1 restarts video, event3 clears talking and shows selection portrait or hides; matches. Event2 frame-counter nudge is draw plumbing. || triage: small; portrait.rs:232-240 tick (video end replaced by new pick); view.rs:1480-1500 talk timer/portrait restore. Callers 0x45edd0 and 0x45efe0 are in bw/mod.rs and view.rs.
+0x45f800	sim	Count unit into trigger location snapshot	equivalent	checked: confirmed: src/bw/triggers.rs:1008 count_location_unit (0x45f800 block 1017-1028) | Same table 0x687c48[type*12+player], factory 0x20, men 8 or (not bldg 0x10 and types 0x24/0x3b/0x61), else bldg 0x10; branch order identical. Completed-count call is the 0x460980 caller. || triage: small; Rust triggers.rs:1008-1030 count_location_unit (0x460980 path): same per-player, factory, men, building counters. No FUN_ callers in dump.
+0x460b20	glue	Sound options switch handler (checkboxes)	equivalent	checked: confirmed: src/menu.rs:588 open / :1076 store | Ids 3..6 map to flags 1,2,4,0x400; ids 3..5 disabled with no sound device, id 6 not; Rust matches. || triage: trivial; menu.rs:588-598 Menu::open Kind::Sound sets checks; menu.rs:1076-1085 Menu::store writes sound_flags bits 1, 2, 4, 0x400.
+0x460bb0	glue	Sound options range setter (sliders)	equivalent	checked: confirmed: src/menu.rs:588-600 | Sliders 1,2 ranged 0..100; ids 1,2 disabled without sound device. || triage: trivial; menu.rs:588-600 Menu::open Kind::Sound: sliders 1 and 2 range 0..100 via slider() at menu.rs:783; ids 1..5 disabled when ctx.no_sound.
+0x460d40	glue	Dialog control event-proc binder wrapper	replaced	trivial; Calls 0x418100, which binds each control event proc from a table. Rust dispatches by (Kind, id) in Menu::on_activate (menu.rs:1261). No callers in dump.
+0x460dd0	glue	Sound/speed/video Cancel: restore and back	equivalent	checked: confirmed: src/menu.rs:1319-1330 on_activate Speed/Sound/Video -3 | Cancel restores saved settings (store), depth>1 goes back to Options else closes; matches 0x4c9780 plus depth logic. || triage: trivial; menu.rs:1316-1330 Menu::on_activate (Speed/Sound/Video, -3): restores saved Settings, back to Options (0x4ca0a0) or closes.
+0x461020	audio	Play menu sound file	later	
+0x461160	glue	Victory/defeat dialog open and setup	ported	wave 2 2026-10-24 | checked: partial: src/menu.rs:616-625 Menu::open (Victory) | Source picks -0x14/-0x15/-0x17 by multiplayer, team result (0x581d61==2), outcome 3, replay texts 0xb5/0xbc. Rust hides -0x15/-0x17 always, -0x14 only if !mp; mp/replay/outcome variants missing. || triage: medium; menu.rs:616-625 Menu::open (Defeat/Victory): buttons and 20 s defeat timer. Outcome music in glue.rs:57 music_track. Its "sound\%s" cue is dead: DAT_0068daf4 is never written.
+0x461760	glue	Format string from .tbl by index	equivalent	checked: confirmed: src/setup.rs:266 tbl_str; src/menu.rs:145 | 1-based index 0 gives null, out-of-range gives empty string, then fmt_s; Rust 0-based empty fallback matches. || triage: trivial; setup.rs:266 tbl_str (0-based .tbl string, "" when out of range), menu.rs:145 sprintf_s, glue_create.rs:263 fmt_s.
+0x461940	net	Send chat message	wait-net	
+0x461a30	glue	Load dialog Load / Previous handler	equivalent	checked: confirmed: src/menu.rs:1196-1205 save_activate | -2 loads selected save (0x4619a0); -3 back to game menu when depth>1 else close; matches. || triage: trivial; menu.rs:1196-1205 Menu::save_activate: -2 loads the chosen save; -3 returns to the game menu (0x4ca450) or closes.
+0x461ae0	glue	Save/load dialog destroy: keep selection	equivalent	checked: confirmed: src/menu.rs:1205-1215 save_activate tail | Selected row (0xff if no rows) kept, edit text kept with trailing spaces trimmed, list cleared. || triage: small; menu.rs:1205-1215 Menu::save_activate tail: row kept in g.sel, typed name kept (trimmed), saves list cleared.
+0x461c20	glue	Save-name edit key handler	equivalent	checked: confirmed: src/menu.rs:type_char (~1060) | Bad-char table network.tbl 0x11, length cap 0x1a, no leading space, backspace allowed, OK enabled by text, list selection cleared; matches. || triage: small; menu.rs:997 Menu::key_down (edit characters, length limit, no leading space) and menu.rs:1104 Menu::key cover the same rules.
+0x461d80	glue	Save/load list fill and button state	equivalent	checked: confirmed: src/menu.rs:642-665 Menu::open SaveGame/LoadGame | Rows added then layout; Load(-2) disabled with no rows; Delete(3) enabled only if row selected (delete_state). Matches. || triage: small; menu.rs:642-656 Menu::open (SaveGame/LoadGame): list rows from saves, Delete and Load disabled with no saves, edit initialised.
+0x461e50	sys	Wait-loop polling with tick	later	
+0x461ed0	glue	Save/load dialog init	equivalent	checked: confirmed: src/menu.rs:634-675 Menu::open SaveGame/LoadGame | Saves read, list filled, delete state set, edit gets typed name else selected row; same select/edit_set condition as source. || triage: small; menu.rs:634-641 Menu::open: read saves via read_saves (0x4cfd90 with 0x461800), fill list and edit. Rust reads network.tbl with files.read.
+0x4622a0	glue	Message popup with OK/Cancel and text	equivalent	checked: confirmed: src/menu.rs:1129 Menu::popup | Format string by 1-based tbl index then okcancel.bin popup; same text handling. || triage: trivial; menu.rs:1129 Menu::popup (Kind::OkCancel) with text via sprintf_s/tbl_str; rez/okcancel.bin also used at glue.rs:192 and glue_score.rs:910.
+0x46a620	unknown	Store byte field	later	
+0x46c9c0	hud	Briefing: show skip controls	equivalent	checked: confirmed: src/glue_ready.rs:523-530 | Shows controls 0x13 and -0xd (SKIP, SKIP_PIC) exactly; caller 0x427ea0 condition ported. || triage: trivial; glue_ready.rs:523-530 action 9 shows SKIP and SKIP_PIC when single player with map_dir_flag.
+0x46d200	audio	Music fade out and in	later	
+0x46e740	sys	Checksum or bytecode loop	later	
+0x46eef0	unknown	Adjust clip region	later	
+0x46efa0	net	Reset game start state	wait-net	
+0x470180	unknown	Conditional cleanup call	later	
+0x4701a0	unknown	sai helper	later	
+0x470210	unknown	sai helper	later	
+0x470250	unknown	sai helper	later	
+0x470290	unknown	sai helper	later	
+0x470310	unknown	sai helper	later	
+0x470400	unknown	sai helper	later	
+0x470480	unknown	sai helper	later	
+0x470520	unknown	Format chat string	later	
+0x4705d0	unknown	Format chat string	later	
+0x4706d0	unknown	sai helper	later	
+0x470720	net	Send astat chat command	wait-net	
+0x4707d0	unknown	sai helper	later	
+0x472060	net	Game start timer init	wait-net	
+0x472110	net	Net start failure handler	wait-net	
+0x472210	unknown	net chat helper	later	
+0x472800	unknown	group helper	later	
+0x472840	unknown	group helper	later	
+0x472900	unknown	group helper	later	
+0x472940	unknown	group helper	later	
+0x472a00	unknown	group helper	later	
+0x472a70	unknown	group helper	later	
+0x472ab0	unknown	group helper	later	
+0x472ba0	unknown	group helper	later	
+0x472c10	unknown	group helper	later	
+0x472c90	net	Check map or replay	wait-net	
+0x472d60	net	Kill timer	wait-net	
+0x472e00	net	Set timer	wait-net	
+0x472f40	unknown	group helper	later	
+0x473290	sim	Check fogged rect for human player	equivalent	checked: confirmed: src/bw/build.rs:151 gas_spot_check (rect_all_fogged build.rs:132) | Orig 0x473db0 itself inlines the player_type(0x57eee8+p*0x24)==2 gate then calls 0x402770; Rust gate+call identical. Wrapper itself has no callers. || triage: trivial; Wrapper. Rust build.rs:151-155 gas_spot_check inlines the player_type==2 gate and calls rect_all_fogged (build.rs:132). Unreferenced wrapper in dump.
+0x4732c0	sim	Check unexplored rect for human player	equivalent	checked: confirmed: src/bw/build.rs:151 gas_spot_check (rect_any_unexplored build.rs:126) | Same gate as 0x473290, then 0x4027f0 call; order any_unexplored(10) before all_fogged matches 0x473db0. || triage: trivial; Same as 0x473290: build.rs:151-155 gas_spot_check calls rect_any_unexplored (build.rs:126) behind the player_type==2 gate.
+0x474910	sim	Order failed handler (position variant)	not-needed	checked: dead: No call/jmp/dword refs in .text or data sections; int3-padded. Thin wrapper of 0x4745f0. || triage: trivial; Thin wrapper over 0x4745f0 (Rust orders.rs:108 queue fn). No direct, absolute or indirect refs in dump or exe: dead.
+0x474980	sim	Order failed handler	not-needed	checked: dead: No refs in .text or data sections; int3-padded wrapper of 0x4745f0. || triage: trivial; Thin wrapper over 0x4745f0 (Rust orders.rs:108 queue fn). No refs in dump or exe: dead.
+0x474cb0	sim	Issue unit order wrapper	not-needed	checked: dead: No refs in .text or data sections; int3-padded wrapper of issue_order. || triage: trivial; Wrapper over issue_order 0x474810 (Rust orders.rs:195 issue_order). No refs in dump or exe: dead.
+0x479dd0	unknown	group helper	later	
+0x479e00	unknown	group helper	later	
+0x479f70	sim	Unit within distance of a point	equivalent	checked: confirmed: src/bw/build.rs:537 within | Disasm: approx_distance(exact x,y vs point<<8) >>8 <= dist (unsigned cmp). Rust uses fl.exact (+0x2c/+0x30), same shifts and <=; arg order maps to 0x40c360. || triage: trivial; Rust build.rs:537-539 within(): approx_distance of exact pos vs point<<8, then >>8 <= dist. Wrapper unreferenced in dump.
+0x47a010	sim	Init bullet flingy and fields	not-needed	checked: not-equivalent-dead: none (bullet.rs:174 init_bullet is 0x48bec0, not this) | 0x47a010 has no call or data refs. It leaves +0x4d=0xbc and skips weapon/rng/owner writes; init_bullet ends +0x4d=0. Not mirrored by Rust, but unreachable. || triage: small; Rust bullet.rs:139 init_bullet_flingy and bullet.rs:174 init_bullet mirror the 0x48bec0 writes (player, unit type 0xe4). Field +0x4d=0xbc mapping not traced.
+0x47aaf0	unknown	group helper	later	
+0x47ab40	sys	Free group handle array	later	
+0x47abe0	sys	Create group event	later	
+0x47acf0	sys	Create group event	later	
+0x47ae30	unknown	group helper	later	
+0x47af30	unknown	group helper	later	
+0x47b340	unknown	group helper	later	
+0x47b3c0	unknown	group helper	later	
+0x47b940	sim	Apply upgrade callback on ownership change	equivalent	checked: confirmed: src/bw/transform.rs:383 give_unit loop (apply_upgrade research.rs:340) | Callback(unit,up,level,player): level=owner's upgrade level read after change_owner; calls 0x454540(unit, up) if level!=0, returns 1. Rust iterates 0x4e2b50 table with upgrade_level!=0. || triage: trivial; Rust transform.rs:383-388 give_unit loop calls apply_upgrade (research.rs:340) per owned upgrade. Ghidra 0x47c9f0 give_upgrades(FUN_0047b940,0).
+0x47bc10	sim	Set doodad state (toggle) for trigger	equivalent	checked: confirmed: src/bw/triggers.rs:1459 (0|6 arm) + trigger_doodad_state 1869 | Orig: if not disabled (status&0x400,+0x117,+0x119,+0x124 all 0) call disable 0x47b960 else enable 0x47ba00. Rust disabled test identical; enable=disabled. || triage: small; Rust triggers.rs:1464-1468 (modifiers 0/6) and trigger_doodad_state triggers.rs:1869 pick enable/disable from the disabled test, as 0x47bc10 does.
+0x47ccb0	unknown	tips helper	later	
+0x47cd70	unknown	tips helper	later	
+0x47ce20	unknown	tips helper	later	
+0x47ced0	unknown	tips helper	later	
+0x47cf10	unknown	tips helper	later	
+0x47cfc0	unknown	Ring-buffer snapshot of state	later	
+0x47d070	sys	clears global game-state tables at init	later	
+0x47d160	sys	empty stub	later	
+0x47e100	sim	Creep recession every 4th dead-unit tick	equivalent	checked: confirmed: src/bw/frame.rs:174 update_dead_unit (inlined; counter mod.rs:296) | Counter 0x658ae4: nonzero then dec/return, else set 3 then 0x47df90; 0x47df90 resets 0 on success (creep.rs:343). 0x47e100 itself unreferenced; inlined in 0x4eb5e0. || triage: trivial; Rust frame.rs:174-179 dead_removal_counter (0x658ae4) inside update_dead_unit; creep.rs:343 resets it as 0x47df90 does.
+0x47e440	hud	Tips dialog: subtitles checkbox from sound flags	equivalent	checked: confirmed: src/menu.rs:628 Kind::Tips, :1086 store | Callback arg 0xb is the event code, not a control id. Checkbox set from sound_flags bit 0x100 and written back; no id mismatch. || triage: trivial; menu.rs Kind::Tips sets checkbox from sound_flags & 0x100; control id differs (port 2, source 0xb), not verified which dialog.
+0x47e690	glue	Tips dialog OK: back to help or close	equivalent	checked: confirmed: src/menu.rs:1277-1281 | Tips OK/Cancel: settings handling then back to Help when depth>1 else close; matches. || triage: trivial; menu.rs:1277-1281 Menu::on_activate (Tips, -2 or -3): back to Help (0x4ca010) at depth > 1, else close. Credits screen is glue_credits.rs.
+0x47eab0	sim	Scroll step toward target distance	equivalent	checked: confirmed: src/view.rs:768 scroll_step (target branch) | Orig loop: per axis abs diff nonzero, while row6[counter] > diff counter--, returns speed 6. Row 6 table verified in exe [0,8,24,32,40,56,64], so no counter>0 guard needed. UI only. || triage: small; Rust view.rs:744-775 scroll_step target branch uses SCROLL_STEP row 6. Ghidra loop has no counter>0 guard; assumes row-6 entry 0 is 0.
+0x47f440	net	chat/name prefix lookup helper	wait-net	
+0x47f4d0	net	chat/name prefix lookup with flags	wait-net	
+0x47f590	net	handles /league and /stats commands	wait-net	
+0x47f670	net	builds Battle.net message text	wait-net	
+0x47f750	net	prints chat command output	wait-net	
+0x47f7a0	net	formats and prints chat message	wait-net	
+0x47f8f0	net	whisper command (/w) handling	wait-net	
+0x480110	gfx	ANDs mask bits over rectangles	later	
+0x480200	gfx	ANDs mask bits for tile rows	later	
+0x4802a0	gfx	clears mask bits over rectangle list	later	
+0x480310	gfx	clears mask bits from index list	later	
+0x480350	gfx	frees LOS and mask buffers	later	
+0x4808f8	gfx	applies shade table to image	later	
+0x480ae0	hud	Options: portrait radio check state	equivalent	checked: confirmed: src/menu.rs:604-610 Kind::Video | Radio ids 3..5 checked when id == portraits+3; same compare as exe (0x515224+3). || triage: trivial; menu.rs:604-610 Kind::Video sets portrait checks from settings.portraits. Dialog-table callback, no direct caller.
+0x480b90	hud	Options: portrait mode change refresh	replaced	trivial; Port applies portraits on Apply (menu.rs:1095); talking refresh by view.rs/portrait.rs per frame. Caller is a callback table entry.
+0x480bd0	hud	Options: gamma slider range and value	equivalent	checked: confirmed: src/menu.rs:604 Kind::Video slider | set_range 0x3c..0x8c, value = gamma 0x51a158, step 1 (+0x49); Rust slider() same (+0x46=10 is not used by the port draw). || triage: trivial; menu.rs:604-606 Kind::Video slider 1 0x3c..0x8c from settings.gamma.
+0x480c20	hud	Options: read settings from registry	persist	checked: persist: Reads registry Starcraft/Gamma (60..140 else 100), ColorCycle (default 1), UnitPortraits (default 2, max 2), then refreshes portrait. Settings persistence only. || triage: small; Ordinal_423 registry reads (Starcraft\Gamma, ColorCycle, UnitPortraits); port keeps Settings::default (menu.rs:40) with the same fallbacks. Caller 0x4db060 (glue.rs:366 todo).
+0x480d90	hud	Options: color cycling toggle and close	replaced	trivial; Port reads ck(2) into set.color_cycling on Apply (menu.rs:1093); toggle via generic dlg.rs handling. Callback-table entry.
+0x480ee0	hud	Options cancel: restore copy and gamma	equivalent	checked: confirmed: src/menu.rs:1316-1330 | Cancel restores whole saved settings (gamma, portraits, speed) then back to Options or close; OK just closes. || triage: small; menu.rs:1316 comment: Cancel restores the copy; gamma via palette.rs set_gamma (palette.rs:7). Its 0x4c9780 call (credits close) is not checked.
+0x4810f0	gfx	opaque blit of dialog graphic	later	
+0x481160	gfx	opaque blit of dialog graphic	later	
+0x4811e0	gfx	opaque blit of dialog graphic	later	
+0x481260	gfx	opaque blit of dialog graphic	later	
+0x481330	hud	Tooltip buffer setup (CtxtHelp.cpp)	replaced	small; Allocates save-under buffers for tooltip. Port draws tooltip fresh per frame: view.rs:3889 tooltip (0x481510). Caller 0x4daf30 is in glue.rs init (todo at glue.rs:366).
+0x481b80	hud	Speed options: slider and checkbox setup	equivalent	checked: confirmed: src/menu.rs:571-582 Kind::Speed | Sliders 1..3 range 0..6, speed slider disabled in multiplayer or replay; checkbox 4 cpu throttle handled. Matches. || triage: small; menu.rs:604-620 Kind::Speed sliders 1..3 (0..6) and cpu throttle checkbox 4; disables speed in multiplayer/replay.
+0x481cf0	sys	reads CPU throttle registry setting	later	
+0x481de0	hud	Speed options: CPU throttle toggle and close	replaced	trivial; Port reads ck(4) into set.cpu_throttle on Apply (menu.rs:1073); toggle via generic dlg.rs handling.
+0x481e80	hud	opens Speed options dialog with settings copy	equivalent	checked: confirmed: src/menu.rs:533-560, :1322 | Opens with copy of the 9 settings dwords; Cancel restores it (self.saved); depth increments; OK and Cancel graphics styles 3 and 5. || triage: small; menu.rs:533-560 Menu::open (Kind::Speed, saved copy); opened from menu.rs:1259 on_activate (Options 1). Only proc-table caller 0x481fa0.
+0x481ef0	hud	options Speed/Sound/Video OK and Cancel handler	ported	wave 2 2026-10-24 | checked: partial: src/menu.rs:1316-1330 | Cancel/close ok; but OK sends net command 0x0f (game speed from slider) when speed slider enabled; Rust only sets settings.game_speed, no command. || triage: small; menu.rs:1316-1330 on_activate: Cancel restores saved settings, OK applies. Its net_485bd0 call on OK is unverified; check it is not a needed local command.
+0x481fa0	hud	options dialog key and event dispatcher	ported	wave 2 2026-10-24 | checked: partial: src/glue.rs:2501; src/menu.rs:1259,1319 | Cancel and OK close match. Exe OK (0x481ef0) sends command 0x0f speed byte via 0x485bd0 when slider enabled; port sets settings.game_speed directly, no command (replay-visible). || triage: small; glue.rs:2501 key_down and glue.rs:2569 char_in (Enter/Escape to OK/Cancel); menu.rs:1259 on_activate. Sub-branch 0x481d30 not checked.
+0x482890	map	checks neighboring tile values	later	
+0x483dd0	ai	path creation assert-file setup	later	
+0x484360	unknown	stores two words in table	later	
+0x484500	hud	F2-F4 recalls saved screen position	ported	wave 2 2026-10-24 | checked: partial: src/view.rs:3411-3418 camera_slots | Recall sets view like 0x49c440. Source hotkey path is skipped while paused (0x6509c4 != 0); Rust F2-F4 recall has no pause gate. || triage: trivial; view.rs:3411-3418 camera_slots recall (sets vx,vy). Callee 0x49c440 only sets view and redraws stars; Rust redraws every frame.
+0x4846e0	hud	in-game hotkey dispatcher: groups, F-keys, speed, centre	ported	wave 2 2026-10-24 | checked: partial: src/view.rs:3395-3460, 516, 499 | Groups, F2-F4, Ctrl+C, speed keys present; missing: pause gate (0x6509c4) on groups/speed, speed change sends net cmd 0x0f, quick-chat net keys 0x642d-0x641a, 0x638b leaderboard toggle. || triage: small; view.rs ~3390-3460 (hotkey view.rs:516, group_centre view.rs:499, speed 3443, centre 3420); select.rs:239 select_recent_group. Quick-chat keys via net_485bd0 not ported.
+0x484df0	sim	Any slot of race with type 1 or 5	equivalent	checked: confirmed: src/glue_create.rs:1959 has() closure | Slots 0..7 (0x57eee0 stride 0x24), force +0xa == arg, type +8 in {1,5}. Rust identical. Only caller 0x4a938d (rebuild_slots) ported; other lobby callers 4a8e50/4a8f30/471300/471750/452370/4aaab0 not located in Rust. || triage: small; Rust glue_create.rs:1959-1962 has() over slots 0..7 with force and types [1,5]. Other Ghidra callers (471300, 471750, 4a8e50, 4a8f30, 4aaab0) not checked.
+0x484ef0	sim	Count slots of race with type 1 or 2	wait-net	small; Only called by 44f6d0 and 451d40 lobby slot logic, gated by multiplayer flags 0x57f0b4 and 0x596875. Port with networking.
+0x484f20	sim	Race slot test: no human or open slot	wait-net	small; Only called by 451d40 (lobby and team logic), gated by multiplayer 0x57f0b4 and 0x596875. Belongs to network slot handling.
+0x485c70	net	sends network message on state change	wait-net	
+0x485ce0	net	sends network status message	wait-net	
+0x485d10	net	formats and records chat text	wait-net	
+0x485f30	net	chat message send wrapper	wait-net	
+0x485f50	net	chat message send wrapper	wait-net	
+0x485f70	sys	message pump for window events	later	
+0x486040	net	Open player slots for lobby	wait-net	
+0x487350	sys	linked list free-slot handling	later	
+0x4873e0	sys	converts list pointer to index	later	
+0x487a90	hud	tests unit under cursor for fog placement	equivalent	checked: confirmed: src/bw/command.rs:710 fog_unit_at | Type match and (w/2+sprite.x-px) unsigned < w, same for y with placement box; identical. || triage: trivial; command.rs:710 fog_unit_at (commented 0x487a90); same placement-box bounds test around the cursor.
+0x4881e0	gfx	creates sprite for display	later	
+0x488760	hud	pause flag set and not multiplayer	ported	wave 2 2026-10-24 | checked: partial: src/bw/triggers.rs:216 trig.paused (value only) | Callers 0x4a5926/0x4a59f0 (minimap input) and 0x4f36dd/0x4f3770 ignore input while paused and not mp; Rust minimap click view.rs:3535 has no pause gate. || triage: trivial; triggers.rs:216 trig.paused (set in view.rs pause ~600). Multiplayer term 0x57f0b4 is never set in the port (command.rs:1459).
+0x488780	hud	returns pause flag 0x6509c4	equivalent	checked: confirmed: src/bw/triggers.rs:216 trig.paused | Trivial getter of pause flag; Rust reads field. || triage: trivial; triggers.rs:216 trig.paused; the only caller 0x4d9670 is not a separate Rust fn. Rust reads the field directly.
+0x489da0	sim	Skip in-game trigger cinematic (campaign)	ported	2026-10-23 wave 1 || checked: port: Escape caller exists: key handler 0x4846b0 (ESC 0x1b) and dialog handler 0x4f36c0. Only when 0x57f0b4==0 and 0x57f244<0x20: sets 0x10 on active triggers, zeros wait timers 0x6509b8/0x650980, stop_files, clears trigger text. Needed for campaign/UMS; sim-visible via wait timers. || triage: medium; No refs in dump or exe. Rust msgs.rs:97 clear_trigger_text exists, but nothing sets trigger flag 0x10. Re-check for an Escape-path caller before dropping.
+0x48abd0	saveload	Read bullet records from file	later	
+0x48ca90	hud	ends targeting, returns order cursor type	not-needed	checked: not-equivalent-dead: src/bw/command.rs:1256 target_click | Exe function has no callers or refs (dead). Same selection (unit->0x641692, e4->0x641691, else fog 0x641693) is in live path; end_targeting at view.rs:1245. || triage: small; buttons.rs:346-352 ButtonAction::Target {ground,unit,fog}; command.rs:1256 target_click resolves the click; view.rs:1351 target_click. Unit-type 0xe4 branch maps to command logic.
+0x48cac0	hud	ends targeting, returns order cursor type	not-needed	checked: not-equivalent-dead: n/a | No call or pointer refs in the exe (nor 0x48ca90); target selection is done via 0x48caf0 and Rust target_click. || triage: small; Same as 0x48ca90 without the unit-type test; buttons.rs:346-352 and command.rs:1256 target_click.
+0x48d5c0	hud	placement surface offset from box extents	equivalent	checked: confirmed: src/view.rs:2586-2600 placebox | Pixel plumbing: blit offset max(0,-extent) into placement surface; inline centering is equivalent visually. || triage: small; view.rs:2586-2600 placebox centres the box on its surface inline. Callee 0x41d090 blit offset is inline in Rust draw. Not verified line by line.
+0x48d700	unknown	Init list of 10-word entries	later	
+0x48da30	hud	team colour and first-frame size for placement	equivalent	checked: confirmed: src/view.rs:2590-2600 placebox | Local player colour remap, first image frame size vs placement box max; only caller 0x48db80 is placebox build. || triage: small; view.rs:2590-2600 placebox: local player colour, larger of frame and box. Only caller 0x48daf0 is the Rust placebox.
+0x48e640	hud	refused placement sound feedback	not-needed	checked: not-equivalent-dead: n/a (live equivalent view.rs:1428 build) | No refs in exe; body reads byte at address 0 (garbled). Live click path 0x48e5d0 is Rust build(), which has the order 0x47 sound branch but not the error() branch. || triage: small; create.rs:724-750 land_blocked/refused_sound and placement_blocked_sound; caller order_exec.rs:630. The error() branch for race G not checked.
+0x48ebc0	audio	sets music volume	later	
+0x48eff0	audio	Play panned sound	later	
+0x48fb40	audio	Init sound tables and glue sound	later	
+0x48ff10	hud	chat recipient mode for message filter dialog	wait-net	small; Event branch of filter dialog proc 0x490ef0 (case 2). Sets chat target 0x63ff70 (allies/all/player). Chat target UI absent from src (no fltr match); replay chat is chat.rs:438.
+0x490000	sim	Shuffle player list into random order	port	checked: port: Shuffles player ids with CRT rand (not sim RNG) for the alliance/vision row order in dialog setups 0x490300/0x490570/0x490a6b. UI order only; needed only if the replay vision dialog is ported. || triage: small; Uses CRT _rand and memmove. Callers 490300 and 490570 run from 490e90 (dialog 0x491310 case 0), not ported. Decide by whether ready-room start needs seat order.
+0x490110	hud	filter dialog control enable/disable	wait-net	small; Called only from 0x490a38 in the filter dialog family. No Rust chat filter dialog (src has no msgfltr/allyfltr/teamfltr).
+0x4901f0	hud	filter dialog list row draw	wait-net	small; Row draw proc (control +0x2e) installed by 0x490250 and 0x4a2d60. No Rust counterpart for the chat filter list.
+0x490250	hud	filter dialog: shows row with text and draw proc	wait-net	small; Called by 0x490300 and 0x490570 during layout. Sets row text and proc 0x4901f0. Belongs to msgfltr/allyfltr/teamfltr dialogs.
+0x490300	hud	filter dialog layout for player list	wait-net	medium; Called by 0x490e90 (dialog open). Lays out msgfltr/allyfltr rows via 0x490250 and 0x490000 collector. No Rust counterpart.
+0x490570	hud	filter dialog layout for team mode	wait-net	medium; Team variant of 0x490300 from 0x490e90. Team games (0x57f0b4/0x596875) are never set in the port. No Rust counterpart.
+0x490850	hud	toggles message-filter option bit	wait-net	small; Click handler flipping bit in 0x63ff74; installed in .rsrc control table near 0x51a778. No Rust counterpart.
+0x4908e0	hud	filter dialog option event dispatch	wait-net	small; Event dispatch calling option_event; sets chat recipient mode 0x63ff70 to 8 (allies) or 9 (all). No Rust counterpart.
+0x490960	hud	toggles per-player chat filter flag	wait-net	small; Toggles 0x63ff64[slot] for player rows; installed in .rsrc control table near 0x51a748. No Rust counterpart.
+0x490a50	hud	populates filter list box with players	wait-net	medium; Fills player list skipping the local slot, via 0x490000 collector and list_add. Called from filter dialog layout. No Rust counterpart.
+0x490c40	hud	alliance button in chat filter dialog	wait-net	small; Enabled only if command_alliance_4aabb0 allows (Rust check command.rs:1417). Toggles 0x63ff64 flags; does not issue an alliance command. No Rust counterpart.
+0x490d70	hud	hides filter dialog controls and sets text	wait-net	small; Sets text from string 0xb6 and hides controls 0x1a/0x1b in the filter dialog. Chat dialog family; no Rust counterpart.
+0x490e40	hud	opens Options from the game menu	equivalent	checked: confirmed: src/menu.rs Menu::open; 1273 | Opens Options dialog with background, button styles 4 (ok/cancel style); equivalent opener. || triage: trivial; menu.rs:1273 (Kind::Game 3 -> Kind::Options) covers the opener. Direct caller 0x490ef0 (SP key/event proc, table-referenced). No args.
+0x490e90	hud	game-menu Options opener with alliance-row setup	port	checked: port: Reached from 0x491310 case 0, the handler of the dialog 0x4913d0 opens (also templates 0x5042bc when not multiplayer): the replay vision dialog. Needed for replays (minimap button 4, ui.rs:624 shows it in replays; no handler found). || triage: small; Multiplayer variant of 0x490e40: runs alliance button setup (0x490300/0x490570) then opens Options. Caller 0x491310. Options opening is menu.rs:1273; alliance setup is diplomacy.
+0x490ef0	hud	game-menu key/event handler, single-player variant	wait-net	checked: net: SP-variant game-menu handler (template 0x5042ac), reached only from minimap button 3 (0x4a5509; Rust ui.rs:624 hides it, shown only with 2+ humans on a network game). Other opener 0x490fc0 has no references. || triage: small; Args: ECX=ctl, EDX=event. Codes 0/1/2/10 -> 0x490e40, dialog close, 0x48ff10, 0x418100. Not called directly (table refs at file offsets 0x90fcb, 0xa5519). Decide: map codes to view.rs:3421-3436 Alt hotkeys or menu.rs ids.
+0x490fe0	net	sends player settings over network	wait-net	
+0x491310	hud	multiplayer game-menu event handler	port	checked: port: Event handler of the replay vision dialog (0x4913d0 selects 0x5042bc when 0x57f0b4=0). Code 2 -> 0x490fe0 sets replay vision 0x6d0f18/0x57f0b0 from 0x63ff64 row. Needed for replays, not just net. || triage: small; Same shape as 0x490ef0. Code 0 -> 0x490e90 (alliances), code 2 -> 0x490fe0 (sends net_485bd0 turns). Table-referenced (file offset 0x91443). Multiplayer only.
+0x4913d0	hud	snapshots local alliance/vision row for diplomacy	port	checked: port: Minimap button 4 (0x4a54f0 case 4; shown in replays) opens it; in replay stores 0x6d0f18 into 0x63ff74. Single-player/vs-computer: button hidden. Reachable now for replays; no Rust handler for the click. || triage: trivial; Copies 0x58d634 row and vision into 0x63ff64.. read by diplomacy dialog 0x490960/0x490c40/0x490fe0 (multiplayer). Caller toggle_terrain 0x4a54f0. Rust reads alliances live (bw/minimap.rs:397).
+0x493900	sim	Battery callback: recharge unit at battery	equivalent	checked: equivalent: ECX=candidate unit (ESI), EDX=battery (EDI). can_recharge(eax=candidate, edi=battery); then 0x4752b0(eax=battery) orders ESI=candidate with 0x31. Matches battery.rs:146-170 (issue_order to c, target b, 0xe4). || triage: trivial; Per-unit callback of spell_units_near, set in 493990. Rust battery.rs:146-170 issues order 0x31 to unit with battery target. Register roles (EAX, ESI) unverified; needs a trace.
+0x494b10	gfx	scales coordinates by table value	later	
+0x494c70	gfx	frees image list entries	later	
+0x496ee0	sim	Read two position bytes from sprite	not-needed	checked: dead: No refs in any section; padded. || triage: trivial; No refs in dump or exe: dead helper. No Rust equivalent needed.
+0x496ff0	gfx	sets redraw flag	later	
+0x497000	gfx	tests tile range visibility	later	
+0x4970f0	gfx	conditional sprite update	later	
+0x497ce0	gfx	draws sprite with callback	later	
+0x498220	hud	sprite click bounds test	not-needed	checked: not-equivalent-dead: src/bw/select.rs:373 unit_hit | Exe function has no callers or refs (dead). Identical bounds test lives inline in live 0x402a00, ported as unit_hit. || triage: trivial; select.rs:373-383 unit_hit: bounds check against sprite_click_bounds, then image_hit. Caller 0x402a00 ported. No direct EXE call site (indirect).
+0x498470	gfx	draws team color for sprite	later	
+0x498c50	hud	per-sprite team color setup and draw	replaced	small; Fills player remap rows (0x498470) and draws sprite images. Rust draws with per-player color tables: grp.rs:45 (CloakTrans/Table) and view.rs:281 player_colors. Callers 0x488180, 0x498d40 are ported.
+0x499730	hud	removes teammate ally-selection image	not-needed	checked: not-equivalent-dead: n/a | No refs in exe. It would re-add image 0x23b after removing the ally image; Rust select.rs:866 is a different (flag decrement) path. || triage: trivial; select.rs:866-870 (flag shift, image removal when count is 0) and select.rs:945 ally_selection_image_remove -> sprite.rs:838 ui_image_remove. No direct EXE call site.
+0x499770	gfx	sets sprite id	later	
+0x4997a0	gfx	sets sprite ids	later	
+0x499d50	net	builds player name string	wait-net	
+0x499e20	net	builds league timestamp file name	wait-net	
+0x499ec0	replay	Write last replay path and file	later	
+0x49a040	net	copies profile name	wait-net	
+0x49a060	net	loads league profile file	wait-net	
+0x49afe0	unknown	sets two flag bits	later	
+0x49b130	unknown	copies 24-dword table	later	
+0x49b320	gfx	team color slot lookup	later	
+0x49b8d0	gfx	clips screen rectangle	later	
+0x49b9f0	gfx	Draw map tile row	later	
+0x49bb90	gfx	Set map scroll bounds	later	
+0x49bc20	gfx	computes tile offset and draws	later	
+0x49bd40	gfx	computes tile draw parameters	later	
+0x49be20	gfx	Draw map row with wrap	later	
+0x49c0c0	gfx	Scroll map horizontally and redraw	later	
+0x49c1a0	gfx	Scroll map horizontally backward	later	
+0x49c280	gfx	Scroll map vertically and redraw	later	
+0x49c890	unknown	reads table entry value	later	
+0x49cc40	unknown	Copy player state into globals	later	
+0x49d760	sim	Create unit by type and start it	not-needed	checked: dead: No refs in any section; padded. start_unit chk_load.rs:319 covers the same chain. || triage: small; No refs in dump or exe: dead. Rust start_unit chk_load.rs:319 covers the same create and finish chain.
+0x49e300	sys	walks two linked lists	later	
+0x4a1060	ai	finds nearest enemy building	later	
+0x4a2b90	hud	decrements real-time game timer seconds	not-needed	checked: dead: No refs in any section; padded. || triage: trivial; No call site anywhere in the EXE (no direct call, no dword reference). Real-time clock is view.rs:404 and setup.rs:132. Dead code.
+0x4a2bf0	sys	Initialize tick timers	later	
+0x4a2cf0	hud	formats mm:ss into net-wait dialog text	wait-net	small; Only caller 0x4a2f80, the network-wait countdown in 0x4a3380 (called from net_487070; glue_ready.rs:916 todo for 0x4a3380). Unported net wait dialog.
+0x4a2d60	hud	network-wait dialog player-status buttons	wait-net	medium; Called from 0x4a3150 and 0x4a3380 (network wait loop). Reads player slot tables 0x57eee0 / 0x640970 and 0x57f0b8. glue_ready.rs:916 todo. Multiplayer only.
+0x4a2f80	hud	network-wait countdown tick and display	wait-net	small; Only caller 0x4a3380: decrements 0x59cc80 once a second, then 0x4a2cf0 and 0x4a2d60. Multiplayer network-wait timeout; glue_ready.rs:916 todo.
+0x4a3010	sim	Multiplayer team victory/defeat check	wait-net	checked: net: Called by turn_tick only when split_commands fails for a slot (0x6552a8, not replay) and by 0x4f40f0 20 s net-timeout path. Counts connected/left slots; unreachable in SP or replays. || triage: medium; Counts connected (0x10000) and not-left (0x40000) slots. Callers turn_tick 486f50 and 4f40f0 are net code. SP victory is Rust triggers.rs:2431 resolve_game_end.
+0x4a3150	hud	network-wait dialog update proc	wait-net	small; Dialog timer/update proc of the network-wait countdown. Calls 0x4a2d60, sets mm:ss text and enables/disables buttons. Table-referenced, not called by 0x4a3380. Multiplayer only.
+0x4a3320	hud	network-wait timeout display (two minutes)	wait-net	small; Only caller 0x4a3380. GetTickCount plus 120000 ms timeout countdown; reset when the wait ends. Multiplayer; glue_ready.rs:916 todo.
+0x4a39e0	hud	returns two minimap state bytes	not-needed	checked: dead: No refs in any section; padded. || triage: trivial; No call site in the EXE. State (0x59c1a8 / 0x59c2b8) lives in bw/minimap.rs:81 fields. Save code copies them to 0x65fc10 / 0x65eb2d; that Rust side was not checked.
+0x4a3e20	hud	minimap teardown: kills timers, frees images	replaced	trivial; Rust Minimap owns its buffers (bw/minimap.rs:44) and minimap_timers is per scene (view.rs:366-368), so nothing to free or kill. Caller 0x4a59ce in minimap dialog setup.
+0x4a3eb0	hud	minimap teardown: cursor unclip and mouse release	replaced	trivial; ClipCursor release (0x6cddb0) has no port. Cursor is clamped per frame during box drag (view.rs:2974-2978, minifb). Callers 0x4a5650 (minimap dialog proc) and 0x4a5770 region.
+0x4a4a20	hud	minimap dialog and image teardown	replaced	trivial; Closes minimap dialog (credits_close) and frees minimap.cpp image; Rust scene/minimap object drops it (view.rs:194, 342). Caller 0x4b8d90 not checked for port status.
+0x4a4d20	hud	minimap click moves view, scrolls to tile	equivalent	checked: confirmed: src/view.rs:3533-3541 | Cursor minus half screen box to map point, view moves on tile change; ClipCursor part is window plumbing. || triage: small; view.rs:3533-3541: half-screen box offset, screen_to_map, moves view on tile change. ClipCursor branch replaced by view.rs:2976 clamp. Callers 0x4a5310, 0x4a53c0, 0x4a5650.
+0x4a4fe0	hud	minimap diplomacy/vision button visibility (500 ms)	equivalent	checked: confirmed: src/ui.rs:620-633 | SP/replay visibility: 2 hidden in replay, 4 shown only in replay, 3 hidden; matches exe for non-multiplayer. Multiplayer two-human case (net) not modelled. || triage: medium; Timer runs only in multiplayer or replay (set(500) in 0x4a5770). ui.rs:620-633 sets the same visibility at init for SP and replay. Multiplayer dynamic part (needs two humans) is net.
+0x4a5110	hud	minimap button tooltips on hover	port	small; Missing: hover tooltip for control 4 (replay vision; stat_txt 0x604 in replay, 0x32c else). view.rs:2437-2442 only does button 2 (terrain). Control 3 (diplomacy) tooltip is net.
+0x4a5200	hud	minimap redraw: fog, units, pings	equivalent	checked: confirmed: src/bw/minimap.rs:464 redraw | draw_fog, draw_units, draw_pings and mark dirty; Rust redraw also draws terrain when changed. || triage: trivial; bw/minimap.rs:452-466 Minimap::redraw (draw_fog, draw_units, draw_pings) and refresh; view.rs:361. Caller 0x4d9550 (dialog draw proc) ported.
+0x4a5230	hud	minimap button init (SP and replay)	partial	checked: partial: src/ui.rs:620-633 | SP/replay visibility correct (2 not replay, 3 hidden, 4 replay only); multiplayer branch (diplomacy button for 2+ humans, button 4 in MP) hardcoded as single player. || triage: small; ui.rs:620-633: button 2 shown unless replay, 4 replay only, 3 hidden in SP. Multiplayer branch (diplomacy needs two humans) is net. Caller 0x4a5570.
+0x4a5310	hud	minimap click: sets drag owner, redraws	equivalent	checked: confirmed: src/view.rs:3513-3541 | Minimap press centres view on cursor (0x4a4d20: minus half screen box, tile-aligned); handler swap and ClipCursor are plumbing. || triage: trivial; view.rs:3513-3541 handles minimap press (command target via screen_to_map, view move). Handler swap and ClipCursor 0x421690 replaced by view.rs:2976 clamp. Caller 0x4a5650.
+0x4a53c0	hud	minimap click: Alt command or view move	ported	wave 2 2026-10-24 | checked: partial: src/view.rs:3531-3541 | Plain click recenters view like 0x4a4d20. Alt+click should send a 5-byte minimap ping command (0x58) via 0x485bd0; Rust only receives pings (command.rs:1548), never sends one. || triage: trivial; Alt path (net_485bd0 send) becomes command target at view.rs:3513; plain click moves view (view.rs:3533-3541). Caller 0x4a5650 (minimap dialog proc).
+0x4a5440	hud	minimap hovered-control tooltip state	replaced	small; No caller found (code or data scan). Hover tooltip is per-frame in view.rs:2435 (0x4a4c40 terrain button); no Rust port of 0x59c1a4 needed.
+0x4a5490	hud	minimap mouse-move hover tooltip update	replaced	small; Called only by minimap event proc 0x4a5570. view.rs:2435 draws the hover tooltip per frame; minimap input is Rust-native (view.rs:3268-3538).
+0x4a5570	hud	minimap control event proc (move, keys)	replaced	medium; Table-registered (0x11ab00). Rust input loop replaces it: terrain button view.rs:3268-3272, keys/hover per-frame. Calls 0x4a5230/toggle_terrain (minimap.rs:499).
+0x4a55f0	hud	minimap click moves screen and orders target	replaced	small; Called from 0x4a5650. Rust: view.rs:3513 (screen_to_map) and 3532-3538 (click moves screen). Not verified: whether a minimap click shows the ground marker (view.rs:1348).
+0x4a5650	hud	minimap control event dispatcher (clicks, voice, refresh)	replaced	small; Table-registered (0x11aaf8). Click/voice paths are Rust-native: view.rs:3513-3538, command.rs:1548 minimap ping, voices.rs. No port of the switch needed.
+0x4a5d10	hud	load rez minimappreview.bin as minimap preview	wait-net	lobby map preview (caller 0x4b9c20 = net lobby dialog); medium; Only caller 0x4b9ac0, called from 0x4b9c20 (via dialog 0x41a080), unreferenced in dump. Decide by reachability of 0x4b9c20. Rust minimap.rs:77 all_units never set.
+0x4a62b0	audio	Start music track	later	
+0x4a63a0	glue	Map select dialog: store control handle	replaced	small; Stores a control record in one of ten globals 0x6d5a7c..0x6d5aa0 by index. glue_create.rs keeps this state in its own create struct (line ~136). No direct callers in dump.
+0x4a6490	glue	Recent maps list read from registry	persist	checked: persist: Reads registry Starcraft/Recent Maps (Ordinal_421, 0x80-byte buffer). Settings persistence only. || triage: small; Reads the "Recent Maps" MRU from the registry (Ordinal_421). Port's list_dir 0x10 branch is todo_port 0x4a6ee0 (glue_create.rs:725): list stays empty. Decide: persist MRU in a file, or drop it.
+0x4a6660	sys	Linked list insert utility	later	
+0x4a6770	glue	Map dialog teardown: kill timer, free handles	replaced	small; Frees ten handles from 0x4a63a0 and kills timer 0xc. glue_create.rs owns this state (create struct, line ~136-141), so Rust drops it. Callers 44c170, 44c400, 44c960 are net lobby dialogs.
+0x4a6a30	glue	finds map-list node by name (stricmp on path)	wait-net	trivial; EDI = name, returns node in EAX. Only caller 4a6cb0, reached from 0x44c400 (Storm UI map browse, 4ad190 table). Port has MapNode list (glue_create.rs:60, scan_dir 702), no browse dialog.
+0x4a6cb0	glue	adds a browsed map/save/replay by path, runs loader callback	wait-net	small; ESI = loader callback. Caller 0x44c400 (Storm UI browse). Classifies .mlt/.mlx save ext (multiplayer only). Unported callee: 4a6a30 (net). Port: scan_dir glue_create.rs:690-712 covers folder listing only.
+0x4a8710	glue	initializes save-list entry record (magic 0x112233)	not-needed	checked: dead: No refs in any section; padded. || triage: trivial; No static caller in the 1.16.1 dump (dead or unreferenced); fills 0x1c dwords, name, time, multiplayer flag. Nothing in port needs it.
+0x4a8850	data	deletes profile file	later	
+0x4a8cf0	glue	counts open slots (type 6) in slot table	wait-net	trivial; Only caller 4d3910 (network game create, todo_port). Port open-slot logic: setup.rs:358 open_slot / 312 count_in_force, not in network path.
+0x4a8de0	glue	converts lobby copy types 3/4/5/7 to open	wait-net	small; Only caller 4d4130, inside its DAT_00596888 (network) branch. Port: setup.rs:856 snapshot_types, glue_create.rs:2316 comment. Net path only.
+0x4a8e50	glue	lobby slot click: close slot, restore from lobby copy	wait-net	small; EAX = slot index, stack = target. Callers 0x471570 (lobby handler, gated on DAT_00596888 = network game only). Port: none.
+0x4a8f30	glue	lobby slot click: open slot (type 6), restore lobby copy	wait-net	small; EAX = slot index, stack = target. Caller 0x471570, gated on DAT_00596888 (network only). Port: none.
+0x4a9010	glue	lobby slot click: set computer slot, restore lobby copy	wait-net	small; EAX = slot index, stack param. Caller 0x471570, gated on DAT_00596888 (network only). Port: none.
+0x4a9130	glue	lobby slot swap between two slots	wait-net	small; EBX = slot, stack = other slot. Callers 0x471670 / 0x471750 (lobby, gated on DAT_00596888 and team flag). Port: team_places glue_create.rs:1995 is the create-path analogue.
+0x4aa190	glue	resets player table and team/lobby slot mapping	wait-net	large; No args. Only caller 4aa620, under DAT_0057f0b4 (multiplayer). Port: rebuild_slots glue_create.rs:1929 and team_places 1995 cover network cases only.
+0x4aa4b0	glue	assigns team slots (teams 0x596875) for network game	wait-net	medium; No args. Only caller 4d4130 under DAT_00596888 (network). Port: team_places glue_create.rs:1995 and players.rs:209 is_team_game.
+0x4aa620	glue	rebuilds lobby slots after saved game load (multiplayer)	wait-net	large; No args. Caller 4d4130 under DAT_00596888; gated on DAT_0057f0b4. Calls 4aa190. Port: rebuild_slots glue_create.rs:1929 (0x4a9250 analogue) covers the same role.
+0x4aa930	glue	game-type name lookup by type byte (+0x16c)	wait-net	trivial; Stack char = type byte. Only caller 0x44c620 (Storm UI dialog WM handler). Port: find_by_type glue_create.rs:1199 covers the lookup, not reached by net UI.
+0x4aa960	glue	game-type lookup by type byte (+0x68)	wait-net	trivial; Stack char = type byte. Only caller 0x44c620 (Storm UI dialog). Port: find_by_type glue_create.rs:1199 is the analogue.
+0x4aa9b0	glue	predicate: game type 0x11..0x16 (team-type range)	wait-net	trivial; Reads DAT_00596865. Callers 0x44c620 (Storm UI) and 0x4b9910 (network start check, error 0x72). Port: no caller in single player path.
+0x4aa9d0	glue	predicate: game type 0x11..0x7f	wait-net	trivial; Reads DAT_00596865. Only caller 0x44c620 (Storm UI dialog). Not reachable in single player.
+0x4aa9f0	glue	predicate: flag 0x80 record with nonzero param	wait-net	trivial; AL and stack param. Only caller 0x449810 (Storm UI callback, 4ad190 table [4]). Net UI only.
+0x4aaa10	glue	predicate: description has no flags 0x75/0x79/0x7f	wait-net	trivial; EAX = node or NULL (uses DAT_005967f8). Callers 4d3910 (network create) only. Net.
+0x4aaab0	glue	slot legality check for player move/swap	wait-net	small; AL, BL, ESI = types and slots. Callers 0x471300 (lobby, DAT_00596888 gate) and 0x44fa60 (no static caller). Port: none; network lobby only.
+0x4aac60	glue	finds game-type record by (short, char, char)	wait-net	small; Stack short, char, BL. Only caller 4d3910 (network create). Port: find_template glue_create.rs:444 is the single-player analogue.
+0x4aada0	glue	builds Storm provider flags from record	wait-net	small; ECX = char* record. Only caller 4d3910 (network create). Net.
+0x4aadf0	glue	callback wrapper: type 3 and size checks then call	wait-net	trivial; AL = type, EAX = ptr, stack callback. Only caller 0x4ab310 (Storm game-list parser). Net.
+0x4ab050	glue	predicate: may slot allied/share vision in team game	wait-net	small; EAX and stack = slot indexes. Only caller 0x490570 (multiplayer team branch of 0x490e90). Port: command.rs:1417 alliance rule is the single-player analogue.
+0x4ab110	glue	frees game-type list nodes	wait-net	small; No args. Only caller 4ab310 (Storm game-list parser). Port uses Vec, nothing to port.
+0x4ab310	glue	parses Storm game-list records (SNet UI callback)	wait-net	large; Stack params (buffer, length). Storm UI callback 4ad190 table [0x14]. Calls 4aadf0, 4ab110, 4ab150. Net only.
+0x4abc90	net	Battle.net colored text drawing	wait-net	
+0x4abf50	gfx	measures alphabet text size	later	
+0x4ac110	net	Battle.net dialog helper	wait-net	
+0x4ac300	net	loads link cursor	wait-net	
+0x4ac380	net	Battle.net background dialog setup	wait-net	
+0x4acd50	gfx	text metrics measurement	later	
+0x4ace70	gfx	creates font for dialog	later	
+0x4ad040	glue	copies one string from the Battle.net icon string table	wait-net	small; Only caller 0x44d7d0 (opens battle.htm via ShellExecute, Battle.net help). Reads via 0x4ac250 (glubnicon, deferred in re/buckets.txt). No Rust equivalent.
+0x4ad0b0	audio	glue sound hook	later	
+0x4ad0e0	sys	gets active window handle	later	
+0x4ad390	glue	writes the game type name to the "Game Type"/"Custom Type" registry value	persist	trivial; Caller 0x4af4c2 in create_fill_types_4af400 (glue_create.rs:1138). Registry write replaced by session-only prefs HashMap (glue_create.rs:159, create_event GAME_TYPE). Not persisted across launches.
+0x4ad400	glue	writes the game subtype name to the "Game Subtype" registry value	persist	trivial; Caller 0x4ae777 in 0x4ae660. Replaced by prefs.insert("Game Subtype") in glue_create.rs create_event SUBTYPE (~line 1387). Session-only, no registry persistence.
+0x4ad950	glue	shows or hides a create-screen control by flag	equivalent	checked: confirmed: src/glue_create.rs:353 cshow | Show/hide control by flag; identical. || triage: trivial; glue_create.rs:353 cshow(id,on) (0x4186a0). Referenced inline in create_list_init 0x4ae920 (ported in glue_create.rs create_list_init).
+0x4adea0	glue	game type list row add (subtype 1 types only)	equivalent	checked: confirmed: src/glue_create.rs:1138-1160 create_fill_types | Row added only if template_listed, item data = template byte0 (game type). Matches. || triage: small; glue_create.rs:1138-1160 create_fill_types (cadd GAME_TYPE, template_listed at line 467 = 0x4ab5b0). Caller 0x4af405 in create_fill_types_4af400.
+0x4adee0	glue	map list row add with flags 3 and node data	equivalent	checked: confirmed: src/glue_create.rs:735 cadd(LIST, text, 3, data) | list_add with flag 3 and node data stored in item data slot; matches. || triage: trivial; glue_create.rs list_dir (~line 735, cadd(ids::LIST, text, 3, data)). Caller 0x4af12e in create_fill_list 0x4af100 (glue_create.rs:748).
+0x4ae250	glue	formats game speed label for the multiplayer create screen	wait-net	small; Only called from the unnamed speed slider at 0x4ae860 (multiplayer create, not in dump). Port marks it todo_port at glue_create.rs:532 (only when setup.multiplayer). Decide with the MP create screen.
+0x4ae320	glue	reads the saved game speed index from the registry	persist	small; Only called from slider 0x4ae860 family. Single player uses menu::Settings default speed (glue_create.rs:517). Registry read replaced; MP slider todo at glue_create.rs:532.
+0x4ae3c0	glue	writes the game speed name to registry and label	wait-net	small; Only called from slider 0x4ae860 (multiplayer create). Registry write would map to create.prefs. Waits with the MP speed slider todo (glue_create.rs:532).
+0x4ae830	glue	refreshes game type controls when the screen is open	not-needed	checked: dead: No refs in any section; padded. Callees ported. || triage: trivial; No call, jmp or data references anywhere in 1.16.1 .text/.data (refs.py and raw dword scan). Dead code. Its callees create_type_controls and create_fill_subtypes_4ae790 are ported (glue_create.rs:1171, 1204).
+0x4af8e0	glue	stores an entry's name and fields for a join or game record	wait-net	trivial; Only referenced by the Storm game create callback 0x4afa30 (deferred in re/buckets.txt). No Rust equivalent.
+0x4af920	glue	creates the Storm provider (Ordinal_118) for modem / Battle.net	wait-net	small; Only caller 0x4b1060 (gluModemStatus, deferred in re/buckets.txt). No Rust equivalent.
+0x4af970	glue	allocates a linked game-list node with two 128-byte strings	wait-net	medium; Only caller 0x4b0fb0 (modem / AppleTalk provider step, deferred). Storm list helper behind it is replaced by Vec in Rust. No port needed without networking.
+0x4afa90	glue	Storm enumerate callback copying a 0x18-byte game record	wait-net	trivial; Enumerate callback passed to Ordinal_133 in 0x4b0140 (game list, deferred). No Rust equivalent.
+0x4afb60	glue	modem screen teardown and two control labels	wait-net	small; Only caller 0x4b0dc0 (gluModemList, deferred in re/buckets.txt). Calls slide_teardown (glue_slide.rs) and clears 0x6d5a3c / 0x6d5a54.
+0x4afbf0	glue	status dialog cancel: clears status text	wait-net	trivial; Dialog proc of pStatus set in 0x4b01f0 (status dialog, network). Calls unnamed 0x4ef7f0. Deferred with the network screens.
+0x4afc60	glue	enables or disables modem buttons from dirty flags	wait-net	medium; Callers 0x4b0560, 0x4b1310, 0x4b14d0 (gluModem family, deferred). Uses rdisable/cenable which dlg.rs covers generically. Reachable only with networking.
+0x4afd80	glue	enables a button from three list selection states	wait-net	small; Callers 0x4aff50 (text entry key handler) and 0x4b02f0 (pEntry dialog). Network entry dialogs only. No Rust equivalent.
+0x4afe30	glue	sets flag 0x20000 on a control and adds list rows	wait-net	small; Only caller 0x4b0410 (network dialog, deferred). No Rust equivalent.
+0x4afea0	glue	list entry add, scroll, and enable for the game list	wait-net	small; Callers 0x4b0140 (game list, deferred) and 0x4b01d1 inside it. Relies on list_add and list_layout from dlg.rs; no Rust user without networking.
+0x4aff50	glue	text entry key filter (name field) and enable update	wait-net	medium; Only caller 0x4b02f0 / 0x4b03d8 (pEntry dialog, network). Also calls key() and 0x4afd80. No Rust equivalent; edit fields go through dlg.rs.
+0x4b0010	glue	clears the game list and resets its selection state	wait-net	small; Only caller 0x4b0410 (network dialog, deferred). Calls list_clear and slide_teardown. No Rust equivalent.
+0x4b0070	glue	pSelect dialog init for the provider or modem select screen	wait-net	small; Only caller 0x4b0410 (deferred). Loads pSelect.pcx and the 0x4d26b0 proc. Port returns to main menu for MODEM/BATTLE_NET screens (glue.rs:561).
+0x4b0140	glue	refreshes the Battle.net game list via Storm enumerate	wait-net	medium; Callers 0x4b0ae0 and 0x4b1060 (deferred). Matches re/buckets.txt deferred family. glue.rs:561 sends these screens back to main menu.
+0x4b01f0	glue	pStatus dialog init and cancel proc setup	wait-net	small; Only caller 0x4b0410 (network dialog, deferred). Sets cancel proc to 0x4afbf0. glue.rs:561 handles these screens by returning to main menu.
+0x4b02f0	glue	pEntry.pcx entry dialog init (modem/net name entry)	wait-net	small; Only caller FUN_004b0dc0 (gluModemList, modem list) <- FUN_004b0fb0 <- create_game_4d3cc0 (glue_create.rs:1835 todo). Net chain; no Rust.
+0x4b0410	glue	Modem entry dialog init and slide-in	wait-net	trivial; Called only by modem event proc 4b1820 (reached from 4b19c0 gluModem, deferred per glue.rs:565).
+0x4b0560	glue	Fills modem phone-book list (10 entries)	wait-net	medium; Called by 4b0ae0 (modem dialog). Modem list, no Rust; blocked by networking deferral.
+0x4b07c0	sys	Deletes Starcraft registry values	later	
+0x4b0970	glue	Modem entry text fields set from list	wait-net	small; Only caller FUN_004b0dc0 (modem list chain, see 4b02f0). No Rust equivalent.
+0x4b0ae0	glue	Modem dialog control enable/disable and list fill	wait-net	small; Called by modem event proc 4b1820 (case 0 and 10 paths). Net chain.
+0x4b1310	glue	Remove modem list entry after confirm	wait-net	small; Called by 4b1820 case 8. Uses open_ok_cancel; net chain, no Rust.
+0x4b14d0	glue	Add or replace modem entry with confirm	wait-net	medium; Called by 4b1820 case 7; calls 4b13a0 (modem entry save). Net chain, no Rust.
+0x4b1820	glue	gluModem dialog key and event handling	wait-net	medium; Event proc of 4b19c0 (gluModem.bin, FUN_0041a080 screen). Modem screen deferred (glue.rs:565 maps to main menu).
+0x4b2570	glue	Lightup control wrapper: clears flag 0x80 around redraw	replaced	trivial; Only referenced from exe control table. Rust draws lit buttons natively: dlg.rs:965 (flag 0x80 hover), dlg.rs:1751.
+0x4b25a0	glue	Lightup button handler wrapper around lightup	replaced	trivial; Control table entry; wrapper of lightup(). Rust native lit-button draw in dlg.rs:965/1751 instead of this flag juggling.
+0x4b2848	glue	Campaign check then end dialog (classic)	equivalent	checked: fragment-covered: Fragment of 0x4b2810 (campaign event proc): short je at 0x4b281e, state 7 (eax=1, terran). Covered by campaign_activate glue.rs:761-790. || triage: trivial; No callers in dump or exe (dead). Live logic is glue.rs:761-790 (campaign_activate, campaign_check).
+0x4b2870	glue	Campaign check then end dialog (classic, inverted)	equivalent	checked: fragment-covered: Fragment of 0x4b2810: short je at 0x4b281b, state 6 (protoss). Covered by campaign_activate glue.rs:761-790. || triage: trivial; No callers in dump or exe (dead). Live logic is glue.rs:761-790 (campaign_activate, campaign_check).
+0x4b28b0	glue	Classic campaign select event proc and slide-in	equivalent	checked: confirmed: src/glue.rs:730-790 | Event 0 show palette/fade, event 2 campaign_activate, event 10 slide-in all present in open_campaign/campaign_activate. || triage: trivial; glue.rs:730-790 open_campaign(exp=false) + campaign_activate(id 6/7/8) and event 10 slide-in (glue.rs:740).
+0x4b2d20	glue	Option size wrapper for glue (stack args)	not-needed	checked: dead: No refs in any section; padded wrapper of option_size. || triage: trivial; Unreferenced wrapper. Calls option_size (native sizer dlg.rs:1233, used at dlg.rs:1489).
+0x4b2fc0	glue	Formats unit/score time text for report	wait-net	small; Only caller 4b3220 (Battle.net score XML, called from 4c4790 net report). No Rust.
+0x4b3220	glue	Builds Battle.net game-result XML with SHA-1 hash	wait-net	large; Called from 4c4790 (player_outcomes + SNet report via Ordinal_139). Battle.net reporting; no Rust; net per scope.
+0x4b3fd0	glue	Score screen tab/backdrop control event proc (pInset.pcx)	equivalent	checked: confirmed: src/glue_score.rs:483 score_controls | Event 10 loads pInset.pcx backdrop image with flag 0x20 and shows; event 1 frees; matches. || triage: small; glue_score.rs:483 score_controls (backdrops pInset.pcx, event 10) and glue.rs:1598-1640 score screen.
+0x4b4a00	glue	Score screen init and slide-in	equivalent	checked: confirmed: src/glue.rs:1623 open_score | slide_in 500 ms over list 0x51a844, then glue_dialog_init, done in score open path and score_init. || triage: trivial; glue.rs:1623 (slide_in 500 ms over list 0x51a844, glue_dialog_init 0xf4); caller 4b4a30 ported as glue.rs score event proc.
+0x4b4ee0	glue	Lightup control wrapper (flag 0x80 around redraw)	replaced	trivial; Same as 4b2570. Rust lit draw native: dlg.rs:965 and dlg.rs:1751; flag juggling not needed.
+0x4b4f10	glue	Lightup button handler wrapper around lightup	replaced	trivial; Same as 4b25a0. Rust native lit draw dlg.rs:965/1751.
+0x4b51b8	glue	Campaign check then end dialog (expansion)	equivalent	checked: fragment-covered: Fragment of 0x4b5180 (expansion campaign event proc): short je at 0x4b518e, state 7. Covered by campaign_activate glue.rs:761-790 (exp). || triage: trivial; No callers in dump or exe (dead). Live logic in glue.rs:761-790 (campaign_activate, exp path).
+0x4b51e0	glue	Campaign check then end dialog (expansion, inverted)	equivalent	checked: fragment-covered: Fragment of 0x4b5180: short je at 0x4b518b, state 6. Covered by campaign_activate glue.rs:761-790 (exp). || triage: trivial; No callers in dump or exe (dead). Live logic in glue.rs:761-790 (campaign_activate, exp path).
+0x4b5220	glue	Expansion campaign select event proc and slide-in	equivalent	checked: confirmed: src/glue.rs:730-790 | Same as classic with 0x4b5180 activate check (campaign_check for ids 6/7/8) and slide-in. || triage: small; glue.rs:730-790 open_campaign(exp=true) with campaign_activate (0x4b5180 path) and slide-in (glue.rs:741).
+0x4b5500	glue	Loads exe resource by name into buffer	not-needed	checked: not-equivalent-dead: src/glue.rs:2954 exe_resource | Exe function has no callers or refs (dead). Rust exe_resource reads same resource type from StarCraft.exe for the live loaders 0x4b59a0/0x4b5450. || triage: trivial; glue.rs:2954 exe_resource(ty, name) reads StarCraft.exe resource directory (types 0x1b5c, 0x1b5d).
+0x4b57b0	glue	Error screen init: title, text, picture	equivalent	checked: confirmed: src/glue.rs:2281 error_dialog | Title in id 2, text in id 5 only if non-empty, fit_label, error picture from resource 0x1b5d; -2/-3 flag 0x20000 not reproduced (cosmetic). || triage: small; glue.rs:2281-2300 error screen (title id2, text id5), error_picture glue.rs:2237 (resource 0x1b5d).
+0x4b6010	glue	Adds one saved-game row to the load list	equivalent	checked: confirmed: src/glue.rs:1799 load_fill_rows | Each saved game inserted at row 0 with its name; ordering from save_files file-time insertion matches. || triage: small; src/glue.rs:1799 load_fill_rows (list_insert at row 0) fed by save_files (glue.rs:1752). Callback of 0x4cfd90; load screen only, not net.
+0x4b65d0	glue	Copies popup edit text out when closed	equivalent	checked: confirmed: src/glue.rs:2317 activate NewId | Edit text copied out on close (cap 0x18 for new id, edit limits it); Rust edit owns text. Equivalent. || triage: trivial; src/glue.rs:2317 activate, NewId arm reads dlg.get(4).text directly; the Rust edit owns its text (glue.rs:2105 open_edit_popup).
+0x4b6810	glue	Sets popup title and text labels, fits them	equivalent	checked: confirmed: src/glue.rs:2161 popup_dialog_pcx | Id 2 title and id 5 text (only if non-empty) set then fit_label, as in source. || triage: small; src/glue.rs:2161 popup_dialog_pcx sets ids 2 and 5 and calls fit_label (glue.rs:2430). Used by 0x4b7180 / 0x4b7a70 / 0x4b6e50 equivalents.
+0x4b6930	glue	Populates mission history list and selects first	equivalent	checked: confirmed: src/glue.rs:864 open_hist | Rows where record value<=best and flag!=0, data=index, first selected and scrolled; matches. || triage: small; src/glue.rs:864 open_hist: rows within best with gluHist.tbl flag text, first row selected. Caller 0x4b7820 ported as campaign gate.
+0x4b6a20	glue	Edit popup init: title, text, caret, Ok state	equivalent	checked: confirmed: src/glue.rs:2105 open_edit_popup, 2129 edit_ok_state | Title label, edit text and caret at end, preset flag when non-empty, Ok disabled if empty, focus. Matches. || triage: small; src/glue.rs:2105 open_edit_popup plus edit_ok_state (glue.rs:2129, 0x4b68c0). Covers the event-0 logic of gluPEdit.
+0x4b7cb0	glue	Looks up game record by name in tree	wait-net	small; Battle.net/join game list helper. Only caller is gluJoin 0x4b86c0 (deferred in re/buckets.txt); no Rust equivalent needed until networking.
+0x4b7d10	glue	Deletes all game-list items from the join list	wait-net	small; gluJoin list teardown (calls Ordinal_403 delete). Only caller is 0x4b8340, gluJoin list rebuild; deferred with networking.
+0x4b7da0	glue	Finds selected game record in join list	wait-net	trivial; gluJoin helper; callers 0x4b8090 and 0x4b8340 are both gluJoin. Deferred with networking (re/buckets.txt 0x4b86c0).
+0x4b7df0	glue	Join dialog helper: timers/cleanup	wait-net	trivial; Only caller is gluJoin event proc 0x4b8590 (case 1). Deferred with networking.
+0x4b7e10	glue	Join dialog helper: selects create button state	wait-net	trivial; Only caller is gluJoin event proc 0x4b8590 (case 0). Deferred with networking; not a single-player path.
+0x4b7e60	glue	Scrolls join game list to a game	wait-net	small; gluJoin list scroll; callers 0x4b8340 and 0x4b8090 are gluJoin code. Deferred with networking.
+0x4b7f50	glue	Adds one game entry to join list	wait-net	medium; gluJoin: passed to 0x4d37c0 as the per-game callback from 0x4b8340. Formats game names; networking games only. Deferred with networking.
+0x4b8090	glue	Formats game info (resolution, tags) for join list	wait-net	large; gluJoin: called from 0x4b8340 / 0x4b84a0 (game list). Map tags and resolution text from networking games only. Deferred with networking.
+0x4b8340	glue	Rebuilds gluJoin game list and enables buttons	wait-net	medium; gluJoin list rebuild, called from gluJoin event proc 0x4b84a0 and 0x4b8460. Network-only screen; deferred (gluJoin 0x4b86c0 in re/buckets.txt).
+0x4b8460	glue	Resets join list then rebuilds it	wait-net	trivial; gluJoin list refresh, caller 0x4b84a0 (event 0). Deferred with networking.
+0x4b84a0	glue	gluJoin list event proc	wait-net	small; Event proc of the gluJoin list (events 0 / 1 / 8 / 10 / 11). Its owner dialog 0x4b86c0 is deferred networking (re/buckets.txt line 175).
+0x4b8560	glue	gluJoin dialog init and slide-in	wait-net	trivial; Event 10 of gluJoin, called from event proc 0x4b8590 (case 10). Deferred with networking.
+0x4b8590	glue	gluJoin dialog event proc and close	wait-net	medium; gluJoin event proc, registered via 0x41a080 in 0x4b86c0 (gluJoin.cpp). Deferred with networking (re/buckets.txt line 175).
+0x4b8870	net	Lobby chat message switch	wait-net	
+0x4b89a0	net	Chat panel hide loop	wait-net	
+0x4b89f0	net	Chat panel show and hide	wait-net	
+0x4b8c80	net	Chat panel text display	wait-net	
+0x4b8d70	unknown	Clears state and calls shutdown helpers	later	
+0x4b8d90	net	Chat helper flag	wait-net	
+0x4b8de0	net	Creates chat object	wait-net	
+0x4b9170	net	Chat list layout and scroll	wait-net	
+0x4b91c0	net	Chat message dispatch	wait-net	
+0x4b9300	net	Formats chat player message	wait-net	
+0x4b9480	net	Chat player list text	wait-net	
+0x4b9730	net	Chat error dialog	wait-net	
+0x4b9770	net	Chat panel hide and slide	wait-net	
+0x4b9810	net	Chat dialog init	wait-net	
+0x4b9830	glue	Net dialog end: credits and CD check helper	wait-net	small; Called from net lobby handlers 0x4b9b10 and 0x4b9bf0 (FUN_004d4130 start-from-lobby path). Multiplayer; wait for networking.
+0x4b98d0	net	Chat input clear	wait-net	
+0x4b9910	glue	Net lobby event proc: start, connect, CD check	wait-net	medium; Event proc of the net lobby dialog 0x4b9c20 (case 2). Uses 0x4d4130 / 0x4d4340 (wait-net). Multiplayer only; decided with own networking.
+0x4b9b10	net	Chat key handling	wait-net	
+0x4b9bf0	net	Chat helper	wait-net	
+0x4b9c20	net	Chat dialog key handling	wait-net	
+0x4bacb0	net	Connection list item update	wait-net	
+0x4bad10	net	Connection list selection	wait-net	
+0x4bad70	net	Connection dialog slide-in	wait-net	
+0x4bade0	net	Create game entry	wait-net	
+0x4bae20	net	Connection dialog end	wait-net	
+0x4bb170	net	Network error helper	wait-net	
+0x4bb5a0	audio	DirectSound buffer creation	later	
+0x4bb600	audio	DirectSound cooperative level	later	
+0x4bb640	audio	DirectSoundCreate loader	later	
+0x4bba20	audio	Sound helper	later	
+0x4bba90	audio	Sound helper	later	
+0x4bc110	audio	WAV playback	later	
+0x4bc5e0	audio	Plays sound file	later	
+0x4bc620	audio	Sound thread wait and load	later	
+0x4bcb20	audio	Sound file path format	later	
+0x4bcb70	audio	Sound memory cache loader	later	
+0x4bd190	map	Free gamemap buffers	later	
+0x4bdac0	gfx	Light data file loading	later	
+0x4bddd0	map	Load tileset dark lighting image	later	
+0x4bde60	map	Load tileset light image	later	
+0x4bdfa0	gfx	Light map pixel blending	later	
+0x4be1a0	gfx	Light helper	later	
+0x4be430	hud	leaderboard title layout	equivalent	checked: confirmed: src/leaderboard.rs:74-100 | Title x = min(first value x + text width + 4, value right +4); text from map string 0x58d714 else stat_txt 0x330+action / 0x325+action; matches 0x4be54d table. || triage: small; leaderboard.rs:74 (title after first row text, inside leaderboard::draw, leaderboard.rs:45). Drawn per frame, not via dialog callbacks.
+0x4be670	hud	leaderboard fill, one value per player	ported	wave 2 2026-10-24 | checked: partial: src/leaderboard.rs:45 draw | Rows/values/title ok; missing 0x597288 toggle (0x4bec00 via key 0x638b) that hides rows beyond the first; comment says always on. || triage: medium; leaderboard.rs:45 draw (one-value path for action 0x11..0x15 / 0x21..0x25); rows from st.trig.leaderboard_table. Callers 0x4bec00 / replay_show are the toggle and /replay show.
+0x4be860	hud	leaderboard fill, minerals and gas	ported	wave 2 2026-10-24 | checked: partial: src/leaderboard.rs:45 draw | Minerals/gas labels, colour boxes and two icons match. Missing: 0x4bec00 hotkey toggling 0x597288 (collapses list to first row); port always shows all rows. || triage: medium; leaderboard.rs:45 draw, two-value path for action 0x28 (`two`). Same draw function as 0x4be670; callers 0x4bec00 / replay_show.
+0x4bec00	gfx	Light helper	later	
+0x4bec40	hud	leaderboard control callbacks and 1 s timer	replaced	small; Sets per-control icon callbacks and set(1000). Rust redraws the dialog every frame (leaderboard.rs:44 ponytail note), no callback table needed.
+0x4bef40	data	Path name handling	later	
+0x4bf370	saveload	Packed data helper	later	
+0x4bfc50	net	Wrapper sending network command packet	wait-net	
+0x4bfc80	net	Wrapper sending network command packet	wait-net	
+0x4bfcb0	net	Wrapper sending network command packet	wait-net	
+0x4bfd30	net	Wrapper sending network command packet	wait-net	
+0x4bfd50	net	Wrapper sending network command packet	wait-net	
+0x4bfd70	net	Wrapper sending network command packet	wait-net	
+0x4bfd90	net	Wrapper sending network command packet	wait-net	
+0x4bfdb0	net	Wrapper sending network command packet	wait-net	
+0x4bfe10	net	Wrapper sending network command packet	wait-net	
+0x4bfe30	net	Wrapper sending network command packet	wait-net	
+0x4bfe50	net	Wrapper sending network command packet	wait-net	
+0x4bfe70	net	Wrapper sending network command packet	wait-net	
+0x4bfe90	net	Wrapper sending network command packet	wait-net	
+0x4bfeb0	net	Wrapper sending network command packet	wait-net	
+0x4bfed0	net	Wrapper sending network command packet	wait-net	
+0x4bfef0	net	Wrapper sending network command packet	wait-net	
+0x4bff10	net	Wrapper sending network command packet	wait-net	
+0x4bffa0	net	Wrapper sending network command packet	wait-net	
+0x4c0030	net	Wrapper sending network command packet	wait-net	
+0x4c0050	net	Wrapper sending network command packet	wait-net	
+0x4c00c0	net	Wrapper sending network command packet	wait-net	
+0x4c00e0	net	Wrapper sending network command packet	wait-net	
+0x4c01a0	net	Wrapper sending network command packet	wait-net	
+0x4c01c0	net	Wrapper sending network command packet	wait-net	
+0x4c01e0	net	Wrapper sending network command packet	wait-net	
+0x4c0200	net	Wrapper sending network command packet	wait-net	
+0x4c0220	net	Wrapper sending network command packet	wait-net	
+0x4c0240	net	Wrapper sending network command packet	wait-net	
+0x4c0260	net	Wrapper sending network command packet	wait-net	
+0x4c0280	net	Wrapper sending network command packet	wait-net	
+0x4c02a0	net	Wrapper sending network command packet	wait-net	
+0x4c02c0	net	Wrapper sending network command packet	wait-net	
+0x4c0420	net	Wrapper sending network command packet	wait-net	
+0x4c0480	net	Wrapper sending network command packet	wait-net	
+0x4c04b0	net	Wrapper sending network command packet	wait-net	
+0x4c0540	net	Wrapper sending network command packet	wait-net	
+0x4c0560	net	Wrapper sending network command packet	wait-net	
+0x4c05a0	net	Wrapper sending network command packet	wait-net	
+0x4c05c0	net	Wrapper sending network command packet	wait-net	
+0x4c2420	unknown	String handling with player flags	later	
+0x4c3010	saveload	Compression helper	later	
+0x4c3040	saveload	Compression helper	later	
+0x4c3090	saveload	Compression helper	later	
+0x4c35f0	hud	status fluff panel blit from console	equivalent	checked: confirmed: src/ui.rs:513/531 Fluff.bg | Source snapshots console pixels under the panel at panel creation; Rust copies at load (static, equivalent). || triage: trivial; ui.rs:513/531 Fluff.bg copies console pixels at load. statdata.rs:653 todo_port refresh is a dirty-flag marker only. Per-frame re-copy not verified.
+0x4c3780	hud	game-end HUD global cleanup and frees	replaced	small; Called from write_last_replay (0x4ee8c0). Rust drops per-game Scene/Ui state and has no such globals; nothing to port.
+0x4c3c90	net	Sets player slot defaults	wait-net	
+0x4c4870	map	Opens map archive	later	
+0x4c4980	net	Slot state and chat call	wait-net	
+0x4c4a80	map	Map info load and format	later	
+0x4c4c50	map	Map download path setup	later	
+0x4c5590	net	Net misc helper	wait-net	
+0x4c5a80	sim	Subtract deaths, lost units, score per player	equivalent	checked: confirmed: src/bw/triggers.rs:2363 modify_player_value (modifier 9, default arm), for_group 2305 | Dispatch (13 cur, 14-17,26 sums, 18-21 force, 22-25 and >7 return 0) matches; 0xe6/e7/e8 -> 0x581e74/581fc4/5820e4, kind<0xe4 -> deaths[kind][p]; floor at 0 matches saturating_sub; 0xe4/0xe5 no-op. || triage: small; Rust triggers.rs:2361-2430 modify_player_value (modifier 9; kinds 0xe6-0xe8 and unit deaths); for_group triggers.rs:2305. Dump callers are self-callbacks only.
+0x4c5c60	sim	Add deaths and lost units per player	equivalent	checked: confirmed: src/bw/triggers.rs:2363 modify_player_value (modifier 8, default arm) | Same fields as 0x4c5a80, plain wrapping add; kind<0xe4 only; 0xe5 no-op. Group dispatch matches. || triage: small; Rust triggers.rs:2361-2430 modify_player_value (modifier 8); for_group triggers.rs:2305. Same arithmetic. Batch note "group-count switch" is wrong.
+0x4c5f20	sim	Subtract score categories per player	equivalent	checked: confirmed: src/bw/triggers.rs:2363 modify_player_value (action 0x1b, modifier 9) | Kind 0 quarter (n+3)>>2 on 581ed4/582024/581f04/582054; 1/2/4/5 single; 3 and 6 half (n+1)>>1 pairs; 7 custom 5822f4; floored at 0. Field mapping verified in players.rs. || triage: small; Rust triggers.rs:2361-2430 score arm 0x1b modifier 9; quarter and half rounding and kinds 0-7 match. Batch note "group-count switch" is wrong.
+0x4c61e0	sim	Add score categories per player	equivalent	checked: confirmed: src/bw/triggers.rs:2363 modify_player_value (action 0x1b, modifier 8) | Same kind mapping and rounding as 0x4c5f20, wrapping add, kinds >7 no-op, p>=8 no-op. || triage: small; Rust triggers.rs:2361-2430 score arm 0x1b modifier 8; kinds 0-7 only, matching. Batch note "group-count switch" is wrong.
+0x4c65c0	sim	Subtract player resource floored at zero, group dispatch	equivalent	checked: confirmed: src/bw/triggers.rs:2363 modify_player_value (action 0x1a, modifier 9) via arm 1285 | Kind 0 minerals 0x57f0f0, 1 gas 0x57f120, 2 both, others no-op; floored at 0; gathered totals untouched on subtract (Rust modifier 9 leaves them). Group dispatch matches. || triage: small; triggers.rs:2363 modify_player_value (modifier 9, action 0x1a) via for_group 2305, called from arm 1285. Kind 0 minerals, 1 gas, 2 both. Decompile caller is the 0x4c6d80 set-resources path (0x4c6d9a).
+0x4c6700	sim	Add player resource and gathered totals, group dispatch	equivalent	checked: confirmed: src/bw/triggers.rs:2363 modify_player_value (action 0x1a, modifier 8) via arm 1285 | Adds to 0x57f180+0x57f0f0 (minerals) and 0x57f150+0x57f120 (gas) by kind 0/1/2; Rust adds resource and gathered together. Others no-op. || triage: small; triggers.rs:2363 modify_player_value (modifier 8, action 0x1a) via for_group 2305, arm 1285. Same kind mapping as 0x4c65c0. Caller 0x4c6db0 in the 0x4c6d80 path.
+0x4c69c0	sim	Generic unit loop: location, group, type filter, callback	equivalent	checked: confirmed: src/bw/triggers.rs:1342-1363 (0x30-0x35 arm) + trigger_units_in 1901 | Struct: group,+4 loc flags(loc+0x12),+6 type,+8 count,cb,value. Order count!=0, location_excludes, unit_in_group, type (0xe5 any, e6/e7/e8 flags 8/0x10/0x20 of 0x6637a0, else exact), cb, count-- if nonzero return. Rust matches. || triage: small; triggers.rs:1901 trigger_units_in plus count, location_excludes, unit_in_group and trigger_type_matches checks in arms 1334-1360. Type flags 0xe6-0xe8 match staredit group flags.
+0x4c70b0	sim	Trigger action: set unit resources	fixed	checked: mismatch, fixed 2026-10-23: resources loop uses unit type 0xe5 (any), triggers.rs arm 0x34 || triage: small; triggers.rs arm 0x34 (1334-1351) calls trigger_set_resources (2096, 0x4c5670) in the generic unit loop. Location gate matches the action's location byte.
+0x4c7170	sim	Trigger action: set unit shields	equivalent	checked: confirmed: src/bw/triggers.rs:1334 arm 0x33 + :2084 trigger_set_shields | Dis: loc/player/type/modifier (0 gives 0xffff)/number set up, callback 4c5a20 via loop 4c69c0 (count, location_excludes, group, type, count-- on true). Shield enable 6647b0, max 660e00, unsigned min, <<8 all match. || triage: small; triggers.rs arm 0x33 (1334-1351) calls trigger_set_shields (2084, 0x4c5a20) in the generic unit loop.
+0x4c7230	sim	Trigger action: set unit energy	equivalent	checked: confirmed: src/bw/triggers.rs:1334 arm 0x32 + :2071 trigger_set_energy | Same generic loop with callback 4c6aa0: flags&0x200000, not hallucination, (max>>8)*pct/100 truncated to byte, min with max>>8, <<8 (4013b0). Rust matches. || triage: small; triggers.rs arm 0x32 (1334-1351) calls trigger_set_energy (2071, 0x4c6aa0) in the generic unit loop.
+0x4c72f0	sim	Trigger action: set invincibility on units	equivalent	checked: confirmed: src/bw/triggers.rs:1366 arm 0x2b + :2110 trigger_invincibility | Callback 4c6b00: top-level location check (flag 1), recursion into passengers with flag 0 (Rust None), 0x2a upgrade 0x58d2c8 test, modifiers 4/5/6 on 0x4000000 with dat 0x20000000 guard. Matches; arm gates location 0. || triage: small; triggers.rs arm 0x2b (1366-1372) calls trigger_invincibility (2110, 0x4c6b00) over the location's units. Decompile lacks the location gate; the loop supplies it.
+0x4c7400	sim	Find trigger unit, else centre of location	equivalent	checked: confirmed: src/bw/triggers.rs:1820 find_trigger_unit + arm 0x26 (~1408) | find 4c7380 (loc-1, type, player, box + flags 0x58dc72, callback 4c6f70); found unit gives sprite +0x14/+0x16 (movsx), else (l+r)/2,(t+b)/2 signed trunc-toward-zero. Rust identical. || triage: trivial; find_trigger_unit (triggers.rs:1820) plus inline centre fallback in arm 0x26 (about 1408-1412). Uses sprite position for a found unit and (left+right)/2, (top+bottom)/2 otherwise.
+0x4c7460	sim	Trigger action: centre location on a unit	equivalent	checked: confirmed: src/bw/triggers.rs:1403-1446 arm 0x26 | Gates (loc!=0, 0<number<=0xff), centre delta via trunc /2, left/top<0 clamp then right>=0x628450 / bottom>=0x6284b4 clamp in same order, then 0x685180=0 (snapshot_kind). All match. || triage: small; triggers.rs arm 0x26 (about 1403-1446): same recentre, clamp to map_px, snapshot reset. Gates for location 0 and number 0 or over 0xff are caller side in Rust. Caller 4c74a0 is inside this function.
+0x4c75b0	sim	Trigger action: set doodad state, toggle, enable, disable	equivalent	checked: confirmed: src/bw/triggers.rs:1448-1463 arm 0x2a + :1869 trigger_doodad_state | Jump table: mod 0,6 -> 47bc10 toggle, 4 -> 47ba00 enable (0xac), 5 -> 47b960 disable (0xad), 1-3 and >6 nothing. Order-queue loop (665040 interruptible) and 4745f0 append (0xe4,0,0) + 475000 match. || triage: small; triggers.rs arm 0x2a (1448-1463) with trigger_doodad_state (1869). Modifier 0 and 6 match 0x47bc10 toggle; modifier 4 and 5 match enable and disable paths.
+0x4c7890	sim	Trigger action: transmission, single player	replaced	medium; triggers.rs:1555-1606 action 7 keeps the gates, timers, selection flash, ping and alert position. Replaced: headless wait uses game ms, subtitle gate 0x400 and reading-time text left to front end.
+0x4c79f0	sim	Trigger action: order units to location	equivalent	checked: confirmed: src/bw/triggers.rs:1326-1338 arm 0x2e + :1987 trigger_order_unit | Dest centre signed /2, kind from modifier (0->6,1->0x98,2->0xe,else 0x17). Callback 4c7630 checks (flag1 order 0x47/0x48, status 0x20000, 0xe, 0x49/0x55, player type 3/4, burrow path, guard home +0x12/+0x14) all match. || triage: small; triggers.rs arm 0x2e (about 1326-1338) uses trigger_order_unit (1987, 0x4c7630) with destination the centre of location number.
+0x4c7c20	sim	Trigger action: set unit hit points	equivalent	checked: confirmed: src/bw/triggers.rs:1334 arm 0x31 + :2053 trigger_set_hp | Callback 4c7b60: maxhp*pct u32 wrap /100 min 1, 467340 clamp and flames/strength, hallucination 0x546 or type 0x28 -> 0x708 remove timer min. Only 497430 (image redraw flag) not ported, render-only. || triage: small; triggers.rs arm 0x31 (1334-1351) calls trigger_set_hp (2053, 0x4c7b60) in the generic unit loop.
+0x4c8200	sim	Trigger action: give unit to player	fixed	2026-10-23 wave 1 (reviewed vs asm) || checked: mismatch: src/bw/triggers.rs:1334 arm 0x30 + src/bw/spells.rs:1551 give_unit_with_parts | Callback is 4c8040 not 4c8290. (1) Skip cases (hallucination, excluded types, same owner) return 0 in exe but Rust returns true so count is decremented. (2) number 13 (Current Player) maps to 6509b0 in exe; Rust does value as u8 and rejects 13. || triage: small; triggers.rs arm 0x30 (1334-1351) calls give_unit_with_parts in the generic unit loop. Decompile callback 0x4c8290 is the give path.
+0x4c8970	sim	Trigger action: move units to location	fixed	2026-10-23 wave 1 (reviewed vs asm) || checked: mismatch: src/bw/triggers.rs:1315-1326 arm 0x27 + :1941 trigger_move_unit + :1663 snap_building | Unit path and filters match. Building path 4c82d0 snap uses unsigned compare (x-halfwidth) jb mapw, so negative becomes mapw-1; Rust snap_building clamp(0,..) gives 0. Differs when centre minus half placement box is negative near map left/top edge. || triage: small; triggers.rs arm 0x27 (about 1315-1326) with trigger_move_unit (1941, 0x4c8700); count passed as the left argument. Global 0x5971d8 is only this counter, kept local in Rust.
+0x4c8b60	sim	Trigger action: add hangar fighters	equivalent	checked: confirmed: src/bw/triggers.rs:1334 arm 0x35 + :2027 trigger_add_fighters | Callback 4c8a30: types 0x48/0x52->0x49, 0x53/0x51->0x55, loop signed < number, can_make_unit==1, create at sprite pos, finish pre/start, parent +0xc0, dock; result made!=0. Rust matches; UI globals skipped. || triage: small; triggers.rs arm 0x35 (1334-1351) calls trigger_add_fighters (2027, 0x4c8a30) in the generic unit loop.
+0x4c8d90	sim	Trigger action: create unit with properties	equivalent	checked: confirmed: src/bw/triggers.rs:1465-1477 arm 0xb/0x2c + :1620 trigger_create_unit | Both actions 11 and 44 use 4c8d90. Count (0->1) outer loop, per-group 4c8c20: player<8, resource types->owner 0xb, centre (y in eax, x in ecx), props 1..0x40 -> 4cd480. 51ca10 readers are game-start shuffle only. || triage: small; triggers.rs:1465-1477 arm 0xb and 0x2c loops modifier count, calls trigger_create_unit (1620, 0x4c8c20). Temporary 0x51ca10 seed write has no reader in unit creation (readers 0x490000, 0x4a2c20).
+0x4c8e80	gfx	Sample pixel from packed image	later	
+0x4c9030	unknown	Options dialog helper	later	
+0x4c9150	sim	Copy one dialog control state after a timer, in-game menu	ported	wave 2 2026-10-24 | checked: port: Only when multiplayer or replay (via 0x4c9440): copies text of label -13 (replay) or -10/-11/-12 into control 2 of the in-game menu and shows it. Replay-visible cosmetic text; not in menu.rs. || triage: small; Called from 0x4c9440 via 0x4ca160 (in-game menu init). Rust shows or hides controls by mode in menu.rs:560-580 only. Decider: whether the 120 s elapsed_seconds gated copy is visible in the port's quit dialog.
+0x4c9280	hud	quit / restart OK sets next screen	ported	wave 2 2026-10-24 | checked: partial: src/menu.rs:1337; src/glue.rs:3192 | SP quit sets state 4 correctly; multiplayer-game branch (screen 6/7 score by 0x58d700 result, e.g. replay of MP game) not handled; 0x6d0f31 copy not kept. || triage: small; menu.rs:1332-1347 on_activate maps -2 to Action::QuitMission / Restart / ExitProgram; screen choice in glue.rs:3192 (0x51ce90 6/7 per mission outcome).
+0x4c9360	hud	previous or close helper for in-game menus	equivalent	checked: confirmed: src/menu.rs:1200-1201,1272 | Back to game menu (0x4ca450) when depth>1 else close; matches. || triage: trivial; menu.rs:1200-1201 (-3 with depth > 1 goes back to Kind::Game, else Closed); menu.rs:1272 Game -3 closes.
+0x4c9440	hud	EndMission layout: hide control 1 in replay	ported	wave 2 2026-10-24 | small; Called from 0x4ca160 when callback is 0x4ca370 (EndMission). menu.rs open() has no EndMission arm to hide control 1 in replays or multiplayer. BNET timer part is net.
+0x4c94f0	hud	options menu hides network button in single player	equivalent	checked: confirmed: src/menu.rs:572 | Control 4 hidden when not multiplayer. || triage: trivial; menu.rs:572-573: Kind::Options with !ctx.multiplayer hides control 4 (show(&mut dlg, 4, false)).
+0x4c9530	net	Leave game and open menu	wait-net	
+0x4c9780	hud	options Cancel restores saved settings	equivalent	checked: confirmed: src/menu.rs:1316-1330 | Cancel restores 9-word settings copy (replay keeps speed), OK sets depth 1 so dialog closes; volume state read live. || triage: small; menu.rs:1316 comment and on_activate (Speed/Sound/Video, -3) restore `saved` settings (0x6cdfd4 copy); replay keeps speed. Reset calls 0x484cc0 / 0x4bc320 are view-side.
+0x4c9800	hud	menu close: unpause and replay globals restore	partial	wave 2: 0x6d120c / 0x5968e0 / 0x6d1214 not modelled | small; menu.rs:420 doc says 0x596904==3 restore of 0x6d120c / 0x5968e0 and clearing 0x6d1214 is not modelled. Unpause part is view.rs (unpause_game). key_down reset not checked.
+0x4c9890	hud	in-game menu button enable and 2-minute save wait	ported	wave 2 2026-10-24 | checked: partial: src/menu.rs:562-568 | Port lacks the 200 ms dynamic state: Pause(7) shown only when not paused and allowed, Resume(8) when paused, Save(1) disabled 2 min after save in multiplayer. Port hides 1,7 in multiplayer; save_wait only on click. || triage: small; menu.rs:1190/1251 and save_wait use GetTickCount-equivalent (web_time); menu.rs:562-568 hides/shows controls 1,2,7,8 by multiplayer/replay.
+0x4c99c0	gfx	Build visible palette index list	later	
+0x4c9a90	saveload	Save wait and dialog state	later	
+0x4c9c40	unknown	Options dialog assert string	later	
+0x4c9f60	hud	hotkey opens options menu	ported	wave 2 2026-10-24 | checked: partial: src/view.rs:3434 Alt+O -> Kind::Options | Opens options (callback 0x4ca0a0). Source open_4f57a0 also cancels placing and targeting; Rust does not. Rust blocks the hotkey in replays (replay.is_none() gate), source does not. || triage: trivial; view.rs:3434 Alt+O -> Kind::Options; menu.rs:1311 0x4ca0a0 options callback. Hotkey dispatch 0x4846e0 is view-side.
+0x4ca07e	hud	credits close wrapper, unreferenced	equivalent	checked: fragment-covered: Fragment of 0x4ca010: je at 0x4ca05c when depth counter 0x6d1224 hits 0, then 0x419ea0 closes the dialog. Covered by menu.rs:1315 (depth>1 else) and 1348 (_, -3) Closed. || triage: trivial; No reference in code or data (absolute and relative scan found none). Dead; credits close is handled in glue_credits.rs.
+0x4ca128	hud	credits close wrapper, unreferenced	equivalent	checked: fragment-covered: Fragment of 0x4ca0a0: je at 0x4ca106 when depth counter reaches 0, closes dialog (0x419ea0). Covered by menu.rs:1315 and 1348. || triage: trivial; No reference in code or data (absolute and relative scan found none). Dead; same as 0x4ca07e.
+0x4ca160	hud	in-game menu open and depth counter	ported	wave 2 2026-10-24 | checked: partial: src/menu.rs:520-580 | Background, styles, Options hide button 4 in SP, quit2mnu hide 1 present; missing EndMission hides in MP/replay (restart btn, 0x4c9150 label) and pause/resume (7/8) visibility by paused/MP rules. || triage: medium; Menu::open menu.rs:~520-580 (background via skin.menu_background, buttons 1..32, OK/Cancel styles, Kind-specific hides). Depth counter is Menu.depth (menu.rs:~390).
+0x4ca2f0	hud	hotkey opens quit-mission dialog	equivalent	checked: confirmed: src/menu.rs:369; src/view.rs:3433 | Replay opens quitrepl (0x4c9280) else quit2mnu (0x4c95a0) menu; matches. || triage: trivial; menu.rs:369 Kind::QuitMission (quitrepl.bin in replay, quit2mnu.bin otherwise); view.rs:3433 Ctrl/Alt+Q opens it.
+0x4ca330	hud	hotkey opens quit dialog	ported	wave 2 2026-10-24 | checked: partial: src/view.rs:3436 -> Kind::Quit; menu.rs:1338 | Quit -2 exits like 0x4c96d0. Same gaps: targeting/placement not cancelled on open, hotkey blocked in replays. || triage: trivial; view.rs:3436 Ctrl/Alt+X -> Kind::Quit; menu.rs:1338 Quit -2 -> ExitProgram. Callback 0x4c96d0 is not in the dump (LAB_), so exact key not verified.
+0x4ca350	hud	Open the Help menu with its handler	ported	wave 2 2026-10-24 | checked: partial: src/view.rs:3432-3436 | Help opens on F1/Alt+H but only when replay.is_none(); original opens Help menu also in replays. || triage: trivial; Help opens via F1 / Alt+H (view.rs:3432, Kind::Help) and on_activate Help cases (menu.rs:1274-1276). Reached from dispatcher 0x4846e0 (cmd -0x638c). Callback 0x6d1234 is implicit in Menu.
+0x4ca370	hud	End-mission menu item switch and open	equivalent	checked: confirmed: src/menu.rs:1332-1338 | 1 Restart, 2 QuitMission, 3 Quit, -3 back to game menu when depth>1 else close; matches. || triage: small; menu.rs:1332-1336 on_activate EndMission 1/2/3 to Restart/QuitMission/Quit; back via depth (menu.rs:1338). Callback-driven (0x6d1234 set by 0x4c9280/0x4c9530). Register args: none.
+0x4ca4b4	hud	Credits close with menu depth reset	equivalent	checked: confirmed: src/menu.rs:1267 (Game, -3) Closed | Sets depth 0x6d1224 and destroys dialog; Rust Menu drops with depth reset. Game menu cancel verified. || triage: trivial; Sets menu depth and closes the dialog. Port: Menu.depth (menu.rs:536-560) and Action::Closed (menu.rs:1267-1275). No direct callers in dump; reached via callback. Register arg: param_2 (depth).
+0x4ca500	hud	Open the game menu with its handler	equivalent	checked: confirmed: src/view.rs:3253 open_menu(Game) | F10 and MENU button open game menu, pause under it; replay allowed. || triage: trivial; Game menu opened by F10 / menu button (view.rs:3254, Menu Kind::Game); on_activate Game cases (menu.rs:1271-1290). Reached from dispatcher 0x4846e0 (cmd -0x6385).
+0x4ca540	ai	League cnd file name	later	
+0x4ca6d0	unknown	Flag-checked dialog handler	later	
+0x4ca7d0	unknown	Flag-checked dialog handler	later	
+0x4ca8d0	unknown	Flag-checked dialog handler	later	
+0x4ca9f0	unknown	Flag-checked dialog handler	later	
+0x4cab10	unknown	Flag-checked dialog handler	later	
+0x4cacd0	unknown	Map header helper	later	
+0x4caee0	unknown	Map header helper	later	
+0x4caeef	unknown	Map header helper	later	
+0x4caf40	unknown	Map header helper	later	
+0x4cb040	map	Copies map header data	later	
+0x4cb190	map	Track map unit placement record	later	
+0x4cb3a0	map	Map header helper	later	
+0x4cb420	map	Map header helper	later	
+0x4cb490	map	Map header helper	later	
+0x4cb500	map	Map header helper	later	
+0x4cb670	map	Map header helper	later	
+0x4cb940	map	Map header loop	later	
+0x4cbc40	map	Loads VCOD map resource	later	
+0x4cbe00	map	Map flag setter	later	
+0x4cbe70	map	Map header helper	later	
+0x4cbf60	sim	Set unit +0xd0 and refresh mineral frames	equivalent	checked: confirmed: src/bw/chk_load.rs:518-523 chk_unit_props (inline), mineral_frames :581 | Standalone copy has no callers; identical logic is inlined in 4cd480 at 4cd4f7: valid 0x100000, flags 0x2000, word +0xd0 from p+8, types 0xb0-0xb2 -> 468830. mineral_frames thresholds match. || triage: trivial; chk_load.rs:518-523 chk_unit_props (valid 0x100000, unit flag 0x2000, types 0xb0-0xb2 call mineral_frames at chk_load.rs:581). No e8 caller in exe; inlined in Rust.
+0x4cc1b0	sim	Scale unit value by percent, shields	equivalent	checked: confirmed: src/bw/chk_load.rs:508-513 chk_unit_props | Standalone copy is dead; inlined at 4cd4bb: shields max 660e00 * pct /100 (u32), min, <<8 stored +0x60 only if valid&0x40000. Rust matches. 660e00 is the units.dat shields table (same as trigger_set_shields). || triage: trivial; chk_load.rs:508-513 shield percent under valid 0x40000, min with max, shifted by 8. Assumes DAT_00660e00 is the units.dat shields table; not checked.
+0x4cc2a0	map	check map version header	later	
+0x4cc420	map	open map archive header	later	
+0x4cc610	sim	Cloak tech step on unit properties	equivalent	checked: equivalent: Stack arg is the owner player (CUnit +0x4c = player byte), not a tech. Tech = cloak_tech(unit) via 0x491a50 (eax=unit, from type +0x64), then can_use_tech(tech, player). chk_load.rs:527-533 passes (cloak_tech(type), player). Matches. || triage: trivial; chk_load.rs:527-533 uses cloak_tech(unit type). Decompile passes unit+0x4c as the tech arg; +0x4c may be player. Decider: disassembly at 0x4cc610 and the CUnit +0x4c field meaning.
+0x4cc650	sys	maphdr assertion string	later	
+0x4cd070	sim	Create hallucination from unit properties	equivalent	checked: confirmed: src/bw/chk_load.rs:565-567 chk_unit_props -> make_hallucination :602 | Dead standalone gate (valid&8 and state nonzero -> 4f6420, ecx=unit); inlined at 4cd594 as valid&8 and state&8. Rust same condition and position (after lift, before invincible). || triage: trivial; chk_load.rs:565-567 (valid 8 and state 8) calls make_hallucination (chk_load.rs:602, 0x4f6420). Gate shape matches the decompile's bit and flag test.
+0x4cda00	sim	Set UI button graphic style and flags	replaced	trivial; UI button style only, graphics table 0x512768. Rust covers it with menu.rs:451 style table and dlg/buttons code. No game state.
+0x4cda80	hud	Set OK/Cancel control graphic and wide flag	ported	wave 2 2026-10-24 | checked: partial: src/menu.rs:554-566 | OK style 3 + wide for option/save/ok dialogs and style 4 for Defeat match. Tips dialog (0x47e96e) sets OK style 3 but port uses 4 for Tips and restyles its Cancel too. Graphic only. || triage: small; Menu::open styles -2 OK and -3 Cancel with GRAPHICS and WIDE flag (menu.rs:558-566). Callers are all menu openers (0x460d60, open_tip, 0x480e70, 0x481e80, 0x490e40), now in menu.rs. in_EAX = dialog; param_1 style, param_2 flags.
+0x4cfcc0	saveload	write save header info	later	
+0x4cfe40	data	locate file in archive	later	
+0x4d0910	unknown	return cached global value	later	
+0x4d0930	sys	exception code name lookup	later	
+0x4d0cb0	sys	crash stack module lookup	later	
+0x4d0db0	sys	write crash call stack report	later	
+0x4d0e90	sys	hex dump memory for crash log	later	
+0x4d1120	sys	install unhandled exception filter	later	
+0x4d1380	unknown	check input flag state	later	
+0x4d13e0	hud	Classify cursor over unit for targeting	equivalent	checked: confirmed: src/view.rs:797-819 cursor_kind | Codes 5/2/3/4 targeting, 8/6/7 not; enemy test (alliance 0, not replay) matches 0x4d1380; placing returns 0. || triage: small; view.rs:797-819 cursor_kind: targeting none->5, neutral->2, enemy/ally->3/4; no target: neutral->8, else 6/7. Same codes as 0x4d13e0; placing returns 0 as DAT_00640880 does.
+0x4d16f0	sys	IME context setup	later	
+0x4d1750	hud	Show or hide arrow cursor and recenter	replaced	small; Rust draws its own cursor (view.rs cursor_kind) and minifb set_cursor_visibility (glue.rs:3083, view.rs:2918). SetCursorPos recentering is a Win32 refresh quirk and is not needed.
+0x4d17b0	sys	clear key state table	later	
+0x4d1810	sys	poll modifier key state	later	
+0x4d1880	sys	enumerate windows for instance check	later	
+0x4d1900	sys	invoke optional callback	later	
+0x4d1940	hud	Release mouse capture and update button state	replaced	trivial; minifb polls mouse buttons each frame (glue.rs:3406-3421); there is no capture to release. Caller is the WM_* handler 0x4d1d70, which the port replaces with the minifb loop.
+0x4d19c0	hud	Set mouse capture and record button down	replaced	trivial; Same as 0x4d1940: minifb polls button state (glue.rs:3411, 3421); no SetCapture needed. Register args: in_AX button bit, unaff_ESI packed position.
+0x4d1a50	hud	Set mouse capture (variant) and record button	replaced	trivial; Same as 0x4d19c0: minifb polls mouse state; no capture needed. Callers are the 0x4d1d70 message handler.
+0x4d1b40	gfx	save screenshot PCX file	later	
+0x4d1d40	sim	Window capture-loss handler, clears pending reset flags	replaced	small; WM_CAPTURECHANGED (0x215) case in WndProc 0x4d1d70. Port has no Win32 WndProc; window and input state is Rust-native, so the 0x2a pending flags have no direct analogue.
+0x4d1d70	sys	main window message procedure	later	
+0x4d26b0	sys	gamedata assertion string	later	
+0x4d2700	sys	critical section enter and leave	later	
+0x4d2770	sys	fatal error in gamedata init	later	
+0x4d2800	sys	fatal error in gamedata	later	
+0x4d2840	sys	fatal error in gamedata	later	
+0x4d29d0	sys	wait on handles and close	later	
+0x4d2aa0	sys	GetLastError check helper	later	
+0x4d2bf0	sys	last error fatal check	later	
+0x4d2c70	sys	last error fatal check	later	
+0x4d2e40	sys	gamedata assertion string	later	
+0x4d2e60	sys	gamedata assertion string	later	
+0x4d3070	sys	load accelerator table	later	
+0x4d3370	net	copy chat entry name	wait-net	
+0x4d35e0	net	format and delete chat list entries	wait-net	
+0x4d37c0	net	enumerate network list with callback	wait-net	
+0x4d3810	net	free network chat state	wait-net	
+0x4d3860	net	net chat init	wait-net	
+0x4d3910	net	Handle net game start failure	wait-net	
+0x4d4130	net	start network game from lobby	wait-net	
+0x4d4340	net	net glue helper	wait-net	
+0x4d4550	gfx	blit title background	ported	2026-10-23 wave 1 || 
+0x4d45a0	glue	Stops title fade and frees title images	ported	2026-10-23 wave 1 || small; Title screen not in Rust: no titledlg / title.pcx code in src/. Startup 0x4e0820 runs 0x4d49a0 after intro cinematics (glue.rs:444 top_step has none).
+0x4d46a0	glue	Title fade steps, one-time palette fade	ported	2026-10-23 wave 1 || small; Part of the title screen (timer 0x4d4640 via 0x4d46f0). Caller 0x4d4870 is unported; no Rust title screen exists (src/glue.rs top_step INTRO goes to GLUE directly).
+0x4d46f0	glue	Draws title text and starts fade timer	ported	2026-10-23 wave 1 || medium; Title dialog draw (draw_text, two blits, timer 500). Called from 0x4d4870. Needs the title dialog (rez/titledlg.bin) port; currently absent in src/.
+0x4d4870	glue	Loads title art and tFont, starts fade in	ported	2026-10-23 wave 1 || medium; Title dialog event 0: loads glue/title/title.pcx and tFont.pcx, fade_in(3), then 0x4d46f0. Missing in port; blocked by 0x4d49a0 dialog run (0x419d20 dialog path exists in dlg.rs).
+0x4d49a0	glue	Loads rez/titledlg.bin and runs title dialog	ported	2026-10-23 wave 1 || small; Called from startup 0x4e0820 after intro cinematics; runs dialog via 0x419d20 with 100 ms timer. Port has no title dialog; needs 0x4d4870 family and dlg.rs bind.
+0x4d5170	gfx	decode image row offset	later	
+0x4d51a0	gfx	CImage helper accessor	later	
+0x4d5210	gfx	CImage helper accessor	later	
+0x4d5280	gfx	CImage helper accessor	later	
+0x4d5390	gfx	CImage helper accessor	later	
+0x4d53f0	gfx	Blit surface region	later	
+0x4d5450	gfx	CImage small accessor	later	
+0x4d5480	gfx	CImage small accessor	later	
+0x4d54b0	gfx	CImage small accessor	later	
+0x4d54d0	gfx	CImage small accessor	later	
+0x4d54f0	gfx	CImage small accessor	later	
+0x4d5530	gfx	CImage small accessor	later	
+0x4d5570	gfx	CImage small accessor	later	
+0x4d55b0	gfx	CImage small accessor	later	
+0x4d56f0	gfx	frame pixel accessor	later	
+0x4d5c90	gfx	CImage helper accessor	later	
+0x4d6120	gfx	image team color selection	later	
+0x4d61a0	gfx	image team color selection	later	
+0x4d6690	gfx	iscript header init	later	
+0x4d67d0	gfx	image post-init	later	
+0x4d68c0	gfx	iscript header init	later	
+0x4d6930	map	Clear tables and load shift image	later	
+0x4d7180	gfx	load images table	later	
+0x4d8590	sim	Warp fade image update: fade level then iscript anim	equivalent	checked: confirmed: src/bw/frame.rs:611-650 image_update_hook arm 0x11 | Timer +0x31 dec/return; reload 2; level +0x30<0x3f -> level+1 and redraw; else anim!=1 -> anim1, pc from header+10, wait/ret 0, run (4d74c0 with 0,0); then order unit (6d11f4) +0x4f |=1 and redraw. Matches. || triage: small; frame.rs:611-650 image_update_hook arm 0x11: fade timer +0x31, level +0x30, then iscript anim 1 and order signal. Branch order matches the decompile.
+0x4d8790	glue	credits text areas freed, palette blanked (event 0xe)	equivalent	checked: confirmed: src/glue_credits.rs:502 | Area texts freed, palette blanked once, fade; equivalent. || triage: small; Rust glue_credits.rs:502 credits_close (clears texts, blanks palette, fades). Only caller FUN_004d8d20 (credits event proc, ported).
+0x4d9270	sim	sets game-flow result 0x51ce90 and clears frame-loop flag	equivalent	checked: fragment-covered: Called at 0x46147c in defeat/victory dialog init 0x461160 (eax=7). Sets result 0x51ce90, clears 0x6d11ec. Rust equivalent: Action::EndGame/game_end view.rs:3166, menu.rs:616; the 0x6d0f31 replay-length copy is unused. || triage: trivial; No direct, indirect or absolute refs in the exe. Body is the command 0x08 / 0x4b1dc0 game-end state; Rust ends games at view.rs:3369 and chat.rs:96. command.rs:1540 command_game_flow is an empty stub: check 0x4bfb10 separately.
+0x4d9460	hud	click-flash / selection timers keep counting while paused	ported	wave 2 2026-10-24 | checked: not-equivalent-port: src/bw/frame.rs:195 update_selection_flash (draw at view.rs:1040) | Exe counts per-unit flash timer (0x4ebbd0) when game is paused (0x4d9757 else-branch of game_step). Port counts only inside update_unit, so click flash freezes while paused; view.rs only draws. || triage: small; view.rs:1040-1070 draws circles for st.selected in circle_color (0x581d6a); hidden/visibility checks are not mirrored line for line. Called from frame update 0x4d9670 (game loop replaced by Rust frame loop).
+0x4d9550	net	game frame pacing tick	wait-net	
+0x4d9670	sim	main game loop: frame counter, step, triggers, pacing	replaced	large; Frame step and pacing are in view.rs:826-845 (Scene::step) and view.rs:2819 frame_loop with game_acc (FRAME_MS, 42 ms ticks). Rust lacks the 2000 ms bail-out and the replay/net command hooks.
+0x4d9840	sim	main loop wrapper: cursor, scroll, redraw, tick	replaced	large; view.rs:2857 frame_loop_end runs the per-window-tick loop (scroll_step at view.rs:3017, 10 ms redraw gate). Callers 0x4d9950 port is view.rs game-start path. Rust-native loop, no direct port.
+0x4d9b10	glue	show epilog text file (epilogX presence flag)	not-needed	checked: dead: No refs in any section; padded. Flag set inline by 0x4dabd0. || triage: trivial; No call, jump or table word anywhere in exe. Flag 0x6d11e4 is set inline by 0x4dabd0 (dump line ~179543). Rust glue_credits.rs:246 queues epilogX without an existence check.
+0x4d9cd0	data	grid font key lookup	later	
+0x4d9d60	data	decrypt grid data file	later	
+0x4d9eb0	data	build and load ccd clh gid files	later	
+0x4d9fe0	sys	center window on screen	later	
+0x4da130	sys	store string length	later	
+0x4da350	sys	dialog proc shows cursor	later	
+0x4da3e0	data	open file via archive call	later	
+0x4da440	sys	read file version string	later	
+0x4da550	sys	get module path	later	
+0x4da5e0	sys	enumerate drives for CD	later	
+0x4da6d0	sys	check StarCD install	later	
+0x4da790	sys	read CPU throttle option	later	
+0x4da7d0	sys	load local.dll dialog	later	
+0x4da8a0	sys	parse command line options	later	
+0x4daa60	sys	init fatal error handler	later	
+0x4dabd0	data	locate Stardat and Broodat archives	later	
+0x4dae50	gfx	Initialize fonts	later	
+0x4db060	audio	Load sfx data and table	later	
+0x4db180	glue	expansion campaign bin presence check	not-needed	checked: not-equivalent-dead: src/glue.rs:383 expansion_installed (analogue) | No refs in exe. Rust has the same check but via any archive rather than the BroodWar mpq handle. || triage: trivial; Rust glue.rs:383 expansion_installed (files.read gluexpcmpgn.bin). Function itself unreferenced in exe.
+0x4db1c0	glue	campaign bin presence check	equivalent	checked: confirmed: src/glue.rs:1174-1177 | Checks glucmpgn.bin readable (and exp variant); exe function itself unreferenced. || triage: trivial; Rust glue.rs:1174-1177 (glucmpgn.bin / gluexpcmpgn.bin via files.read). Function itself unreferenced in exe.
+0x4db260	glue	gluMain.cpp assertion wrapper	not-needed	checked: plumbing: Debug assertion wrapper (gluMain.cpp file/line); only raises fatal assert on bug, port needs no counterpart. No data refs found. || triage: trivial; Debug assert wrapper (FUN_004d2d10 with source file/line). Rust has no assert counterpart needed.
+0x4dc670	glue	load main menu palette by screen index	not-needed	checked: dead: No refs in any section; padded. || triage: trivial; No call, jump or table word in exe (dead). Rust palettes come from glue.rs:84 list, screen index glue.rs:89/113.
+0x4dc6a0	glue	load main menu palette image by screen index	not-needed	checked: dead: No refs in any section; padded. || triage: trivial; No call, jump or table word in exe (dead). Rust palette table glue.rs:84 covers the same assets.
+0x4dc6d0	hud	EnumWindows callback posting close to other windows	not-needed	checked: plumbing: EnumWindows callback (pushed at 0x4841d9, 0x4d18ad, 0x4dcbea, 0x4dcc73, start-fail path) posting close to the process's other windows; port has a single window, no-op OK (glue_create.rs:2194). || triage: trivial; Win32 window enumeration (closes other windows of this process on start failure). Port has one minifb window; start-fail path is glue_create.rs:2194 todo_port, which can stay a no-op.
+0x4dc840	unknown	copy struct and 256 entry table	later	
+0x4dc9d0	sys	string concatenate helper	later	
+0x4dcbd0	sys	enumerate windows for instance	later	
+0x4dd540	audio	glue sound hook	later	
+0x4dde70	hud	Refill list control rows and relayout	not-needed	checked: not-equivalent-dead: src/dlg.rs:522 list_add, 466 list_layout | Only caller is 0x4de040 which has no callers or data refs (dead code). No Rust counterpart needed. || triage: small; Rows from gluAll.tbl (glue.rs:263) added with dlg.rs:522 list_add, then dlg.rs:466 list_layout. Called from list event 0xe handler 0x4de040 per dialog. Register: unaff_EDI = dialog.
+0x4de040	glue	glue dialog event 0xe proc (combo wrapper)	not-needed	checked: dead: No refs in .text or data sections (dword scan of whole image); padded. Combo behaviour is dlg.rs:1206. || triage: small; No call, jump or table word anywhere in exe; combo behaviour itself is Rust dlg.rs:1206 combo_proc (0x41bc40).
+0x4de740	sim	scale a value by game speed table (ms/frame)	not-needed	checked: dead: No refs in any section; padded. || triage: trivial; No refs in the exe. Speed scaling is in triggers.rs:18 replay_frame_ms (0x4deb90) and glue_score.rs:48 FRAME_MS, which cover the live uses.
+0x4de7a0	replay	replay assertion string	later	
+0x4de7e0	sys	trim trailing spaces	later	
+0x4de950	replay	Replay module entry	later	
+0x4decf0	replay	replay frame ms	later	
+0x4deed0	replay	replay timing tick	later	
+0x4df000	glue	replay name read from edit and trimmed at dialog end	equivalent	checked: confirmed: src/glue_score.rs:841 save_replay_done | Edit text trimmed of trailing spaces into 0x51bfb8; list row retention differs trivially (source resets row to 0 at each open). || triage: small; Rust glue_score.rs:117 (0x51bfb8 name) and glue_score.rs:841-846 save_replay_done (trailing spaces cut). Called from FUN_004dfdd0 (ported).
+0x4df1e0	replay	delete replay file	later	
+0x4df260	replay	net wrapper for replay	later	
+0x4df2c0	replay	net wrapper for replay	later	
+0x4df300	replay	net wrapper for replay	later	
+0x4df880	replay	add replay list entry	later	
+0x4dfa30	glue	score dialog centered, flags 0x2040000, palette flag	ported	wave 2 2026-10-24 | checked: partial: src/glue_score.rs:728 | Centered, flags 0x2040000 done; palette-flag state 0x6d0c50/0x51a194 not modelled (dlg.rs:1851 todo_port for mode 5 shade). || triage: small; Rust glue_score.rs:728 comment documents 0x4dfa30 (centered, flags 0x2040000). Called from FUN_004dfdd0 (score init) and jumped to from it.
+0x4dfdd0	replay	replay list scroll UI	later	
+0x4e0200	sys	set file security info	later	
+0x4e0380	sys	check other instance running	later	
+0x4e0440	sys	memory and disk space check	later	
+0x4e0ae0	sys	register window class	later	
+0x4e1020	hud	Draw light-up button text row	equivalent	checked: confirmed: src/dlg.rs:1942-1985 lightup | Disabled path uses colour row, enabled mixes by light level; text flags/alignment match. || triage: trivial; dlg.rs:1942-1985 lightup draws videos then text with the control's flags and light level. Called from 0x4e1180 lightup; port has the same path in Dialog::draw_ctl.
+0x4e1220	hud	Offset light-up hot rect and set alignment	ported	wave 2 2026-10-24 | checked: partial: src/dlg.rs:326 lightup_init | Hot rect offset by control origin and align = flags>>0x14 match, but source masks align with 0x77; Rust takes (flags>>0x14) as u8 unmasked. || triage: trivial; dlg.rs lightup_init (approx. line 330-345): hot rect += control origin, align = flags >> 0x14. Only caller is event 10 of 0x4e1390.
+0x4e1390	hud	Button click handler by event code	ported	wave 2: generic 0x418c40 events 4/8/10/0xd still todo_port | checked: partial: src/dlg.rs:364 lightup_event | Events 2,3,4,5,9 mirrored; 0x4196f0 tooltip/timer table and 0x418c40 generic fallback are todo_port! stubs; press_release click hook not run in Rust event 3. || triage: small; dlg.rs:423 default_event (press_follow, press_release, activate) and dlg.rs:368 lightup_event. Generic fallthrough 0x418c40 and tooltip 0x4196f0 are todo_port! in dlg.rs:373-413. Register: param_2 event record.
+0x4e1560	hud	Button event dispatcher by message type	ported	wave 2: dlg.rs lightup_mouse + Captures; no caller yet | checked: partial: src/dlg.rs:368,423 | Press, release and follow events mapped, but capture table (0x4196a0), tooltip table (0x4196f0), focus (0x418900) and generic 0x418c40 are todo_port! no-ops. || triage: small; Dispatches to default_event (dlg.rs:423) and lightup_event (dlg.rs:368) per control. Cases 3/4/6/5/0xe map to press follow, release and button_follow. Generic 0x418c40 todos remain (dlg.rs:373,403-413).
+0x4e1d20	gfx	Fill rectangle on surface	later	
+0x4e2da0	sim	sync checksum step over the unit list (0x628430)	wait-net	small; Only reached via 0x47ced0 -> 0x47cf10 sync checksum, called from net_487070 (0x47cfc0). Rust has no sync checksum; glue_ready.rs:929 is a todo_port for 0x47cfc0. Net work waits.
+0x4e3f10	hud	Redraw CTF notice when game type is 4	not-needed	checked: not-equivalent-dead: src/bw/powerups.rs:131 ctf_notice (analogue) | No refs to 0x4e3f10 in exe; the live callers call 0x4e3de0 directly, which Rust ctf_event/ctf_notice covers (team name variant unmodelled). || triage: trivial; Only game type 4 prints; port queues the notice in powerups.rs:131-134 ctf_notice and draws notices. Direct caller not found in dump (likely a hook table); unsure only about the redraw trigger.
+0x4e4590	sys	fatal dialog init and clip cursor	later	
+0x4e4670	sys	fatal dialog helper	later	
+0x4e46a0	sys	fatal dialog outline draw	later	
+0x4e4820	hud	Init in-game fatal message dialog	equivalent	checked: confirmed: src/menu.rs:685-705 | Fatal dialog: draw procs, message into label -10, flags; debug text -0x14 left empty (no callers set it). || triage: small; Fatal dialog open in menu.rs:685-690 (rez/dlgFatal.bin, Kind::Fatal) and its close event menu.rs:1267. Draw 0x4e46a0 is dlg.rs:1330. Reached via dialog table, no direct callers.
+0x4e53b0	sys	Fatal dialog show with message	later	
+0x4e5600	sys	Fatal dialog hide	later	
+0x4e57d0	hud	Show or hide statres control 6 (resource bar)	replaced	trivial; Control 6 (resource bar) is hidden and never drawn; Rust draws resources directly in view.rs:3831-3890 draw_resources. Only caller is 0x4e58d0 with param 0.
+0x4e58d0	hud	Init resource bar and its timer	replaced	trivial; Rust statres loaded in ui.rs:616 and resource numbers drawn each frame by view.rs:3831 draw_resources (timer and counters). Control 6 hide (0x4e57d0) is skipped since it never draws.
+0x4e5990	hud	Load rez\statres.bin resource bar	equivalent	checked: confirmed: src/ui.rs:616 | Loads rez/statres.bin as dialog; fatal on missing; marks flag and binds. Equivalent. || triage: small; ui.rs:616 Ui::load_with reads rez/statres.bin into ui.statres (ui.rs:502). Port uses Storage instead of MPQ ordinals. Called from 0x4c3bb0 (init).
+0x4e6020	hud	Center view on status unit (Ctrl/Alt+C)	ported	wave 2 2026-10-24 | checked: partial: src/view.rs:3424-3431 | Math matches ((x>>5)-10)<<5, ((y>>5)-6)<<5. Source uses active unit 0x597248, Rust uses selected.first(); source hotkey path is ignored while paused, Rust has no pause gate. || triage: trivial; view.rs:3424-3431 centers on first selected unit's sprite position; scroll_to_49c440 is view.rs:734 scroll_to. Only caller is dispatcher 0x4846e0.
+0x4e6060	hud	Add dialog top image (sprite image)	replaced	trivial; Dialog images are Ctl.anims drawn by dlg.rs image_ctl (1845) and lightup (1943); the sprite add_image_top (0x498ea0) is not used by dialogs. No direct caller found; unsure only about hook.
+0x4e6c10	sim	ground level equality check	not-needed	checked: dead: No refs in any section; padded. || triage: trivial; No refs in the exe. Compares ground_level() with itself (always true). Real ground level is triggers.rs:1054 ground_level.
+0x4e8660	sim	nearest unit wrapper for a point, exclude 0	not-needed	checked: dead: No refs in any section; padded. || triage: trivial; No refs in the exe. Live nearest search is harvest.rs:928 nearest_unit and harvest.rs:758 nearest_unit_to (0x4e8740); point search with exclude 0 is unused.
+0x4e88b0	hud	Latency radio option state update	wait-net	trivial; Network latency radio (0x6556e4). Port keeps the level in setup.g6556e4 (setup.rs:146, glue_create.rs:2175) with no radio UI. Belongs to multiplayer create-game; waits with net.
+0x4e89c0	hud	in-game options dialog open	equivalent	checked: confirmed: src/menu.rs Menu::open (saved copy) | Copies 9 settings words as saved, styles 3/5, depth+1; equivalent. || triage: small; src/menu.rs:1273 (Game button 3 opens Options) via open_menu view.rs:3064; settings copy = Menu.saved. Caller 4e8ae0 (event dispatcher).
+0x4e8a30	hud	close credits and open options	partial	checked: partial: src/menu.rs:1201,1315 | Back/close tail (0x4c9780, depth handling) matches. OK branch sending commands via 0x485bd0 for controls 1..3 (multiplayer network options dialog) has no Rust dialog. || triage: small; src/menu.rs:1201 and 1315 back(Kind::Game) at depth>1. Unported: net_485bd0 branch (controls 1-3 with +0x36), multiplayer-only, not checked.
+0x4e8ae0	hud	multiplayer network-options dialog proc	wait-net	checked: not-equivalent-port: n/a (menu.rs:974 key_down is list/edit keys) | It is the network options dialog proc: OK sends 3 commands via 0x485bd0, then restores or reopens options. Not ported (ponytail: network options); menu.rs key_down is unrelated. || triage: trivial; src/menu.rs:974 Menu::key_down; event 0xe codes 0/1/2/10 map to open, close, back. Caller: event proc via dialog table.
+0x4ea940	unknown	set table flag	later	
+0x4eaa80	saveload	unit save mask relink	later	
+0x4ead80	data	free file dialog list	later	
+0x4eadf0	data	free file dialog list	later	
+0x4eaeb0	data	free file dialog entry	later	
+0x4eaf70	data	reset file list paths	later	
+0x4eafe0	data	dispatch loader by type	later	
+0x4ed490	net	insert login entry	wait-net	
+0x4eddf0	sys	find foreground game window	later	
+0x4ede60	sys	open URL via shell	later	
+0x4edef0	data	find file in archive wrapper	later	
+0x4edf20	data	search special folder for file	later	
+0x4ee070	sys	post message to fast indexer	later	
+0x4ee0f0	sys	conditional shutdown call	later	
+0x4ee210	sys	shutdown cleanup	later	
+0x4eefd0	data	load flingy dat and init gamedata	later	
+0x4ef590	gfx	draw rectangle update	later	
+0x4ef7f0	glue	score bar fill: two score_wide draws	equivalent	checked: confirmed: src/dlg.rs:1630-1641 | fill=width*value/max clamped to width, min 1 when value nonzero; backdrop plus fill drawn. || triage: trivial; Rust dlg.rs:1630-1641 (fill = width*value/max, min 1) and dlg.rs:1652 score_wide (0x4ef710). Caller FUN_004afbf0 is the score control draw.
+0x4efa80	hud	draw check box	equivalent	checked: confirmed: src/dlg.rs:1496-1510 | Frame: disabled uses graphic (0x8b if checked), pressed (checked+1)*2+g, normal checked*2+g+1; focus outline; label side. Matches. || triage: trivial; src/dlg.rs:1496-1500 (ty 4 check box draw, 0x4efa80 comment). Edge cases of +0x10 picture branch not here.
+0x4efc30	hud	draw option button	equivalent	checked: confirmed: src/dlg.rs:1488-1495 ty 3 | Frame 6 disabled, (checked+4)*2 pressed, checked*2+7 normal; side from flag; focus outline in box_text. || triage: trivial; src/dlg.rs:1488-1495 (ty 3 option button, 0x4efc30 comment). Called from draw dispatch table.
+0x4efd90	hud	draw frame button	equivalent	checked: confirmed: src/dlg.rs:1471-1487 | Frame by disabled/pressed (+0/+2/+1), type 1 outline color 5, focus outline 0x10, text offset; matches. || triage: trivial; src/dlg.rs:1471-1487 (ty 1/2 frame button, no 0x20000 frame). Called from 4f0390 and dispatch table.
+0x4f0050	hud	framed picture control with corner brackets	unsure	checked: unclear: Control +0x10 nonzero branch from draw dispatch 0x4f0390; dlg.rs:281 notes +0xc/+0x10 as dialog bg bitmap data. Which controls set it was not traced; no references found to set it. || triage: medium; Only from 4f0390 when +0x10 nonzero; no Rust path (4eff80 corners absent). Decide: which .bin controls set +0x10 and show in a ported dialog.
+0x4f0390	hud	draw dispatch by control flags	unsure	checked: unclear: Dispatch on +0x10 (4f0050), flag 0x20000000 (4efeb0), else 4efd90. Resolved with 0x4f0050; no direct callers (table-referenced). || triage: small; src/dlg.rs:1400-1500 dispatches by type/WIDE, but misses the +0x10 branch that calls 4f0050. Decided by 4f0050 reachability.
+0x4f1680	sim	walk direction dispatch by walker mask bits	equivalent	checked: confirmed: src/bw/short_path.rs:1902-1906 expand (inlined in 0x42e4f0) | Tests +0x73 bits 1,2,4,8 in order calling 4f1200, 4f0d50, 4f08c0, 4f03e0, stops on first nonzero; same code is inlined at 42e592. Rust names/mapping match; mask read once, no walker rewrites it. || triage: trivial; short_path.rs:1902-1906 expand() dispatches up_right, down_right, down_left, up_left in the same order on the mask, stopping on success. No refs in the exe.
+0x4f2f00	hud	chat label text by chat target	wait-net	small; Only caller draw_4f3040 (chat line). Label formats chat-target string 0x57eeeb table; src/chat.rs:337-360 draws label with static text. Chat belongs to net.
+0x4f35d0	hud	chat textbox dialog init	equivalent	checked: confirmed: src/chat.rs:257 open, 340 draw | Label sized to text, edit starts after label, replay shifts 24 px up; chat open logic equivalent. || triage: small; src/chat.rs:257 open (label, edit ctl, replay 24 px shift via up flag). Textbox load src/view.rs:372 and 3382. No direct caller in dump.
+0x4f37c0	hud	load race textbox.bin	equivalent	checked: confirmed: src/view.rs:372,3382; src/chat.rs:268 | Loads rez/<race letter>textbox.bin for the local race at game start and keeps the dialog. || triage: small; src/view.rs:372 and 3382 read rez/<race>textbox.bin; src/chat.rs:268 keeps the dialog loaded at game start (caller 4c3bb0).
+0x4f4080	sim	game mode check after net wait	wait-net	small; Only caller is 0x4f40f0 (net wait loop, GetTickCount-gated, net_487070). Tests 0x66fbfa == 4, then calls 0x45a050, 0x4b8870, 0x471010. Net work waits.
+0x4f40f0	net	net sync tick	wait-net	
+0x4f4670	sim	acid spore callback for each enemy air unit	equivalent	checked: confirmed: src/bw/spells.rs:1156 acid_spore_area | Callback: player != caster, flags&1==0, status&4, not 0x4000000, (status&0x300)==0 or visibility +0xe4 has caster bit, then add_acid_spore(4f4480). Box +/-0x40 from 4f4770 matches units_around(0x40). || triage: trivial; spells.rs:1156 acid_spore_area: same owner, flags &1, status &4 / &0x4000000, visibility checks inline. Called as a units-around callback from 0x4f4770 (callback ptr 0x4f4670 in exe).
+0x4f4bc0	sim	template-list callback: add listed game type row	replaced	trivial; Reached only as a callback pointer from 0x4f4c00. glue_create.rs:467 template_listed and glue_create.rs:1142 create_fill_types filter and add the rows directly.
+0x4f4c00	sim	create game-type combo fill from control string	replaced	small; Live via 0x4ad190 control table slot 0xd. glue_create.rs:1142 create_fill_types builds the rows with the listed filter. Not ported: the 0x40aa10 token parse of the control string and the 0x4ddd30 control creation.
+0x4f4cf0	hud	clear statfluf dialogs of console	replaced	small; src/ui.rs:519-545 load_fluff: fluff rects are an owned Vec dropped with Ui (no per-rect dialog pointer). Caller 4c3780 teardown.
+0x4f4d30	hud	set flag 0x2000 and redraw fluff	replaced	trivial; src/dlg.rs:299 and ui.rs:531: Rust redraws each frame, no 0x41c400 dirty flag. Console pixels via ui.rs:531 path.
+0x4f4f70	hud	MENU button tooltip	equivalent	checked: confirmed: src/view.rs:2443-2448 | Tooltip text stat_txt 1-based 0x32e shown beside the MENU button. || triage: trivial; src/view.rs:2443-2448 draws stat_txt 0x32d tooltip right of stat_f10 control 1 under cursor.
+0x4f5070	hud	tooltip hover update	ported	wave 2 2026-10-24 | checked: partial: src/view.rs:2443-2448 | Menu button tooltip appears on hover but port lacks the exe gate: hidden while paused (0x6509c4) in single player. || triage: trivial; src/view.rs:2443-2448 (per-frame hover, same tooltip). Gap: pause gate 0x6509c4 not checked in view.rs.
+0x4f50f0	hud	tooltip hover update	ported	wave 2 2026-10-24 | checked: partial: src/view.rs:2436-2448 hover tooltips | Tooltip shown for hovered control; source only when not paused (or mp), otherwise hides tooltip. Rust draws tooltips while paused. || triage: trivial; src/view.rs:2443-2448 (per-frame hover). Same pause-gate gap as 4f5070. Called from 4f5180 mouse-move event.
+0x4f5150	hud	MENU button opens game menu	equivalent	checked: confirmed: src/view.rs:3253-3254 | MENU button (id 1) opens game menu. || triage: trivial; src/view.rs:3254 open_menu(Kind::Game) on MENU click or F10 (menu_clicked); src/menu.rs:1272 game menu.
+0x4f5180	hud	console MENU button event proc	equivalent	checked: confirmed: src/ui.rs:611-614; src/dlg.rs:1404; src/view.rs:3254 | Menu button graphic and draw, click on id 1 opens game menu (also F10), ids -2/-3 set result. Tooltip pause gate covered in 0x4f5070. || triage: small; src/ui.rs:611-614 (MenuButton update, graphic), src/dlg.rs:1404 draw, src/view.rs:3254 click. Called by dialog table.
+0x4f5210	hud	set flag 0x20000000 and redraw	replaced	trivial; glue.rs:590 sets same flag at glue dialog init; Rust redraws per frame. No direct caller in dump.
+0x4f5480	hud	fill 51 list rows, layout	unsure	checked: unclear: Called from list-control handler at 0x4f5509 (event 0 with empty list): adds 51 empty rows then layout. Owning dialog not identified; menu.rs:647 handles saves only. || triage: small; Owner dialog unknown: no direct caller or exe pointer. Rust menu.rs:647 list fill is for saves only. Decide by finding owner .bin with 51-row list.
+0x4f5530	hud	load rez help_txt.tbl into 0x685170	equivalent	checked: fragment-covered: Called at 0x4f56a0 from help dialog proc 0x4f5650 (init). Does dialog init (menu_background, in_game, 0x6d1224++) plus loads help_txt.tbl into 0x685170, only freed at 0x4f5691, never read. Help dialog menu.rs:364; table not needed. || triage: trivial; Loads file into DAT_00685170 which no decompiled function reads. src/menu.rs:364 opens helpmenu.bin with no table. Caveat: unread-check is grep-based.
+0x4f5700	hud	unpause and close menu	equivalent	checked: confirmed: src/menu.rs:420-430 teardown; view.rs:3236 | Unpauses when not multiplayer and closes menu; replay global restore (0x6d120c, 0x6d1214) not visible. || triage: small; src/menu.rs:420-430 teardown (0x4c93a0) with unpause via view.rs. Not modelled: 0x6d1214 reset, 0x596904==3 restore.
+0x4f5760	hud	key handler switch	equivalent	checked: confirmed: src/view.rs:3095 (menu modal input) | Modal menu consumes all input events; Rust menu takes all input while open (not Menu::key_down which is edit/list key handling). || triage: trivial; src/menu.rs:974 Menu::key_down (same key set and return values as 4f5760).
+0x4f59e0	hud	OK/Cancel dialog destroy	equivalent	checked: confirmed: src/menu.rs:1216 popup_activate | Clears message buffer and callback then unpauses/clears modal (0x4c9800) via menu close; matches. || triage: trivial; src/menu.rs:1216 popup_activate and Rust-owned text (msg Vec); free 0x6d123c replaced by drop.
+0x4f5b70	hud	OK/Cancel dialog open	unsure	checked: unclear: Label equals menu.rs:676-684. Shade branch (flags 0x2040000, 0x4c8e80) only if 0x6d1244 nonzero, set from wrapper args at 0x4f5dbf/0x4f5f2f; 0x5128f0 gates in_game. Low impact (cosmetic shading). || triage: small; Label text 0x6d123c equivalent at src/menu.rs:676-684. Unported: shade branch with flags 0x2040000, 4c8e80 and 0x6d0c50 (dlg.rs:1851 todo). Decide: is DAT_006d1244 set on this path.
+0x4f70f0	glue	ready room Zerg frame images and H frames	equivalent	checked: confirmed: src/glue_ready.rs:242-251 ready_405 | Exe strings 0x5031f0 (ZFrameH1-4, EAX list) and 0x503254 (ZFrame1-4, stack list) feed 0x44f020 exactly as source. || triage: small; Rust glue_ready.rs:242-251 ready_405 (race 0 tables 0x5031f0/0x503254) then ready_44f020. Called from open_ready_dialog path (ported).
+0x4f7450	glue	ready room Terran frame images	equivalent	checked: confirmed: src/glue_ready.rs:242-251 | Terran string tables 0x5030f0.. and 0x503154.. match disassembly exactly. || triage: small; Rust glue_ready.rs:242-251 ready_405 (race 1 tables). Called from open_ready_dialog_4f7550 (ported).
+0x4f77b0	glue	ready room Protoss frame images	equivalent	checked: confirmed: src/glue_ready.rs:242-251 ready_405 | Strings at 0x502e9c.. are PFrameH1-4 and 0x502f00.. PFrame1-4; pairing with 0x68f55c/0x68f538 matches exe order. || triage: small; Rust glue_ready.rs:242-251 ready_405 (race 2 tables). Called from open_ready_dialog_4f78b0 (ported).
+0x4bfb10	sim	command 0x08 game flow (restart / end)	fixed	2026-10-23 wave 1 (reviewed vs asm) || checked: Rust command_game_flow (command.rs ~1540) is empty; 1.16.1 (single player / replay) sets 0x51ce90 = 5, clears 0x6d11ec, copies 0x57f23c to 0x6d0f31 outside replays; needed for Restart (view.rs:3224 stub)

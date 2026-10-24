@@ -735,10 +735,16 @@ impl Glue {
         self.init_controls(files, &mut dlg);
         let tile = format!("{}/tile.grp", super::PALETTES[TILE_PALETTE[self.score.save_tile % 6]]);
         let Ok(t) = files.read(&tile) else { crate::bw::fatal_error(&tile) };
-        crate::dlg::Skin::tile_background(&Grp::parse(t), &mut dlg);
+        let tile = Grp::parse(t);
+        crate::dlg::Skin::tile_background(&tile, &mut dlg);
         let (x, y) = ((640 - dlg.this.rect.2) / 2, (480 - dlg.this.rect.3) / 2);
         dlg.this.rect = (x, y, dlg.this.rect.2 + x, dlg.this.rect.3 + y);
         self.glue_dialog_init(files, &mut dlg, false);
+        // 0x4dfa30: the second shade (flag 0x2000000) from the score tile's frame 4.
+        let p = self.palette_id();
+        if let Some(fx) = self.looks[p].as_mut().and_then(|l| l.skin.fx.as_mut()) {
+            fx.set_second_shade(&tile);
+        }
         dlg.this.flags |= 0x2040000;
         Some(dlg)
     }

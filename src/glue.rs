@@ -25,6 +25,8 @@ mod credits;
 mod ready;
 #[path = "glue_cine.rs"]
 mod cine;
+#[path = "glue_title.rs"]
+mod title;
 #[path = "glue_slide.rs"]
 mod slide;
 
@@ -96,6 +98,8 @@ pub const SCREEN_PALETTE: [u8; 0x19] = [
 pub mod state {
     /// 0x4d4470: the intro cinematics, then the glue.
     pub const INTRO: u8 = 0;
+    /// 0x4d49a0: the title screen, shown before the glue loop at startup.
+    pub const TITLE: u8 = 11;
     /// 1 / 5: a game starts (5 also sets 0x6d0f0c).
     pub const START: u8 = 1;
     /// 0x4e0710: the game runs.
@@ -173,6 +177,8 @@ pub enum Open {
     Score(bool),
     /// 0x4d8df0: rez\credits.bin, event proc 0x4d8d60 (glue_credits.rs).
     Credits,
+    /// 0x4d49a0: rez\titledlg.bin, event proc 0x4d4960 (glue_title.rs).
+    Title,
     /// 0x4b2930: rez\gluCmpgn.bin, event proc 0x4b28b0.
     Campaign,
     /// 0x4b52a0: rez\gluExpCmpgn.bin, event proc 0x4b5220.
@@ -347,6 +353,7 @@ pub struct Glue {
     score: score::Score,
     /// The credits and mission text screens' globals (glue_credits.rs).
     credits: credits::Credits,
+    title: title::Title,
     /// The ready room's globals (glue_ready.rs).
     ready: ready::Ready,
     /// 0x51a238: the load screen's saved games, as the list rows show them (newest first; the
@@ -432,6 +439,7 @@ impl Glue {
             create: create::Create::default(),
             score: score::Score::default(),
             credits: credits::Credits::default(),
+            title: title::Title::default(),
             ready: ready::Ready::default(),
             saves: Vec::new(),
             save_name: Vec::new(),
@@ -453,6 +461,15 @@ impl Glue {
                 // (The first-start flags 0x6cdfec & 0x200 / 0x800 play them before the loop.)
                 self.state = state::GLUE;
                 Top::Cine(vec![0, if self.expansion_installed { 0x18 } else { 1 }])
+            }
+            state::TITLE => {
+                // 0x4e0820 before its loop (after the intro cinematics): 0x4d49a0 opens the
+                // title screen; it stays up while the data loads and 0x4de200 sleeps, and
+                // `title_tick` then goes on to the glue (state 4).
+                if self.dlg.is_none() {
+                    self.title_start(files);
+                }
+                Top::Glue
             }
             state::GAME => Top::Game,
             state::GLUE | 6 | 7 => {
@@ -2499,6 +2516,10 @@ impl Glue {
     /// that take keys get it (0x418a10): a list moves its selection (0x41a9d0), an edit
     /// its caret (0x416980).
     pub fn key_down(&mut self, files: &Storage, vk: u16, mods: u8) {
+        // The title screen is never run: nothing reads the keys.
+        if self.title_open_now() {
+            return;
+        }
         if self.credits_open_now() {
             return self.credits_key(files, vk);
         }
@@ -2570,6 +2591,9 @@ impl Glue {
     /// a hotkey (none while the dialog has an edit, 0x418510), else the controls that
     /// take keys (an edit types it).
     pub fn char_in(&mut self, files: &Storage, ch: u8) {
+        if self.title_open_now() {
+            return;
+        }
         match ch {
             9 => {
                 self.tab_focus();
@@ -2702,6 +2726,9 @@ impl Glue {
     /// double click, presses the default button (0x418270 flag 0x80000); an edit takes
     /// the focus and puts its caret under the mouse (0x416980 event 4 / 6, 0x4164d0).
     pub fn press(&mut self, files: &Storage) {
+        if self.title_open_now() {
+            return;
+        }
         if self.credits_open_now() {
             return self.credits_click(files);
         }
@@ -2887,6 +2914,7 @@ impl Glue {
             }
         }
         self.credits_tick(files, ms);
+        self.title_tick(ms);
         self.ready_tick(files, ms);
         if let (Some(r), true) = (self.result, matches!(self.dlg, Some((_, Open::Ready(_))))) {
             // The idle proc 0x46d340 ended the ready room.
@@ -2914,10 +2942,11 @@ impl Glue {
         for dlg in main.into_iter().chain(self.popup.as_ref().map(|d| &d.0)) {
             look.skin.draw(dlg, &mut s);
         }
-        let screen_pal = if credits { *self.credits.palette() } else { look.pal };
+        let title = self.title_open_now();
+        let screen_pal = if credits { *self.credits.palette() } else if title { *self.title_palette() } else { look.pal };
         // 0x4be120: the frame's grp box sits at the mouse minus 0x3f. The credits and mission
         // text (0x4d8df0, its own loop 0x41a080) show none (as the real game's screen).
-        if !credits {
+        if !credits && !title {
             let n = look.arrow.frame_count().max(1);
             look.arrow.draw(self.cursor_frame % n, false, self.mouse.0 - 0x3f, self.mouse.1 - 0x3f, s.px, 640, 480, Blend::Normal);
         }
@@ -3068,6 +3097,10 @@ pub fn run(files: &Storage, shot: Option<&str>) -> std::io::Result<()> {
     use minifb::{MouseButton, MouseMode, Scale, Window, WindowOptions};
     let (w, h) = (640usize, 480usize);
     let mut glue = Glue::new(files);
+    // 0x4e0820: the title screen opens before the glue loop (screenshot runs start at the menu).
+    if shot.is_none() {
+        glue.state = state::TITLE;
+    }
     // SCBW_SCORE_TEST=1: the score screen of a finished two player game (no game played).
     if std::env::var_os("SCBW_SCORE_TEST").is_some() {
         glue.score_test_game();
@@ -3202,6 +3235,12 @@ pub fn run(files: &Storage, shot: Option<&str>) -> std::io::Result<()> {
                 };
                 // 0x4d9950 ends with 0x4be0b0.
                 glue.flush_notice();
+                // Result 5 (command 0x08, Restart Mission): the glue's state 5 starts the
+                // mission again (0x4e09dc, 0x6d0f0c).
+                if crate::view::take_restart() {
+                    glue.state = 5;
+                    continue;
+                }
                 glue.objectives = glue.game_end.as_ref().map_or(glue.objectives, |e| e.objectives);
                 // 0x4dbc00 (a loaded game): 0x51ca1c = 0x57f1e3.
                 if let (false, Some(e)) = (glue.multiplayer, glue.game_end.as_ref()) {

@@ -1134,6 +1134,32 @@ impl State {
         }
     }
 
+    /// 0x489da0 (Escape): skips the running trigger cinematic. Not in multiplayer (0x57f0b4)
+    /// nor in a campaign mission of 0x20 or more (0x57f244); every executing trigger (flag 1,
+    /// not 0x40) of the local player (0x512684) gets flag 0x10, the player's wait ends
+    /// (0x6509b8 / 0x650980 = 0) and the next trigger pass is the next frame (0x6509a0 = 1).
+    /// True when a trigger was skipped: the front end then does the rest (stop_files, the
+    /// running transmission timer 0x68ac4c, `clear_trigger_text` 0x48ccf0).
+    pub fn skip_cinematic(&mut self) -> bool {
+        if self.multiplayer || self.mission >= 0x20 {
+            return false;
+        }
+        let me = self.local_player as usize;
+        let Some(list) = self.trig.lists.get_mut(me) else { return false };
+        let mut skipped = false;
+        for t in list.iter_mut() {
+            let f = t.flags();
+            if f & 1 != 0 && f & 0x40 == 0 {
+                t.set_flags(f | 0x10);
+                self.trig.waiting[me] = 0;
+                self.trig.wait_ms[me] = 0;
+                self.trig.check_timer = 1;
+                skipped = true;
+            }
+        }
+        skipped
+    }
+
     /// 0x4c77d0: the action's wav (map string, a path in the scenario archive) plays for the
     /// local player (not in a replay) unless the trigger was skipped (0x10); the front end
     /// does 0x4bc490. No wait is set here.
@@ -1345,10 +1371,13 @@ impl State {
                 }
                 let mut count: u16 = if a.modifier == 0 { 0xffff } else { a.modifier as u16 };
                 let (id, value) = (a.id, a.number);
+                // 0x4c70b0 (resources) fills the loop's unit type with 0xe5 (any unit); the
+                // others take the action's unit type.
+                let unit_type = if id == 0x34 { 0xe5 } else { a.unit_type };
                 self.trigger_units_in(_d, a.location as u8 - 1, |st, u, flags, _: &mut u32| {
-                    if count != 0 && !st.location_excludes(u, flags) && st.unit_in_group(a.player, u) && st.trigger_type_matches(_d, a.unit_type, u) {
+                    if count != 0 && !st.location_excludes(u, flags) && st.unit_in_group(a.player, u) && st.trigger_type_matches(_d, unit_type, u) {
                         let done = match id {
-                            0x30 => st.give_unit_with_parts(_d, u, value as u8),
+                            0x30 => st.give_unit_with_parts(_d, u, value),
                             0x31 => st.trigger_set_hp(_d, u, value),
                             0x32 => st.trigger_set_energy(_d, u, value),
                             0x33 => st.trigger_set_shields(_d, u, value),
@@ -1669,6 +1698,23 @@ impl State {
         ((bx & !0x1f) + hw, (by & !0x1f) + hh)
     }
 
+    /// The snap inside 0x4c82d0: like `snap_building`, but (x - half width) is compared
+    /// against the map size as unsigned (jb), so a negative value clamps to size - 1.
+    fn snap_building_move(&self, d: &Data, t: u16, x: i32, y: i32) -> (i32, i32) {
+        let v = d.dat.units.placement_box[t as usize];
+        let (hw, hh) = ((v as i16 as i32) / 2, ((v >> 16) as i16 as i32) / 2);
+        let (mw, mh) = (self.map_px.0 as u32, self.map_px.1 as u32);
+        let mut bx = (x - hw) as u32;
+        if bx >= mw {
+            bx = mw - 1;
+        }
+        let mut by = (y - hh) as u32;
+        if by >= mh {
+            by = mh - 1;
+        }
+        (((bx & !0x1f) as i32) + hw, ((by & !0x1f) as i32) + hh)
+    }
+
     /// 0x4c82d0: move the completed building `u` to (x, y) if it fits there; a terran one
     /// drops its addon (and takes one lined up at the new spot), zerg creep follows.
     /// 0x463330: the building whose addon (+0xc0) is `u`, from the visible units (inline here).
@@ -1678,7 +1724,7 @@ impl State {
         }
         let t = self.units[u as usize].unit_type;
         let (x, y) = self.clamp_to_map(d, t, x, y);
-        let (x, y) = self.snap_building(d, t, x, y);
+        let (x, y) = self.snap_building_move(d, t, x, y);
         let v = d.dat.units.placement_box[t as usize];
         let (hw, hh) = ((v as i16 as i32) / 2, ((v >> 16) as i16 as i32) / 2);
         let tile = |v: i32| (v + ((v >> 31) & 0x1f)) >> 5;

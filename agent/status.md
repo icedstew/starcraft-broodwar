@@ -1,4 +1,4 @@
-# Status (updated 2026-10-19)
+# Status (updated 2026-10-24)
 
 Read first. Kept short: what is in flight and what is next. Rewrite it in the same commit
 as each step (conventions.md). Durable facts per area: [areas/sim.md](areas/sim.md),
@@ -23,6 +23,33 @@ all 1490/1973 (75%); front end 683/1186. Frontier lists: `--missing both` (non-A
 2026-10-18: all functions 2182/4644 ported; the reachable sets have 0 left, so the
 frontier is now `--missing rest` (every unported in-scope function, ported callers first:
 dialog procs, tables and other indirect calls the reachability misses).
+2026-10-23 (dump rebuilt on Windows, tools.md "Rebuilding the dump"; reachable sets equal
+the old dump's): all functions 2758/4644 ported, in scope 2742/4494, `--missing rest` 771.
+2026-10-23 triage of those 771: agent/frontier.tsv (addr, area, purpose, verdict, notes;
+our notes only). Areas sim / hud / glue (362) triaged by Haiku, every equivalent /
+not-needed / unsure checked by Sonnet. Work list: 5 fix (Rust differs: trigger give unit
+0x4c8200 (skipped units count, Current Player = 13), trigger move building 0x4c8970 /
+0x4c82d0 (unsigned edge clamp), command 0x08 0x4bfb10 stub (Restart), status name of
+morphing units 0x425ec0 / 0x425ee0), 16 port (title screen 0x4d45a0..0x4d49a0, replay
+vision dialog 0x4913d0 / 0x491310 / 0x490e90 / 0x490000, Esc skips trigger cinematics
+0x489da0, Nuclear Silo panel 0x426ff0, ...), 29 partial (notes say what is missing; e.g.
+game speed changes must send command 0x0f so replays record them, pause gates on
+hotkeys / minimap / tooltips, quit from a multiplayer replay -> score), 5 persist (settings
+and recent maps are not saved between runs: one feature, a settings file), 4 unsure (dialog
+control draw details). Fixed: trigger set resources 0x4c70b0 matches any unit (0xe5).
+User 2026-10-23: multiplayer functions (wait-net, 232) wait until we decide them with our
+networking; other areas (later, 279) not triaged yet.
+Wave 1 (2026-10-23): triggers give unit / move building / set resources, command 0x08 +
+Restart, Esc skips cinematics, status name of morphing units, Nuclear Silo panel, title
+screen (src/glue_title.rs). Wave 2 (2026-10-24, reviewed): game menu / end-mission / victory
+dialogs by multiplayer / replay / pause state (menu.rs, `Ctx` filled from the scene), speed
+changes go through command 0x0f (`State::game_speed` = 0x6cdfd4, the settings follow it),
+pause gates on hotkeys / minimap / tooltips, Help / menus in replays, Alt+click ping 0x58,
+paused click flashes 0x4d9460, portrait per unit + static 0x45ebc0 / 0x45e650, leaderboard
+Ctrl+R 0x4bec00 (key from Local.dll's accelerators), score second shade 0x4dfa30, dialog
+capture / delayed-event tables (dlg.rs `Captures`, no caller yet). Neither wave run in a
+window yet. frontier.tsv: 37 ported / 6 fixed; left 5 port (replay vision dialog), 4
+partial, 5 persist, 4 unsure. Suite runs on Windows now (data116 extracted, suite.sh uses $PY).
 Coverage fix 2026-10-17: a `///` line that only mentions an address in prose no longer
 counts; only a doc block's first line or a doc line starting with `/// 0x...` does
 (~90 false credits removed).
@@ -46,6 +73,20 @@ Delegate per agents.md: Haiku triage, Sonnet porting, Opus review / hard RE / co
   (rollback engine) and `scbw nettest`: 20 runs over 10 replays (2-3 players, delay /
   latency / jitter 2/3/2 and 1/8/6) all MATCH straight playback. Next: phase 3a, QUIC
   transport (wtransport) and `scbw netrep` across processes (net.md "Phase 3 plan").
+  2026-10-23, moved to a Windows box (16 cores; no wine harness yet): ShieldBattery
+  cloned for reference (`reference/shieldbattery`, fba29b3, next to the repo).
+  New replay set (user: >= 200, >= 50 games per race, dated while 1.16.1 was live):
+  `reference/replays/bw116/` (index bw116.tsv, list bw116.list), 300 1v1 games, 2009–2016
+  by header start time (window 2009-01-21 .. 2017-04-18; 1.18 came out 2017-04-19):
+  40 per matchup of 5–30 min + 10 per matchup over 30 min (up to 151 min; user: long
+  games matter, desyncs grow with complexity), 140 per race. From the Webber pack and
+  Synnaeve's TL/GG/ICCup pack (Wayback); tl.net now 403s scripts. `re/repfilter.py`
+  (header filter), `re/netsuite.py` (rbtest 3 + nettest 2/3/2 + 1/8/6, whole replays,
+  resumable). User: at most 4 scbw instances at once (14 at once gave bare exit-1
+  failures; those runs MATCH alone). 2026-10-23: the 240 short ones all MATCH (720/720:
+  rbtest 3, nettest 2/3/2, 1/8/6; ~4 h at 4 instances, binary from before wave 1). Next:
+  resume pass for the 60 long ones (same command; it skips MATCH rows). Results:
+  replays/netsuite.tsv.
 
 - Screenshot tests on all 1.16.1 replays (user 2026-10-21: "match a PvZ 100%, with the
   minimap UI"): tl1311 (PvZ) rng + draw count match native every frame to f42049.

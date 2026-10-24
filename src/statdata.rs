@@ -29,6 +29,13 @@ pub enum Show {
     Cargo { bg: u16, unit: u32 },
 }
 
+/// 0x456d30 (the frame of 0x457480 buttons): the control's frame `bg` (+0x24), plus one
+/// while its flag 0x40000000 (pressed) is set; the caller shows frame 0 when the result
+/// is not below the grp's frame count.
+pub fn button_frame(bg: u16, flags: u32) -> u16 {
+    if flags & 0x4000_0000 != 0 { bg + 1 } else { bg }
+}
+
 /// Panel ids remembered in 0x68c1e5 (5 training, 7 research, 8 upgrade).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Panel {
@@ -108,11 +115,14 @@ pub fn building_panel(st: &State, d: &Data, strings: &[String], u: u32) -> Optio
         out.extend(unit_panel(st, d, strings, u).into_iter().filter(|(id, _)| matches!(id, 1 | -7 | -20 | -5)));
         return Some((Panel::Unit, out));
     }
-    if (0xb0..=0xb2).contains(&t) || t == 0xbc || un.status & 1 == 0 || t == 0x6c {
+    if (0xb0..=0xb2).contains(&t) || t == 0xbc || un.status & 1 == 0 {
         return None;
     }
     if !st.replay && un.player != st.local_player {
         return None;
+    }
+    if t == 0x6c {
+        return silo_panel(st, d, strings, u).map(|p| (Panel::Unit, p));
     }
     // 0x4e6ba0: units whose panel shows their cargo, not a queue (todo: those panels).
     if un.status & 0x4000_0000 == 0 && (t != 0x2a || st.players.upgrade_sc[un.player as usize][0x18] != 0) && d.dat.units.space_provided[t as usize] != 0 {
@@ -155,6 +165,28 @@ fn supply_panel(st: &State, d: &Data, strings: &[String], u: u32) -> Vec<(i16, S
     out.push((-12, Show::Text(format!("{} {}", stat(strings, race + 0x332), (total + 1) / 2))));
     out.push((-13, Show::Text(format!("{} {}", stat(strings, race + 0x338), (max as u32 + 1) >> 1))));
     out
+}
+
+/// 0x426ff0: the Nuclear Silo's panel while a nuke is in production (queue head below
+/// 0x6a): the progress (7) of the nuke being built and its label (-15, stat_txt 0x303 + race),
+/// with the wireframe, hit points, status line and name as 0x427a50 draws them. None when
+/// the head is 0x6a or more (the idle panel: 0x426c60, shown by `unit_panel`).
+fn silo_panel(st: &State, d: &Data, strings: &[String], u: u32) -> Option<Vec<(i16, Show)>> {
+    let un = &st.units[u as usize];
+    if un.build_queue[un.build_queue_slot as usize % 5] > 0x69 {
+        return None;
+    }
+    let target = if matches!(un.order, 0x1e | 0x22 | 0x21) || is_building_unit(st, u) {
+        un.order_target_unit
+    } else if matches!(un.secondary_order, 0x26 | 0x3f) || is_training(st, u) {
+        un.current_build_unit
+    } else {
+        crate::bw::list::NIL
+    };
+    let progress = if target != crate::bw::list::NIL { build_progress(st, d, target) } else { 0 };
+    let mut out = vec![(7, Show::Progress(progress)), (-15, Show::Text(stat(strings, 0x303 + race_index(d, un.unit_type))))];
+    out.extend(unit_panel(st, d, strings, u).into_iter().filter(|(id, _)| matches!(id, 1 | -7 | -8 | -20 | -5)));
+    Some(out)
 }
 
 /// 0x4669e0: percent done of unit `b` being built (eggs and morphing buildings count
@@ -478,7 +510,8 @@ pub fn unit_panel(st: &State, d: &Data, strings: &[String], u: u32) -> Vec<(i16,
         let total = if un.status & 0x4000_0000 != 0 { 0x546 } else { 0x708 };
         out.push((-8, Show::Text(format!("\x04{}/{}", un.remove_timer / 10, total / 10))));
     }
-    out.push((-5, Show::Text(unit_name(d, strings, t))));
+    // 0x425ec0 / 0x425ee0: the name of the morph an incomplete unit is becoming (0x47b5a0).
+    out.push((-5, Show::Text(unit_morph_name(st, d, strings, u))));
     out
 }
 

@@ -1296,7 +1296,7 @@ impl State {
             return;
         }
         let player = self.units[src as usize].player;
-        self.give_unit_with_parts(d, u, player);
+        self.give_unit_with_parts(d, u, player as u32);
         if self.units[u as usize].unit_type == 0x3f {
             self.units[u as usize].energy = 0;
         }
@@ -1548,10 +1548,14 @@ impl State {
 
     /// 0x4c8040: give `u` to `player` with what belongs to it: the worker inside a
     /// refinery, passengers, fighters, an addon, an addon being built, a nydus exit.
-    pub(super) fn give_unit_with_parts(&mut self, d: &Data, u: u32, player: u8) -> bool {
+    /// Player 13 is the current player (0x6509b0); returns false for a skipped unit
+    /// (hallucination, excluded types, already owned) and for a bad player.
+    pub(super) fn give_unit_with_parts(&mut self, d: &Data, u: u32, player: u32) -> bool {
+        let player = if player == 13 { self.trig.player } else { player };
         if player >= 12 || u == NIL {
             return false;
         }
+        let player = player as u8;
         let un = &self.units[u as usize];
         let t = un.unit_type;
         if un.status & 0x4000_0000 != 0
@@ -1559,7 +1563,7 @@ impl State {
             || d.dat.units.flags[t as usize] & 2 != 0
             || un.player == player
         {
-            return true;
+            return false;
         }
         // A completed refinery gives its gas worker too.
         if self.is_completed_refinery(u) {

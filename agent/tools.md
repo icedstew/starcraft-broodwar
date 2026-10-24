@@ -55,6 +55,20 @@ Copied from the session scratchpad
 The SC:R CASC export that was at `scratch/data/` (672 MB) was not copied: the project no
 longer uses SC:R data.
 
+### Rebuilding the dump (Windows, 2026-10-23)
+
+`re/ghidra/dump.ps1 -Install <1.16.1 dir>` recreates `sc116/`, the Ghidra project
+`ghidra_proj/`, `dump/bw116.c` and `dump/bw116n.c` (~2 min auto-analysis, ~30 s
+ParallelDecompiler on all cores; Ghidra 12.1.4, JDK 21). Names come from
+`re/src_names.py`: each `/// 0x...` doc block names its address after the Rust fn
+(dispatcher fns porting several functions get `_<addr>` suffixes so names stay unique),
+plus `re/data/names116.txt`. Output is deterministic (DumpAll sorts each batch). Its
+coverage.py reachable sets match the original Linux dump. `analyzeHeadless.bat` fails on
+paths with spaces: run through a junction (here `C:\src\scbwre` -> `C:\src\scbw reverse`).
+`env.sh` falls back to `venv/Scripts/python.exe` (Windows venv).
+`data116/` on a new box: `agent/tools/fill_data116.py "$PY" "$EXE" "$DATA" "$W/md/cur" "$SCBW" "$W"`
+(after one `scbw mapdump` into `$W/md/cur`; reruns the emulator, extracting what it misses: 746 files).
+
 ## scbw commands useful for RE
 
 ```sh

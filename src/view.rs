@@ -367,6 +367,8 @@ impl<'a> Scene<'a> {
         for (id, ms) in bw::minimap::Minimap::TIMERS {
             minimap_timers.set(0, 0, id, ms, None);
         }
+        // 0x4bed70 sets 0x597288 := 1 when it creates the leaderboard dialog.
+        crate::leaderboard::reset_rows();
         let mut scene = Scene { st, scroll: ScrollState::default(), creep_grp, minimap, minimap_timers, voices: crate::voices::Voices::new(), portrait: Default::default(), talk_left: 0, talk_unit: None, trans_left: None, sent_selection: Vec::new(), turns: Default::default(), card_menu: None, placing: None, card_held: None, targeting: None, error: 0, msgs: Default::default(), chat: Default::default(), clock_ms: 0, timer_running: false, timer_base: 0, timer_start: 0, from_save: false, gamma: 100, pause_tick: 0, pause_replay_saved: false, place_ok: false, place_tile: (0, 0), place_err: 0, drag_box: None, a, chk, ts, terrain, player_colors, colors: std::array::from_fn(|p| colr.get(p).copied().unwrap_or(p as u8)), end_at: std::env::var("SCBW_END_AT").ok().and_then(|v| Some((v.trim_end_matches('d').parse().ok()?, if v.ends_with('d') { 0x40 } else { 0x80 }))), local, shadow, dark, fog: crate::fog::Fog::new(), parallax, tselect, thpbar, remaps };
         scene.timer_running = timer_running;
         if let Ok(d) = scene.a.files.read(&format!("rez/{}textbox.bin", ["z", "t", "p"][scene.local_race()])) {
@@ -398,11 +400,17 @@ impl<'a> Scene<'a> {
         });
     }
 
+    /// 0x4a2ca0: the game's elapsed seconds (the timer is never stopped while the scene runs,
+    /// so the 0x59cc88 end tick is the clock).
+    pub fn elapsed_seconds(&self) -> u32 {
+        self.timer_base.wrapping_add(self.clock_ms.wrapping_sub(self.timer_start) / 1000)
+    }
+
     /// 0x4d02d0: the whole saved game `name`: the text (0x4ce950), the header (0x4cf160),
     /// then `save_state`'s parts. None when the game would not save.
     pub fn save_file(&mut self, name: &[u8], multi: bool) -> Option<Vec<u8>> {
         // 0x4d02d0: 0x57f240 = (now - 0x59cc7c) / 1000 + 0x6d5bcc, before the game data.
-        self.st.game_secs = self.clock_ms.wrapping_sub(self.timer_start) / 1000 + self.timer_base;
+        self.st.game_secs = self.elapsed_seconds();
         let table = self.st.player_table();
         let slots: Vec<[u8; 0x24]> = table.chunks_exact(0x24).map(|c| c.try_into().unwrap()).collect();
         // not kept: the map's title (0x596845) and path (0x57fd3c), the game type name
@@ -506,6 +514,24 @@ impl<'a> Scene<'a> {
             (ax + x as i32, ay + y as i32)
         });
         Some(((sx / n - 0x140) & !7, (sy / n - 0xc8) & !7))
+    }
+
+    /// 0x4d9460 (the game loop's paused pass, 0x4d9757): counts the click-flash timer of
+    /// every visible unit's sprite (0x4ebbd0) unless the unit is flagged 0x10 (units.dat) or its
+    /// sprite hidden. UI-side: sprite timers / flags are not in `state_hash`.
+    pub fn paused_selection_flash(&mut self) {
+        let st = &mut self.st;
+        with_data(self.a, |d| {
+            let mut u = st.visible_units.head;
+            while u != bw::list::NIL {
+                let un = &st.units[u as usize];
+                let (next, ut, s) = (un.link.next, un.unit_type as usize, un.sprite);
+                if d.dat.units.flags[ut] & 0x10 == 0 && st.sprites[s as usize].flags & bw::sprite::sflag::HIDDEN == 0 {
+                    st.update_selection_flash(s);
+                }
+                u = next;
+            }
+        });
     }
 
     /// 0x4c07b0: send hotkey group command 0x13 (`action` 0 set, 1 select, 2 add; BL = group
@@ -1548,8 +1574,10 @@ impl<'a> Scene<'a> {
             pl.hide();
         }
         if self.talk_left == 0 {
-            let p = self.st.selected.first().and_then(|&u| portrait(self, u));
-            pl.show(ps, files, p);
+            // 0x45ebc0 with the status unit 0x597248 (index + 1; 0 for none).
+            let active = self.client_selection().active;
+            let p = Some(active).filter(|&u| u != NIL).and_then(|u| portrait(self, u));
+            pl.show_unit(ps, files, if active == NIL { 0 } else { active + 1 }, p);
         }
         pl.tick(ps, files, ms, mode == 2);
     }
@@ -1578,6 +1606,18 @@ impl<'a> Scene<'a> {
                         } else {
                             vec![unit]
                         };
+                        // 0x458220: with Alt (0x596a2a) a lone result goes to its best recent
+                        // group (0x496d30) when it has one, and that group is selected instead.
+                        let mut sel = sel;
+                        if sel.len() == 1 && self.st.key_alt {
+                            let h = self.st.unit_handle(sel[0]);
+                            if let Some(g) = self.st.recent_group_of(h) {
+                                let grp = with_data(self.a, |d| self.st.select_recent_group(d, g));
+                                if !grp.is_empty() {
+                                    sel = grp;
+                                }
+                            }
+                        }
                         self.set_selected(sel);
                         self.card_menu = None;
                         self.set_placing(None);
@@ -2293,8 +2333,10 @@ fn draw_hud(scene: &Scene, ui: &crate::ui::Ui, vx: i32, vy: i32, cursor: Option<
     crate::leaderboard::draw(scene, ui, out);
     if let Some((l, t, r, b)) = ui.statport.screen_rect(1) {
         // 0x45e650: the video, then conover.pcx over it (index 0 clear).
-        // ponytail: the static shown while a new portrait loads (0x45e570) is not ported.
         scene.portrait.borrow_mut().draw(scene.palette(), l, t, r - l + 1, b - t + 1, out, w, h);
+        if let Some(ps) = ui.portraits.as_ref() {
+            scene.portrait.borrow_mut().draw_static_overlay(ps, [l as i16, t as i16, r as i16, b as i16], &scene.minimap.colors[..16], out, w);
+        }
         if let Some(c) = &ui.conover {
             crate::ui::blit(c, l, t, out, w, h);
         }
@@ -2392,9 +2434,12 @@ fn draw_hud(scene: &Scene, ui: &crate::ui::Ui, vx: i32, vy: i32, cursor: Option<
                     }
                 }
                 crate::statdata::Show::Button { bg, icon, cmdicon } => {
-                    // 0x457480: an enabled button (ticon row 3).
+                    // 0x457480: an enabled button (ticon row 3), frame 0x456d30.
+                    todo_port!("0x457480", "pressed state (flag 0x40000000) of status panel buttons: none is tracked");
                     let g = if *cmdicon { &ui.cmdicons } else { &ui.cmdbtns };
-                    stat_button(ui, *bg, g, *icon, 3, false, (l, t, r, b), out);
+                    let bg = crate::statdata::button_frame(*bg, 0);
+                    let bg = if (bg as usize) < ui.cmdbtns.frame_count() { bg } else { 0 };
+                    stat_button(ui, bg, g, *icon, 3, false, (l, t, r, b), out);
                 }
             }
         }
@@ -2422,8 +2467,11 @@ fn draw_hud(scene: &Scene, ui: &crate::ui::Ui, vx: i32, vy: i32, cursor: Option<
             draw_cmd_button(ui, scene.st.replay, b.icon, !*enabled, scene.card_held == Some(i), lit == Some(b.icon), card_rect(ui, i as u16 + 1), out, w, h);
         }
     }
+    // 0x4f50f0 / 0x4f5070: while paused (0x6509c4) outside multiplayer (0x57f0b4) the hover
+    // tooltips are hidden.
+    let hover = cursor.filter(|_| !scene.st.trig.paused || scene.st.multiplayer);
     // 0x4593a0: the hovered button's tooltip.
-    if let Some((_, _, cx, cy)) = cursor {
+    if let Some((_, _, cx, cy)) = hover {
         for (i, slot) in scene.card().iter().enumerate() {
             let Some((b, enabled)) = slot else { continue };
             let (bx, by, br, bb) = card_rect(ui, i as u16 + 1);
@@ -2433,7 +2481,7 @@ fn draw_hud(scene: &Scene, ui: &crate::ui::Ui, vx: i32, vy: i32, cursor: Option<
         }
     }
     // 0x4a4c40: the terrain button's tooltip (stat_txt 0x32a shown, 0x329 hidden).
-    if let (Some((_, _, cx, cy)), Some((l, t, r, b))) = (cursor, ui.minimap.get(2).filter(|c| c.flags & crate::dlg::flag::VISIBLE != 0).and(ui.minimap.screen_rect(2))) {
+    if let (Some((_, _, cx, cy)), Some((l, t, r, b))) = (hover, ui.minimap.get(2).filter(|c| c.flags & crate::dlg::flag::VISIBLE != 0).and(ui.minimap.screen_rect(2))) {
         if (l..=r).contains(&cx) && (t..=b).contains(&cy) {
             let i = if scene.minimap.hide_terrain { 0x329 } else { 0x32a };
             let s = ui.stat_txt.get(i).map_or("", |s| s.split('\0').next().unwrap_or(""));
@@ -2441,7 +2489,7 @@ fn draw_hud(scene: &Scene, ui: &crate::ui::Ui, vx: i32, vy: i32, cursor: Option<
         }
     }
     // 0x4f4f70: the MENU button's tooltip (stat_txt 0x32d) right of it.
-    if let (Some((_, _, cx, cy)), Some((l, t, r, b))) = (cursor, ui.stat_f10.screen_rect(1)) {
+    if let (Some((_, _, cx, cy)), Some((l, t, r, b))) = (hover, ui.stat_f10.screen_rect(1)) {
         if (l..=r).contains(&cx) && (t..=b).contains(&cy) {
             let s = ui.stat_txt.get(0x32d).map_or("", |s| s.split('\0').next().unwrap_or(""));
             tooltip(ui, s, r, t, out, w, h);
@@ -2761,6 +2809,14 @@ thread_local! {
 /// Exit Program (quit.bin -2) was chosen: the whole program ends, not only the game.
 pub static EXIT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// The game ended with result 5 (Restart Mission, command 0x08): the glue's next state is 5.
+static RESTART: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// True once after a game ended with `RESTART` set.
+pub fn take_restart() -> bool {
+    RESTART.swap(false, std::sync::atomic::Ordering::Relaxed)
+}
+
 pub fn park_window(w: minifb::Window) {
     PARKED.with(|p| *p.borrow_mut() = Some(w));
 }
@@ -2971,6 +3027,7 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
         }
         if let Some((g, m, k)) = win.take_settings() {
             (settings.game_speed, settings.mouse_scroll, settings.key_scroll) = (g, m, k);
+            scene.st.game_speed = g.clamp(0, 6) as u8;
         }
         let (mut cx, mut cy) = win.get_mouse_pos(minifb::MouseMode::Clamp).map_or((vw / 2, vh / 2), |(x, y)| (x as i32, y as i32));
         // 0x46ff70 -> 0x421690 (ClipCursor 0x5993b0): while a box is dragged the cursor stays
@@ -3052,6 +3109,11 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
         // The game menu (F10 or the console's MENU button) takes all input while open;
         // single player and replays pause under it (0x4f57a0 -> 0x488790).
         ctx.replay_speed = scene.st.replay_speed as i16;
+        ctx.multiplayer = scene.st.multiplayer;
+        ctx.paused = scene.st.trig.paused;
+        ctx.player_type = scene.st.player_types.get(scene.st.local_player as usize).copied().unwrap_or(0);
+        ctx.local_result = scene.st.player_left.get(scene.st.local_player as usize).copied().unwrap_or(0);
+        ctx.elapsed_secs = scene.elapsed_seconds();
         let open_plain = |scene: &Scene, kind, depth, settings: &crate::menu::Settings| {
             let u = ui.as_ref()?;
             let mut m = crate::menu::Menu::open(kind, depth, &a.files, &u.skin, ctx, settings)?;
@@ -3165,9 +3227,18 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
                     }
                     // 0x4e0710: the game's result 0x51ce90 (7 after the defeat dialog, else 6)
                     // is the glue's next state; 0x4de200 then opens the score screen.
-                    crate::menu::Action::EndGame => {
+                    // 0x4c9280 (multiplayer quit): 6 or 7 by the local result, then the score screen
+                    // as after the end dialogs.
+                    crate::menu::Action::EndGame | crate::menu::Action::QuitScore(_) => {
                         *end.borrow_mut() = Some(scene.game_end());
                         return Ok(false);
+                    }
+                    // 0x481ef0: the speed dialog's OK sends command 0x0f (0x485bd0); its handler sets
+                    // 0x6cdfd4, which the settings follow.
+                    crate::menu::Action::GameSpeed(v) => {
+                        if replay.is_none() {
+                            scene.send(&[0x0f, v]);
+                        }
                     }
                     // 0x4c0600 (command 6, run at once here): the game saved as `name`.
                     crate::menu::Action::SaveGame(name) => {
@@ -3221,7 +3292,13 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
                             scene.unpause_game(true);
                         }
                     }
-                    // ponytail: restarting rebuilds nothing yet; the menu just closes.
+                    // 0x4c9530 (restart.bin OK): command 0x08 (0x4bfb10) through the command
+                    // channel like every command; when it runs the game ends with result 5.
+                    crate::menu::Action::Restart => {
+                        if replay.is_none() {
+                            scene.send(&[8]);
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -3239,6 +3316,14 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
                     scene.st.replay_paused = false;
                 }
             }
+            // 0x4d97 (paused loop pass) -> 0x4d9460: the click-flash timers keep counting, once
+            // per frame time of the speed.
+            let ms = if replay.is_some() { bw::triggers::replay_frame_ms(scene.st.replay_speed as usize, scene.st.replay_mult as u32) } else { bw::triggers::FRAME_MS[settings.game_speed.clamp(0, 6) as usize] };
+            game_acc += 42;
+            for _ in 0..game_acc / ms {
+                scene.paused_selection_flash();
+            }
+            game_acc %= ms;
             let counter = tick * 42 / 100;
             scene.gamma = settings.gamma;
             scene.ts.cycle.tick(settings.color_cycling); // 0x4d93f0
@@ -3334,6 +3419,7 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
                 pressed = Some(*b);
             }
         }
+        let chat_was_open = scene.chat.open;
         let mut chat_keys = Vec::new();
         if scene.chat.open {
             for c in typed_chars {
@@ -3384,6 +3470,22 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
             }
             chat_keys.push(Key::Enter);
         }
+        // 0x4f36c0 / 0x4846b0 (Escape): 0x489da0 skips the trigger cinematic, applied locally
+        // (not a command) before the game step. While a trigger paused the game (0x6509c4)
+        // the dialog proc takes it even with the chat line open; otherwise the chat's Escape
+        // (0x4f32d0) consumes it.
+        if keys_no.contains(&Key::Escape) && (!chat_was_open || scene.st.trig.paused) && scene.st.skip_cinematic() {
+            if let Some(au) = audio.as_ref() {
+                au.stop_files(); // stop_files 0x4015f0
+            }
+            // 0x68ac4c: the running transmission timer is killed (no 0x45e610 end) and
+            // 0x45ec40 (3) ends the talk: the portrait shows the selection's again.
+            if scene.trans_left.take().is_some() {
+                scene.talk_left = 0;
+                scene.talk_unit = None;
+            }
+            scene.msgs.clear_trigger_text();
+        }
         let keys = if scene.chat.open || !chat_keys.is_empty() { Vec::new() } else { keys_no.clone() };
         for k in keys {
             use minifb::Key::*;
@@ -3393,6 +3495,10 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
                 // (0x4967e0, 0x496b40), the digit alone selects; selecting the same
                 // group again within 500 ms centers too (0x4c07b0).
                 let g = g as u8;
+                // 0x4846e0: the accelerators below the 0x6509c4 gate do nothing while paused.
+                if scene.st.trig.paused {
+                    continue;
+                }
                 if ctrl || shift {
                     scene.hotkey(if ctrl { 0 } else { 2 }, g, tick * 42, &mut last_group);
                     continue;
@@ -3408,6 +3514,8 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
             }
             let fkey = [F2, F3, F4].iter().position(|&n| n == k);
             match (k, fkey) {
+                // 0x4846e0: below the pause gate (0x6509c4 != 0 returns) F2..F4 and Ctrl/Alt+C do nothing.
+                (_, Some(_)) | (C, _) if scene.st.trig.paused && (fkey.is_some() || ctrl || alt) => continue,
                 // 0x484360 / 0x484500: Shift+F2..F4 saves the screen, F2..F4 returns.
                 (_, Some(i)) if shift => {
                     camera_slots[i] = (vx & !7, vy & !7);
@@ -3417,9 +3525,11 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
                     (vx, vy) = camera_slots[i];
                     continue;
                 }
-                // 0x4e6020: Ctrl / Alt+C centers on the status unit.
+                // 0x4e6020 (accelerator -0x639c, when the active unit 0x597248 is set): Ctrl / Alt+C
+                // centers on the status unit.
                 (C, _) if ctrl || alt => {
-                    if let Some(&u) = scene.st.selected.first() {
+                    let u = scene.client_selection().active;
+                    if u != bw::list::NIL {
                         let (x, y) = scene.st.unit_sprite_pos(u);
                         (vx, vy) = ((((x as i32) >> 5) - 10) << 5, (((y as i32) >> 5) - 6) << 5);
                     }
@@ -3427,27 +3537,38 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
                 }
                 _ => {}
             }
-            if replay.is_none() {
-                let menu_kind = match k {
-                    F1 => Some(crate::menu::Kind::Help),
-                    H if alt => Some(crate::menu::Kind::Help),
-                    O if alt => Some(crate::menu::Kind::Options),
-                    Q if ctrl || alt => Some(crate::menu::Kind::QuitMission),
-                    X if ctrl || alt => Some(crate::menu::Kind::Quit),
-                    _ => None,
-                };
-                if menu_kind.is_some() {
-                    want_menu = menu_kind;
-                    continue;
-                }
-                // 0x4c0480: +/= and -/_ change the game speed outside multiplayer.
+            // 0x4846e0 (first switch, before the pause gate; replays too): 0x4ca350 Help (F1,
+            // Alt+H), 0x4c9f60 Alt+O options, 0x4ca330 Ctrl/Alt+X quit; 0x4ca2f0 (Ctrl/Alt+Q)
+            // opens the replay's own dialog 0x4c9280 in a replay (not ported: stays off there).
+            let menu_kind = match k {
+                F1 => Some(crate::menu::Kind::Help),
+                H if alt => Some(crate::menu::Kind::Help),
+                O if alt => Some(crate::menu::Kind::Options),
+                Q if (ctrl || alt) && replay.is_none() => Some(crate::menu::Kind::QuitMission),
+                X if ctrl || alt => Some(crate::menu::Kind::Quit),
+                _ => None,
+            };
+            if menu_kind.is_some() {
+                want_menu = menu_kind;
+                continue;
+            }
+            // 0x4846e0 -0x638b (first switch, so also paused / replays; Local.dll tables 101 / 102
+            // entry Ctrl+R, cmd 0x9c75): 0x4bec00 toggles 0x597288 and refills the dialog.
+            if k == R && ctrl && !alt && !shift {
+                crate::leaderboard::toggle_rows();
+                continue;
+            }
+            if replay.is_none() && !scene.st.trig.paused {
+                // 0x4c0480: +/= and -/_ (accelerators -0x6388 / -0x6386, below the pause gate) send
+                // command 0x0f (speed) when not multiplayer (0x57f0b4); the command's
+                // handler (0x4865d0) sets 0x6cdfd4 for values below 7.
                 match k {
-                    Equal | NumPadPlus if settings.game_speed < 6 => {
-                        settings.game_speed += 1;
+                    Equal | NumPadPlus if !scene.st.multiplayer && scene.st.game_speed < 6 => {
+                        scene.send(&[0x0f, scene.st.game_speed + 1]);
                         continue;
                     }
-                    Minus | NumPadMinus if settings.game_speed > 0 => {
-                        settings.game_speed -= 1;
+                    Minus | NumPadMinus if !scene.st.multiplayer && scene.st.game_speed > 0 => {
+                        scene.send(&[0x0f, scene.st.game_speed - 1]);
                         continue;
                     }
                     _ => {}
@@ -3507,7 +3628,9 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
         }
         let down = down && scene.placing.is_none();
         let mut targeted = false;
-        if scene.targeting.is_some() && clicked && pressed.is_none() && !on_card {
+        // 0x488760: the minimap ignores its input while paused (0x6509c4) outside multiplayer.
+        let mm_blocked = scene.st.trig.paused && !scene.st.multiplayer && on_minimap_pt(cx, cy);
+        if scene.targeting.is_some() && clicked && pressed.is_none() && !on_card && !mm_blocked {
             // A targeted order given on the minimap goes to that map point; the camera
             // stays (the click does not also scroll it).
             let pt = if on_minimap_pt(cx, cy) { scene.minimap.screen_to_map(cx, cy, (ox as i16, (oy - 0x13b) as i16)) } else { map_pt };
@@ -3530,6 +3653,14 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
             hud_press = Some(ui.as_ref().is_some_and(|u| u.hud_hit(press_pos.0, press_pos.1)));
         }
         if down && on_minimap_pt(cx, cy) && drag_start.is_none() {
+          if mm_blocked {
+              // 0x4a5926 / 0x4a59f0: ignored while paused.
+          } else if alt && clicked && replay.is_none() {
+            // 0x4a53c0: Alt+click sends the minimap ping, command 0x58 with the map point
+            // (0x4a3d70), instead of moving the view.
+            let (mx, my) = scene.minimap.screen_to_map(cx, cy, (ox as i16, (oy - 0x13b) as i16));
+            scene.send(&[0x58, mx as u8, (mx >> 8) as u8, my as u8, (my >> 8) as u8]);
+          } else {
             // 0x4a4d20: the cursor less half the screen box (20 x 13 tiles in minimap
             // pixels), as a map point (0x4a3d70), its tile (0x49c440 when it changed).
             let mm = &scene.minimap;
@@ -3538,6 +3669,7 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
             let (mx, my) = mm.screen_to_map(cx - hx, cy - hy, (ox as i16, (oy - 0x13b) as i16));
             vx = (mx >> 5) << 5;
             vy = (my >> 5) << 5;
+          }
         } else if down && cy < vh - 120 && (drag_start.is_some() || hud_press == Some(false)) {
             let (sx, sy) = *drag_start.get_or_insert(press_pos);
             scene.drag_box = Some((sx, sy, cx, cy));
@@ -3562,11 +3694,14 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
             // Watching a replay: no commands.
         } else if rdown && !rmb_was_down && cy < vh - 120 {
             scene.right_click(map_pt, shift);
-        } else if rdown && !rmb_was_down && on_minimap_pt(cx, cy) {
+        } else if rdown && !rmb_was_down && on_minimap_pt(cx, cy) && !mm_blocked {
             scene.right_click(((cx - ox) * scale, (cy - oy) * scale), shift);
         }
         rmb_was_down = rdown;
         if let Some(kind) = want_menu {
+            // 0x4f57a0 (in a game): placement (0x48e310) and targeting (0x48ca10) end first.
+            scene.set_placing(None);
+            scene.end_targeting();
             menu = open_menu(&scene, kind, 0, &mut settings);
             menu_paused = menu.is_some();
             if menu_paused {
@@ -3593,6 +3728,8 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
         } else {
             // The game speed (0x6cdfd4) picks the ms per frame (0x5124d8).
             game_acc += 42;
+            // 0x6cdfd4 is both the setting and what command 0x0f sets.
+            settings.game_speed = scene.st.game_speed as i16;
             let ms = bw::triggers::FRAME_MS[settings.game_speed.clamp(0, 6) as usize];
             let n = game_acc / ms;
             game_acc %= ms;
@@ -3621,6 +3758,14 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
                 }
             }
             sounds.extend(scene.step());
+        }
+        // 0x4bfb10 (command 0x08) cleared the game loop flag 0x6d11ec: the game ends with the
+        // result 0x51ce90 = 5, which 0x4e0710 follows with write_last_replay and the glue's
+        // state 5 (the mission starts again, `take_restart`).
+        if scene.st.game_restart {
+            scene.write_last_replay();
+            RESTART.store(true, std::sync::atomic::Ordering::Relaxed);
+            return Ok(false);
         }
         // 0x4615b0 / 0x461640: the victory / defeat dialog. 0x48e310 / 0x48ca10 end placement
         // and targeting; 0x4f57a0 opens it and pauses (0x488790).

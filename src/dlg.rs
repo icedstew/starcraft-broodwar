@@ -247,9 +247,79 @@ pub enum Update {
     Portrait,
 }
 
+/// The global control tables of the event dispatchers (one dialog is active at a time, so
+/// controls are named by id): the capture table 0x6d5e40 (19 entries; the mouse events go to
+/// the control in entry `type`) and the delayed-event table 0x6d5e90 (4 entries: a control
+/// and its deadline, GetTickCount + 0x1e).
+#[derive(Clone, Debug, Default)]
+pub struct Captures {
+    pub cap: [Option<i16>; 19],
+    pub tip: [Option<(i16, u32)>; 4],
+    /// GetTickCount, advanced by `advance`.
+    pub now: u32,
+}
+
+impl Captures {
+    /// 0x4196a0 (ESI = the entry, EDI = the control): the previous holder is returned and
+    /// must get event 6 (its update +0x2a with (6, 0)).
+    pub fn capture(&mut self, slot: usize, id: i16) -> Option<i16> {
+        self.cap[slot].replace(id)
+    }
+
+    /// 0x419640 (EDX = the control): it leaves every capture and delayed-event entry.
+    pub fn release(&mut self, id: i16) {
+        for c in &mut self.cap {
+            if *c == Some(id) {
+                *c = None;
+            }
+        }
+        for t in &mut self.tip {
+            if t.is_some_and(|t| t.0 == id) {
+                *t = None;
+            }
+        }
+    }
+
+    /// 0x4196f0 (EDX = the control): queue event 3 (sub 0xe) for it in 30 ms, unless an entry
+    /// of the same dialog is queued already (a single active dialog here).
+    pub fn delay(&mut self, id: i16) {
+        if self.tip.iter().any(|t| t.is_some()) {
+            return;
+        }
+        if let Some(t) = self.tip.iter_mut().find(|t| t.is_none()) {
+            *t = Some((id, self.now.wrapping_add(0x1e)));
+        }
+    }
+
+    /// 0x419740 (the dialog event loop): the controls whose deadline has passed (strictly,
+    /// as `deadline - now < 0`), cleared; each gets event 3 with sub 0xe at the mouse.
+    pub fn due(&mut self) -> Vec<i16> {
+        let now = self.now;
+        let mut v = vec![];
+        for t in &mut self.tip {
+            if let Some((id, at)) = *t {
+                if (at.wrapping_sub(now) as i32) < 0 {
+                    *t = None;
+                    v.push(id);
+                }
+            }
+        }
+        v
+    }
+
+    /// Time passes (GetTickCount += `ms`).
+    pub fn advance(&mut self, ms: u32) {
+        self.now = self.now.wrapping_add(ms);
+    }
+}
+
 /// What the caller of `Ctl::default_event` (0x4e1a70) must still do.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Dispatch {
+    /// Controls that lost a capture (0x4196a0) and get event 6.
+    pub lost: [Option<i16>; 2],
+    /// Run the hook 0x6d5eac(1) (0x4e0d40: the mouse pressed the button).
+    pub sound1: bool,
     /// The dispatcher's return value.
     pub ret: bool,
     /// Run the hook 0x6d5eac(0).
@@ -322,7 +392,7 @@ impl Ctl {
     /// entry opens its video (0x4e1260, inline here: the file is opened and its first frame
     /// shown, a missing file is fatal "Could not load") and the text flags are taken from
     /// the control's flags. The draw (+0x2e = 0x4e1180) is `Update`; the redraw is the caller's.
-    /// 0x4e1260: a light-up entry's video opened and its first frame shown (inline here).
+    /// 0x4e1220 (align = flags >> 0x14 & 0x77, hot rect moved to the control) and 0x4e1260: a light-up entry's video opened and its first frame shown (inline here).
     pub fn lightup_init(&mut self, files: &Storage) {
         let (l, t) = (self.rect.0, self.rect.1);
         self.hot = (self.hot.0 + l, self.hot.1 + t, self.hot.2 + l, self.hot.3 + t);
@@ -341,7 +411,7 @@ impl Ctl {
             smk.next_frame();
             a.video = Some(Rc::new(RefCell::new(smk)));
         }
-        self.align = (self.flags >> 0x14) as u8;
+        self.align = (self.flags >> 0x14) as u8 & 0x77;
     }
 
     /// 0x4e0b80 (EDI = the control; event 1): the videos are closed and the hot rect is
@@ -361,16 +431,16 @@ impl Ctl {
         (l..=r).contains(&x) && (t..=b).contains(&y) && self.flags & flag::VISIBLE != 0 && self.flags & flag::DISABLED == 0 && self.flags & 0x10 != 0
     }
 
-    /// 0x4e1670 (ESI = the control, EAX = the event record, `ev` = its number at +0): the
+    /// 0x4e1670 / 0x4e1390 (ESI = the control, EAX = the event record, `ev` = its number at +0): the
     /// light-up button's event dispatcher. `x`, `y` as for `lightup_hit` (event 4). What the
     /// caller must still run is in `LightupAct` (event 2's activation and the sounds); the
     /// events that end in the generic handler 0x418c40 are `todo_port!` (no state here).
-    pub fn lightup_event(&mut self, ev: u32, x: i32, y: i32, files: &Storage) -> LightupAct {
+    pub fn lightup_event(&mut self, ev: u32, x: i32, y: i32, files: &Storage, caps: &mut Captures) -> LightupAct {
         let mut a = LightupAct::default();
         match ev {
             1 => {
                 self.lightup_close();
-                todo_port!("0x418c40", "generic control event handler");
+                self.generic_event(1, caps);
             }
             2 => {
                 // 0x6d051c := id; the control's update (+0x2a) with event 2
@@ -380,12 +450,15 @@ impl Ctl {
             3 => {
                 self.flags |= 1;
                 if self.flags & flag::PRESSED != 0 {
-                    // 0x4e0dd0: released without the click hook
+                    // 0x4e0dd0: released (capture entries dropped), the control's update
+                    // gets event 2 at the mouse
+                    caps.release(self.id);
                     self.flags &= !flag::PRESSED;
+                    a.activate = Some(self.id);
                     a.ret = true;
                     return a;
                 }
-                todo_port!("0x4196f0", "tooltip table entry for this control");
+                caps.delay(self.id);
                 self.flags ^= flag::PRESSED;
                 if self.flags & flag::PRESSED != 0 {
                     a.sound1 = true;
@@ -400,19 +473,80 @@ impl Ctl {
             }
             10 => {
                 self.lightup_init(files);
-                todo_port!("0x418c40", "generic control event handler");
+                a.ret = self.generic_event(10, caps);
             }
             0xe => {
                 self.flags &= !flag::PRESSED;
-                todo_port!("0x418c40", "generic control event handler");
+                a.ret = self.generic_event(0xe, caps);
             }
             6 => {
                 self.flags &= 0xbfff_ff7f;
-                todo_port!("0x418c40", "generic control event handler");
+                a.ret = self.generic_event(6, caps);
             }
-            _ => todo_port!("0x418c40", "generic control event handler"),
+            _ => a.ret = self.generic_event(ev, caps),
         }
         a
+    }
+
+    /// 0x418c40 (ESI = the control, EAX = the event record, `ev` = its number): the generic
+    /// control handler. Ported: 1 (0x419640 drops the control from the tables), 5, 6 (the
+    /// same), 0xe (flag 8 cleared). Not ported (fields the controls do not carry here):
+    /// 1's kill_all and frees, 4 (0x418030), 8, 10 (+0x1e hide counter), 0xd, and 6's focus
+    /// leave (0x4180d0).
+    pub fn generic_event(&mut self, ev: u32, caps: &mut Captures) -> bool {
+        match ev {
+            1 => {
+                caps.release(self.id);
+                todo_port!("0x418c40", "event 1: kill_all and freeing the control's buffers");
+                true
+            }
+            5 => true,
+            6 => {
+                caps.release(self.id);
+                todo_port!("0x4180d0", "event 6: leaving the focus when the control is the dialog's active one");
+                true
+            }
+            0xe => {
+                self.flags &= !flag::VISIBLE;
+                true
+            }
+            _ => {
+                todo_port!("0x418c40", "generic control event handler: events 4, 8, 10 (+0x1e counter), 0xd");
+                false
+            }
+        }
+    }
+
+    /// 0x4e1560 (ECX = the control, EDX = the event record; `sub` its word at +0xc, `inside`
+    /// as for `press_follow`): the light-up button's mouse dispatcher. 3: 0x4e0d40 (the
+    /// pressed flag follows the mouse; the hooks 0x6d5eac(0) and (1) when it comes onto the
+    /// button), 4 / 6: capture entries 5 and 3 := this control, then the same; 5: the control
+    /// leaves the tables (0x419640), follows, 0x418900 (focus) and 0x4e0dd0 (release, the
+    /// update gets event 2). 0xe is `lightup_event`. Other codes return false.
+    pub fn lightup_mouse(&mut self, sub: u16, inside: bool, caps: &mut Captures) -> Dispatch {
+        let mut d = Dispatch::default();
+        match sub {
+            3 | 4 | 6 | 5 => {
+                if sub == 4 || sub == 6 {
+                    d.lost = [caps.capture(5, self.id), caps.capture(3, self.id)];
+                }
+                if sub == 5 {
+                    caps.release(self.id);
+                }
+                let entered = self.press_follow(inside);
+                d.sound0 = entered;
+                d.sound1 = entered;
+                if sub == 5 {
+                    todo_port!("0x418900", "focus / tooltip bookkeeping of the control");
+                    // 0x4e0dd0
+                    caps.release(self.id);
+                    d.activate = self.press_release();
+                }
+                d.ret = true;
+            }
+            _ => {}
+        }
+        d
     }
 
     /// 0x4e1a70 (EAX = the control, EBX = the event record, `ev` = its number at +0, `sub` = the
@@ -420,12 +554,12 @@ impl Ctl {
     /// is what the caller must run (sounds 0x6d5eac, the control's update +0x2a with event 2).
     /// The capture table 0x6d5e40 (0x4196a0), the tooltip table 0x6d5e90 (0x4196f0), the focus
     /// 0x418900 and the generic handler 0x418c40 have no state here: `todo_port!`.
-    pub fn default_event(&mut self, ev: u32, sub: u16, inside: bool) -> Dispatch {
+    pub fn default_event(&mut self, ev: u32, sub: u16, inside: bool, caps: &mut Captures) -> Dispatch {
         let mut d = Dispatch::default();
         match sub {
             4 | 6 | 3 => {
                 if sub != 3 {
-                    todo_port!("0x4196a0", "capture table entries 5 and 3 := this control");
+                    d.lost = [caps.capture(5, self.id), caps.capture(3, self.id)];
                 }
                 d.sound0 = self.press_follow(inside);
                 d.ret = true;
@@ -433,6 +567,7 @@ impl Ctl {
             5 => {
                 d.sound0 = self.press_follow(inside);
                 todo_port!("0x418900", "focus / tooltip bookkeeping of the control");
+                caps.release(self.id);
                 d.activate = self.press_release();
                 d.ret = true;
             }
@@ -440,7 +575,7 @@ impl Ctl {
                 if ev == 3 {
                     // 0x418580: shown (redraw is the caller's)
                     if self.flags & flag::PRESSED == 0 {
-                        todo_port!("0x4196f0", "tooltip table entry for this control");
+                        caps.delay(self.id);
                         self.flags ^= flag::PRESSED;
                         d.ret = true;
                     } else {
@@ -451,7 +586,7 @@ impl Ctl {
                     if ev == 6 {
                         self.flags &= !flag::PRESSED;
                     }
-                    todo_port!("0x418c40", "generic control event handler");
+                    d.ret = self.generic_event(ev, caps);
                 }
             }
             _ => {}
@@ -1025,6 +1160,10 @@ pub struct Effects {
     pub image_pct: i32,
     /// 0x6d05a4: the blend level shaded dialog bitmaps (flag 0x40000) use.
     pub shade_level: u8,
+    /// 0x51a194 / 0x6d0c50: the second shade color and level (blit mode 5, flag 0x2000000),
+    /// set by `set_second_shade` (0x4dfa30, 0x4f5ba0).
+    pub shade2: u8,
+    pub level2: u8,
 }
 
 /// 0x51b2f0: the 26 neighbor cells 0x4174a0 searches.
@@ -1037,7 +1176,7 @@ const NEIGHBORS: [[i32; 3]; 26] = [
 impl Effects {
     /// 0x4178b0 (no excluded colors): the three tables by 0x4174a0 for p = 1..=3.
     pub fn new(pal: &[[u8; 3]; 256], shade: u8, image_pct: i32) -> Effects {
-        Effects { tables: [1, 2, 3].map(|p| Self::table(pal, p, &[false; 256])), shade, image_pct, shade_level: level(image_pct) }
+        Effects { tables: [1, 2, 3].map(|p| Self::table(pal, p, &[false; 256])), shade, image_pct, shade_level: level(image_pct), shade2: 0, level2: 0 }
     }
 
     /// 0x4c90c0 (an in-game menu opens): the shade color is dlgs\tile.grp frame 4's
@@ -1052,6 +1191,14 @@ impl Effects {
         let mut fx = Self::new(pal, shade, 0);
         fx.tables[2] = Self::table(pal, 4, excluded);
         Effects { shade_level: 4, ..fx }
+    }
+
+    /// 0x4dfa30 (after the dialog's tile): 0x6d0c50 := 0x6d0af8 (the level of 80%, the
+    /// entry 80 of 0x6d09b8) and 0x51a194 := the score tile's frame 4 pixel (0, 0)
+    /// (0x4c8e80); the remap built from them is recomputed per use (0x51a190 dirty).
+    pub fn set_second_shade(&mut self, tile: &Grp) {
+        self.level2 = level(80);
+        self.shade2 = tile.pixels(4).and_then(|(px, _, _)| px.first().copied()).unwrap_or(0);
     }
 
     /// 0x4174a0: the nearest-color table for the blend fraction p / 8. The palette is
@@ -1125,7 +1272,12 @@ impl Effects {
     /// 0x416f30: the remap a translucent blit at `level` applies to the pixels it covers
     /// (the shade color blended over each).
     pub fn shade_remap(&self, level: u8) -> [u8; 256] {
-        let sh = self.shade as usize;
+        self.shade_remap_for(self.shade, level)
+    }
+
+    /// 0x416f30 with the shade color `shade` (0x51a18c, or 0x51a194 in mode 5).
+    pub fn shade_remap_for(&self, shade: u8, level: u8) -> [u8; 256] {
+        let sh = shade as usize;
         std::array::from_fn(|k| match level {
             0 => 0,
             1 | 2 => self.tables[level as usize - 1][k * 256 + sh],
@@ -1343,9 +1495,11 @@ impl Skin {
             // 0x40000 (the glue's dialogs, every in-game menu): mode 4 (0x416f30), the
             // shade color blends.
             if let Some(fx) = self.fx.as_ref().filter(|_| dlg.this.flags & 0x40000 != 0) {
-                let remap = fx.shade_remap(fx.shade_level);
+                // Flag 0x2000000: mode 5, the second shade (0x4ef440).
+                let (sh, lv) = if dlg.this.flags & 0x2000000 != 0 { (fx.shade2, fx.level2) } else { (fx.shade, fx.shade_level) };
+                let remap = fx.shade_remap_for(sh, lv);
                 let r = (ox, oy, ox + bw - 1, oy + bh - 1);
-                self.blit_shade(bg, *bw, *bh, ox, oy, r, fx.shade, &remap, s);
+                self.blit_shade(bg, *bw, *bh, ox, oy, r, sh, &remap, s);
             } else {
             for y in 0..*bh {
                 for x in 0..*bw {
@@ -1847,14 +2001,13 @@ impl Skin {
         if c.flags & 0x40000 == 0 {
             return self.blit(&img.px, img.w, img.h, r.0, r.1, r, None, c.flags & 0x2000 != 0, s);
         }
-        if c.flags & 0x2000000 != 0 {
-            todo_port!("0x416f30", "mode 5: the second shade 0x51a194 / level 0x6d0c50");
-        }
         let Some(fx) = self.fx.as_ref() else { return };
         // 0x416f30 through table 0x6d05a8 (0x417270: row 0 keeps the screen, row s
-        // writes s): only the shade color's row is the blend.
-        let remap = fx.shade_remap(level(fx.image_pct));
-        self.blit_shade(&img.px, img.w, img.h, r.0, r.1, r, fx.shade, &remap, s);
+        // writes s): only the shade color's row is the blend. Flag 0x2000000: mode 5, the
+        // second shade and level (0x51a194 / 0x6d0c50).
+        let (sh, lv) = if c.flags & 0x2000000 != 0 { (fx.shade2, fx.level2) } else { (fx.shade, level(fx.image_pct)) };
+        let remap = fx.shade_remap_for(sh, lv);
+        self.blit_shade(&img.px, img.w, img.h, r.0, r.1, r, sh, &remap, s);
     }
 
     /// 0x4172f0 mode 4 (0x416f30): source 0 keeps the screen, the shade color `shade`

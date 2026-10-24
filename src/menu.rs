@@ -307,6 +307,24 @@ pub struct Ctx {
     /// 0x6d1264 == 0 (no sound device): the sound dialog's sliders and boxes 3..5 are disabled
     /// (0x460bb0 / 0x460b20). Negated so that `Default` keeps the sound on.
     pub no_sound: bool,
+    /// 0x6509c4: the game is paused (the game menu's Pause / Resume, 0x4c9890).
+    pub paused: bool,
+    /// 0x57eee8 (stride 0x24) of the local slot 0x512688 (2: a human player).
+    pub player_type: u8,
+    /// 0x66fbfa (the game menu shows Pause in multiplayer above 8).
+    pub g66fbfa: u8,
+    /// 0x58d718 of the local slot: the pauses left.
+    pub pauses_left: u8,
+    /// 0x58d700 of the local slot 0x512684 (3: won).
+    pub local_result: u8,
+    /// 0x57f0b4 with 0x59688c == 'BNET'.
+    pub bnet: bool,
+    /// 0x4a2ca0: elapsed game seconds when the menu opens.
+    pub elapsed_secs: u32,
+    /// 0x4c4220's result of the local player (`setup.player_outcomes`), read by the victory dialog.
+    pub outcome: u32,
+    /// 0x581d61 == 2 (a team game: the victory dialog's team lines).
+    pub team_result: bool,
 }
 
 impl Ctx {
@@ -394,9 +412,14 @@ pub enum Action {
     Resume,
     /// The settings changed (OK in an option dialog).
     Apply,
+    /// 0x481ef0 (the speed dialog's OK): send command 0x0f with this speed (0x485bd0,
+    /// `Scene::send(&[0x0f, speed])`); the settings changed too.
+    GameSpeed(u8),
     Restart,
     /// Quit the mission / replay.
     QuitMission,
+    /// 0x4c9280 in a multiplayer game: quit to the score screen (0x51ce90 = 6 won / 7 else).
+    QuitScore(u8),
     ExitProgram,
     /// OK in the defeat / victory dialog (0x460f30 / 0x460fa0): the game ends and the
     /// score screen follows (0x51ce90 = 7 / 6).
@@ -446,6 +469,8 @@ pub struct Menu {
     tick_count: u32,
     /// Milliseconds since the message pump last sent event 0xd (every 100 ms, 0x4d1bf0).
     pump_ms: u32,
+    /// What the menu opened with (the 200 ms refreshes of the game and end-mission menus read it).
+    ctx: Ctx,
 }
 
 /// 0x512768: button graphics by style (0 minimap, 3 OK, 4 menu buttons, 5 Cancel, ...).
@@ -547,10 +572,15 @@ impl Menu {
             }
         }
         // 0x4cda80 / 0x4cda30: OK (-2) and Cancel / Previous (-3); the option dialogs
-        // (0x481e80, 0x460d60, 0x480e70) use styles 3 and 5.
-        let (ok, cancel) = if matches!(kind, Kind::Speed | Kind::Sound | Kind::Video | Kind::SaveGame | Kind::LoadGame | Kind::OkCancel | Kind::Ok) { (3, 5) } else { (4, 4) };
+        // (0x481e80, 0x460d60, 0x480e70) use styles 3 and 5. The tips dialog (0x47e8f0,
+        // call 0x47e96e) restyles only OK, with style 3.
+        let (ok, cancel) = match kind {
+            Kind::Tips => (Some(3), None),
+            Kind::Speed | Kind::Sound | Kind::Video | Kind::SaveGame | Kind::LoadGame | Kind::OkCancel | Kind::Ok => (Some(3), Some(5)),
+            _ => (Some(4), Some(4)),
+        };
         for (id, style) in [(-2, ok), (-3, cancel)] {
-            if let Some(c) = find(&mut dlg, id) {
+            if let (Some(style), Some(c)) = (style, find(&mut dlg, id)) {
                 c.graphic = GRAPHICS[style];
                 c.flags |= flag::WIDE;
             }
@@ -559,12 +589,23 @@ impl Menu {
         let mut timers = crate::dlg::DlgTimers::default();
         match kind {
             Kind::Game => {
-                // 0x4c9a90 (multiplayer or replay): no save / load / pause in a replay.
+                // 0x4ca160 -> 0x4c9a90 (multiplayer or replay)
                 if ctx.multiplayer || ctx.replay {
-                    show(&mut dlg, 2, false);
-                    show(&mut dlg, 1, false);
-                    show(&mut dlg, 7, !ctx.replay && !ctx.multiplayer);
-                    show(&mut dlg, 8, false);
+                    game_menu_open(&mut dlg, &ctx);
+                    // not in a replay: the 200 ms refresh 0x4c9890
+                    if !ctx.replay {
+                        timers.set(0, 0, 1, 200, None);
+                    }
+                }
+            }
+            // 0x4ca160 -> 0x4c9440 (multiplayer or replay): the restart button goes, the quit
+            // button's text follows the game's state (0x4c9150).
+            Kind::EndMission if ctx.multiplayer || ctx.replay => {
+                show(&mut dlg, 1, false);
+                end_mission_label(&mut dlg, &ctx, ctx.elapsed_secs);
+                if ctx.bnet {
+                    show(&mut dlg, 3, false);
+                    timers.set(0, 0, 1, 200, None);
                 }
             }
             // 0x4ca160 with 0x4c95a0 (quit2mnu.bin, not a replay): control 1 hidden (0x418700).
@@ -612,17 +653,36 @@ impl Menu {
                     }
                 }
             }
-            Kind::Defeat | Kind::Victory => {
-                // 0x461020 / 0x461160: button 1 (continue observing / playing) only in a
-                // multiplayer game (4c4220's state is not modelled: not shown); -20 shows in
-                // single player, -21 and -23 (the multiplayer / replay lines) are hidden.
-                // The tail of 0x461020 (the defeat dialog only) sets a 20 s dialog timer (0x416090).
-                show(&mut dlg, 1, kind == Kind::Victory && ctx.multiplayer && !ctx.replay);
-                show(&mut dlg, -0x14, !ctx.multiplayer);
-                show(&mut dlg, -0x15, false);
-                show(&mut dlg, -0x17, false);
-                if kind == Kind::Defeat {
-                    timers.set(0, 0, 0, 20000, None);
+            Kind::Defeat => {
+                // 0x461020: -20 unless a multiplayer team result (0x581d61 == 2), which shows -21;
+                // button 1 is hidden. Then a 20 s dialog timer (0x416090).
+                let team = ctx.multiplayer && ctx.team_result;
+                show(&mut dlg, 1, false);
+                show(&mut dlg, -0x14, !team);
+                show(&mut dlg, -0x15, team);
+                timers.set(0, 0, 0, 20000, None);
+            }
+            Kind::Victory => {
+                // 0x461160: button 1 (continue playing) in a live multiplayer game only.
+                show(&mut dlg, 1, ctx.multiplayer && !ctx.replay);
+                // Team result: -21; else the local player's outcome 3 (not in a replay): -23;
+                // else -20.
+                let team = ctx.multiplayer && ctx.team_result;
+                let won3 = !team && ctx.outcome == 3 && !ctx.replay;
+                let line20 = !team && !won3;
+                let glu = files.read("rez/gluAll.tbl").unwrap_or_default();
+                show(&mut dlg, -0x14, line20);
+                if ctx.replay {
+                    copy_str(&mut dlg, -0x14, crate::setup::tbl_str(&glu, 0xb5 - 1));
+                }
+                show(&mut dlg, -0x15, team);
+                show(&mut dlg, -0x17, won3);
+                // The OK text: a replay's (gluAll 0xbc); in multiplayer -10, or -22 when
+                // line 20 is not the one shown (0x4c4220 team / outcome 3).
+                if ctx.replay {
+                    copy_str(&mut dlg, -2, crate::setup::tbl_str(&glu, 0xbc - 1));
+                } else if ctx.multiplayer {
+                    copy_text(&mut dlg, -2, if line20 { -10 } else { -0x16 });
                 }
             }
             Kind::Tips => {
@@ -718,7 +778,7 @@ impl Menu {
         }
         // The edit has the focus (0x418580).
         dlg.active = dlg.controls.iter().position(|c| c.ty == 8 && c.flags & flag::VISIBLE != 0);
-        Some(Menu { kind, dlg, depth, saved: *set, pressed: None, dragging: None, click: false, was_down: false, clock: None, last_press: None, timers, tick_count: 0, pump_ms: 0 })
+        Some(Menu { kind, dlg, depth, saved: *set, pressed: None, dragging: None, click: false, was_down: false, clock: None, last_press: None, timers, tick_count: 0, pump_ms: 0, ctx })
     }
 
     /// 0x47e7b0 (the tips open): a campaign mission's tips at the game start (0x47ea30 set
@@ -957,13 +1017,24 @@ impl Menu {
             }
         }
         let mut act = None;
+        let mut refresh = false;
         let kind = self.kind;
         self.timers.run(self.tick_count, |_, t| {
             // 0x461430 event 8 (0x461470): only id 0.
             if kind == Kind::Defeat && t.callback.is_none() && t.id == 0 {
                 act = Some(-2);
             }
+            // 0x4c9890 / 0x4c9150: the 200 ms timers of the game and end-mission menus.
+            if matches!(kind, Kind::Game | Kind::EndMission) && t.id == 1 {
+                refresh = true;
+            }
         });
+        if refresh {
+            match kind {
+                Kind::Game => game_menu_refresh(&mut self.dlg, &self.ctx),
+                _ => end_mission_label(&mut self.dlg, &self.ctx, self.ctx.elapsed_secs + self.tick_count / 1000),
+            }
+        }
         act
     }
 
@@ -1065,9 +1136,8 @@ impl Menu {
         let ck = |id: i16| d.get(id).map(|c| c.checked);
         match self.kind {
             Kind::Speed => {
-                if d.get(1).is_some_and(|c| c.flags & flag::DISABLED == 0) {
-                    set.game_speed = v(1).unwrap_or(set.game_speed);
-                }
+                // The game speed slider does not change 0x6cdfd4 itself: OK sends command
+                // 0x0f (0x481ef0, `Action::GameSpeed`).
                 set.mouse_scroll = v(2).unwrap_or(set.mouse_scroll);
                 set.key_scroll = v(3).unwrap_or(set.key_scroll);
                 set.cpu_throttle = ck(4).unwrap_or(set.cpu_throttle);
@@ -1316,7 +1386,15 @@ impl Menu {
             // 0x481ef0 / 0x460dd0 / 0x480ee0 with 0x4c9780: Cancel restores the copy (a
             // replay keeps its speed) and returns to the options; OK sets the depth to 1
             // (0x6d1224) so the dialog just closes.
-            (Kind::Speed | Kind::Sound | Kind::Video, -2) => (None, Action::Apply),
+            // 0x481ef0: OK with the speed slider (1) enabled sends command 0x0f with its value
+            // (0x485bd0), which sets 0x6cdfd4 when the turn runs (0x4bf7f0).
+            (Kind::Speed, -2) => match self.dlg.get(1) {
+                Some(c) if c.flags & flag::DISABLED == 0 => {
+                    (None, Action::GameSpeed(c.value.0.clamp(0, 255) as u8))
+                }
+                _ => (None, Action::Apply),
+            },
+            (Kind::Sound | Kind::Video, -2) => (None, Action::Apply),
             (Kind::Speed | Kind::Sound | Kind::Video, -3) => {
                 let speed = set.game_speed;
                 *set = self.saved;
@@ -1334,6 +1412,9 @@ impl Menu {
             (Kind::EndMission, 2) => (Some((Kind::QuitMission, self.depth)), Action::None),
             (Kind::EndMission, 3) => (Some((Kind::Quit, self.depth)), Action::None),
             (Kind::Restart, -2) => (None, Action::Restart),
+            // 0x4c9280: a multiplayer game sets the next screen 0x51ce90 to 6 (local result 0x58d700
+            // == 3) or 7, the score screen.
+            (Kind::QuitMission, -2) if ctx.multiplayer => (None, Action::QuitScore(if ctx.local_result == 3 { 6 } else { 7 })),
             (Kind::QuitMission, -2) => (None, Action::QuitMission),
             (Kind::Quit, -2) => (None, Action::ExitProgram),
             // 0x460f30 (defeat; every activation sets 0x68517c) / 0x460fa0 (victory).
@@ -1362,4 +1443,63 @@ fn skin_option(skin: &Skin) -> i32 {
 
 fn skin_thumb_half(skin: &Skin) -> i32 {
     skin.grp.frame(0x63).map_or(5, |f| f.w / 2)
+}
+
+/// 0x4c9150 (the tail): control `dst`'s text is `text` and the control is shown (0x41c400).
+fn copy_str(dlg: &mut Dialog, dst: i16, text: &[u8]) {
+    if let Some(c) = find(dlg, dst) {
+        c.text = text.to_vec();
+        c.flags |= flag::VISIBLE;
+    }
+}
+
+/// 0x4c9150 (the tail): control `dst` takes the text of control `src`.
+fn copy_text(dlg: &mut Dialog, dst: i16, src: i16) {
+    if let Some(t) = find(dlg, src).map(|c| c.text.clone()) {
+        copy_str(dlg, dst, &t);
+    }
+}
+
+/// 0x4c9150 (called by 0x4c9440 with the end-mission menu, then every 200 ms in a BNET game):
+/// control 2 shows the text of label -13 in a replay; else -12 in a battle.net game in its
+/// first 120 s (`secs` = 0x4a2ca0), else -11 when the local result (0x58d700) is 3, else -10.
+fn end_mission_label(dlg: &mut Dialog, ctx: &Ctx, secs: u32) {
+    let src = if ctx.replay {
+        -13
+    } else if !(ctx.bnet && secs <= 0x78) {
+        if ctx.local_result == 3 { -11 } else { -10 }
+    } else {
+        -12
+    };
+    copy_text(dlg, 2, src);
+}
+
+/// 0x4c9a90 (multiplayer or replay game menu): the load button goes; the save button
+/// shows (disabled during the 2 minute wait, 0x461720) for the lowest human of a savable
+/// live game, else it goes; Pause (7) / Resume (8) show by the pause state.
+fn game_menu_open(dlg: &mut Dialog, ctx: &Ctx) {
+    show(dlg, 2, false);
+    if ctx.lowest_human() == ctx.local_storm && ctx.no_save == 0 && !ctx.replay {
+        if save_wait(ctx) {
+            disable(dlg, 1);
+        } else {
+            enable(dlg, 1);
+        }
+    } else {
+        show(dlg, 1, false);
+    }
+    show(dlg, 7, !ctx.replay && (!ctx.multiplayer || (ctx.g66fbfa > 8 && ctx.player_type == 2 && ctx.pauses_left != 0)) && !ctx.paused);
+    show(dlg, 8, !ctx.replay && ctx.player_type == 2 && ctx.paused);
+}
+
+/// 0x4c9890 (the game menu's 200 ms timer, not in a replay): Pause / Resume by the pause
+/// state, the save button disabled during a multiplayer game's 2 minute wait.
+fn game_menu_refresh(dlg: &mut Dialog, ctx: &Ctx) {
+    show(dlg, 7, (!ctx.multiplayer || (ctx.g66fbfa > 8 && ctx.player_type == 2 && ctx.pauses_left != 0)) && !ctx.paused);
+    show(dlg, 8, ctx.paused);
+    if save_wait(ctx) {
+        disable(dlg, 1);
+    } else {
+        enable(dlg, 1);
+    }
 }

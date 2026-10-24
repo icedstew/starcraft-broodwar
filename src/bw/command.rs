@@ -1537,10 +1537,18 @@ impl State {
         self.minimap_redraw();
     }
 
-    /// 0x4bfb10: command 0x08, when not multiplayer: clears 0x6d11ec, sets 0x51ce90 = 5 and
-    /// (not in a replay) copies the frame counter 0x57f23c to 0x6d0f31 (the replay's length).
-    /// Only UI / game-flow globals, none modelled here.
-    fn command_game_flow(&mut self) {}
+    /// 0x4bfb10: command 0x08 (Restart Mission), when not multiplayer (0x57f0b4): clears the
+    /// game loop flag 0x6d11ec, sets the game result 0x51ce90 = 5 (`game_restart`; the glue
+    /// then starts the mission again, state 5) and, outside a replay (0x6d0f14), copies the
+    /// frame counter 0x57f23c to 0x6d0f31 (`replay_frames`).
+    fn command_game_flow(&mut self) {
+        if !self.multiplayer {
+            self.game_restart = true;
+            if !self.replay {
+                self.replay_frames = self.frame;
+            }
+        }
+    }
 
     /// 0x4bf7a0: command 0x58, a minimap ping at map point (x, y) from `player`, shown when
     /// `player` is allied with the local player: type 0x11 for the local player's own,
@@ -1556,6 +1564,18 @@ impl State {
     /// latency." (network.tbl 0x44 + the level, at most 2; 0x6556e4 keeps the level, UI).
     fn command_latency(&mut self, player: u8, level: u8) {
         self.notices.push((0x44 + level.min(2) as u16, player));
+    }
+
+    /// 0x4bf7f0: command 0x0f, game speed: a value under 7 sets 0x6cdfd4 when not multiplayer
+    /// (in a replay that is its playback speed).
+    fn command_game_speed(&mut self, speed: u8) {
+        if speed < 7 && !self.multiplayer {
+            if self.replay {
+                self.replay_speed = speed;
+            } else {
+                self.game_speed = speed;
+            }
+        }
     }
 
     /// 0x4bf820: commands 0x38 / 0x39 toggle a net-slot flag (bit 2 of 0x66fe22); no
@@ -1700,6 +1720,7 @@ impl State {
             // 0x4c0ad0: only with the template's cheats flag (0x596876 == template[0x11]).
             0x12 if self.template[0x11] == 1 => self.command_cheat(d, u32::from_le_bytes([byte(1), byte(2), byte(3), byte(4)])),
             0x08 => self.command_game_flow(),
+            0x0f => self.command_game_speed(byte(1)),
             0x10 => self.command_pause(player),
             0x11 => self.command_resume(player),
             // 0x4bf820: net-slot table 0x66fe20 only (flag bit 2 set / cleared for '9'); not sim state.

@@ -73,11 +73,20 @@ pub struct Player {
     /// 0x6d5ca8: frames the video still has to run although the mode is not 2 (set to 1 by
     /// `begin`, so a still portrait shows its first frame).
     pub wait: u32,
+    /// 0x68ac98 + 0x26: the unit whose portrait is shown (0 none / a talking advisor).
+    unit: u32,
+    /// 0x68ac9c: the static's threshold (drawn while below 0x50); 0x6d5ca0: set by a new
+    /// portrait until its first video frame arrives.
+    static_level: u8,
+    static_wait: bool,
+    /// Time into the 50 ms frame timer (1) and the 30 ms static timer (2) of 0x45ec40.
+    t1: u32,
+    t2: u32,
 }
 
 impl Default for Player {
     fn default() -> Self {
-        Player { portrait: None, talking: false, animate: true, last_talk: 0, video: None, elapsed: 0, rng: None, remap: None, wait: 0 }
+        Player { portrait: None, talking: false, animate: true, last_talk: 0, video: None, elapsed: 0, rng: None, remap: None, wait: 0, unit: 0, static_level: 0, static_wait: false, t1: 0, t2: 0 }
     }
 }
 
@@ -205,8 +214,29 @@ impl Player {
         }
     }
 
+    /// 0x45ebc0: the selection's portrait update. `unit` is the status unit (0x597248, 0 for
+    /// none), `portrait` its portrait (None hides). Another unit restarts the portrait even
+    /// with the same portrait id; the same unit keeps it (its wire_type compared with
+    /// itself is always equal).
+    pub fn show_unit(&mut self, ps: &Portraits, files: &Storage, unit: u32, portrait: Option<u16>) {
+        if unit == 0 || portrait.is_none() {
+            self.unit = 0;
+            self.hide();
+            return;
+        }
+        if unit == self.unit && self.portrait == portrait {
+            return;
+        }
+        self.unit = unit;
+        self.talking = false;
+        self.portrait = portrait;
+        self.static_level = 0;
+        self.static_wait = true;
+        self.open(ps, files);
+    }
+
     /// The status unit's portrait (None for no selection or a unit without one); a new
-    /// one starts idling.
+    /// one starts idling. Prefer `show_unit` (0x45ebc0 restarts per unit).
     pub fn show(&mut self, ps: &Portraits, files: &Storage, portrait: Option<u16>) {
         if portrait != self.portrait {
             self.portrait = portrait;
@@ -218,7 +248,10 @@ impl Player {
     /// 0x45ea30 (mode 2) -> 0x45e8a0: another unit's portrait `p` shown talking.
     pub fn show_talking(&mut self, ps: &Portraits, files: &Storage, p: u16) {
         self.portrait = Some(p);
+        self.unit = 0;
         self.talking = true;
+        self.static_level = 0;
+        self.static_wait = true;
         self.open(ps, files);
     }
 
@@ -226,12 +259,40 @@ impl Player {
     pub fn hide(&mut self) {
         self.portrait = None;
         self.video = None;
+        self.unit = 0;
+    }
+
+    /// 0x45e650: after the video, the static while 0x68ac9c < 0x50 (the caller blits
+    /// conover.pcx over it). `rect` is the portrait control's `[l, t, r, b]`.
+    pub fn draw_static_overlay(&mut self, ps: &Portraits, rect: [i16; 4], colors: &[u8], out: &mut [u8], sw: i32) {
+        if self.static_level < 0x50 {
+            self.draw_static(ps, self.static_level, rect, colors, out, sw);
+        }
     }
 
     /// Advance `ms`; `animate` false (still portraits) keeps the first frame. A video
     /// that ends is replaced by a new pick, idle or talking as before (0x45ec40 timer 1
     /// calls 0x45ea30 again for the same unit).
     pub fn tick(&mut self, ps: &Portraits, files: &Storage, ms: u32, animate: bool) {
+        // 0x45ec40 timer 1 (50 ms): the first video frame ends the full static (0x32);
+        // timer 2 (30 ms): the static fades in steps of 10 up to 0x50.
+        if self.video.is_some() {
+            self.t1 += ms;
+            self.t2 += ms;
+            if self.t1 >= 50 {
+                self.t1 %= 50;
+                if self.static_wait {
+                    self.static_wait = false;
+                    self.static_level = 0x32;
+                }
+            }
+            while self.t2 >= 30 {
+                self.t2 -= 30;
+                if !self.static_wait && self.static_level < 0x50 {
+                    self.static_level += 10;
+                }
+            }
+        }
         if !animate {
             return;
         }
