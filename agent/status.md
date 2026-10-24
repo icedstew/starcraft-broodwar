@@ -243,6 +243,13 @@ Delegate per agents.md: Haiku triage, Sonnet porting, Opus review / hard RE / co
 
 ## User reports to handle (2026-10-18)
 
+Rechecked 2026-10-24 on bw116 replays (`scbw repview <rep> <dir> <frames>`: full screen +
+minimap PNGs): minimap colors / movement and replay chat match the decompile (not
+reproduced); cloak distortion wrap 0x40b155 fixed. Open: who is the local player
+(0x512684) in a native replay: `reset_slot_indices` sets 8, so native may show "Not enough
+energy." and the green chat color for nobody, scbw uses the first human slot
+(create.rs `local_error_line`): needs a native check.
+
 - Replays: minimap player colors wrong (purple shown green), no white border on narrow
   maps, minimap unit movement looks broken; chat lines not shown (tl1330_p2 f23040);
   "Not enough energy." not shown (tl1341_p2 f22444); cloaked observer shimmer differs by

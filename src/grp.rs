@@ -170,7 +170,9 @@ impl Grp {
                         // 0x4b000 = the 640x480 screen buffer; reads past our buffer keep the pixel.
                         Blend::Cloak(t) => {
                             let o = t[c as usize] as usize;
-                            let j = if flip { i.checked_sub(o) } else { Some(i + o) };
+                            // 0x40b155: a source past the buffer's end wraps by 0x4b000 (to the top rows);
+                            // the flipped 0x40b9a9 only goes back.
+                            let j = if flip { i.checked_sub(o) } else { Some(if i + o >= 0x4b000 { i + o - 0x4b000 } else { i + o }) };
                             j.and_then(|j| dst.get(j).copied()).unwrap_or(dst[i])
                         }
                         _ => 0,
