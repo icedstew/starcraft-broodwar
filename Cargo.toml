@@ -17,6 +17,7 @@ rodio = { version = "0.22.2", default-features = false, features = ["playback", 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 cpal = { version = "0.17.3", features = ["wasm-bindgen"] }
 js-sys = "0.3.106"
+wasm-bindgen-futures = "0.4.79"
 wasm-bindgen = "0.2.129"
 web-sys = { version = "0.3.106", features = ["Window", "Performance", "console", "Document", "Element", "EventTarget", "KeyboardEvent"] }
 console_error_panic_hook = "0.1"

@@ -87,8 +87,14 @@ Delegate per agents.md: Haiku triage, Sonnet porting, Opus review / hard RE / co
   <map> [port] [players] [delay]` / `netjoin <code>` play a live melee game over the
   Session (src/net/live.rs, view.rs NetDriver; menus do not pause net games);
   agent/tools/netlive.sh runs host + join headless (SCBW_NET_HEADLESS / SCBW_NET_SCRIPT):
-  equal hashes at delay 1 / 2 / 4 with rollbacks. Not tried in a window yet. Next: browser
-  join (WebTransport client in web.rs); wasm vs native determinism being checked.
+  equal hashes at delay 1 / 2 / 4 with rollbacks. Not tried in a window yet. Browser join done
+  (2026-10-24): src/net/web_transport.rs (JS glue over WebTransport, cert pinned by hash;
+  protocol core shared with native in transport.rs), web.rs `net_join`, join field in
+  web/index.html (the user's file: not committed). Headless Chrome joined a headless
+  `scbw nethost` (Bottleneck, 300 frames, no commands): equal hashes; a run with commands on
+  both sides is still to do. Determinism: wasm (node / V8) vs native rbtest hashes SAME on
+  18 replays (a median and the longest per matchup, up to 218k frames). Netsuite: all 300
+  bw116 replays x 3 tests = 900 MATCH.
   2026-10-23, moved to a Windows box (16 cores; no wine harness yet): ShieldBattery
   cloned for reference (`reference/shieldbattery`, fba29b3, next to the repo).
   New replay set (user: >= 200, >= 50 games per race, dated while 1.16.1 was live):

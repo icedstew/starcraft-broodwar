@@ -10,10 +10,15 @@
 //! select command of the first worker of the local player). SCBW_NET_RACES="t,z,p,r" picks
 //! the host's slot races (default: random by the seed), SCBW_NET_BIND the host address.
 
-use super::transport::{ANY, Event, Transport};
+#[cfg(not(target_arch = "wasm32"))]
+use super::transport::ANY;
+use super::transport::{Event, Transport};
 use super::Session;
-use crate::view::{self, GameSetup, NetDriver, Scene};
-use std::time::{Duration, Instant};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::view;
+use crate::view::{GameSetup, NetDriver, Scene};
+use std::time::Duration;
+use web_time::Instant;
 
 /// How long a finished headless peer keeps serving datagrams for the others.
 const LINGER: Duration = Duration::from_secs(3);
@@ -115,6 +120,7 @@ pub fn decode_setup(b: &[u8], local: u8) -> Option<GameSetup> {
     })
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 /// The scenario.chk of a map argument (.scm / .scx archive, bare .chk, or a replay's).
 fn load_chk(path: &str) -> std::io::Result<Vec<u8>> {
     let l = path.to_ascii_lowercase();
@@ -127,6 +133,7 @@ fn load_chk(path: &str) -> std::io::Result<Vec<u8>> {
     crate::mpq::Mpq::open(path.as_ref())?.read("staredit\\scenario.chk")
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 /// The melee game on `chk` for `humans` players: they take the map's first human slots that
 /// have a start location, in slot order; other slots stay empty. Races come from
 /// SCBW_NET_RACES (`z t p r`, in slot order) or are dealt from the seed. Returns the setup
@@ -217,6 +224,14 @@ fn select_worker(st: &crate::bw::State, player: u8) -> Vec<u8> {
     Vec::new()
 }
 
+/// A result line: stdout natively, the console in the browser.
+fn say(s: &str) {
+    #[cfg(target_arch = "wasm32")]
+    web_sys::console::log_1(&s.into());
+    #[cfg(not(target_arch = "wasm32"))]
+    println!("{s}");
+}
+
 pub struct NetGame {
     se: Session,
     tr: Transport,
@@ -228,10 +243,25 @@ pub struct NetGame {
     host: bool,
     verbose: bool,
     last_report: Instant,
+    /// Browser: play to this frame and log `frame K hash H` (the headless line, for the console).
+    report: Option<u32>,
+    reported: bool,
 }
 
 impl NetGame {
-    fn new(se: Session, tr: Transport, host: bool, early: Vec<(u8, u32, Vec<u8>)>) -> Result<NetGame, String> {
+    /// Browser: the SCBW_NET_SCRIPT text (`<frame>:<hex>;...`) for this peer.
+    pub(crate) fn set_script(&mut self, s: &str) -> Result<(), String> {
+        self.script = parse_script(s)?;
+        Ok(())
+    }
+
+    /// Stop at frame `k` and report the state hash there (see `report`).
+    pub(crate) fn report_at(&mut self, k: u32) {
+        self.report = Some(k);
+        self.se.end = k;
+    }
+
+    pub(crate) fn new(se: Session, tr: Transport, host: bool, early: Vec<(u8, u32, Vec<u8>)>) -> Result<NetGame, String> {
         let script = parse_script(&std::env::var("SCBW_NET_SCRIPT").unwrap_or_default())?;
         let headless = std::env::var("SCBW_NET_HEADLESS").ok().and_then(|v| v.parse().ok());
         let mut se = se;
@@ -243,7 +273,7 @@ impl NetGame {
             se.remote_turn(p, f, b);
         }
         let next_send = se.delay;
-        Ok(NetGame { se, tr, next_send, script, headless, finished: None, host, verbose: std::env::var_os("NETREP_DEBUG").is_some(), last_report: Instant::now() })
+        Ok(NetGame { se, tr, next_send, script, headless, finished: None, host, verbose: std::env::var_os("NETREP_DEBUG").is_some(), last_report: Instant::now(), report: None, reported: false })
     }
 }
 
@@ -280,7 +310,13 @@ impl NetDriver for NetGame {
             self.last_report = Instant::now();
             eprintln!("net player {}: frame {} confirmed {} stalled {} rollbacks {} dgrams {:?}", se.me, se.frame, se.confirmed, se.stalled, se.rollbacks, self.tr.stats);
         }
-        se.tick(scene).then(|| std::mem::take(&mut se.sounds))
+        let stepped = se.tick(scene);
+        if let Some(k) = self.report.filter(|&k| !self.reported && se.frame >= k && se.confirmed >= k) {
+            self.reported = true;
+            say(&format!("frame {k} hash {:016x}", scene.st.state_hash()));
+            say(&format!("player {} rollbacks {} resimulated {} stalled {}", se.me, se.rollbacks, se.resimulated, se.stalled));
+        }
+        stepped.then(|| std::mem::take(&mut se.sounds))
     }
 
     fn pump_headless(&mut self, scene: &mut Scene<'_>) -> bool {
@@ -304,6 +340,7 @@ impl NetDriver for NetGame {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn lobby_wait(tr: &mut Transport) -> Result<(u8, u32, Vec<u8>, Vec<(u8, u32, Vec<u8>)>), String> {
     let mut early = Vec::new();
     loop {
@@ -318,6 +355,7 @@ fn lobby_wait(tr: &mut Transport) -> Result<(u8, u32, Vec<u8>, Vec<(u8, u32, Vec
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn play(mut a: view::Assets, mut g: GameSetup, se: Session, tr: Transport, host: bool, early: Vec<(u8, u32, Vec<u8>)>) -> std::io::Result<()> {
     let net = NetGame::new(se, tr, host, early).map_err(std::io::Error::other)?;
     view::set_net_driver(Box::new(net));
@@ -326,6 +364,7 @@ fn play(mut a: view::Assets, mut g: GameSetup, se: Session, tr: Transport, host:
     Ok(())
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 /// `scbw nethost <map> [port] [players] [delay]`: print the join code, wait for
 /// players - 1 joins, start.
 pub fn nethost(files: crate::storage::Storage, map: &str, port: u16, players: usize, delay: u32) -> std::io::Result<()> {
@@ -345,6 +384,7 @@ pub fn nethost(files: crate::storage::Storage, map: &str, port: u16, players: us
     play(a, g, Session::new(slots[0], &table, delay), tr, true, early)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 /// `scbw netjoin <code> [delay]`: join a host (its delay wins) and play the slot it gives.
 pub fn netjoin(files: crate::storage::Storage, code: &str, _delay: u32) -> std::io::Result<()> {
     let a = view::Assets::load(files)?;

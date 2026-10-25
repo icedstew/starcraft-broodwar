@@ -21,14 +21,19 @@
 //! and the client pins its SHA-256 (`server_certificate_hashes`, as a browser would).
 
 use std::collections::HashMap;
-use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, mpsc};
-use std::time::Duration;
+use std::sync::{Arc, mpsc};
+#[cfg(not(target_arch = "wasm32"))]
+use std::{net::SocketAddr, sync::Mutex, time::Duration};
+#[cfg(not(target_arch = "wasm32"))]
 use tokio::sync::mpsc as tmpsc;
+#[cfg(not(target_arch = "wasm32"))]
 use wtransport::endpoint::IncomingSession;
+#[cfg(not(target_arch = "wasm32"))]
 use wtransport::endpoint::endpoint_side::Server;
+#[cfg(not(target_arch = "wasm32"))]
 use wtransport::tls::{Sha256Digest, Sha256DigestFmt};
+#[cfg(not(target_arch = "wasm32"))]
 use wtransport::{ClientConfig, Connection, Endpoint, Identity, RecvStream, ServerConfig};
 
 /// The peer id of the host, as a client sees it.
@@ -48,7 +53,7 @@ pub enum Event {
     Error(String),
 }
 
-enum Inbound {
+pub(super) enum Inbound {
     Start { slot: u8, first: u32, setup: Vec<u8> },
     Dgram { from: u8, data: Vec<u8> },
     Error(String),
@@ -74,7 +79,8 @@ pub struct Transport {
     /// The acks last sent to a peer (a flush with nothing new and the same acks is skipped).
     sent_acks: HashMap<u8, Vec<(u8, u32)>>,
     rx: mpsc::Receiver<Inbound>,
-    tx: tmpsc::UnboundedSender<(u8, Vec<u8>)>,
+    /// Hands a datagram to the link (native: the runtime thread; browser: the WebTransport writer).
+    tx: Box<dyn FnMut(u8, Vec<u8>)>,
     max_dgram: Arc<AtomicUsize>,
     /// Datagrams (sent, received, unparsable): diagnostics.
     pub stats: (u32, u32, u32),
@@ -102,20 +108,37 @@ impl<'a> Reader<'a> {
     }
 }
 
+/// The client's Hello lobby message (length-prefixed), shared by the native and browser clients.
+pub(super) fn hello_msg(me: u8) -> [u8; 6] {
+    [2, 0, 0, 0, 1, me]
+}
+
+/// A client's reading of the host's Start (`ty` + `body` of one lobby message).
+pub(super) fn parse_start(ty: u8, body: &[u8]) -> Result<Inbound, String> {
+    if ty != 2 || body.len() < 5 {
+        return Err("expected Start".into());
+    }
+    Ok(Inbound::Start { slot: body[0], first: u32::from_le_bytes([body[1], body[2], body[3], body[4]]), setup: body[5..].to_vec() })
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn hex(d: &Sha256Digest) -> String {
     d.fmt(Sha256DigestFmt::DottedHex).replace(':', "")
 }
 
-fn unhex(s: &str) -> Result<Sha256Digest, String> {
+/// The 32 bytes of a hex certificate hash.
+pub(super) fn unhex(s: &str) -> Result<[u8; 32], String> {
     let b: Result<Vec<u8>, _> = (0..s.len() / 2).map(|i| u8::from_str_radix(s.get(2 * i..2 * i + 2).unwrap_or("zz"), 16)).collect();
     let b: [u8; 32] = b.map_err(|_| "bad certificate hash")?.try_into().map_err(|_| "bad certificate hash length")?;
-    Ok(Sha256Digest::new(b))
+    Ok(b)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn new_runtime() -> Result<tokio::runtime::Runtime, String> {
     tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| e.to_string())
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 /// Run `f` on a current-thread tokio runtime on its own thread; its error goes to the game.
 fn spawn_runtime<Fut>(itx: mpsc::Sender<Inbound>, rt: tokio::runtime::Runtime, f: Fut) -> Result<(), String>
 where
@@ -133,11 +156,15 @@ where
 }
 
 impl Transport {
-    fn new(me: u8, host: bool, peers: Vec<u8>, first: u32, rx: mpsc::Receiver<Inbound>, tx: tmpsc::UnboundedSender<(u8, Vec<u8>)>, max_dgram: Arc<AtomicUsize>) -> Transport {
+    pub(super) fn new(me: u8, host: bool, peers: Vec<u8>, first: u32, rx: mpsc::Receiver<Inbound>, tx: Box<dyn FnMut(u8, Vec<u8>)>, max_dgram: Arc<AtomicUsize>) -> Transport {
         let mut got = HashMap::new();
         got.insert(me, Vec::new());
         Transport { me, host, setup: Vec::new(), peers, first, got, next: HashMap::new(), acked: HashMap::new(), dirty: HashMap::new(), sent_acks: HashMap::new(), rx, tx, max_dgram, stats: (0, 0, 0) }
     }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Transport {
 
     /// Listen on `127.0.0.1:port` (0: any free port). Returns `ip:port#certhash` for the
     /// clients. `clients`: the players that will join; `first`: see the module doc.
@@ -166,7 +193,7 @@ impl Transport {
         let (tx, orx) = tmpsc::unbounded_channel();
         let max_dgram = Arc::new(AtomicUsize::new(1000));
         spawn_runtime(itx.clone(), rt, host_run(ep, clients.to_vec(), Arc::new(setup.clone()), first, itx, orx, max_dgram.clone()))?;
-        let mut tr = Transport::new(me, true, clients.to_vec(), first, rx, tx, max_dgram);
+        let mut tr = Transport::new(me, true, clients.to_vec(), first, rx, Box::new(move |to, d| drop(tx.send((to, d)))), max_dgram);
         tr.setup = setup;
         Ok((tr, format!("{addr}#{}", hex(&hash))))
     }
@@ -175,7 +202,7 @@ impl Transport {
     /// Start event says which slot the host gave).
     pub fn join(target: &str, me: u8, first: u32) -> Result<Transport, String> {
         let (addr, hash) = target.split_once('#').ok_or("expected addr#hash")?;
-        let hash = unhex(hash)?;
+        let hash = Sha256Digest::new(unhex(hash)?);
         let config = ClientConfig::builder()
             .with_bind_default()
             .with_server_certificate_hashes([hash])
@@ -185,9 +212,12 @@ impl Transport {
         let (tx, orx) = tmpsc::unbounded_channel();
         let max_dgram = Arc::new(AtomicUsize::new(1000));
         spawn_runtime(itx.clone(), new_runtime()?, client_run(config, format!("https://{addr}"), me, itx, orx, max_dgram.clone()))?;
-        Ok(Transport::new(me, false, vec![HOST], first, rx, tx, max_dgram))
+        Ok(Transport::new(me, false, vec![HOST], first, rx, Box::new(move |to, d| drop(tx.send((to, d)))), max_dgram))
     }
 
+}
+
+impl Transport {
     /// The datagram size cap (diagnostics).
     pub fn cap(&self) -> usize {
         self.max_dgram.load(Ordering::Relaxed)
@@ -331,7 +361,7 @@ impl Transport {
             }
             self.sent_acks.insert(peer, acks);
             self.stats.0 += 1;
-            let _ = self.tx.send((peer, out));
+            (self.tx)(peer, out);
         }
     }
 
@@ -346,8 +376,10 @@ impl Transport {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 type Conns = Arc<Mutex<HashMap<u8, Connection>>>;
 
+#[cfg(not(target_arch = "wasm32"))]
 async fn read_msg(r: &mut RecvStream) -> Result<(u8, Vec<u8>), String> {
     let mut len = [0u8; 4];
     r.read_exact(&mut len).await.map_err(|e| e.to_string())?;
@@ -363,6 +395,7 @@ async fn read_msg(r: &mut RecvStream) -> Result<(u8, Vec<u8>), String> {
     Ok((body[0], body[1..].to_vec()))
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 async fn host_run(ep: Endpoint<Server>, expected: Vec<u8>, setup: Arc<Vec<u8>>, first: u32, itx: mpsc::Sender<Inbound>, mut orx: tmpsc::UnboundedReceiver<(u8, Vec<u8>)>, md: Arc<AtomicUsize>) -> Result<(), String> {
     let conns: Conns = Default::default();
     let count = Arc::new(AtomicUsize::new(0));
@@ -396,6 +429,7 @@ async fn host_run(ep: Endpoint<Server>, expected: Vec<u8>, setup: Arc<Vec<u8>>, 
     Ok(())
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 async fn host_conn(
     inc: IncomingSession,
     expected: Vec<u8>,
@@ -443,19 +477,18 @@ async fn host_conn(
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 async fn client_run(config: ClientConfig, url: String, me: u8, itx: mpsc::Sender<Inbound>, mut orx: tmpsc::UnboundedReceiver<(u8, Vec<u8>)>, md: Arc<AtomicUsize>) -> Result<(), String> {
     let ep = Endpoint::client(config).map_err(|e| e.to_string())?;
     let conn = ep.connect(url).await.map_err(|e| e.to_string())?;
     let (mut send, mut recv) = conn.open_bi().await.map_err(|e| e.to_string())?.await.map_err(|e| e.to_string())?;
-    send.write_all(&[2, 0, 0, 0, 1, me]).await.map_err(|e| e.to_string())?;
+    send.write_all(&hello_msg(me)).await.map_err(|e| e.to_string())?;
     let (ty, body) = read_msg(&mut recv).await?;
-    if ty != 2 || body.len() < 5 {
-        return Err("expected Start".into());
-    }
+    let start = parse_start(ty, &body)?;
     if let Some(n) = conn.max_datagram_size() {
         md.fetch_min(n, Ordering::Relaxed);
     }
-    let _ = itx.send(Inbound::Start { slot: body[0], first: u32::from_le_bytes([body[1], body[2], body[3], body[4]]), setup: body[5..].to_vec() });
+    let _ = itx.send(start);
     loop {
         tokio::select! {
             d = conn.receive_datagram() => {

@@ -9,12 +9,12 @@
 
 use crate::{bw, replay, view};
 
-#[cfg(not(target_arch = "wasm32"))]
 pub mod live;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod netrep;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod transport;
+#[cfg(target_arch = "wasm32")]
+pub mod web_transport;
 
 /// Frames a peer may simulate past the first frame with a missing turn.
 pub const PRED_LIMIT: u32 = 8;
