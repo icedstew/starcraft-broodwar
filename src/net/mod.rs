@@ -42,6 +42,18 @@ pub struct Session {
     pub stalled: u32,
     /// The sounds the last first-run step returned.
     pub sounds: Vec<(u16, i32, i32)>,
+    /// Per player (as `players`): `(last, fence)` once it left: its turns below `last` are
+    /// real, `last..fence` empty, `fence` the leave command, after it empty (`apply_leave`).
+    gone: Vec<Option<(u32, u32)>>,
+    /// Record confirmed frames into the replay recorder (live games); `recorded` = the next
+    /// frame to record.
+    pub record: bool,
+    recorded: u32,
+    /// The next multiple of 8 whose state hash is due.
+    hash_next: u32,
+    /// Test: SCBW_NET_DEBUG_DESYNC=<f>: skip the first non-empty frame at or after f.
+    debug_desync: Option<u32>,
+    skipped: Option<u32>,
 }
 
 impl Session {
@@ -49,6 +61,7 @@ impl Session {
     pub fn new(me: u8, players: &[(u8, u8)], delay: u32) -> Session {
         let mut players = players.to_vec();
         players.sort_by_key(|p| std::cmp::Reverse(p.1));
+        let gone = vec![None; players.len()];
         let table = players.iter().map(|_| (0..delay).map(|_| Some(Vec::new())).collect()).collect();
         Session {
             me,
@@ -64,6 +77,12 @@ impl Session {
             resimulated: 0,
             stalled: 0,
             sounds: Vec::new(),
+            gone,
+            record: false,
+            recorded: 0,
+            hash_next: 8,
+            debug_desync: std::env::var("SCBW_NET_DEBUG_DESYNC").ok().and_then(|v| v.parse().ok()),
+            skipped: None,
         }
     }
 
@@ -71,7 +90,21 @@ impl Session {
         self.players.iter().position(|p| p.0 == player)
     }
 
+    /// Is player `i`'s turn at frame `f` known (stored, or past a leave's fence)?
+    fn known(&self, i: usize, f: u32) -> bool {
+        self.table[i].get(f as usize).is_some_and(|x| x.is_some()) || self.gone[i].is_some_and(|(_, fence)| f > fence)
+    }
+
+    fn advance_confirmed(&mut self) {
+        while (0..self.table.len()).all(|i| self.known(i, self.confirmed)) {
+            self.confirmed += 1;
+        }
+    }
+
     fn store(&mut self, i: usize, frame: u32, bytes: Vec<u8>) -> bool {
+        if self.gone[i].is_some_and(|(last, _)| frame >= last) {
+            return false; // the fence replaced everything from `last` on
+        }
         let t = &mut self.table[i];
         if t.len() <= frame as usize {
             t.resize(frame as usize + 1, None);
@@ -81,10 +114,58 @@ impl Session {
             return false;
         }
         *slot = Some(bytes);
-        while self.table.iter().all(|t| t.get(self.confirmed as usize).is_some_and(|x| x.is_some())) {
-            self.confirmed += 1;
-        }
+        self.advance_confirmed();
         true
+    }
+
+    /// The first frame of `player` whose turn is missing (every turn below it is stored).
+    pub fn contiguous(&self, player: u8) -> u32 {
+        let Some(i) = self.index(player) else { return 0 };
+        self.table[i].iter().position(|x| x.is_none()).unwrap_or(self.table[i].len()) as u32
+    }
+
+    /// The frame a leave must be fenced at when the leaver's turns below `last` are all that
+    /// exist: no peer can have simulated it. A peer's `frame` is at most `confirmed + PRED_LIMIT
+    /// + 1`, its `confirmed` at most `last` (it only gets the leaver's turns through the host,
+    /// which holds exactly the turns below `last` contiguously).
+    pub fn fence_for(last: u32) -> u32 {
+        last + PRED_LIMIT + 1
+    }
+
+    pub fn is_gone(&self, player: u8) -> bool {
+        self.index(player).is_some_and(|i| self.gone[i].is_some())
+    }
+
+    /// `player` leaves: its turns below `last` stay, `last..fence` become empty, the turn at
+    /// `fence` the leave command (0x57, `reason`: 1 quit, 6 dropped), every later one empty.
+    /// `fence` must not be simulated yet (the host picks `fence_for(last)`); a violation is
+    /// logged and rolled back if the ring still has it.
+    pub fn apply_leave(&mut self, player: u8, last: u32, fence: u32, reason: u8) {
+        let Some(i) = self.index(player) else { return };
+        if self.gone[i].is_some() || fence < last {
+            return;
+        }
+        if fence < self.frame {
+            eprintln!("net: FENCE VIOLATION: player {player} leaves at frame {fence}, already simulated to {}", self.frame);
+        }
+        self.gone[i] = Some((last, fence));
+        let frame = self.frame;
+        let t = &mut self.table[i];
+        if t.len() <= fence as usize {
+            t.resize(fence as usize + 1, None);
+        }
+        let mut rb = None;
+        for f in last..=fence {
+            let new = if f == fence { vec![0x57, reason] } else { Vec::new() };
+            let old = t[f as usize].replace(new.clone());
+            if f < frame && old.is_none_or(|o| o != new) && frame - f <= PRED_LIMIT + 1 {
+                rb = Some(rb.map_or(f, |r: u32| r.min(f)));
+            }
+        }
+        if let Some(f) = rb {
+            self.rollback = Some(self.rollback.map_or(f, |r| r.min(f)));
+        }
+        self.advance_confirmed();
     }
 
     /// My turn, at the current frame: stored for frame `self.frame + delay`; the transport
@@ -106,23 +187,90 @@ impl Session {
     }
 
     /// Frame `f`'s turns, run in 0x486f50's order (storm ids 7 down to 0); a missing turn
-    /// is empty. Then the step.
-    fn run_frame(&self, scene: &mut view::Scene, f: u32) -> Vec<(u16, i32, i32)> {
-        // todo: a session must record only confirmed frames (replay_rec::record runs inside
-        // execute_command, so a re-simulated frame records again; net.md).
-        for (i, &(player, _)) in self.players.iter().enumerate() {
-            if let Some(Some(turn)) = self.table[i].get(f as usize) {
-                for c in replay::split_commands(turn) {
-                    scene.replay_command(player, c);
+    /// is empty. Then the step. A net game records at confirmation (`record_confirmed`).
+    fn run_frame(&mut self, scene: &mut view::Scene, f: u32) -> Vec<(u16, i32, i32)> {
+        if self.record {
+            crate::replay_rec::suppress(true);
+        }
+        // Test hook: one peer drops the first non-empty frame at or after the given one.
+        let mut skip = self.skipped == Some(f);
+        if let (Some(d), None) = (self.debug_desync, self.skipped) {
+            if f >= d && self.table.iter().any(|t| t.get(f as usize).is_some_and(|x| x.as_ref().is_some_and(|b| !b.is_empty()))) {
+                self.skipped = Some(f);
+                skip = true;
+                eprintln!("net: DEBUG_DESYNC: skipping the commands of frame {f}");
+            }
+        }
+        if !skip {
+            for (i, &(player, _)) in self.players.iter().enumerate() {
+                if let Some(Some(turn)) = self.table[i].get(f as usize) {
+                    for c in replay::split_commands(turn) {
+                        scene.replay_command(player, c);
+                    }
                 }
             }
         }
-        scene.step()
+        let r = scene.step();
+        if self.record {
+            crate::replay_rec::suppress(false);
+        }
+        r
+    }
+
+    /// Record the commands of every simulated, confirmed frame once (storm id order).
+    fn record_confirmed(&mut self) {
+        if !self.record {
+            return;
+        }
+        let mut ids = [0u8; 12];
+        for &(p, s) in &self.players {
+            ids[p as usize] = s;
+        }
+        crate::replay_rec::set_storm_ids(ids);
+        while self.recorded < self.confirmed.min(self.frame) {
+            let f = self.recorded as usize;
+            for (i, &(player, _)) in self.players.iter().enumerate() {
+                if let Some(Some(turn)) = self.table[i].get(f) {
+                    for c in replay::split_commands(turn) {
+                        crate::replay_rec::record_at(f as u32, player, c);
+                    }
+                }
+            }
+            self.recorded += 1;
+        }
+    }
+
+    /// The (frame, hash) pairs now due: every multiple of 8 the confirmed frame has reached,
+    /// hashed from the snapshot of the state before that frame (the live state when it is the
+    /// next frame). Nothing while a rollback is pending (`tick` clears it first).
+    pub fn due_hashes(&mut self, st: &bw::State) -> Vec<(u32, u64)> {
+        let mut out = Vec::new();
+        if self.rollback.is_some() {
+            return out;
+        }
+        while self.hash_next <= self.confirmed && self.hash_next <= self.frame {
+            let m = self.hash_next;
+            self.hash_next += 8;
+            if m == self.frame {
+                out.push((m, st.state_hash()));
+            } else if let (Some(s), true) = (&self.snaps[(m % (PRED_LIMIT + 1)) as usize], self.frame - m <= PRED_LIMIT + 1) {
+                out.push((m, s.state_hash()));
+            } else {
+                eprintln!("net: no snapshot for the hash of frame {m}");
+            }
+        }
+        out
     }
 
     /// One game frame of wall time: a pending rollback is played first, then (unless the
     /// prediction limit stalls it) the next frame. Returns whether it stepped.
     pub fn tick(&mut self, scene: &mut view::Scene) -> bool {
+        let stepped = self.tick_inner(scene);
+        self.record_confirmed();
+        stepped
+    }
+
+    fn tick_inner(&mut self, scene: &mut view::Scene) -> bool {
         let ring = PRED_LIMIT + 1;
         if let Some(g) = self.rollback.take() {
             let snap = self.snaps[(g % ring) as usize].take().expect("snapshot for the rollback");

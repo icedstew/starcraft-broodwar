@@ -130,6 +130,7 @@ pub async fn net_join(storm: Vec<u8>, archives: js_sys::Array, code: String, fra
                 transport::Event::Start { slot, first, setup } => break 'lobby (slot, first, setup),
                 transport::Event::Error(m) => return Err(err(m)),
                 transport::Event::Turn { player, frame, bytes } => early.push((player, frame, bytes)),
+                _ => {}
             }
         }
         sleep(5).await;

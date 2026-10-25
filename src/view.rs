@@ -220,6 +220,10 @@ pub trait NetDriver {
     fn frame(&mut self, scene: &mut Scene<'_>) -> Option<Vec<(u16, i32, i32)>>;
     /// One pass of the headless loop; false once the game is over.
     fn pump_headless(&mut self, scene: &mut Scene<'_>) -> bool;
+    /// The game cannot go on (the host left): why. The loop ends it as a quit.
+    fn over(&self) -> Option<String> {
+        None
+    }
 }
 
 thread_local! {
@@ -461,6 +465,11 @@ impl<'a> Scene<'a> {
 
     /// 0x4ee8c0 (after every game, quit too) -> 0x4dfab0 with 1: the recorded game becomes
     /// LastReplay.rep.
+    /// The recorded game as a replay file's bytes (headless net games: SCBW_NET_REPLAY).
+    pub fn replay_file(&self) -> Option<Vec<u8>> {
+        crate::replay_rec::replay_bytes(&self.st, &self.chk.raw)
+    }
+
     pub fn write_last_replay(&self) {
         let exe = crate::menu::save_env().exe_dir;
         if crate::replay_rec::recording() && !exe.is_empty() {
@@ -3194,6 +3203,11 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
                 let _ = crate::write_png_rgb(&path, vw as usize, vh as usize, &rgb);
             }
             return Ok(r);
+        }
+        if let Some(why) = net.as_ref().and_then(|n| n.over()) {
+            eprintln!("net: game over: {why}");
+            scene.write_last_replay();
+            return Ok(false);
         }
         if !win.step(scene.st.frame, &typed) {
             // The script ran out or stopped: the game ends as a quit would (0x4ee8c0).

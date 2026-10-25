@@ -56,6 +56,7 @@ pub fn run_peer(a: &view::Assets, r: &replay::Replay, delay: u32, role: Role) ->
                 Event::Start { .. } => started = true,
                 Event::Error(m) => return Err(std::io::Error::other(m)),
                 Event::Turn { player, frame, bytes } => early.push((player, frame, bytes)),
+                _ => {}
             }
         }
         nap();
@@ -83,7 +84,7 @@ pub fn run_peer(a: &view::Assets, r: &replay::Replay, delay: u32, role: Role) ->
                     se.remote_turn(player, frame, bytes)
                 }
                 Event::Error(m) => eprintln!("netrep player {me}: {m}"),
-                Event::Start { .. } => {}
+                _ => {}
             }
         }
         if verbose && last_report.elapsed() > Duration::from_secs(2) {

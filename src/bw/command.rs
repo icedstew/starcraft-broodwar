@@ -1640,9 +1640,14 @@ impl State {
     }
 
     /// 0x4c2e90: command 0x57, leave game; only replays act on it (0x4c4d60 with -1).
+    /// In a network game (own netcode, net.md phase 3d) the session makes this command the
+    /// fence of a player that quit (reason 1) or dropped (6): the effect Storm's player-left
+    /// callback 0x4c4d60 has in the real game, run at a frame every peer agrees on.
     fn command_leave_game(&mut self, d: &Data, player: u8, reason: u8) {
         if self.replay {
             self.leave_notice(d, None, player, reason as u32);
+        } else if self.multiplayer {
+            self.leave_notice(d, None, player, if reason == 6 { 0x4000_0006 } else { reason as u32 });
         }
     }
 
@@ -1652,7 +1657,7 @@ impl State {
     /// 0x48a180) and clears their selection.
     pub fn leave_notice(&mut self, d: &Data, slot: Option<u8>, player: u8, reason: u32) {
         let dropped = reason == 0x4000_0006;
-        if !self.replay {
+        if !self.replay && !self.multiplayer {
             todo_port!("0x4c4d60", "net game: slot lookup 0x57eec0, name via 0x4cde70, 0x581d62, team branches");
             return;
         }

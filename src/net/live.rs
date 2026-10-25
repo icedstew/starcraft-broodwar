@@ -12,11 +12,12 @@
 
 #[cfg(not(target_arch = "wasm32"))]
 use super::transport::ANY;
-use super::transport::{Event, Transport};
+use super::transport::{Event, HOST, Transport};
 use super::Session;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::view;
 use crate::view::{GameSetup, NetDriver, Scene};
+use std::collections::HashMap;
 use std::time::Duration;
 use web_time::Instant;
 
@@ -246,6 +247,28 @@ pub struct NetGame {
     /// Browser: play to this frame and log `frame K hash H` (the headless line, for the console).
     report: Option<u32>,
     reported: bool,
+    /// Host: (frame -> first (player, hash) seen), for the desync compare.
+    hashes: HashMap<u32, (u8, u64)>,
+    desync: Option<u32>,
+    /// Why the game cannot go on (the host left).
+    over: Option<String>,
+    /// Host: clean quits waiting for the quitter's turns to arrive: (player, its next frame, since).
+    quitting: Vec<(u8, u32, Instant)>,
+    /// SCBW_NET_REPLAY=<path>: a headless game writes its replay there at the end.
+    replay_path: Option<String>,
+    /// SCBW_NET_QUIT_AT=<frame>: a headless peer quits (as the in-game menu would) at that frame.
+    quit_at: Option<u32>,
+}
+
+/// Control messages (first byte; see the module doc).
+const C_LEAVE: u8 = 1;
+const C_LEAVE_REQ: u8 = 2;
+const C_HASH: u8 = 3;
+const C_DESYNC: u8 = 4;
+const C_HOST_LEFT: u8 = 5;
+
+fn rd32(b: &[u8], at: usize) -> Option<u32> {
+    Some(u32::from_le_bytes(b.get(at..at + 4)?.try_into().ok()?))
 }
 
 impl NetGame {
@@ -265,6 +288,7 @@ impl NetGame {
         let script = parse_script(&std::env::var("SCBW_NET_SCRIPT").unwrap_or_default())?;
         let headless = std::env::var("SCBW_NET_HEADLESS").ok().and_then(|v| v.parse().ok());
         let mut se = se;
+        se.record = true;
         if let Some(k) = headless {
             se.end = k;
         }
@@ -273,7 +297,88 @@ impl NetGame {
             se.remote_turn(p, f, b);
         }
         let next_send = se.delay;
-        Ok(NetGame { se, tr, next_send, script, headless, finished: None, host, verbose: std::env::var_os("NETREP_DEBUG").is_some(), last_report: Instant::now(), report: None, reported: false })
+        Ok(NetGame::make(se, tr, next_send, script, headless, host))
+    }
+
+    /// Host: `player` is gone (quit, or its connection died). Fence at `Session::fence_for`
+    /// of the turns the host holds, tell everybody (reliable), apply it here.
+    fn decide_leave(&mut self, player: u8, reason: u8) {
+        if !self.host || self.se.is_gone(player) {
+            return;
+        }
+        let last = self.se.contiguous(player);
+        let fence = Session::fence_for(last);
+        let mut msg = vec![C_LEAVE, player];
+        msg.extend_from_slice(&last.to_le_bytes());
+        msg.extend_from_slice(&fence.to_le_bytes());
+        msg.push(reason);
+        eprintln!("net: LEAVE player {player} (reason {reason}): turns below {last} kept, fence frame {fence}, host at frame {}", self.se.frame);
+        self.se.apply_leave(player, last, fence, reason);
+        self.tr.broadcast_ctl(&msg);
+    }
+
+    /// A control message from `from` (see the constants above).
+    fn ctl(&mut self, from: u8, msg: &[u8], scene: &mut Scene<'_>) {
+        match (msg.first().copied(), self.host) {
+            (Some(C_LEAVE), false) if from == HOST => {
+                if let (Some(&p), Some(last), Some(fence), Some(&reason)) = (msg.get(1), rd32(msg, 2), rd32(msg, 6), msg.get(10)) {
+                    eprintln!("net: leave of player {p}: fence frame {fence} (at frame {})", self.se.frame);
+                    self.se.apply_leave(p, last, fence, reason);
+                }
+            }
+            (Some(C_LEAVE_REQ), true) => {
+                if let Some(upto) = rd32(msg, 1) {
+                    if !self.quitting.iter().any(|q| q.0 == from) {
+                        self.quitting.push((from, upto, Instant::now()));
+                    }
+                }
+            }
+            (Some(C_HASH), true) => {
+                if let (Some(m), Some(lo), Some(hi)) = (rd32(msg, 1), rd32(msg, 5), rd32(msg, 9)) {
+                    self.on_hash(from, m, lo as u64 | (hi as u64) << 32, scene);
+                }
+            }
+            (Some(C_DESYNC), false) if from == HOST => {
+                if let Some(m) = rd32(msg, 1) {
+                    self.report_desync(m, scene);
+                }
+            }
+            (Some(C_HOST_LEFT), false) if from == HOST => self.over = Some("the host left".into()),
+            _ => {}
+        }
+    }
+
+    /// Host: compare a peer's hash of frame `m` with the first one seen for it.
+    fn on_hash(&mut self, player: u8, m: u32, h: u64, scene: &mut Scene<'_>) {
+        match self.hashes.get(&m) {
+            None => {
+                self.hashes.insert(m, (player, h));
+                self.hashes.retain(|&f, _| f + 4096 > m);
+            }
+            Some(&(p0, h0)) if h0 != h && self.desync.is_none() => {
+                eprintln!("net: hash mismatch at frame {m}: player {p0} {h0:016x}, player {player} {h:016x}");
+                let mut msg = vec![C_DESYNC];
+                msg.extend_from_slice(&m.to_le_bytes());
+                self.tr.broadcast_ctl(&msg);
+                self.report_desync(m, scene);
+            }
+            _ => {}
+        }
+    }
+
+    fn report_desync(&mut self, m: u32, scene: &mut Scene<'_>) {
+        if self.desync.is_some() {
+            return;
+        }
+        self.desync = Some(m);
+        let text = format!("DESYNC detected at frame {m}");
+        say(&text);
+        eprintln!("net: {text}");
+        scene.msgs.error(text.as_bytes(), scene.clock_ms);
+    }
+
+    fn make(se: Session, tr: Transport, next_send: u32, script: Vec<(u32, Cmd)>, headless: Option<u32>, host: bool) -> NetGame {
+        NetGame { se, tr, next_send, script, headless, finished: None, host, verbose: std::env::var_os("NETREP_DEBUG").is_some(), last_report: Instant::now(), report: None, reported: false, hashes: HashMap::new(), desync: None, over: None, quitting: Vec::new(), replay_path: std::env::var("SCBW_NET_REPLAY").ok(), quit_at: std::env::var("SCBW_NET_QUIT_AT").ok().and_then(|v| v.parse().ok()) }
     }
 }
 
@@ -283,40 +388,81 @@ impl NetDriver for NetGame {
     }
 
     fn frame(&mut self, scene: &mut Scene<'_>) -> Option<Vec<(u16, i32, i32)>> {
-        let se = &mut self.se;
+        if self.se.frame == 0 {
+            crate::replay_rec::set_net_header(scene.st.game_seed, 2, 1);
+        }
+        if self.over.is_some() {
+            return None;
+        }
         // My turn for frame + delay: the commands the UI queued since the last one.
-        if se.frame + se.delay == self.next_send && se.frame < se.end {
+        if self.se.frame + self.se.delay == self.next_send && self.se.frame < self.se.end {
             self.next_send += 1;
-            let f = se.frame;
+            let f = self.se.frame;
             for (_, c) in self.script.iter().filter(|(sf, _)| *sf == f) {
                 let b = match c {
                     Cmd::Raw(b) => b.clone(),
-                    Cmd::SelectWorker => select_worker(&scene.st, se.me),
+                    Cmd::SelectWorker => select_worker(&scene.st, self.se.me),
                 };
                 scene.st.send_command(&b);
             }
             let bytes = std::mem::take(&mut scene.st.turn_out);
-            let (f, b) = se.local_turn(bytes);
+            let (f, b) = self.se.local_turn(bytes);
             self.tr.send_turns(f, b);
         }
         for e in self.tr.poll() {
             match e {
-                Event::Turn { player, frame, bytes } => se.remote_turn(player, frame, bytes),
-                Event::Error(m) => eprintln!("net: {m}"),
+                Event::Turn { player, frame, bytes } => self.se.remote_turn(player, frame, bytes),
+                Event::Ctl { from, msg } => self.ctl(from, &msg, scene),
+                Event::Lost { player, why } => {
+                    eprintln!("net: player {player} lost: {why}");
+                    self.decide_leave(player, 6);
+                }
+                Event::Error(m) => {
+                    eprintln!("net: {m}");
+                    if !self.host {
+                        self.over = Some(format!("lost the host ({m})"));
+                    }
+                }
                 Event::Start { .. } => {}
             }
         }
+        // Host: a clean quitter's leave once its last turns are in (or after a grace period).
+        let ready: Vec<(u8, u32, Instant)> = self.quitting.iter().copied().filter(|&(p, upto, t)| self.se.contiguous(p) >= upto || t.elapsed() > Duration::from_millis(1500)).collect();
+        self.quitting.retain(|q| !ready.iter().any(|r| r.0 == q.0));
+        for (p, _, _) in ready {
+            self.decide_leave(p, 1);
+        }
+        if self.over.is_some() {
+            return None;
+        }
         if self.verbose && self.last_report.elapsed() > Duration::from_secs(2) {
             self.last_report = Instant::now();
+            let se = &self.se;
             eprintln!("net player {}: frame {} confirmed {} stalled {} rollbacks {} dgrams {:?}", se.me, se.frame, se.confirmed, se.stalled, se.rollbacks, self.tr.stats);
         }
-        let stepped = se.tick(scene);
+        let stepped = self.se.tick(scene);
+        // Desync check: the state hash of every 8th confirmed frame goes to the host.
+        for (m, h) in self.se.due_hashes(&scene.st) {
+            if self.host {
+                self.on_hash(self.se.me, m, h, scene);
+            } else {
+                let mut msg = vec![C_HASH];
+                msg.extend_from_slice(&m.to_le_bytes());
+                msg.extend_from_slice(&h.to_le_bytes());
+                self.tr.send_ctl(HOST, msg);
+            }
+        }
+        let se = &mut self.se;
         if let Some(k) = self.report.filter(|&k| !self.reported && se.frame >= k && se.confirmed >= k) {
             self.reported = true;
             say(&format!("frame {k} hash {:016x}", scene.st.state_hash()));
             say(&format!("player {} rollbacks {} resimulated {} stalled {}", se.me, se.rollbacks, se.resimulated, se.stalled));
         }
         stepped.then(|| std::mem::take(&mut se.sounds))
+    }
+
+    fn over(&self) -> Option<String> {
+        self.over.clone()
     }
 
     fn pump_headless(&mut self, scene: &mut Scene<'_>) -> bool {
@@ -326,16 +472,39 @@ impl NetDriver for NetGame {
             if self.frame(scene).is_none() {
                 nap();
             }
+            if self.over.is_some() {
+                println!("game over: {}", self.over.as_deref().unwrap_or(""));
+                return false;
+            }
+            if self.quit_at.is_some_and(|q| self.se.frame >= q) {
+                println!("quit at frame {}", self.se.frame);
+                return false; // dropping the game announces the leave
+            }
             if self.se.frame >= k && self.se.confirmed >= k {
                 println!("frame {k} hash {:016x}", scene.st.state_hash());
                 println!("player {} rollbacks {} resimulated {} stalled {}", self.se.me, self.se.rollbacks, self.se.resimulated, self.se.stalled);
+                if let Some(p) = self.replay_path.take() {
+                    match scene.replay_file() {
+                        Some(b) => std::fs::write(&p, b).unwrap_or_else(|e| eprintln!("net: {p}: {e}")),
+                        None => eprintln!("net: no replay recorded"),
+                    }
+                }
                 self.finished = Some(Instant::now());
             }
             return true;
         };
         // Keep serving until the peers have the last turns (a client: the host acked mine).
-        self.tr.poll();
+        for e in self.tr.poll() {
+            match e {
+                Event::Ctl { from, msg } => self.ctl(from, &msg, scene),
+                Event::Lost { player, .. } => self.decide_leave(player, 6),
+                _ => {}
+            }
+        }
         nap();
+        if self.over.is_some() {
+            return false;
+        }
         !(t0.elapsed() > LINGER || (self.tr.fully_acked(k + self.se.delay) && (self.host || t0.elapsed() > Duration::from_millis(300))))
     }
 }
@@ -349,6 +518,7 @@ fn lobby_wait(tr: &mut Transport) -> Result<(u8, u32, Vec<u8>, Vec<(u8, u32, Vec
                 Event::Start { slot, first, setup } => return Ok((slot, first, setup, early)),
                 Event::Error(m) => return Err(m),
                 Event::Turn { player, frame, bytes } => early.push((player, frame, bytes)),
+                _ => {}
             }
         }
         std::thread::sleep(Duration::from_millis(2));
@@ -393,4 +563,30 @@ pub fn netjoin(files: crate::storage::Storage, code: &str, _delay: u32) -> std::
     let g = decode_setup(&setup, slot).ok_or_else(|| std::io::Error::other("bad game setup"))?;
     let table: Vec<(u8, u8)> = (0..8u8).filter(|&p| g.types[p as usize] == 2).enumerate().map(|(i, p)| (p, i as u8)).collect();
     play(a, g, Session::new(slot, &table, delay), tr, false, early)
+}
+
+/// Leaving a game announces itself: a client tells the host which turn it sent last (the host
+/// fences it as soon as those arrived), the host tells every client the game is over. Not after
+/// a finished headless game or when the host already left.
+impl Drop for NetGame {
+    fn drop(&mut self) {
+        if self.finished.is_some() || self.over.is_some() {
+            return;
+        }
+        if self.host {
+            self.tr.broadcast_ctl(&[C_HOST_LEFT]);
+        } else {
+            let mut msg = vec![C_LEAVE_REQ];
+            msg.extend_from_slice(&self.next_send.to_le_bytes());
+            self.tr.send_ctl(HOST, msg);
+        }
+        let t0 = Instant::now();
+        while t0.elapsed() < Duration::from_millis(1000) {
+            self.tr.poll();
+            if !self.tr.ctl_pending() && (self.host || self.tr.fully_acked(self.next_send)) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
 }

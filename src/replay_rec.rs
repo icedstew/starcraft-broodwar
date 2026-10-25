@@ -54,12 +54,30 @@ pub fn recording() -> bool {
 /// 0x4865d0 (at 0x486d7a): after a command of `player` (a slot), record it with the player's
 /// storm id (0x512680) at the frame 0x57f23c.
 pub fn record(st: &State, player: u8, cmd: &[u8]) {
+    if SUPPRESS.with(|s| s.get()) {
+        return;
+    }
+    record_at(st.frame, player, cmd);
+}
+
+thread_local! {
+    /// A net game records confirmed frames only (`record_at`): execution does not.
+    static SUPPRESS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Stop (true) or resume `record`'s recording at execution.
+pub fn suppress(on: bool) {
+    SUPPRESS.with(|s| s.set(on));
+}
+
+/// `record` for a command of `player` that runs at `frame` (a net session's confirmed frame).
+pub fn record_at(frame: u32, player: u8, cmd: &[u8]) {
     REC.with(|c| {
         if let Some(r) = c.borrow_mut().as_mut() {
             // The State keeps no storm ids: `set_storm_ids` gives them (a single player
             // game's human is storm id 0).
             let storm = STORM.with(|s| s.borrow().get(player as usize).copied()).unwrap_or(0);
-            r.record(st.frame, storm, cmd);
+            r.record(frame, storm, cmd);
         }
     });
 }
@@ -178,6 +196,19 @@ pub fn live_header(st: &State, recorded: &[u8]) -> Vec<u8> {
     h
 }
 
+/// The replay file's bytes of the recorded game (0x4dfab0's body); None without a recorder.
+pub fn replay_bytes(st: &State, chk: &[u8]) -> Option<Vec<u8>> {
+    REC.with(|c| {
+        let mut c = c.borrow_mut();
+        let r = c.as_mut()?;
+        let recorded = r.header.clone();
+        r.header = live_header(st, &recorded);
+        let f = r.file(chk);
+        r.header = recorded;
+        f
+    })
+}
+
 /// 0x4dfab0: the recorded game as the file `<exe dir>maps\replays\<name>.rep`. With `fresh`
 /// (the argument 1) an existing file is deleted first; one that stays is -1 (the game shows
 /// the "can't overwrite" popup 0x4f5ee0, not modelled). Returns 1 written, 0 failed, -1 locked.
@@ -188,16 +219,7 @@ pub fn write_replay(exe_dir: &str, name: &str, fresh: bool, st: &State, chk: &[u
         todo_port!("0x4f5ee0", "the popup for a replay file that cannot be deleted");
         return -1;
     }
-    let bytes = REC.with(|c| {
-        let mut c = c.borrow_mut();
-        let r = c.as_mut()?;
-        let recorded = r.header.clone();
-        r.header = live_header(st, &recorded);
-        let f = r.file(chk);
-        r.header = recorded;
-        f
-    });
-    match bytes {
+    match replay_bytes(st, chk) {
         Some(b) if std::fs::write(&p, &b).is_ok() => 1,
         _ => {
             let _ = std::fs::remove_file(&p);
@@ -223,4 +245,17 @@ pub fn save_named(exe_dir: &str, name: &str, overwrite: impl FnOnce() -> bool) -
         return -1;
     }
     copy_last_replay(exe_dir, name) as i32
+}
+
+/// A net game's header seed and game type (melee 2 / 1, as `melee_setup` loads the template): the real game copies the 0x48 command (id, seed, ...) into the
+/// header (0x472110); the net session sends none, so its seed goes in directly (+8, 0x6d0f38).
+pub fn set_net_header(seed: u32, game_type: u16, sub_type: u16) {
+    REC.with(|c| {
+        if let Some(r) = c.borrow_mut().as_mut() {
+            r.header[7] = 0x48;
+            r.header[8..12].copy_from_slice(&seed.to_le_bytes());
+            r.header[0x3c..0x3e].copy_from_slice(&game_type.to_le_bytes());
+            r.header[0x3e..0x40].copy_from_slice(&sub_type.to_le_bytes());
+        }
+    });
 }

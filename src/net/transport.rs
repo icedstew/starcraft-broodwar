@@ -7,6 +7,11 @@
 //! follows) + `type u8` + body: Hello = 1 + `player u8`; Start = 2 + `slot u8` + `first u32`
 //! (the host's input delay: every peer must use the same) + the setup bytes (opaque here: phase 3b's serialized `GameSetup`, empty for `netrep`).
 //!
+//! Control messages (phase 3d; leaves, desync hashes) ride in the same datagrams: after the runs,
+//! `ack u32` (the sender has every control message of the receiver below it), `nctl u8`, nctl x
+//! (`seq u32`, `len u16`, bytes): the sender's unacked messages in order, resent until acked;
+//! the receiver delivers `seq` == next expected only (reliable, ordered, per peer).
+//!
 //! Turns: unreliable datagrams, resent every flush until acked. One datagram:
 //! `kind u8 = 1`, `nacks u8`, nacks x (`player u8`, `next u32`: the sender has every turn
 //! of that player below `next`), `nruns u8`, nruns x (`player u8`, `count u16`, count x
@@ -49,6 +54,10 @@ pub enum Event {
     Start { slot: u8, first: u32, setup: Vec<u8> },
     /// A turn of `player` for `frame` arrived for the first time.
     Turn { player: u8, frame: u32, bytes: Vec<u8> },
+    /// A control message (`send_ctl`) of peer `from` (a player; `HOST` for the host).
+    Ctl { from: u8, msg: Vec<u8> },
+    /// Host: the connection of `player` ended (closed or timed out).
+    Lost { player: u8, why: String },
     /// The runtime thread failed or the link closed.
     Error(String),
 }
@@ -56,6 +65,7 @@ pub enum Event {
 pub(super) enum Inbound {
     Start { slot: u8, first: u32, setup: Vec<u8> },
     Dgram { from: u8, data: Vec<u8> },
+    Lost { player: u8, why: String },
     Error(String),
 }
 
@@ -78,6 +88,11 @@ pub struct Transport {
     dirty: HashMap<u8, bool>,
     /// The acks last sent to a peer (a flush with nothing new and the same acks is skipped).
     sent_acks: HashMap<u8, Vec<(u8, u32)>>,
+    /// Control messages: per peer the next sequence number to give, the sent ones not yet
+    /// acked, and the next one expected from the peer.
+    ctl_next: HashMap<u8, u32>,
+    ctl_unacked: HashMap<u8, Vec<(u32, Vec<u8>)>>,
+    ctl_in: HashMap<u8, u32>,
     rx: mpsc::Receiver<Inbound>,
     /// Hands a datagram to the link (native: the runtime thread; browser: the WebTransport writer).
     tx: Box<dyn FnMut(u8, Vec<u8>)>,
@@ -134,6 +149,12 @@ pub(super) fn unhex(s: &str) -> Result<[u8; 32], String> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+/// How long a silent connection lives before the peer counts as lost (SCBW_NET_TIMEOUT_MS, default 10 s).
+fn timeout() -> Duration {
+    Duration::from_millis(std::env::var("SCBW_NET_TIMEOUT_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(10_000))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn new_runtime() -> Result<tokio::runtime::Runtime, String> {
     tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| e.to_string())
 }
@@ -159,7 +180,7 @@ impl Transport {
     pub(super) fn new(me: u8, host: bool, peers: Vec<u8>, first: u32, rx: mpsc::Receiver<Inbound>, tx: Box<dyn FnMut(u8, Vec<u8>)>, max_dgram: Arc<AtomicUsize>) -> Transport {
         let mut got = HashMap::new();
         got.insert(me, Vec::new());
-        Transport { me, host, setup: Vec::new(), peers, first, got, next: HashMap::new(), acked: HashMap::new(), dirty: HashMap::new(), sent_acks: HashMap::new(), rx, tx, max_dgram, stats: (0, 0, 0) }
+        Transport { me, host, setup: Vec::new(), peers, first, got, next: HashMap::new(), acked: HashMap::new(), dirty: HashMap::new(), sent_acks: HashMap::new(), ctl_next: HashMap::new(), ctl_unacked: HashMap::new(), ctl_in: HashMap::new(), rx, tx, max_dgram, stats: (0, 0, 0) }
     }
 }
 
@@ -180,7 +201,8 @@ impl Transport {
         let config = ServerConfig::builder()
             .with_bind_address(SocketAddr::new(bind, port))
             .with_identity(identity)
-            .keep_alive_interval(Some(Duration::from_secs(3)))
+            .keep_alive_interval(Some(timeout() / 3))
+            .max_idle_timeout(Some(timeout())).map_err(|e| e.to_string())?
             .build();
         // quinn's socket needs a runtime context at creation.
         let rt = new_runtime()?;
@@ -206,7 +228,8 @@ impl Transport {
         let config = ClientConfig::builder()
             .with_bind_default()
             .with_server_certificate_hashes([hash])
-            .keep_alive_interval(Some(Duration::from_secs(3)))
+            .keep_alive_interval(Some(timeout() / 3))
+            .max_idle_timeout(Some(timeout())).map_err(|e| e.to_string())?
             .build();
         let (itx, rx) = mpsc::channel();
         let (tx, orx) = tmpsc::unbounded_channel();
@@ -219,6 +242,32 @@ impl Transport {
 
 impl Transport {
     /// The datagram size cap (diagnostics).
+    /// A control message to `peer`: reliable and in order (resent in every datagram until the
+    /// peer acks it). A client's only peer is `HOST`.
+    pub fn send_ctl(&mut self, peer: u8, msg: Vec<u8>) {
+        let seq = self.ctl_next.entry(peer).or_insert(0);
+        let s = *seq;
+        *seq += 1;
+        self.ctl_unacked.entry(peer).or_default().push((s, msg));
+    }
+
+    /// `send_ctl` to every peer (the host: all clients still connected).
+    pub fn broadcast_ctl(&mut self, msg: &[u8]) {
+        for p in self.peers.clone() {
+            self.send_ctl(p, msg.to_vec());
+        }
+    }
+
+    /// Control messages to a connected peer that it has not acked yet.
+    pub fn ctl_pending(&self) -> bool {
+        self.peers.iter().any(|p| self.ctl_unacked.get(p).is_some_and(|u| !u.is_empty()))
+    }
+
+    /// The clients still connected (host).
+    pub fn peers(&self) -> &[u8] {
+        &self.peers
+    }
+
     pub fn cap(&self) -> usize {
         self.max_dgram.load(Ordering::Relaxed)
     }
@@ -269,6 +318,10 @@ impl Transport {
                     ev.push(Event::Start { slot, first: self.first, setup })
                 }
                 Inbound::Error(e) => ev.push(Event::Error(e)),
+                Inbound::Lost { player, why } => {
+                    self.peers.retain(|&p| p != player);
+                    ev.push(Event::Lost { player, why });
+                }
                 Inbound::Dgram { from, data } => self.ingest(from, &data, &mut ev),
             }
         }
@@ -303,6 +356,20 @@ impl Transport {
                     }
                 }
             }
+            // Control: the sender has all of mine below `ack`, then its unacked messages in order.
+            let ack = r.u32()?;
+            if let Some(u) = self.ctl_unacked.get_mut(&from) {
+                u.retain(|(s, _)| *s >= ack);
+            }
+            for _ in 0..r.u8()? {
+                let (seq, len) = (r.u32()?, r.u16()? as usize);
+                let m = r.bytes(len)?;
+                let want = self.ctl_in.entry(from).or_insert(0);
+                if seq == *want {
+                    *want += 1;
+                    ev.push(Event::Ctl { from, msg: m.to_vec() });
+                }
+            }
             Some(())
         })();
         if ok.is_none() {
@@ -315,10 +382,23 @@ impl Transport {
         if !self.host && self.me == ANY {
             return; // no slot yet
         }
-        let cap = self.max_dgram.load(Ordering::Relaxed).saturating_sub(8);
+        let cap_full = self.max_dgram.load(Ordering::Relaxed).saturating_sub(8);
         let mut players: Vec<u8> = self.got.keys().copied().collect();
         players.sort();
         for &peer in &self.peers.clone() {
+            // Control section first (small), so it is never starved by the turn runs.
+            let mut ctl = Vec::new();
+            let mut nctl = 0u8;
+            for (seq, m) in self.ctl_unacked.get(&peer).into_iter().flatten() {
+                if ctl.len() + 6 + m.len() > 600 || nctl == 255 {
+                    break;
+                }
+                ctl.extend_from_slice(&seq.to_le_bytes());
+                ctl.extend_from_slice(&(m.len() as u16).to_le_bytes());
+                ctl.extend_from_slice(m);
+                nctl += 1;
+            }
+            let cap = cap_full.saturating_sub(ctl.len() + 5);
             let acks: Vec<(u8, u32)> = players.iter().map(|&p| (p, *self.next.get(&p).unwrap_or(&self.first))).collect();
             let mut out = vec![DGRAM, acks.len() as u8];
             for &(p, n) in &acks {
@@ -355,8 +435,11 @@ impl Transport {
                 }
             }
             out[nruns_at] = nruns;
+            out.extend_from_slice(&self.ctl_in.get(&peer).copied().unwrap_or(0).to_le_bytes());
+            out.push(nctl);
+            out.extend_from_slice(&ctl);
             let dirty = self.dirty.insert(peer, false).unwrap_or(false);
-            if nruns == 0 && !dirty && self.sent_acks.get(&peer) == Some(&acks) {
+            if nruns == 0 && nctl == 0 && !dirty && self.sent_acks.get(&peer) == Some(&acks) {
                 continue;
             }
             self.sent_acks.insert(peer, acks);
@@ -472,8 +555,14 @@ async fn host_conn(
     start.extend_from_slice(&setup);
     send.write_all(&start).await.map_err(|e| e.to_string())?;
     loop {
-        let d = conn.receive_datagram().await.map_err(|e| e.to_string())?;
-        let _ = itx.send(Inbound::Dgram { from: player, data: d.payload().to_vec() });
+        match conn.receive_datagram().await {
+            Ok(d) => drop(itx.send(Inbound::Dgram { from: player, data: d.payload().to_vec() })),
+            Err(e) => {
+                conns.lock().unwrap().remove(&player);
+                let _ = itx.send(Inbound::Lost { player, why: e.to_string() });
+                return Ok(());
+            }
+        }
     }
 }
 
