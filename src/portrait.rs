@@ -265,7 +265,9 @@ impl Player {
     /// 0x45e650: after the video, the static while 0x68ac9c < 0x50 (the caller blits
     /// conover.pcx over it). `rect` is the portrait control's `[l, t, r, b]`.
     pub fn draw_static_overlay(&mut self, ps: &Portraits, rect: [i16; 4], colors: &[u8], out: &mut [u8], sw: i32) {
-        if self.static_level < 0x50 {
+        // 0x45e650 is the portrait control's draw: `hide` (0x45e710, no selection) hides the control, so
+        // nothing is drawn, no static either (0x515224 is the portraits option, not "shown").
+        if self.video.is_some() && self.static_level < 0x50 {
             self.draw_static(ps, self.static_level, rect, colors, out, sw);
         }
     }

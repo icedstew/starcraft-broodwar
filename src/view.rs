@@ -3171,9 +3171,29 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
     let mut card_down: Option<usize> = None;
     let mut pend_rep: Vec<Key> = Vec::new();
     let (mut pend_l, mut pend_r) = (false, false);
+    // Debug: SCBW_NET_SHOT=<frame>:<png> draws the screen once at that frame of a headless net game.
+    #[cfg(not(target_arch = "wasm32"))]
+    let mut net_shot: Option<(u32, String)> =
+        std::env::var("SCBW_NET_SHOT").ok().and_then(|v| v.split_once(':').and_then(|(f, p)| Some((f.parse().ok()?, p.to_string()))));
     Ok(move || {
         if net_headless {
-            return Ok(net.as_mut().is_some_and(|n| n.pump_headless(&mut scene)));
+            let r = net.as_mut().is_some_and(|n| n.pump_headless(&mut scene));
+            #[cfg(not(target_arch = "wasm32"))]
+            if net_shot.as_ref().is_some_and(|(f, _)| scene.st.frame >= *f) {
+                let (_, path) = net_shot.take().unwrap();
+                if let Some(u) = ui.as_ref() {
+                    scene.portrait_tick(u, 0, 2);
+                    // The game clock does not run headless: let the minimap timers fire.
+                    for _ in 0..3 {
+                        scene.clock_ms += 1000;
+                        scene.run_minimap_timers();
+                    }
+                }
+                scene.gamma = settings.gamma;
+                compose_with_cursor(&scene, ui.as_ref(), vx, vy, Some((0, 0, vw / 2, vh / 2)), None, &mut idx, &mut rgb);
+                let _ = crate::write_png_rgb(&path, vw as usize, vh as usize, &rgb);
+            }
+            return Ok(r);
         }
         if !win.step(scene.st.frame, &typed) {
             // The script ran out or stopped: the game ends as a quit would (0x4ee8c0).
