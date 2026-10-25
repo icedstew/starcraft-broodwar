@@ -72,6 +72,8 @@
       <label>StarCraft 1.16.1 install folder<br><input id="install" type="file" webkitdirectory></label>
       <label>Map or replay (.scm, .scx, .chk, .rep)<br><input id="map" type="file" accept=".scm,.scx,.chk,.rep"></label>
       <button id="start">Start</button>
+      <label>Join a host (scbw nethost code, ip:port#hash)<br><input id="join" type="text" size="44" spellcheck="false"></label>
+      <button id="joinbtn">Join</button>
       <div id="status"></div>
       <div class="dim">Files stay on your computer. Nothing is uploaded.</div>
     </div>
@@ -99,7 +101,7 @@ for (const type of ["pointerdown", "keydown"]) addEventListener(type, () => {
 }, true);
 </script>
 <script type="module">
-import init, { start, rbtest } from "./pkg/scbw.js";
+import init, { start, rbtest, net_join } from "./pkg/scbw.js";
 
 // storage.rs ARCHIVES order; the CD archives (BroodWar.mpq, Starcraft.mpq: music,
 // ~600 MB each) are left out to keep memory down.
@@ -187,7 +189,11 @@ async function run(load) {
       status.textContent = out;
       return;
     }
-    start(storm, archives, name, map);
+    if (joinCode) {
+      status.textContent = "joining...";
+      // ?frames=K: log "frame K hash H" to the console at frame K (headless-net check).
+      await net_join(storm, archives, joinCode, Number(new URLSearchParams(location.search).get("frames")) || 0, new URLSearchParams(location.search).get("script") || "");
+    } else start(storm, archives, name, map);
     document.getElementById("setup").remove();
     box.querySelector("canvas").focus({ preventScroll: true });
   } catch (e) {
@@ -236,6 +242,34 @@ if (drive?.[3]) {
   const name = decodeURIComponent(drive[3]);
   run(async () => [await driveGet("storm.dll"), await Promise.all(ARCHIVES.map(driveGet)), name, await driveGet(name)]);
 }
+
+// Join a game hosted with `scbw nethost` (its LISTEN code): the install only, no map.
+let joinCode = null;
+async function joinGame(code, loadInstall) {
+  joinCode = code.trim();
+  await run(async () => [...(await loadInstall()), "", new Uint8Array()]);
+}
+document.getElementById("joinbtn").onclick = () => joinGame(document.getElementById("join").value, async () => {
+  if (drive) return [await driveGet("storm.dll"), await Promise.all(ARCHIVES.map(driveGet))];
+  const top = new Map();
+  for (const f of document.getElementById("install").files) {
+    if (f.webkitRelativePath.split("/").length === 2) top.set(f.name.toLowerCase(), f);
+  }
+  if (!top.has("storm.dll")) throw new Error("pick the install folder (it has storm.dll)");
+  const bytes = async f => new Uint8Array(await f.arrayBuffer());
+  const archives = [];
+  for (const name of ARCHIVES) if (top.has(name)) archives.push(await bytes(top.get(name)));
+  return [await bytes(top.get("storm.dll")), archives];
+});
+
+// ?join=<code> (with the install in auto/, see below): join at once.
+const autoJoin = new URLSearchParams(location.search).get("join");
+const autoGet = async name => {
+  const r = await fetch("auto/" + name);
+  if (!r.ok) throw new Error(`auto/${name}: ${r.status}`);
+  return new Uint8Array(await r.arrayBuffer());
+};
+if (autoJoin) joinGame(autoJoin, async () => [await autoGet("storm.dll"), await Promise.all(ARCHIVES.map(autoGet))]);
 
 // ?auto=<map>: files served from auto/ (see build-and-run.sh).
 const auto = new URLSearchParams(location.search).get("auto");
