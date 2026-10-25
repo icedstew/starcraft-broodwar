@@ -57,8 +57,12 @@ try {
     if (-not $NoWeb) {
         $py = Get-Command python -ErrorAction SilentlyContinue
         $pyExe = if ($py -and $py.Source -notlike "*WindowsApps*") { $py.Source } else { Join-Path $repo "agent\local\scratch\venv\Scripts\python.exe" }
-        $web = Start-Process $pyExe -ArgumentList "-m", "http.server", $WebPort, "-b", "127.0.0.1", "-d", (Join-Path $repo "web") `
-            -WindowStyle Hidden -PassThru
+        # -WorkingDirectory instead of -d: Start-Process (PS 5.1) does not quote arguments with spaces.
+        $web = Start-Process $pyExe -ArgumentList "-m", "http.server", $WebPort, "-b", "127.0.0.1" `
+            -WorkingDirectory (Join-Path $repo "web") -WindowStyle Hidden -PassThru `
+            -RedirectStandardOutput (Join-Path $env:TEMP "scbw_web.out") -RedirectStandardError (Join-Path $env:TEMP "scbw_web.log")
+        Start-Sleep -Milliseconds 800
+        if ($web.HasExited) { throw "the web server exited at once (port $WebPort in use? python: $pyExe; log: $env:TEMP\scbw_web.log)" }
         Write-Host "web page: http://localhost:$WebPort/   (server pid $($web.Id))"
     }
     Write-Host "game: $Exe"
