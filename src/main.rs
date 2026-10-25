@@ -648,6 +648,25 @@ fn main() -> std::io::Result<()> {
                 }
             }
         }
+        Some("rephash") => {
+            // rephash <rep> [frames]: play the replay straight (default: to its end) and print
+            // `frame K hash H`, the line a SCBW_NET_HEADLESS game prints (net.md phase 3d).
+            let mut a = view::Assets::load(files)?;
+            let r = replay::Replay::parse(&std::fs::read(&args[1])?)?;
+            view::prepare_replay(&mut a, &r);
+            let mut scene = view::Scene::from_replay(&a, &r)?;
+            let end: u32 = args.get(2).and_then(|v| v.parse().ok()).unwrap_or(r.header.frames).min(r.header.frames);
+            let mut ci = 0;
+            for f in 0..end {
+                while ci < r.commands.len() && r.commands[ci].frame <= f {
+                    let c = &r.commands[ci];
+                    scene.replay_command(c.owner, &c.data);
+                    ci += 1;
+                }
+                scene.step();
+            }
+            println!("frame {end} hash {:016x} (header frames {})", scene.st.state_hash(), r.header.frames);
+        }
         Some("reprecord") => {
             // reprecord <in.rep> <out.rep>: play the replay headless with the recorder on
             // (0x4cde70) and write the replay file it makes (0x4dfab0's layout).
@@ -1240,7 +1259,11 @@ fn main() -> std::io::Result<()> {
                 m
             });
             if let Some(u) = ui.as_ref() {
+                // Debug: SCBW_PTICKS=n runs n more 42 ms portrait ticks (the static fades, the video moves).
                 scene.portrait_tick(u, 0, 2);
+                for _ in 0..std::env::var("SCBW_PTICKS").ok().and_then(|v| v.parse().ok()).unwrap_or(0) {
+                    scene.portrait_tick(u, 42, 2);
+                }
                 scene.text_tick(u, 0, true);
             }
             view::compose_with_cursor(&scene, ui.as_ref(), x, y, cursor, menu.as_ref(), &mut idx, &mut rgb);

@@ -1494,17 +1494,12 @@ impl Skin {
             self.outline((l, t, r, b), col[0x10], s);
             self.outline((l + 1, t + 1, r - 1, b - 1), col[0x10], s);
         }
-        if dlg.bg.is_none() {
-            // 0x4ef590 (no bitmap): the rect filled by 0x4e1d20 with the 0x6ceb2c color,
-            // or 0 with flag 0x2000.
-            let c = if dlg.this.flags & 0x2000 != 0 { 0 } else { self.colors.get()[0xc] };
-            let (l, t, r, b) = dlg.this.rect;
-            for y in t.max(0)..=b.min(s.h - 1) {
-                for x in l.max(0)..=r.min(s.w - 1) {
-                    s.px[(y * s.w + x) as usize] = c;
-                }
-            }
-        }
+        // 0x4ef590 without a bitmap fills the *update rect* it is given (param_4, the part being
+        // redrawn) with the 0x6ceb2c color, or 0 with flag 0x2000 (0x4e1d20). scbw redraws the
+        // whole screen each frame and draws the in-game panels (minimap, ...) after their
+        // dialogs, so there is no stale area to clear: filling the dialog's own rect (as an
+        // earlier port did) painted gray over the minimap box and the console art.
+        // todo: needs an update rect (the dirty-cell redraw 0x4bd580 / 0x4bcdc0) to port.
         if let Some((bw, bh, bg)) = &dlg.bg {
             // 0x4ef590 -> 0x4ef440: the dialog bitmap; index 0 is transparent. Flag
             // 0x40000 (the glue's dialogs, every in-game menu): mode 4 (0x416f30), the
