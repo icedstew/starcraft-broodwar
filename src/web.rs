@@ -38,17 +38,24 @@ pub fn start(storm: &[u8], archives: js_sys::Array, name: &str, file: &[u8]) -> 
 }
 
 /// Run `frame` from requestAnimationFrame until it returns false or fails.
-fn run_raf(mut frame: Box<dyn FnMut() -> std::io::Result<bool>>) {
+fn run_raf(frame: Box<dyn FnMut() -> std::io::Result<bool>>) {
     // requestAnimationFrame runs at the display rate, as the native window loop: the
     // cursor is redrawn every pass, the frame loop ticks the game every 42 ms.
     let win = web_sys::window().unwrap();
     let tick: Rc<RefCell<Option<Closure<dyn FnMut()>>>> = Rc::new(RefCell::new(None));
     let again = tick.clone();
+    // The loop's state (a network game's `NetGame` among it) is dropped when it ends, so a
+    // leave is announced and the link closes (the rAF closure itself lives on).
+    let mut frame = Some(frame);
     *tick.borrow_mut() = Some(Closure::new(move || {
-        match frame() {
+        let Some(f) = frame.as_mut() else { return };
+        match f() {
             Ok(true) => {}
-            Ok(false) => return,
-            Err(e) => return web_sys::console::error_1(&e.to_string().into()),
+            Ok(false) => return frame = None,
+            Err(e) => {
+                frame = None;
+                return web_sys::console::error_1(&e.to_string().into());
+            }
         }
         let w = web_sys::window().unwrap();
         w.request_animation_frame(again.borrow().as_ref().unwrap().as_ref().unchecked_ref()).unwrap();

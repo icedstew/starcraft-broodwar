@@ -17,12 +17,13 @@ use wasm_bindgen::prelude::*;
 export function wt_connect(url, hash, hello, on_start, on_dgram, on_err) {
   // Rust's slices are views of wasm memory: copy what is used after an await.
   hash = hash.slice(); hello = hello.slice();
-  let dw = null;
+  let dw = null, wt = null, closed = false;
   const fail = e => on_err(String((e && e.message) || e));
   (async () => {
     try {
-      const wt = new WebTransport(url, { serverCertificateHashes: [{ algorithm: "sha-256", value: hash }] });
+      wt = new WebTransport(url, { serverCertificateHashes: [{ algorithm: "sha-256", value: hash }] });
       await wt.ready;
+      if (closed) return wt.close();
       const bi = await wt.createBidirectionalStream();
       const w = bi.writable.getWriter();
       await w.write(hello);
@@ -50,7 +51,11 @@ export function wt_connect(url, hash, hello, on_start, on_dgram, on_err) {
       }
     } catch (e) { fail(e); }
   })();
-  return { send(d) { if (dw) dw.write(d).catch(fail); } };
+  return {
+    send(d) { if (dw && !closed) dw.write(d).catch(fail); },
+    // A short grace so the last datagrams (the leave) go out before the session closes.
+    close() { closed = true; setTimeout(() => { try { if (wt) wt.close(); } catch (e) {} }, 200); },
+  };
 }
 "#)]
 extern "C" {
@@ -58,6 +63,18 @@ extern "C" {
     fn wt_connect(url: &str, hash: &[u8], hello: &[u8], on_start: &Closure<dyn FnMut(Uint8Array, u32)>, on_dgram: &Closure<dyn FnMut(Uint8Array)>, on_err: &Closure<dyn FnMut(String)>) -> Link;
     #[wasm_bindgen(method)]
     fn send(this: &Link, d: &Uint8Array);
+    #[wasm_bindgen(method)]
+    fn close(this: &Link);
+}
+
+/// The link of a `Transport`: closing the session when the transport is dropped makes the
+/// host see the player lost at once (instead of after its idle timeout).
+struct Owned(Link);
+
+impl Drop for Owned {
+    fn drop(&mut self) {
+        self.0.close();
+    }
 }
 
 impl Transport {
@@ -92,7 +109,8 @@ impl Transport {
         on_start.forget();
         on_dgram.forget();
         on_err.forget();
-        let out = Box::new(move |_to: u8, d: Vec<u8>| link.send(&Uint8Array::from(&d[..])));
+        let link = Owned(link);
+        let out = Box::new(move |_to: u8, d: Vec<u8>| link.0.send(&Uint8Array::from(&d[..])));
         Ok(Transport::new(me, false, vec![HOST], first, rx, out, max_dgram))
     }
 }

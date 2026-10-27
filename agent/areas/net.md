@@ -266,3 +266,9 @@ PRED_LIMIT stalls, ~30% more ticks); tl2071 INVALID (a command at frame 0 < dela
   1500 frames: equal hashes at delay 1 / 2 / 4. The browser steps ~18 frames/s headless.
   Fix: a client that loses the host after holding every turn up to its end plays them out
   (the host closes once its turns are acked, the slower browser was 1-2 frames short).
+- **Browser leave** (2026-10-27): the browser's frame loop drops its state when it ends
+  (`run_raf`), so `NetGame::drop` sends the leave (no blocking wait in wasm) and the
+  WebTransport session closes ~200 ms later: the host sees the player lost at once. Before,
+  a menu quit kept the session alive and the host stalled forever. A closed tab already gave
+  "closed by peer" at once; a killed browser is seen after the 10 s idle timeout, with no
+  waiting-for-players dialog yet (0x4a3380 unported).

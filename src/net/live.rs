@@ -664,7 +664,16 @@ impl Drop for NetGame {
             msg.extend_from_slice(&self.next_send.to_le_bytes());
             self.tr.send_ctl(HOST, msg);
         }
+        // The browser cannot block: send once and let the closing link (web_transport.rs)
+        // tell the host the rest.
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.tr.poll();
+            return;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
         let t0 = Instant::now();
+        #[cfg(not(target_arch = "wasm32"))]
         while t0.elapsed() < Duration::from_millis(1000) {
             self.tr.poll();
             if !self.tr.ctl_pending() && (self.host || self.tr.fully_acked(self.next_send)) {
