@@ -7,7 +7,8 @@
 //! SCBW_NET_HEADLESS=<K> runs without a window for K frames and prints
 //! `frame K hash <state_hash>`; SCBW_NET_SCRIPT="<frame>:<hex command>;..." injects commands
 //! into this peer's local turn at that frame (replay-format bytes; `selw` stands for the
-//! select command of the first worker of the local player). SCBW_NET_RACES="t,z,p,r" picks
+//! select command of the first worker of the local player; `say <text>` submits a chat line
+//! to all, as Shift+Enter would). SCBW_NET_RACES="t,z,p,r" picks
 //! the host's slot races (default: random by the seed), SCBW_NET_BIND the host address.
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -192,6 +193,7 @@ pub fn melee_setup(a: &view::Assets, chk_raw: Vec<u8>, humans: usize, seed: u32)
 enum Cmd {
     Raw(Vec<u8>),
     SelectWorker,
+    Say(Vec<u8>),
 }
 
 fn parse_script(s: &str) -> Result<Vec<(u32, Cmd)>, String> {
@@ -200,6 +202,10 @@ fn parse_script(s: &str) -> Result<Vec<(u32, Cmd)>, String> {
         let (f, c) = item.split_once(':').ok_or_else(|| format!("bad script item {item:?}"))?;
         let f: u32 = f.trim().parse().map_err(|_| format!("bad frame in {item:?}"))?;
         let c = c.trim();
+        if let Some(t) = c.strip_prefix("say ") {
+            v.push((f, Cmd::Say(t.as_bytes().to_vec())));
+            continue;
+        }
         if c == "selw" {
             v.push((f, Cmd::SelectWorker));
             continue;
@@ -266,6 +272,9 @@ const C_LEAVE_REQ: u8 = 2;
 const C_HASH: u8 = 3;
 const C_DESYNC: u8 = 4;
 const C_HOST_LEFT: u8 = 5;
+/// A Storm message (chat / whisper, `chat::Chat::out`): client -> host `[6, to u16, packet]`,
+/// host -> client `[6, from, packet]`; the host passes each on to the players in `to`.
+const C_CHAT: u8 = 6;
 
 fn rd32(b: &[u8], at: usize) -> Option<u32> {
     Some(u32::from_le_bytes(b.get(at..at + 4)?.try_into().ok()?))
@@ -344,7 +353,71 @@ impl NetGame {
                 }
             }
             (Some(C_HOST_LEFT), false) if from == HOST => self.over = Some("the host left".into()),
+            (Some(C_CHAT), true) => {
+                if let (Some(to), Some(pkt)) = (msg.get(1..3), msg.get(3..)) {
+                    self.route_chat(from, u16::from_le_bytes([to[0], to[1]]) & !(1 << from), pkt, scene);
+                }
+            }
+            (Some(C_CHAT), false) if from == HOST => {
+                if let (Some(&p), Some(pkt)) = (msg.get(1), msg.get(2..)) {
+                    self.chat_in(p, pkt, scene);
+                }
+            }
             _ => {}
+        }
+    }
+
+    /// The players still in the game (0x66fe20 == 1), a bit per player.
+    fn active(&self) -> u16 {
+        self.se.players().filter(|&p| !self.se.is_gone(p)).fold(0, |m, p| m | 1 << p)
+    }
+
+    /// SNetSendMessage (ord 127) to each player in `to`: Storm hands a message to oneself
+    /// at once; the rest go through the host.
+    fn send_chat(&mut self, to: u16, pkt: Vec<u8>, scene: &mut Scene<'_>) {
+        let me = self.se.me;
+        if to & 1 << me != 0 {
+            self.chat_in(me, &pkt, scene);
+        }
+        let to = to & !(1 << me);
+        if to == 0 {
+            return;
+        }
+        if self.host {
+            self.route_chat(me, to, &pkt, scene);
+        } else {
+            let mut msg = vec![C_CHAT];
+            msg.extend_from_slice(&to.to_le_bytes());
+            msg.extend_from_slice(&pkt);
+            self.tr.send_ctl(HOST, msg);
+        }
+    }
+
+    /// Host: a message of `from` for the players in `to`.
+    fn route_chat(&mut self, from: u8, to: u16, pkt: &[u8], scene: &mut Scene<'_>) {
+        let to = to & self.active();
+        for p in (0..16u8).filter(|&p| to & 1 << p != 0) {
+            if p == self.se.me {
+                self.chat_in(from, pkt, scene);
+            } else {
+                let mut msg = vec![C_CHAT, from];
+                msg.extend_from_slice(pkt);
+                self.tr.send_ctl(p, msg);
+            }
+        }
+    }
+
+    /// 0x485f70 (SNetReceiveMessage, ord 121): a message of player `from` by its first byte,
+    /// 0 chat (0x485f50) and 1 whisper (0x485f30); 2 (0x47d170) and others are not ours.
+    /// A chat line is recorded at the frame it arrives in (0x4cde70 under the local storm
+    /// id) and shown (`State::chat`, 0x48d1c0).
+    fn chat_in(&mut self, from: u8, pkt: &[u8], scene: &mut Scene<'_>) {
+        if self.active() & 1 << from == 0 || pkt.first().is_none_or(|&t| t > 1) {
+            return;
+        }
+        if let Some(cmd) = crate::chat::receive(&mut scene.chat, from, pkt, pkt[0] == 1) {
+            scene.st.chat.push((from, cmd[2..].to_vec()));
+            self.se.record_chat(cmd);
         }
     }
 
@@ -402,12 +475,21 @@ impl NetDriver for NetGame {
                 let b = match c {
                     Cmd::Raw(b) => b.clone(),
                     Cmd::SelectWorker => select_worker(&scene.st, self.se.me),
+                    Cmd::Say(t) => {
+                        scene.chat.mode = 2;
+                        scene.chat.send(&scene.st, t);
+                        continue;
+                    }
                 };
                 scene.st.send_command(&b);
             }
             let bytes = std::mem::take(&mut scene.st.turn_out);
             let (f, b) = self.se.local_turn(bytes);
             self.tr.send_turns(f, b);
+        }
+        scene.chat.active = self.active();
+        for (to, pkt) in std::mem::take(&mut scene.chat.out) {
+            self.send_chat(to, pkt, scene);
         }
         for e in self.tr.poll() {
             match e {

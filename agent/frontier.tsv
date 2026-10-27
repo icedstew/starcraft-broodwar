@@ -148,13 +148,13 @@
 0x47e440	hud	Tips dialog: subtitles checkbox from sound flags	equivalent	checked: confirmed: src/menu.rs:628 Kind::Tips, :1086 store | Callback arg 0xb is the event code, not a control id. Checkbox set from sound_flags bit 0x100 and written back; no id mismatch. || triage: trivial; menu.rs Kind::Tips sets checkbox from sound_flags & 0x100; control id differs (port 2, source 0xb), not verified which dialog.
 0x47e690	glue	Tips dialog OK: back to help or close	equivalent	checked: confirmed: src/menu.rs:1277-1281 | Tips OK/Cancel: settings handling then back to Help when depth>1 else close; matches. || triage: trivial; menu.rs:1277-1281 Menu::on_activate (Tips, -2 or -3): back to Help (0x4ca010) at depth > 1, else close. Credits screen is glue_credits.rs.
 0x47eab0	sim	Scroll step toward target distance	equivalent	checked: confirmed: src/view.rs:768 scroll_step (target branch) | Orig loop: per axis abs diff nonzero, while row6[counter] > diff counter--, returns speed 6. Row 6 table verified in exe [0,8,24,32,40,56,64], so no counter>0 guard needed. UI only. || triage: small; Rust view.rs:744-775 scroll_step target branch uses SCROLL_STEP row 6. Ghidra loop has no counter>0 guard; assumes row-6 entry 0 is 0.
-0x47f440	net	chat/name prefix lookup helper	wait-net	
-0x47f4d0	net	chat/name prefix lookup with flags	wait-net	
+0x47f440	net	/reply name match (0x57f094)	ported	2026-10-27: chat.rs `slash` (no match outside Battle.net)
+0x47f4d0	net	slash prefix + player name match	ported	2026-10-27: chat.rs `name_after`
 0x47f590	net	handles /league and /stats commands	wait-net	
 0x47f670	net	builds Battle.net message text	wait-net	
 0x47f750	net	prints chat command output	wait-net	
-0x47f7a0	net	formats and prints chat message	wait-net	
-0x47f8f0	net	whisper command (/w) handling	wait-net	
+0x47f7a0	net	whisper send + echo	ported	2026-10-27: chat.rs `slash` (type 1 packet, network.tbl 0x4e)
+0x47f8f0	net	chat slash commands	ported	2026-10-27: chat.rs `slash`: squelch/ignore/unsquelch/unignore, whisper/msg/w/m; Battle.net 0x47f670 not ported
 0x480110	gfx	ANDs mask bits over rectangles	equivalent	2026-10-24 triage: checked: ok: checked/unchecked inner+outer loops with LOS parent test match vision.rs reveal; 0x480200 unchecked variant
 0x480200	gfx	ANDs mask bits for tile rows	equivalent	2026-10-24 triage: checked: ok: unchecked variant of 0x480110, same loops as vision.rs reveal
 0x4802a0	gfx	clears mask bits over rectangle list	equivalent	2026-10-24 triage: checked: ok: air branch: clear mask on first outer entries, bounds-checked; vision.rs:228
@@ -188,10 +188,10 @@
 0x484f20	sim	Race slot test: no human or open slot	wait-net	small; Only called by 451d40 (lobby and team logic), gated by multiplayer 0x57f0b4 and 0x596875. Belongs to network slot handling.
 0x485c70	net	sends network message on state change	wait-net	
 0x485ce0	net	sends network status message	wait-net	
-0x485d10	net	formats and records chat text	wait-net	
-0x485f30	net	chat message send wrapper	wait-net	
-0x485f50	net	chat message send wrapper	wait-net	
-0x485f70	sys	Message pump for window events	replaced	2026-10-24 triage: Win32 pump; Rust window events come from minifb (Cargo.toml minifb; event loop in src/main.rs and src/view.rs).
+0x485d10	net	chat / whisper receive, records 0x5c	ported	2026-10-27: chat.rs `receive` + live.rs `chat_in` (Session::record_chat)
+0x485f30	net	whisper receive wrapper	ported	2026-10-27: live.rs `chat_in` (type 1)
+0x485f50	net	chat receive wrapper	ported	2026-10-27: live.rs `chat_in` (type 0)
+0x485f70	net	SNetReceiveMessage loop by message type	ported	2026-10-27: live.rs `chat_in` (was wrongly triaged as the Win32 pump); type 2 = 0x47d170 not handled
 0x486040	net	Open player slots for lobby	wait-net	
 0x487350	sys	Linked list free-slot handling	not-needed	2026-10-24 triage: checked: ok: dead (no callers in dump, no dword ref in exe); win32/crash/debug plumbing, no game effect
 0x4873e0	sys	Converts list pointer to index	not-needed	2026-10-24 triage: checked: ok: dead (no callers in dump, no dword ref in exe); win32/crash/debug plumbing, no game effect
@@ -487,7 +487,7 @@
 0x4c0560	net	Wrapper sending network command packet	wait-net	
 0x4c05a0	net	Wrapper sending network command packet	wait-net	
 0x4c05c0	net	Wrapper sending network command packet	wait-net	
-0x4c2420	unknown	send string to each player in mask	wait-net	2026-10-24 triage: Called from 0x4f3280. Ordinal_127 send per player (chat/net message).
+0x4c2420	net	chat send to players in mask	ported	2026-10-27: chat.rs `Chat::send` + live.rs `send_chat` / `route_chat` (via host)
 0x4c3010	saveload	Read file into buffer via Storm (wrapper)	replaced	2026-10-24 triage: Wraps 0x410430 with -1 (Storm file read, caller 0045a390, no Rust port). Rust reads save files with std::fs and In (src/bw/save.rs:116).
 0x4c3040	saveload	Compression helper (write to stream)	replaced	2026-10-24 triage: Copies a buffer into the save stream; Rust Out::packed writes into a Vec (src/bw/save.rs:70).
 0x4c3090	saveload	Compression helper (read from stream)	replaced	2026-10-24 triage: Copies from the save stream into a buffer; Rust In::packed reads from a slice (src/bw/save.rs:116).
@@ -749,7 +749,7 @@
 0x4f0050	hud	framed picture control with corner brackets	unsure	checked: unclear: Control +0x10 nonzero branch from draw dispatch 0x4f0390; dlg.rs:281 notes +0xc/+0x10 as dialog bg bitmap data. Which controls set it was not traced; no references found to set it. || triage: medium; Only from 4f0390 when +0x10 nonzero; no Rust path (4eff80 corners absent). Decide: which .bin controls set +0x10 and show in a ported dialog.
 0x4f0390	hud	draw dispatch by control flags	unsure	checked: unclear: Dispatch on +0x10 (4f0050), flag 0x20000000 (4efeb0), else 4efd90. Resolved with 0x4f0050; no direct callers (table-referenced). || triage: small; src/dlg.rs:1400-1500 dispatches by type/WIDE, but misses the +0x10 branch that calls 4f0050. Decided by 4f0050 reachability.
 0x4f1680	sim	walk direction dispatch by walker mask bits	equivalent	checked: confirmed: src/bw/short_path.rs:1902-1906 expand (inlined in 0x42e4f0) | Tests +0x73 bits 1,2,4,8 in order calling 4f1200, 4f0d50, 4f08c0, 4f03e0, stops on first nonzero; same code is inlined at 42e592. Rust names/mapping match; mask read once, no walker rewrites it. || triage: trivial; short_path.rs:1902-1906 expand() dispatches up_right, down_right, down_left, up_left in the same order on the mask, stopping on success. No refs in the exe.
-0x4f2f00	hud	chat label text by chat target	wait-net	small; Only caller draw_4f3040 (chat line). Label formats chat-target string 0x57eeeb table; src/chat.rs:337-360 draws label with static text. Chat belongs to net.
+0x4f2f00	hud	chat label 4 text by recipient	ported	2026-10-27: chat.rs `recipient_label`
 0x4f35d0	hud	chat textbox dialog init	equivalent	checked: confirmed: src/chat.rs:257 open, 340 draw | Label sized to text, edit starts after label, replay shifts 24 px up; chat open logic equivalent. || triage: small; src/chat.rs:257 open (label, edit ctl, replay 24 px shift via up flag). Textbox load src/view.rs:372 and 3382. No direct caller in dump.
 0x4f37c0	hud	load race textbox.bin	equivalent	checked: confirmed: src/view.rs:372,3382; src/chat.rs:268 | Loads rez/<race letter>textbox.bin for the local race at game start and keeps the dialog. || triage: small; src/view.rs:372 and 3382 read rez/<race>textbox.bin; src/chat.rs:268 keeps the dialog loaded at game start (caller 4c3bb0).
 0x4f4080	sim	game mode check after net wait	wait-net	small; Only caller is 0x4f40f0 (net wait loop, GetTickCount-gated, net_487070). Tests 0x66fbfa == 4, then calls 0x45a050, 0x4b8870, 0x471010. Net work waits.

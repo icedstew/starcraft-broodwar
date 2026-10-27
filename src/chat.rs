@@ -2,6 +2,7 @@
 //! matcher (0x4b23e0). The cheat hashes and the caret bytes are read from the user's
 //! StarCraft.exe at runtime; none of them are stored here.
 
+use crate::bw::State;
 use crate::dlg::{Ctl, Dialog};
 
 /// File offset of a .rdata address (section VA 0x4fe000, raw 0xfe000).
@@ -243,6 +244,25 @@ pub struct Chat {
     /// The caret bytes 0x50612c..0x50612e read from the exe.
     caret_bytes: [u8; 3],
     opened_ms: u32,
+    /// 0x68c144: 0 closed, 1 single player "Message:", 2 to all, 3 to allies, 4 to the
+    /// recipients the message dialog chose (`target`).
+    pub mode: u8,
+    /// 0x581d60: the message dialog's recipient (a player, 8 all, 9 allies).
+    pub target: u8,
+    /// 0x57f1da: the players a mode 4 line goes to (bit per player; see `send`).
+    pub send_to: u16,
+    /// 0x57f1d8: the players whose lines are shown (cleared by /squelch).
+    pub accept: u16,
+    /// Storm messages (SNetSendMessage, ord 127) to send: (recipients, packet). The packet is
+    /// the type (0 chat, 1 whisper), a byte 1.16.1 leaves unset (0 here) and the text with its
+    /// NUL. Bits are players: 1.16.1's are storm ids, our transport addresses peers by player
+    /// (the two map one to one, `Session::players`).
+    pub out: Vec<(u16, Vec<u8>)>,
+    /// 0x66fe20 == 1: the players in the network game (bit per player; the net driver keeps
+    /// it, 0 outside a network game).
+    pub active: u16,
+    /// 0x48d0c0 lines to show: (network.tbl line, player for its %s, text appended).
+    pub notices: Vec<(usize, u8, Vec<u8>)>,
 }
 
 /// What a key did.
@@ -253,8 +273,33 @@ pub enum Done {
 }
 
 impl Chat {
-    /// 0x4f32d0 (closed): open the line; single player mode 1 ("Message:").
-    pub fn open(&mut self, dlg: Dialog, now: u32) {
+    /// 0x4ee180 (not from a save): the recipients at game start, 0x48fdb0's allies and
+    /// 0x581d60 = 8 (all; 9 in a type 0xf game that is not a replay); 0x4d4130: every
+    /// player's lines are shown.
+    pub fn game_start(&mut self, st: &State) {
+        self.send_to = allies(st);
+        self.target = if st.template[0] == 0xf && !st.replay { 9 } else { 8 };
+        self.accept = 0xffff;
+    }
+
+    /// 0x4f32d0 (closed): open the line. Mode 1 in single player; in a multiplayer game
+    /// Shift (0x4d1810's 3) is to all, Ctrl (4) in a game with alliances (0x4aabb0) to
+    /// allies, else the message dialog's recipient (`target`).
+    pub fn open(&mut self, dlg: Dialog, now: u32, st: &State, shift: bool, ctrl: bool) {
+        let alliances = st.template[0xf] == 1 && st.template[0x12] == 0;
+        self.mode = if !st.multiplayer {
+            1
+        } else if shift {
+            2
+        } else if alliances && ctrl {
+            3
+        } else if self.target == 8 {
+            2
+        } else if alliances && self.target == 9 {
+            3
+        } else {
+            4
+        };
         self.dlg = Some(dlg);
         self.open = true;
         self.text.clear();
@@ -287,6 +332,7 @@ impl Chat {
     /// 0x4f32d0 (open): close; the text is cleared (0x501b7d is "").
     pub fn close(&mut self) {
         self.open = false;
+        self.mode = 0;
         self.text.clear();
         self.caret = 0;
     }
@@ -294,8 +340,29 @@ impl Chat {
     /// 0x4f36fa: Enter submits, Esc cancels.
     pub fn enter(&mut self) -> Done {
         let t = std::mem::take(&mut self.text);
+        let mode = self.mode;
         self.close();
+        self.mode = mode; // `send` reads it; 0x4f32d0 clears 0x68c144 after the send
         Done::Submit(t)
+    }
+
+    /// 0x4f3280 (multiplayer, the line was no cheat or /replay command): the recipients by
+    /// mode (2 all, 3 allies by 0x48fdb0, else `send_to`), then 0x4c2420: a "/" line is
+    /// 0x47f8f0's; else a non-empty line goes to every human player in the mask.
+    pub fn send(&mut self, st: &State, text: &[u8]) {
+        let mode = std::mem::take(&mut self.mode);
+        if slash(self, st, text) {
+            return;
+        }
+        let to = match mode {
+            2 => 0xffff,
+            3 => allies(st),
+            _ => self.send_to,
+        };
+        // 0x4c2420 sends to each player of the mask that is in the game.
+        if to & self.active != 0 && !text.is_empty() {
+            self.out.push((to & self.active, packet(0, text)));
+        }
     }
 
     /// 0x4f3240: a typed character; at most 78 characters (len > 0x4d rejects).
@@ -337,18 +404,21 @@ impl Chat {
     /// 0x4f3040: the dialog's label and the edit text with the blinking caret
     /// (500 ms, 0x416600). `up`: replays draw the box 24 px higher.
     /// 0x4167f0 is the edit control's part of the draw.
-    pub fn draw(&self, skin: &crate::dlg::Skin, now: u32, up: bool, out: &mut [u8], w: i32, h: i32) {
+    pub fn draw(&self, skin: &crate::dlg::Skin, now: u32, up: bool, st: &State, network: &[String], out: &mut [u8], w: i32, h: i32) {
         let Some(d) = self.dlg.as_ref().filter(|_| self.open) else { return };
         let dy = if up { -24 } else { 0 };
         let (ox, oy) = d.origin();
         let mut s = crate::dlg::Surf { px: out, w, h };
-        let Some(label) = d.get(1) else { return };
+        // Mode 1 shows label 1, 3 label 2 (allies), 2 label 3 (all), 4 label 4 with
+        // 0x4f2f00's text.
+        let id = [1, 1, 3, 2, 4][self.mode.min(4) as usize];
+        let Some(label) = d.get(id) else { return };
+        let text = if self.mode == 4 { self.recipient_label(&label.text, st, network) } else { label.text.clone() };
         let lr = (ox + label.rect.0, oy + label.rect.1 + dy, ox + label.rect.0 + 279, oy + label.rect.3 + dy);
         let Some(edit) = d.get(6) else { return };
-        let lw = skin.fonts[1].width_bytes(&label.text);
-        let mut l: Ctl = label.clone();
-        l.flags |= 0;
-        skin.ctl_text(&l, &label.text, lr, 0, 0, 0x11, &mut s);
+        let lw = skin.fonts[1].width_bytes(&text);
+        let l: Ctl = label.clone();
+        skin.ctl_text(&l, &text, lr, 0, 0, 0x11, &mut s);
         // 0x4f3040: the edit starts after the label and one glyph gap.
         let left = ox + lw + 1;
         let mut line = self.text.clone();
@@ -359,6 +429,143 @@ impl Chat {
         let er = (left, oy + edit.rect.1 + dy, ox + edit.rect.2, oy + edit.rect.3 + dy);
         skin.ctl_text(edit, &line, er, 0, 0, 0x11, &mut s);
     }
+}
+
+impl Chat {
+    /// 0x4f2f00: label 4's format with the recipient: the player's name, in a team game
+    /// (0x484f50) network.tbl line `target` + 0x11 (the force names).
+    fn recipient_label(&self, fmt: &[u8], st: &State, network: &[String]) -> Vec<u8> {
+        let name = if team(st) {
+            network.get(self.target as usize + 0x11).map_or("", |s| s.split('\0').next().unwrap_or(""))
+        } else {
+            st.player_names.get(self.target as usize).map_or("", String::as_str)
+        };
+        sprintf_s(fmt, name.as_bytes())
+    }
+}
+
+/// 0x41f1b0 with one "%s".
+fn sprintf_s(fmt: &[u8], arg: &[u8]) -> Vec<u8> {
+    let fmt = &fmt[..fmt.iter().position(|&c| c == 0).unwrap_or(fmt.len())];
+    match fmt.windows(2).position(|w| w == b"%s") {
+        Some(i) => [&fmt[..i], arg, &fmt[i + 2..]].concat(),
+        None => fmt.to_vec(),
+    }
+}
+
+/// The packet 0x4c2420 / 0x47f7a0 send: type, an unset byte, the text (at most 0x4f
+/// characters, 0x41008e) and its NUL.
+fn packet(ty: u8, text: &[u8]) -> Vec<u8> {
+    let mut p = vec![ty, 0];
+    p.extend_from_slice(&text[..text.len().min(0x4f)]);
+    p.push(0);
+    p
+}
+
+/// 0x484f50: a team game (multiplayer and template +0x10, 0x596875).
+fn team(st: &State) -> bool {
+    st.multiplayer && st.template[0x10] != 0
+}
+
+/// 0x48fdb0: the local player's allies (0x58d634), itself included. In a team game
+/// (0x48fc70) every human of an allied player's force.
+pub fn allies(st: &State) -> u16 {
+    let me = st.local_player as usize;
+    let mut m = 0u16;
+    if team(st) {
+        for q in 0..8 {
+            if st.alliances[me][q] != 0 {
+                for r in 0..8 {
+                    if st.player_types[r] == 2 && st.player_force[r] == st.player_force[q] {
+                        m |= 1 << r;
+                    }
+                }
+            }
+        }
+    } else {
+        for q in 0..8 {
+            // A slot without a storm id (0xff: computer, closed) shifts by 31: no bit.
+            if st.alliances[me][q] != 0 && st.player_types[q] == 2 {
+                m |= 1 << q;
+            }
+        }
+    }
+    m
+}
+
+/// 0x47f4d0: `text` starts with `prefix` (any case) and then a human player's name (with
+/// a space after it when `space`): the player and the rest after it.
+fn name_after<'a>(st: &State, text: &'a [u8], prefix: &[u8], space: bool) -> Option<(u8, &'a [u8])> {
+    let rest = text.get(prefix.len()..).filter(|_| text[..prefix.len()].eq_ignore_ascii_case(prefix))?;
+    (0..8u8).find_map(|p| {
+        let name = st.player_names[p as usize].as_bytes();
+        let name = &name[..name.iter().position(|&c| c == 0).unwrap_or(name.len())];
+        if st.player_types[p as usize] != 2 || name.is_empty() || !rest.get(..name.len())?.eq_ignore_ascii_case(name) {
+            return None;
+        }
+        let after = &rest[name.len()..];
+        match (space, after.first()) {
+            (false, _) => Some((p, after)),
+            (true, Some(b' ')) => Some((p, &after[1..])),
+            _ => None,
+        }
+    })
+}
+
+/// 0x47f8f0: the "/" commands of a multiplayer chat line; true when `text` starts with "/"
+/// (the line is never sent then). /squelch and /ignore <name> hide that player's lines,
+/// /unsquelch and /unignore show them again (network.tbl 0x4c / 0x4d, 0x48d0c0);
+/// /whisper, /msg, /w and /m <name> <text> whisper (0x47f7a0). /reply and /r match the
+/// name buffer 0x57f094, which 0x4f32d0 zeroes on opening the line (Battle.net fills it,
+/// 0x4c4200): nothing outside Battle.net. Battle.net's own handling (0x47f670) is not ported.
+fn slash(c: &mut Chat, st: &State, text: &[u8]) -> bool {
+    let Some(t) = text.strip_prefix(b"/") else { return false };
+    for (pre, on) in [(&b"squelch "[..], false), (b"ignore ", false), (b"unsquelch ", true), (b"unignore ", true)] {
+        if let Some((p, _)) = name_after(st, t, pre, false) {
+            if on {
+                c.accept |= 1 << p;
+            } else {
+                c.accept &= !(1 << p);
+            }
+            c.notices.push((if on { 0x4d } else { 0x4c }, p, Vec::new()));
+            return true;
+        }
+    }
+    for pre in [&b"whisper "[..], b"msg ", b"w ", b"m "] {
+        if let Some((p, rest)) = name_after(st, t, pre, true) {
+            // 0x47f7a0: a non-empty text of at most 0x4f characters to that player, echoed
+            // with network.tbl 0x4e and the recipient's name.
+            if !rest.is_empty() && c.active & 1 << p != 0 && rest.len() + 1 <= 0x50 {
+                c.out.push((1 << p, packet(1, rest)));
+                c.notices.push((0x4e, p, [b" ", rest].concat()));
+            }
+            return true;
+        }
+    }
+    true
+}
+
+/// 0x485d10: a chat (`whisper` false; 0x485f50) or whisper (0x485f30) packet from player
+/// `from`: the text after the two header bytes must end within 0x50 bytes and hold no
+/// control characters (0x485980); lines of squelched players (0x57f1d8) are dropped. A
+/// chat line is the 0x5c command `[0x5c, from, text (80 bytes)]`, which 1.16.1 records
+/// (0x4cde70) and shows (0x48d1c0); a whisper shows network.tbl 0x4f with the name, " "
+/// and the text (0x48d0c0). Returns the 0x5c command of a chat line.
+pub fn receive(c: &mut Chat, from: u8, pkt: &[u8], whisper: bool) -> Option<Vec<u8>> {
+    let body = pkt.get(2..).filter(|_| from < 8)?;
+    let end = body.iter().take(0x50).position(|&b| b == 0 || b < 0x20)?;
+    if body[end] != 0 || c.accept & 1 << from == 0 {
+        return None;
+    }
+    let text = &body[..end];
+    if whisper {
+        c.notices.push((0x4f, from, [b" ", text].concat()));
+        return None;
+    }
+    let mut cmd = vec![0x5c, from];
+    cmd.extend_from_slice(&text[..text.len().min(0x4f)]);
+    cmd.resize(0x52, 0);
+    Some(cmd)
 }
 
 #[cfg(test)]

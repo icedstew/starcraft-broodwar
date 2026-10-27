@@ -404,6 +404,9 @@ impl<'a> Scene<'a> {
         }
         scene.timer_base = timer_base;
         scene.from_save = save.is_some();
+        if !scene.from_save {
+            scene.chat.game_start(&scene.st);
+        }
         Ok(scene)
     }
 
@@ -730,6 +733,14 @@ impl<'a> Scene<'a> {
             let name = with_data(self.a, |d| crate::statdata::unit_name(d, &ui.stat_txt, t));
             let line = f.replacen("%s", &name, 1).replacen("%d", &x.to_string(), 1).replacen("%d", &y.to_string(), 1);
             self.msgs.print(&ui.font, line.as_bytes(), now, 0, 2, &mut self.st.ui_sounds);
+        }
+        for (fmt, p, tail) in std::mem::take(&mut self.chat.notices) {
+            // 0x41f1b0 with the player's name, then the text (0x47f7a0 / 0x485d10); 0x48d0c0.
+            let Some(f) = ui.network.get(fmt) else { continue };
+            let name = self.st.player_names.get(p as usize).map_or("", String::as_str);
+            let mut t = f.split('\0').next().unwrap_or("").replacen("%s", name, 1).into_bytes();
+            t.extend_from_slice(&tail);
+            self.msgs.print(&ui.font, &t, now, 0, 0x17, &mut self.st.ui_sounds);
         }
         for (p, text) in std::mem::take(&mut self.st.chat) {
             let st = &self.st;
@@ -2537,7 +2548,7 @@ fn draw_hud(scene: &Scene, ui: &crate::ui::Ui, vx: i32, vy: i32, cursor: Option<
         }
     }
     scene.msgs.draw(&ui.font, crate::ui::TextDst { rows: &ui.text_colors, out, w, h });
-    scene.chat.draw(&ui.skin, scene.clock_ms, scene.st.replay, out, w, h);
+    scene.chat.draw(&ui.skin, scene.clock_ms, scene.st.replay, &scene.st, &ui.network, out, w, h);
     // 0x4f31d0: the prompt of targeting (0x48caf0: network.tbl 0x3e, "Select Target") /
     // placement (0x48e730: 0x3f, "Select Location"), hidden when they end (0x48ca10 / 0x48e310).
     if let Some(t) = [(scene.targeting.is_some(), 0x3e), (scene.placing.is_some(), 0x3f)].iter().find(|p| p.0).and_then(|p| ui.network.get(p.1)) {
@@ -3657,8 +3668,13 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
                                 scene.st.command_cheat_packet(opt);
                             }
                             // 0x4f32d0: in a replay (0x6d0f14) the "/replay " command (0x4de6a0).
+                            let mut done = false;
                             if replay.is_some() {
-                                crate::chat::replay_command(&t, &mut scene.st.trig);
+                                done = crate::chat::replay_command(&t, &mut scene.st.trig);
+                            }
+                            // 0x4f3280 when the line was no /replay command (no cheat matches in multiplayer).
+                            if scene.st.multiplayer && !done {
+                                scene.chat.send(&scene.st, &t);
                             }
                             // 0x4b2350 -> 0x4a62b0 (0x596904 == 3, 0x6d11e4 Brood War installed, 0x57f1e2 zerg):
                             // Radio Free Zerg on / off, with network.tbl line 0x41 / 0x42 (0x48ccb0: 7 s).
@@ -3684,7 +3700,8 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
         } else if keys_no.contains(&Key::Enter) && menu.is_none() {
             let c = ["z", "t", "p"][scene.local_race()];
             if let Ok(d) = a.files.read(&format!("rez/{c}textbox.bin")) {
-                scene.chat.open(crate::dlg::Dialog::parse(&d), scene.clock_ms);
+                let shift = win.is_key_down(Key::LeftShift) || win.is_key_down(Key::RightShift);
+                scene.chat.open(crate::dlg::Dialog::parse(&d), scene.clock_ms, &scene.st, shift, ctrl);
             }
             chat_keys.push(Key::Enter);
         }

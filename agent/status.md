@@ -1,4 +1,4 @@
-# Status (updated 2026-10-24)
+# Status (updated 2026-10-27)
 
 Read first. Kept short: what is in flight and what is next. Rewrite it in the same commit
 as each step (conventions.md). Durable facts per area: [areas/sim.md](areas/sim.md),
@@ -87,7 +87,12 @@ Delegate per agents.md: Haiku triage, Sonnet porting, Opus review / hard RE / co
   <map> [port] [players] [delay]` / `netjoin <code>` play a live melee game over the
   Session (src/net/live.rs, view.rs NetDriver; menus do not pause net games);
   agent/tools/netlive.sh runs host + join headless (SCBW_NET_HEADLESS / SCBW_NET_SCRIPT):
-  equal hashes at delay 1 / 2 / 4 with rollbacks. Not tried in a window yet. Phase 3d (2026-10-26): leaves / fence, desync hashes, confirmed-only recording: netlive_leave.sh a-f all PASS (header now taken at game start, 0x4dea10); left: UPnP. Browser join done
+  equal hashes at delay 1 / 2 / 4 with rollbacks. Not tried in a window yet. Phase 3d (2026-10-26): leaves / fence, desync hashes, confirmed-only recording: netlive_leave.sh a-f all PASS (header now taken at game start, 0x4dea10); left: UPnP. In-game chat (2026-10-27, net.md "In-game chat"): 0x4f32d0 recipient modes
+  (Shift all / Ctrl allies), 0x4c2420 send through the host, 0x485d10 receive + 0x5c
+  recorded into the replay (1.16.1 does), whisper / squelch slash commands 0x47f8f0;
+  headless `say` scripts: hashes equal, both replays carry the lines, `repview` shows them.
+  Left: message dialog 0x48ff10 (recipient choice, mode 4), labels not seen in a window.
+  Lobby screens (gluConn / gluJoin / gluCreat speed, 2026-10-26/27) committed. Browser join done
   (2026-10-24): src/net/web_transport.rs (JS glue over WebTransport, cert pinned by hash;
   protocol core shared with native in transport.rs), web.rs `net_join`, join field in
   web/index.html (the user's file: not committed). Headless Chrome joined a headless

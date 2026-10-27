@@ -110,6 +110,26 @@ own networking); the 1.16.1 turn loop around them is.
 - Today scbw runs local commands at once (view.rs `Scene::command` -> `execute_command`),
   not through a turn; glue_ready.rs has the lobby-side pieces (todo_port! at 843..929).
 
+## In-game chat (2026-10-27)
+
+1.16.1 chat is not a turn command: Storm messages (SNetSendMessage ord 127 per recipient,
+received by 0x485f70 / SNetReceiveMessage ord 121, dispatched by the first byte through
+0x50439c: 0 chat 0x485f50, 1 whisper 0x485f30, 2 0x47d170). Packet = type, an unset byte,
+text + NUL. The receiver (0x485d10) checks the sender is in the game and not squelched
+(0x57f1d8), then records `[0x5c, sender slot, 80 bytes]` into the replay under its own storm
+id (0x4cde70, frame 0x57f23c) and shows it (0x48d1c0); whispers are shown, not recorded.
+So 1.16.1 replays do carry chat, as seen by the recording player. Storm hands a message
+to oneself directly (the sender's own line comes back through the receive path).
+Recipients (0x4f32d0 at open): Shift = all, Ctrl = allies (alliance games, 0x4aabb0), else
+0x581d60 (the message dialog 0x48ff10, not ported: 8 all at game start, 9 allies in type
+0xf games). "/" lines are 0x47f8f0's and never sent (squelch / ignore / unsquelch /
+unignore, whisper / msg / w / m; /r only on Battle.net).
+Ours: chat.rs (`Chat::send`, `slash`, `receive`), live.rs C_CHAT control messages routed
+by the host (`send_chat` / `route_chat` / `chat_in`), `Session::record_chat` records at the
+frame it arrived in, flushed with that frame's confirmed turns. Masks are player bits, not
+storm ids (one to one). Check: SCBW_NET_SCRIPT `say <text>`; `scbw rep` prints chat lines.
+A 0x5c in the replay's last frame group is never run (0x4cdff0 returns -1 at the end).
+
 ## Rollback oracle (scbw rbtest)
 
 `scbw rbtest <rep> [delay] [frames]` (main.rs): straight playback vs one where all but the

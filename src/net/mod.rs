@@ -51,6 +51,8 @@ pub struct Session {
     /// frame to record.
     pub record: bool,
     recorded: u32,
+    /// Chat lines (0x5c commands) to record at the frame they arrived in, before its turns.
+    chat_rec: Vec<(u32, Vec<u8>)>,
     /// The next multiple of 8 whose state hash is due.
     hash_next: u32,
     /// Test: SCBW_NET_DEBUG_DESYNC=<f>: skip the first non-empty frame at or after f.
@@ -82,6 +84,7 @@ impl Session {
             gone,
             record: false,
             recorded: 0,
+            chat_rec: Vec::new(),
             hash_next: 8,
             debug_desync: std::env::var("SCBW_NET_DEBUG_DESYNC").ok().and_then(|v| v.parse().ok()),
             skipped: None,
@@ -219,6 +222,19 @@ impl Session {
         r
     }
 
+    /// A received chat line's 0x5c command (`chat::receive`): 0x485d10 records it at the
+    /// frame counter 0x57f23c, the frame about to run.
+    pub fn record_chat(&mut self, cmd: Vec<u8>) {
+        if self.record {
+            self.chat_rec.push((self.frame.max(self.recorded), cmd));
+        }
+    }
+
+    /// The players in the game.
+    pub fn players(&self) -> impl Iterator<Item = u8> + '_ {
+        self.players.iter().map(|p| p.0)
+    }
+
     /// Record the commands of every simulated, confirmed frame once (storm id order).
     fn record_confirmed(&mut self) {
         if !self.record {
@@ -231,6 +247,14 @@ impl Session {
         crate::replay_rec::set_storm_ids(ids);
         while self.recorded < self.confirmed.min(self.frame) {
             let f = self.recorded as usize;
+            let me = self.me;
+            self.chat_rec.retain(|(cf, c)| {
+                if *cf as usize != f {
+                    return true;
+                }
+                crate::replay_rec::record_at(*cf, me, c);
+                false
+            });
             for (i, &(player, _)) in self.players.iter().enumerate() {
                 if let Some(Some(turn)) = self.table[i].get(f) {
                     for c in replay::split_commands(turn) {

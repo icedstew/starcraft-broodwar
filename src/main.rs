@@ -88,6 +88,10 @@ fn main() -> std::io::Result<()> {
         }
         println!("commands by player: {by_player:?}");
         println!("{} commands, by id: {:x?}", r.commands.len(), hist);
+        for c in r.commands.iter().filter(|c| c.data.first() == Some(&0x5c)) {
+            let t = c.data.get(2..).unwrap_or(&[]);
+            println!("chat f{} from {}: {}", c.frame, c.data.get(1).unwrap_or(&0), String::from_utf8_lossy(&t[..t.iter().position(|&b| b == 0).unwrap_or(t.len())]));
+        }
         println!("chk {} bytes, tileset {}", r.chk.len(), map::Chk::parse(&r.chk).tileset());
         return Ok(());
     }
