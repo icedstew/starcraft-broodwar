@@ -374,6 +374,8 @@ fn main() -> std::io::Result<()> {
             let t = view::load_template(&a, r.header.game_type, r.header.sub_type);
             let hex = |b: &[u8]| b.iter().map(|b| format!("{b:02x}")).collect::<String>();
             o += &format!("template {}\nmapunits {}\n", hex(&t), hex(&r.header.raw[0x271..0x279]));
+            // "playertable <hex>": header +0xa1, the 12-entry player table 0x57eee0.
+            o += &format!("playertable {}\n", hex(&r.header.raw[0xa1..0xa1 + 12 * 0x24]));
             for (i, s) in r.header.slots.iter().enumerate().take(8) {
                 o += &format!("player {i} {} {}\n", s.kind, s.race);
             }

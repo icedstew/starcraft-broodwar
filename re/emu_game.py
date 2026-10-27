@@ -98,7 +98,7 @@ def load_replay(path):
             r["seed"] = int(w[1], 0)
         elif w[0] == "player":
             r["players"].append((int(w[1]), int(w[2]), int(w[3])))
-        elif w[0] in ("template", "mapunits"):
+        elif w[0] in ("template", "mapunits", "playertable"):
             r[w[0]] = bytes.fromhex(w[1])
         elif w[0] == "cmd":
             r["cmds"].append((int(w[1]), int(w[2]), bytes.fromhex(w[3])))
@@ -173,8 +173,16 @@ def game_init(e, f, md):
                     for pl, ty, race in r["players"]:
                         e.w8(0x57eee8 + pl * 0x24, ty)
                         e.w8(0x57eee8 + pl * 0x24 + 1, race)
+                    # Header +0xa1 is the 12-entry player table 0x57eee0 as it was at the
+                    # start (forces at +0xa decide 0x4c3ed0's team alliances).
+                    if "playertable" in r:
+                        e.write(0x57eee0, r["playertable"])
                     e.w32(0x51ca14, r["seed"])
                     e.w32(0x51ca18, 0)
+                    # 0x4ef100 also srands the CRT rand (creep tile variants) with the seed,
+                    # then 0x4ee2d0 draws once for the music variant (the process's first game).
+                    ptd = e.r32(0x4059e5)
+                    e.w32(ptd + 0x14, (r["seed"] * 0x343fd + 0x269ec3) & 0xffffffff)
                     # The game's template (0x596865) and 0x59bda8 (header +0x271), which
                     # the UNIT loader and 0x49da40 consult.
                     if "template" in r:
@@ -434,8 +442,14 @@ def scenario(e, units, move, frames, out):
         for p, ty, race in replay["players"]:
             e.w8(0x57eee8 + p * 0x24, ty)
             e.w8(0x57eee8 + p * 0x24 + 1, race)
-            e.w32(0x57f0f0 + p * 4, 50)
-            e.w32(0x57f120 + p * 4, 0)
+        if "playertable" in replay:
+            e.write(0x57eee0, replay["playertable"])
+        if "template" in replay:
+            e.call(0x4aabf0)  # 0x4eec30: starting resources from the template (0x596865)
+        else:  # old repdumps: a melee game
+            for p, ty, race in replay["players"]:
+                e.w32(0x57f0f0 + p * 4, 50)
+                e.w32(0x57f120 + p * 4, 0)
     if replay:
         for p in range(8, 12):
             e.w8(0x57eee8 + p * 0x24, 0)

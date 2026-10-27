@@ -36,6 +36,11 @@ Debug loop: find the frame `fN` of the first diff; list the replay's commands ar
 order/function in `src/bw/order_exec.rs` / `todo_port!`; port it from
 `fns.sh`+`dis.sh`; rebuild; rerun. Emulator speed ~1000 frames per 10 s.
 
+Harness setup for replays (re/emu_game.py, fixed 2026-10-26): `repdump` gives the header's
+player table (+0xa1 = 0x57eee0, forces decide 0x4c3ed0's team alliances), the template
+(0x4aabf0 starting resources: Top vs Bottom starts at 0), and the CRT rand is srand(seed) +
+one music-variant draw (creep tile variants). tl1341 / tl1672 (TvB) and tl1362 MATCH to the end.
+
 Order of command execution (0x4d9670 / 0x487100): commands recorded at frame F run while
 the frame counter equals F, then the counter increments and `game_step` runs.
 
