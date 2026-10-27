@@ -445,7 +445,7 @@ fn main() -> std::io::Result<()> {
             }
             // 0x63fe2c (when the recent-selection groups were used) is in no save and never
             // reset: zero in a fresh process.
-            sa.st.recent_used = Default::default();
+            sa.st.recent_used.iter_mut().for_each(|r| *r = [0; 8]);
             // 0x65eb10 (the creep recession countdown): 0x47d660 zeroes it at game init.
             sa.st.random_event_timer = 0;
             // The CRT rand (creep tile variants): srand(the header's seed) at game init (0x4ef100).
@@ -1682,7 +1682,7 @@ fn apply_moves(st: &mut bw::State, d: &bw::Data, made: &[u32], m: &str) {
             let pkt: Vec<u8> = (0..h.len()).step_by(2).filter_map(|i| u8::from_str_radix(h.get(i..i + 2)?, 16).ok()).collect();
             let cur = bw::select::selection_units(&st.selections[0]).to_vec();
             st.rng.enabled = true;
-            st.execute_command(d, 0, &cur, &pkt);
+            st.execute_command(d, 0, 0, &cur, &pkt);
             st.rng.enabled = false;
             continue;
         }
@@ -1704,7 +1704,7 @@ fn apply_moves(st: &mut bw::State, d: &bw::Data, made: &[u32], m: &str) {
             }
             pkt
         };
-        st.execute_command(d, 0, &[], &pkt);
+        st.execute_command(d, 0, 0, &[], &pkt);
     }
     for p in v.iter().filter(|p| p.starts_with('K')) {
         // "K<op>[:<u16>]": cancel command 0x18 / 0x19 / 0x20 with player 0's selection.
@@ -1713,7 +1713,7 @@ fn apply_moves(st: &mut bw::State, d: &bw::Data, made: &[u32], m: &str) {
         let mut pkt = vec![num(op) as u8];
         pkt.extend(num(arg).to_le_bytes());
         let sel = bw::select::selection_units(&st.selections[0]).to_vec();
-        st.execute_command(d, 0, &sel, &pkt);
+        st.execute_command(d, 0, 0, &sel, &pkt);
     }
     for p in v.iter().filter(|p| p.starts_with('M')) {
         // "M<type>": every player-0 larva morphs into <type> (0x4c1990).

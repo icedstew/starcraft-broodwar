@@ -250,17 +250,17 @@ pub struct Chat {
     /// 0x581d60: the message dialog's recipient (a player, 8 all, 9 allies).
     pub target: u8,
     /// 0x57f1da: the players a mode 4 line goes to (bit per player; see `send`).
-    pub send_to: u16,
+    pub send_to: u32,
     /// 0x57f1d8: the players whose lines are shown (cleared by /squelch).
-    pub accept: u16,
+    pub accept: u32,
     /// Storm messages (SNetSendMessage, ord 127) to send: (recipients, packet). The packet is
     /// the type (0 chat, 1 whisper), a byte 1.16.1 leaves unset (0 here) and the text with its
     /// NUL. Bits are players: 1.16.1's are storm ids, our transport addresses peers by player
     /// (the two map one to one, `Session::players`).
-    pub out: Vec<(u16, Vec<u8>)>,
+    pub out: Vec<(u32, Vec<u8>)>,
     /// 0x66fe20 == 1: the players in the network game (bit per player; the net driver keeps
     /// it, 0 outside a network game).
-    pub active: u16,
+    pub active: u32,
     /// 0x48d0c0 lines to show: (network.tbl line, player for its %s, text appended).
     pub notices: Vec<(usize, u8, Vec<u8>)>,
 }
@@ -279,7 +279,7 @@ impl Chat {
     pub fn game_start(&mut self, st: &State) {
         self.send_to = allies(st);
         self.target = if st.template[0] == 0xf && !st.replay { 9 } else { 8 };
-        self.accept = 0xffff;
+        self.accept = u32::MAX;
     }
 
     /// 0x4f32d0 (closed): open the line. Mode 1 in single player; in a multiplayer game
@@ -355,7 +355,7 @@ impl Chat {
             return;
         }
         let to = match mode {
-            2 => 0xffff,
+            2 => u32::MAX,
             3 => allies(st),
             _ => self.send_to,
         };
@@ -438,7 +438,7 @@ impl Chat {
         let name = if team(st) {
             network.get(self.target as usize + 0x11).map_or("", |s| s.split('\0').next().unwrap_or(""))
         } else {
-            st.player_names.get(self.target as usize).map_or("", String::as_str)
+            st.human_name(self.target)
         };
         sprintf_s(fmt, name.as_bytes())
     }
@@ -468,10 +468,11 @@ fn team(st: &State) -> bool {
 }
 
 /// 0x48fdb0: the local player's allies (0x58d634), itself included. In a team game
-/// (0x48fc70) every human of an allied player's force.
-pub fn allies(st: &State) -> u16 {
+/// (0x48fc70) every human of an allied player's force. Bits are humans (`State::nation_of`):
+/// ours past 8, the humans sharing an allied slot.
+pub fn allies(st: &State) -> u32 {
     let me = st.local_player as usize;
-    let mut m = 0u16;
+    let mut m = 0u32;
     if team(st) {
         for q in 0..8 {
             if st.alliances[me][q] != 0 {
@@ -490,6 +491,11 @@ pub fn allies(st: &State) -> u16 {
             }
         }
     }
+    for h in 8..st.human_nation.len().min(32) {
+        if st.alliances[me][st.nation_of(h as u8) as usize & 7] != 0 {
+            m |= 1 << h;
+        }
+    }
     m
 }
 
@@ -497,10 +503,10 @@ pub fn allies(st: &State) -> u16 {
 /// a space after it when `space`): the player and the rest after it.
 fn name_after<'a>(st: &State, text: &'a [u8], prefix: &[u8], space: bool) -> Option<(u8, &'a [u8])> {
     let rest = text.get(prefix.len()..).filter(|_| text[..prefix.len()].eq_ignore_ascii_case(prefix))?;
-    (0..8u8).find_map(|p| {
-        let name = st.player_names[p as usize].as_bytes();
+    (0..st.human_nation.len().min(32) as u8).find_map(|p| {
+        let name = st.human_name(p).as_bytes();
         let name = &name[..name.iter().position(|&c| c == 0).unwrap_or(name.len())];
-        if st.player_types[p as usize] != 2 || name.is_empty() || !rest.get(..name.len())?.eq_ignore_ascii_case(name) {
+        if (p < 8 && st.player_types[p as usize] != 2) || name.is_empty() || !rest.get(..name.len())?.eq_ignore_ascii_case(name) {
             return None;
         }
         let after = &rest[name.len()..];
@@ -552,7 +558,7 @@ fn slash(c: &mut Chat, st: &State, text: &[u8]) -> bool {
 /// (0x4cde70) and shows (0x48d1c0); a whisper shows network.tbl 0x4f with the name, " "
 /// and the text (0x48d0c0). Returns the 0x5c command of a chat line.
 pub fn receive(c: &mut Chat, from: u8, pkt: &[u8], whisper: bool) -> Option<Vec<u8>> {
-    let body = pkt.get(2..).filter(|_| from < 8)?;
+    let body = pkt.get(2..).filter(|_| from < 32)?;
     let end = body.iter().take(0x50).position(|&b| b == 0 || b < 0x20)?;
     if body[end] != 0 || c.accept & 1 << from == 0 {
         return None;

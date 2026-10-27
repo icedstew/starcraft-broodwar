@@ -280,3 +280,20 @@ PRED_LIMIT stalls, ~30% more ticks); tl2071 INVALID (a command at frame 0 < dela
   6); a client sends `C_DROP` (7). Not done: 0x4a3010's self-leave when more lag than
   respond, the 0x4a2c20 row shuffle. Checked under Xvfb: SIGSTOPped joiner -> dialog,
   countdown, Drop -> "Player 2 was dropped from the game.", game resumes.
+- **Team games / shared control** (2026-10-27): 0x486f50 runs each human's commands as two
+  players: 0x512678 = 0x57eec0[id] (the slot whose units it orders, "nation") and 0x51267c =
+  0x57ee7c[id] (the human: its selection 0x6284e8 row, hotkey groups, errors shown when it
+  is 0x512688). `State::execute_command(nation, human, ..)`, `Scene::human_command`,
+  `State::human_nation` / `local_human` / `human_names`. Ours: humans past 8 (up to 12 per
+  slot, 32 in all) have no slot and get rows 8.. (selections / hotkeys / recent groups grow).
+  `scbw nethost` with SCBW_NET_TEAMS=a,b[,c,d] (SCBW_NET_GAME 11/12/13): leaders on start
+  slots, members on free human slots (type 2, team force, seat races 0x57f1c0), then ids 8..;
+  the setup carries humans / names / leaders / seats / storm order. Chat masks are u32 of
+  humans. Leave (0x4c4d60 team branch): the slot is settled only when no human of it is left.
+  Teammates' selection circles (0x49a110 / 0x49af80 / 0x499a10): sprite flag bits 1..2 only,
+  drawn by view.rs; 1.16.1's image 0x23b runs iscript header 0 (waitrand) on the teammates'
+  clients only, which split our peers' states ("DESYNC at frame 56" in a window test).
+  Checked: 2v1 (human 8 shares slot 0), 2v2 on a 4-slot map, 12v1 (13 peers): equal hashes;
+  the member's move changes the hash. Not checked against native (needs 3+ real clients).
+  Left: team chat filter dialog (teamfltr.bin 0x490570), "[team]" chat names, 0x4a3010 team
+  result, lobby seat races (0x486040 / 0x471d00), gluChat team slots.

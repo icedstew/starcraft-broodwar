@@ -39,7 +39,7 @@ impl State {
         if !loading {
             self.reset_resources();
             self.hotkeys.iter_mut().for_each(|g| *g = [0; 12]);
-            self.recent_used = [[0; 8]; 12];
+            self.recent_used.iter_mut().for_each(|r| *r = [0; 8]);
         }
         self.lurker_hits = [[0; 0x20]; 0x20];
         self.lurker_hits_count = 0;

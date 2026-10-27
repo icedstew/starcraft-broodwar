@@ -526,29 +526,91 @@ pub fn selection_units(row: &[u32; 12]) -> &[u32] {
 }
 
 impl State {
-    /// 0x49a740: clear player `p`'s selection.
+    /// 0x51267c: the human whose command runs (its selection and groups); `player` (0x512678,
+    /// the slot whose units it orders) outside commands.
+    fn cmd_human(&self, player: u8) -> usize {
+        self.cmd_player.unwrap_or(player) as usize
+    }
+
+    /// Ours: the humans and the slot each controls (`human_nation`): every human gets a
+    /// selection row, 18 groups and recent-group times.
+    pub fn set_humans(&mut self, nation: &[u8]) {
+        let n = nation.len().max(8);
+        self.human_nation = (0..n).map(|h| nation.get(h).copied().unwrap_or(h as u8)).collect();
+        self.selections.resize(n, [NIL; 12]);
+        self.hotkeys.resize(n.max(12) * 18, [0; 12]);
+        self.recent_used.resize(n.max(12), [0; 8]);
+    }
+
+    /// Human `h`'s name: its slot's below 8, else `human_names`.
+    pub fn human_name(&self, h: u8) -> &str {
+        match h {
+            0..8 => self.player_names[h as usize].as_str(),
+            _ => self.human_names.get(h as usize - 8).map_or("", String::as_str),
+        }
+    }
+
+    /// The slot human `h` controls.
+    pub fn nation_of(&self, h: u8) -> u8 {
+        self.human_nation.get(h as usize).copied().unwrap_or(h)
+    }
+
+    /// 0x49a110 (EAX = `p`): a team game's other human of the local human's force (both
+    /// human slots, type 2). Ours: humans past 8 by the force of the slot they share.
+    fn teammate(&self, p: usize) -> bool {
+        let me = self.local_human as usize;
+        let human = |h: usize| if h < 8 { self.player_types[h] == 2 } else { h < self.human_nation.len() };
+        let force = |h: usize| self.player_force[if h < 8 { h } else { self.nation_of(h as u8) as usize & 7 }];
+        super::players::is_team_game(self.multiplayer, &self.template) && p != me && human(p) && human(me) && force(p) == force(me)
+    }
+
+    /// 0x49a740: clear human `p`'s selection; a teammate's units each lose one ally
+    /// selection (flag bits 1..2), the last one its image (0x497590).
     fn selection_clear(&mut self, p: usize) {
-        if p < 8 {
-            self.selections[p] = [NIL; 12];
+        if p >= self.selections.len() {
+            return;
+        }
+        if self.teammate(p) {
+            for u in selection_units(&self.selections[p]).to_vec() {
+                self.ally_selection_drop(u);
+            }
+        }
+        self.selections[p] = [NIL; 12];
+    }
+
+    /// 0x49a740 / 0x4bfb40 (inline): unit `u` loses one teammate's selection (flag bits
+    /// 1..2); at none its ally-selection image goes (0x497590).
+    fn ally_selection_drop(&mut self, u: u32) {
+        let s = self.units[u as usize].sprite as usize;
+        let b = self.sprites[s].flags;
+        if (b >> 1) & 3 != 0 {
+            let b = ((b >> 1).wrapping_sub(1).wrapping_mul(2) ^ b) & 6 ^ b;
+            self.sprites[s].flags = b;
+            if b & 6 == 0 {
+                self.ally_selection_image_remove(s as u32);
+            }
         }
     }
 
     /// 0x49af80: put `u` in slot `i` of player `p`'s selection; slots after the first
     /// take only `player`'s multi-selectable units.
     fn selection_put(&mut self, d: &Data, p: usize, i: usize, u: u32, player: u8) -> bool {
-        if p > 7 || i > 11 || self.sprites[self.units[u as usize].sprite as usize].flags & super::sprite::sflag::HIDDEN != 0 {
+        if p >= self.selections.len() || i > 11 || self.sprites[self.units[u as usize].sprite as usize].flags & super::sprite::sflag::HIDDEN != 0 {
             return false;
         }
         if i > 0 && (!self.multi_selectable(d, u) || self.units[u as usize].player != player) {
             return false;
         }
         self.selections[p][i] = u;
+        if self.teammate(p) {
+            self.ally_selection_unit(d, u);
+        }
         true
     }
 
     /// 0x49a170: take `u` out of player `p`'s selection; returns the remaining count.
     fn selection_remove(&mut self, p: usize, u: u32) -> usize {
-        if p >= 8 {
+        if p >= self.selections.len() {
             return 0;
         }
         let row = &mut self.selections[p];
@@ -566,7 +628,7 @@ impl State {
 
     /// 0x49a7f0 (selection part): a dying or hidden unit leaves every selection.
     pub fn selections_remove_unit(&mut self, u: u32) {
-        for p in 0..8 {
+        for p in 0..self.selections.len() {
             self.selection_remove(p, u);
         }
     }
@@ -656,8 +718,11 @@ impl State {
                 self.hotkeys[slot][n] = 0;
                 continue;
             };
-            if p < 8 && i < 12 && (i < 1 || self.multi_selectable(d, u)) {
+            if p < self.selections.len() && i < 12 && (i < 1 || self.multi_selectable(d, u)) {
                 self.selections[p][i] = u;
+                if self.teammate(p) {
+                    self.ally_selection_unit(d, u);
+                }
             }
             i += 1;
         }
@@ -693,7 +758,7 @@ impl State {
 
     /// Command 0x09 (0x4c2750): select the units of `handles`.
     pub fn command_select(&mut self, d: &Data, player: u8, handles: &[u16]) {
-        let p = player as usize;
+        let p = self.cmd_human(player);
         if handles.len() >= 13 {
             return;
         }
@@ -701,7 +766,7 @@ impl State {
         let mut n = 0;
         for &h in handles {
             let Some(u) = self.unit_from_handle(h as u32) else { continue };
-            if p < 8 && selection_units(&self.selections[p]).contains(&u) {
+            if p < self.selections.len() && selection_units(&self.selections[p]).contains(&u) {
                 continue;
             }
             if self.units[u as usize].unit_type != 0xe && self.selection_put(d, p, n, u, player) {
@@ -715,20 +780,23 @@ impl State {
 
     /// Command 0x0a (0x4c2560): add the units of `handles` to the selection.
     pub fn command_select_add(&mut self, d: &Data, player: u8, handles: &[u16]) {
-        let p = player as usize;
-        let mut n = if p < 8 { selection_units(&self.selections[p]).len() } else { 0 };
+        let p = self.cmd_human(player);
+        let mut n = if p < self.selections.len() { selection_units(&self.selections[p]).len() } else { 0 };
         if handles.len() + n >= 13 {
             return;
         }
         for &h in handles {
             let Some(u) = self.unit_from_handle(h as u32) else { continue };
-            if p < 8 && selection_units(&self.selections[p]).contains(&u) {
+            if p < self.selections.len() && selection_units(&self.selections[p]).contains(&u) {
                 continue;
             }
             let hidden = self.sprites[self.units[u as usize].sprite as usize].flags & super::sprite::sflag::HIDDEN != 0;
-            if p < 8 && n < 12 && !hidden && (n < 1 || self.multi_selectable(d, u) && self.units[u as usize].player == player) {
+            if p < self.selections.len() && n < 12 && !hidden && (n < 1 || self.multi_selectable(d, u) && self.units[u as usize].player == player) {
                 self.selections[p][n] = u;
                 n += 1;
+                if self.teammate(p) {
+                    self.ally_selection_unit(d, u);
+                }
             }
         }
         if n > 1 {
@@ -738,14 +806,18 @@ impl State {
 
     /// Command 0x0b (0x4bfb40): take the units of `handles` out of the selection.
     pub fn command_select_remove(&mut self, d: &Data, player: u8, handles: &[u16]) {
-        let p = player as usize;
+        let p = self.cmd_human(player);
         if handles.len() >= 13 {
             return;
         }
         let mut n = 0;
         for &h in handles {
             let Some(u) = self.unit_from_handle(h as u32) else { continue };
-            n = if p < 8 { self.selection_remove(p, u) } else { 0 };
+            // A teammate's row drops the ally selection whether or not it held the unit.
+            if p < self.selections.len() && self.teammate(p) {
+                self.ally_selection_drop(u);
+            }
+            n = if p < self.selections.len() { self.selection_remove(p, u) } else { 0 };
         }
         if n > 1 {
             self.remember_selection(d, p, player);
@@ -757,7 +829,7 @@ impl State {
         if g >= 0x13 {
             return;
         }
-        let p = player as usize;
+        let p = self.cmd_human(player);
         match action {
             0 => self.hotkey_save(d, p, g as usize, true, player),
             1 => self.hotkey_select(d, p, g as usize, player),
@@ -961,23 +1033,22 @@ impl State {
     }
 
     /// 0x499a10 (ESI = sprite, stack = color; 0x4e65c0 gives the owner's 0x581d6a color):
-    /// one more teammate selects the sprite (count in flag bits 1..2); below 3 it gets the
-    /// ally-selection image 0x23b (0x4d7070), undone if none is free.
-    pub fn ally_selection_add(&mut self, d: &Data, s: u32, color: u8) {
+    /// one more teammate selects the sprite (count in flag bits 1..2). 1.16.1 also gives it
+    /// the ally-selection image 0x23b (0x4d7070, whose 0x4d6810 runs iscript header 0's
+    /// init: an underlay and `waitrand`). Ours: only the teammates' clients add it, so a
+    /// sim image would split the peers' states; view.rs draws image 0x23b + the circle size
+    /// from these bits instead, as it draws the local selection circles.
+    pub fn ally_selection_add(&mut self, _d: &Data, s: u32, _color: u8) {
         let lim = self.ally_selection_limit();
         let b = self.sprites[s as usize].flags;
         if (b >> 1) & 3 != lim.wrapping_sub(1) {
             let b = ((b & 0xfe).wrapping_add(2) ^ b) & 6 ^ b;
             self.sprites[s as usize].flags = b;
-            if b & 6 < 3 && self.ui_circle_image(d, s, color, 0x23b).is_none() {
-                self.sprites[s as usize].flags &= 0xf9;
-            }
         }
     }
 
-    /// 0x4e65c0 (from the tail of 0x49af80): after the unit entered another team member's selection (0x6284e8,
-    /// 0x49a110 true) its sprite takes the ally-selection image (0x4e65c0). Hook: call it
-    /// where a network game puts a unit in a player's selection (scbw has none, 0x57f0b4 = 0).
+    /// 0x4e65c0 (from the tail of 0x49af80): after the unit entered another team member's
+    /// selection (0x6284e8, 0x49a110 true) its sprite takes the ally-selection image.
     pub fn ally_selection_unit(&mut self, d: &Data, u: u32) {
         let c = self.circle_color[self.units[u as usize].player as usize];
         let s = self.units[u as usize].sprite;
@@ -1011,8 +1082,8 @@ impl State {
     /// 0x4eed10 (tail, after 0x4cfef0 / 0x4c3bb0 and 0x4d92a0): 0x596b7c = the local
     /// player's row (0x512688) of 0x6284e8, then all rows are cleared.
     pub fn take_start_selection(&mut self) {
-        self.start_selection = self.selections[self.local_player as usize & 7];
-        self.selections = [[NIL; 12]; 8];
+        self.start_selection = self.selections.get(self.local_human as usize).copied().unwrap_or([NIL; 12]);
+        self.selections.iter_mut().for_each(|r| *r = [NIL; 12]);
     }
 
     /// 0x4d0820 (game start, from 0x4d9950 after the first steps): reselect what the saved

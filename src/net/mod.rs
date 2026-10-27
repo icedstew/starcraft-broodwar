@@ -219,7 +219,7 @@ impl Session {
             for (i, &(player, _)) in self.players.iter().enumerate() {
                 if let Some(Some(turn)) = self.table[i].get(f as usize) {
                     for c in replay::split_commands(turn) {
-                        scene.replay_command(player, c);
+                        scene.human_command(player, c);
                     }
                 }
             }
@@ -250,24 +250,24 @@ impl Session {
             return;
         }
         let mut ids = [0u8; 12];
-        for &(p, s) in &self.players {
+        for &(p, s) in self.players.iter().filter(|p| p.0 < 12) {
             ids[p as usize] = s;
         }
         crate::replay_rec::set_storm_ids(ids);
         while self.recorded < self.confirmed.min(self.frame) {
             let f = self.recorded as usize;
-            let me = self.me;
+            let me = self.players.iter().find(|p| p.0 == self.me).map_or(0, |p| p.1);
             self.chat_rec.retain(|(cf, c)| {
                 if *cf as usize != f {
                     return true;
                 }
-                crate::replay_rec::record_at(*cf, me, c);
+                crate::replay_rec::record_storm(*cf, me, c);
                 false
             });
-            for (i, &(player, _)) in self.players.iter().enumerate() {
+            for (i, &(_, storm)) in self.players.iter().enumerate() {
                 if let Some(Some(turn)) = self.table[i].get(f) {
                     for c in replay::split_commands(turn) {
-                        crate::replay_rec::record_at(f as u32, player, c);
+                        crate::replay_rec::record_storm(f as u32, storm, c);
                     }
                 }
             }
@@ -407,6 +407,7 @@ pub fn nettest(a: &view::Assets, r: &replay::Replay, delay: u32, latency: u32, j
         s.st = start.clone();
         s.local = p;
         s.st.local_player = p;
+        s.st.local_human = p;
         scenes.push(s);
         let mut se = Session::new(p, &players, delay);
         se.end = end;

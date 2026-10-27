@@ -15,6 +15,7 @@ impl State {
     fn selections_encode(&self) -> Vec<u32> {
         self.selections
             .iter()
+            .take(8)
             .flatten()
             .map(|&u| {
                 if u == NIL {

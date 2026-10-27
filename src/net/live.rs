@@ -60,8 +60,9 @@ impl<'a> In<'a> {
     }
 }
 
-/// The wire form of a `GameSetup` (not the map archive, campaign directory or a save).
-pub fn encode_setup(g: &GameSetup) -> Vec<u8> {
+/// The wire form of a `GameSetup` (not the map archive, campaign directory or a save) and
+/// the humans in storm id order (`melee_setup`).
+pub fn encode_setup(g: &GameSetup, order: &[u8]) -> Vec<u8> {
     let mut o = Out(Vec::new());
     o.bytes(&g.chk);
     o.0.extend_from_slice(&g.types);
@@ -78,11 +79,22 @@ pub fn encode_setup(g: &GameSetup) -> Vec<u8> {
     }
     o.0.extend_from_slice(&g.mission.to_le_bytes());
     o.0.push(g.camp_cont as u8 | (g.expansion as u8) << 1 | (g.multiplayer as u8) << 2);
+    // Team games and shared control: who controls which slot, the extra humans' names, the
+    // leaders and seat races, and the humans in storm id order (`order`, empty = the slots).
+    o.bytes(&g.humans);
+    o.u32(g.human_names.len() as u32);
+    for n in &g.human_names {
+        o.bytes(n.as_bytes());
+    }
+    o.0.extend_from_slice(&g.team_leaders);
+    o.0.extend_from_slice(&g.seat_races);
+    o.bytes(order);
     o.0
 }
 
-/// `encode_setup`'s inverse; `local` is the receiving peer's slot.
-pub fn decode_setup(b: &[u8], local: u8) -> Option<GameSetup> {
+/// `encode_setup`'s inverse; `local` is the receiving peer's human (its slot, or past 8).
+/// Also returns the session table: (human, storm id).
+pub fn decode_setup(b: &[u8], local: u8) -> Option<(GameSetup, Vec<(u8, u8)>)> {
     let mut i = In(b);
     let chk = i.bytes()?.to_vec();
     let types = i.take(12)?.try_into().ok()?;
@@ -101,7 +113,16 @@ pub fn decode_setup(b: &[u8], local: u8) -> Option<GameSetup> {
     }
     let mission = i.u16()?;
     let fl = i.u8()?;
-    Some(GameSetup {
+    let humans = i.bytes()?.to_vec();
+    let mut human_names = Vec::new();
+    for _ in 0..i.u32()? {
+        human_names.push(String::from_utf8_lossy(i.bytes()?).into_owned());
+    }
+    let team_leaders = i.take(5)?.try_into().ok()?;
+    let seat_races = i.take(8)?.try_into().ok()?;
+    let order = i.bytes()?;
+    let table = order.iter().enumerate().map(|(i, &h)| (h, i as u8)).collect();
+    let g = GameSetup {
         chk,
         mpq: None,
         map_dir: None,
@@ -111,7 +132,12 @@ pub fn decode_setup(b: &[u8], local: u8) -> Option<GameSetup> {
         forces,
         colors,
         template,
-        local,
+        local: humans.get(local as usize).copied().unwrap_or(local),
+        local_human: local,
+        humans,
+        human_names,
+        team_leaders,
+        seat_races,
         seed,
         objectives,
         save: None,
@@ -119,7 +145,8 @@ pub fn decode_setup(b: &[u8], local: u8) -> Option<GameSetup> {
         mission,
         expansion: fl & 2 != 0,
         multiplayer: fl & 4 != 0,
-    })
+    };
+    Some((g, table))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -139,8 +166,19 @@ fn load_chk(path: &str) -> std::io::Result<Vec<u8>> {
 /// The melee game on `chk` for `humans` players: they take the map's first human slots that
 /// have a start location, in slot order; other slots stay empty. Races come from
 /// SCBW_NET_RACES (`z t p r`, in slot order) or are dealt from the seed. Returns the setup
-/// (local = the first human) and the human slots.
+/// (local = the first human) and the humans in storm id order.
+///
+/// SCBW_NET_TEAMS=`a,b[,c,d]` plays a team game instead (SCBW_NET_GAME: 11 Team Melee, the
+/// default, 12 Team FFA, 13 Team CTF): `a` humans control the first team's slot, `b` the
+/// second's... As 1.16.1's lobby leaves it (0x485160): each team's leader takes a start slot,
+/// the other members the map's free human slots (type 2, the team's force, no units) and
+/// the seats 0x57f1c0 of a team hold its members' races. Ours: members past the 8 slots
+/// (up to 12 humans per team) have no slot; they get humans 8.. sharing the leader's slot.
 pub fn melee_setup(a: &view::Assets, chk_raw: Vec<u8>, humans: usize, seed: u32) -> Result<(GameSetup, Vec<u8>), String> {
+    let teams: Vec<usize> = std::env::var("SCBW_NET_TEAMS").unwrap_or_default().split(',').filter_map(|s| s.trim().parse().ok()).collect();
+    if !teams.is_empty() {
+        return team_setup(a, chk_raw, &teams, humans, seed);
+    }
     let chk = crate::map::Chk::parse(&chk_raw);
     let owners = chk.owners();
     let starts: Vec<u8> = chk.section(b"UNIT").unwrap_or(&[]).chunks_exact(36).filter(|r| u16::from_le_bytes([r[8], r[9]]) == 0xd6 && r[16] < 8).map(|r| r[16]).collect();
@@ -161,6 +199,11 @@ pub fn melee_setup(a: &view::Assets, chk_raw: Vec<u8>, humans: usize, seed: u32)
         colors: [0, 1, 2, 3, 4, 5, 6, 7],
         template: view::load_template(a, 2, 1),
         local: slots[0],
+        local_human: slots[0],
+        humans: Vec::new(),
+                human_names: Vec::new(),
+                team_leaders: [0xff; 5],
+                seat_races: [0; 8],
         seed,
         objectives: [0; 8],
         save: None,
@@ -187,6 +230,103 @@ pub fn melee_setup(a: &view::Assets, chk_raw: Vec<u8>, humans: usize, seed: u32)
         g.forces[p as usize] = forc.map_or(1, |f| f[p as usize].wrapping_add(1));
     }
     Ok((g, slots))
+}
+
+/// A race from SCBW_NET_RACES' letter, else dealt from `rng`.
+fn pick_race(c: Option<&char>, rng: &mut u32) -> u8 {
+    match c.map(|c| c.to_ascii_lowercase()) {
+        Some('z') => 0,
+        Some('t') => 1,
+        Some('p') => 2,
+        _ => {
+            *rng ^= *rng << 13;
+            *rng ^= *rng >> 17;
+            *rng ^= *rng << 5;
+            (*rng % 3) as u8
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+/// `melee_setup`'s team game: `teams[k]` humans on team k (see there).
+fn team_setup(a: &view::Assets, chk_raw: Vec<u8>, teams: &[usize], humans: usize, seed: u32) -> Result<(GameSetup, Vec<u8>), String> {
+    if !(2..=4).contains(&teams.len()) || teams.contains(&0) || teams.iter().any(|&n| n > 12) {
+        return Err("SCBW_NET_TEAMS: 2 to 4 teams of 1 to 12 humans".into());
+    }
+    if teams.iter().sum::<usize>() != humans || humans > 32 {
+        return Err(format!("SCBW_NET_TEAMS adds up to {} humans, not {humans} (at most 32)", teams.iter().sum::<usize>()));
+    }
+    let chk = crate::map::Chk::parse(&chk_raw);
+    let owners = chk.owners();
+    let starts: Vec<u8> = chk.section(b"UNIT").unwrap_or(&[]).chunks_exact(36).filter(|r| u16::from_le_bytes([r[8], r[9]]) == 0xd6 && r[16] < 8).map(|r| r[16]).collect();
+    let leaders: Vec<u8> = (0..8u8).filter(|&p| owners[p as usize] == 6 && starts.contains(&p)).take(teams.len()).collect();
+    if leaders.len() < teams.len() {
+        return Err(format!("the map has only {} human slots with a start location", leaders.len()));
+    }
+    let mut free = (0..8u8).filter(|&p| owners[p as usize] == 6 && !leaders.contains(&p));
+    let gt = std::env::var("SCBW_NET_GAME").ok().and_then(|v| v.parse().ok()).unwrap_or(11);
+    let template = view::load_template(a, gt, teams.len() as u16 - 1);
+    if template[0x10] as usize != teams.len() {
+        return Err(format!("no template for game type {gt} with {} teams", teams.len()));
+    }
+    let size = crate::bw::players::team_size(template[0x10]) as usize;
+    let wanted: Vec<char> = std::env::var("SCBW_NET_RACES").unwrap_or_default().split(',').filter_map(|s| s.trim().chars().next()).collect();
+    let mut rng = seed ^ 0x9e37_79b9;
+    let mut g = GameSetup {
+        chk: chk_raw,
+        mpq: None,
+        map_dir: None,
+        types: [0; 12],
+        races: [0; 12],
+        names: Default::default(),
+        forces: [0; 8],
+        colors: [0, 1, 2, 3, 4, 5, 6, 7],
+        template,
+        local: leaders[0],
+        local_human: leaders[0],
+        humans: (0..8).collect(),
+        human_names: Vec::new(),
+        team_leaders: [0xff; 5],
+        seat_races: [0; 8],
+        seed,
+        objectives: [0; 8],
+        save: None,
+        camp_cont: false,
+        mission: 0,
+        expansion: true,
+        multiplayer: true,
+    };
+    let mut order = Vec::new();
+    for (k, (&n, &lead)) in teams.iter().zip(&leaders).enumerate() {
+        let force = k as u8 + 1;
+        g.team_leaders[force as usize] = lead;
+        for j in 0..n {
+            let i = order.len();
+            let race = pick_race(wanted.get(i), &mut rng);
+            let name = format!("Player {}", i + 1);
+            let h = if j == 0 { Some(lead) } else { free.next() };
+            let h = match h {
+                Some(slot) => {
+                    g.types[slot as usize] = 2;
+                    g.races[slot as usize] = race;
+                    g.names[slot as usize] = name;
+                    g.forces[slot as usize] = force;
+                    g.humans[slot as usize] = lead;
+                    slot
+                }
+                None => {
+                    g.humans.push(lead);
+                    g.human_names.push(name);
+                    g.humans.len() as u8 - 1
+                }
+            };
+            if j < size {
+                g.seat_races[k * size + j] = race;
+            }
+            order.push(h);
+        }
+    }
+    Ok((g, order))
 }
 
 /// One scripted injection: (frame, bytes), or `selw`.
@@ -274,8 +414,9 @@ const C_LEAVE_REQ: u8 = 2;
 const C_HASH: u8 = 3;
 const C_DESYNC: u8 = 4;
 const C_HOST_LEFT: u8 = 5;
-/// A Storm message (chat / whisper, `chat::Chat::out`): client -> host `[6, to u16, packet]`,
-/// host -> client `[6, from, packet]`; the host passes each on to the players in `to`.
+/// A Storm message (chat / whisper, `chat::Chat::out`): client -> host `[6, to u32, packet]`,
+/// host -> client `[6, from, packet]`; the host passes each on to the humans in `to` (a bit
+/// per human: ours, humans can pass 16).
 const C_CHAT: u8 = 6;
 /// A client pressed Drop Players: `[7]`; the host drops the players it is itself waiting for.
 const C_DROP: u8 = 7;
@@ -364,8 +505,8 @@ impl NetGame {
             (Some(C_HOST_LEFT), false) if from == HOST => self.over = Some("the host left".into()),
             (Some(C_DROP), true) => self.drop_waiting(),
             (Some(C_CHAT), true) => {
-                if let (Some(to), Some(pkt)) = (msg.get(1..3), msg.get(3..)) {
-                    self.route_chat(from, u16::from_le_bytes([to[0], to[1]]) & !(1 << from), pkt, scene);
+                if let (Some(to), Some(pkt)) = (msg.get(1..5), msg.get(5..)) {
+                    self.route_chat(from, u32::from_le_bytes([to[0], to[1], to[2], to[3]]) & !(1 << from), pkt, scene);
                 }
             }
             (Some(C_CHAT), false) if from == HOST => {
@@ -378,13 +519,13 @@ impl NetGame {
     }
 
     /// The players still in the game (0x66fe20 == 1), a bit per player.
-    fn active(&self) -> u16 {
+    fn active(&self) -> u32 {
         self.se.players().filter(|&p| !self.se.is_gone(p)).fold(0, |m, p| m | 1 << p)
     }
 
     /// SNetSendMessage (ord 127) to each player in `to`: Storm hands a message to oneself
     /// at once; the rest go through the host.
-    fn send_chat(&mut self, to: u16, pkt: Vec<u8>, scene: &mut Scene<'_>) {
+    fn send_chat(&mut self, to: u32, pkt: Vec<u8>, scene: &mut Scene<'_>) {
         let me = self.se.me;
         if to & 1 << me != 0 {
             self.chat_in(me, &pkt, scene);
@@ -404,9 +545,9 @@ impl NetGame {
     }
 
     /// Host: a message of `from` for the players in `to`.
-    fn route_chat(&mut self, from: u8, to: u16, pkt: &[u8], scene: &mut Scene<'_>) {
+    fn route_chat(&mut self, from: u8, to: u32, pkt: &[u8], scene: &mut Scene<'_>) {
         let to = to & self.active();
-        for p in (0..16u8).filter(|&p| to & 1 << p != 0) {
+        for p in (0..32u8).filter(|&p| to & 1 << p != 0) {
             if p == self.se.me {
                 self.chat_in(from, pkt, scene);
             } else {
@@ -472,7 +613,8 @@ impl NetDriver for NetGame {
 
     fn frame(&mut self, scene: &mut Scene<'_>) -> Option<Vec<(u16, i32, i32)>> {
         if self.se.frame == 0 {
-            crate::replay_rec::set_net_header(scene.st.game_seed, 2, 1);
+            let t = &scene.st.template;
+            crate::replay_rec::set_net_header(scene.st.game_seed, u16::from_le_bytes([t[0], t[1]]), u16::from_le_bytes([t[2], t[3]]));
         }
         if self.over.is_some() {
             return None;
@@ -484,7 +626,7 @@ impl NetDriver for NetGame {
             for (_, c) in self.script.iter().filter(|(sf, _)| *sf == f) {
                 let b = match c {
                     Cmd::Raw(b) => b.clone(),
-                    Cmd::SelectWorker => select_worker(&scene.st, self.se.me),
+                    Cmd::SelectWorker => select_worker(&scene.st, scene.st.nation_of(self.se.me)),
                     Cmd::Say(t) => {
                         scene.chat.mode = 2;
                         scene.chat.send(&scene.st, t);
@@ -660,14 +802,15 @@ pub fn nethost(files: crate::storage::Storage, map: &str, port: u16, players: us
     let delay = delay.max(1);
     let a = view::Assets::load(files)?;
     let seed = std::env::var("SCBW_SEED").ok().and_then(|s| s.parse().ok()).unwrap_or_else(|| web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map_or(0, |t| t.as_secs() as u32));
-    let (mut g, slots) = melee_setup(&a, load_chk(map)?, players.clamp(1, 8), seed).map_err(std::io::Error::other)?;
-    let (tr, code) = Transport::host(port, slots[0], &slots[1..], delay, encode_setup(&g)).map_err(std::io::Error::other)?;
+    let (mut g, slots) = melee_setup(&a, load_chk(map)?, players.clamp(1, 32), seed).map_err(std::io::Error::other)?;
+    let (tr, code) = Transport::host(port, slots[0], &slots[1..], delay, encode_setup(&g, &slots)).map_err(std::io::Error::other)?;
     println!("LISTEN {code}");
     use std::io::Write;
     std::io::stdout().flush()?;
     let mut tr = tr;
     let (_, _, _, early) = lobby_wait(&mut tr).map_err(std::io::Error::other)?;
-    g.local = slots[0];
+    g.local = g.humans.get(slots[0] as usize).copied().unwrap_or(slots[0]);
+    g.local_human = slots[0];
     g.mpq = crate::mpq::Mpq::open(map.as_ref()).ok();
     let table: Vec<(u8, u8)> = slots.iter().enumerate().map(|(i, &p)| (p, i as u8)).collect();
     play(a, g, Session::new(slots[0], &table, delay), tr, true, early)
@@ -679,8 +822,7 @@ pub fn netjoin(files: crate::storage::Storage, code: &str, _delay: u32) -> std::
     let a = view::Assets::load(files)?;
     let mut tr = Transport::join(code, ANY, 0).map_err(std::io::Error::other)?;
     let (slot, delay, setup, early) = lobby_wait(&mut tr).map_err(std::io::Error::other)?;
-    let g = decode_setup(&setup, slot).ok_or_else(|| std::io::Error::other("bad game setup"))?;
-    let table: Vec<(u8, u8)> = (0..8u8).filter(|&p| g.types[p as usize] == 2).enumerate().map(|(i, p)| (p, i as u8)).collect();
+    let (g, table) = decode_setup(&setup, slot).ok_or_else(|| std::io::Error::other("bad game setup"))?;
     play(a, g, Session::new(slot, &table, delay), tr, false, early)
 }
 

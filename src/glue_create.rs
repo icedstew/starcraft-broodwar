@@ -2513,6 +2513,11 @@ impl Glue {
                 colors: [0; 8],
                 template: [0; 0x20],
                 local: 0,
+                local_human: 0,
+                humans: Vec::new(),
+                human_names: Vec::new(),
+                team_leaders: [0xff; 5],
+                seat_races: [0; 8],
                 seed: 0,
                 objectives: self.objectives,
                 save: Some(save),
@@ -2553,6 +2558,16 @@ impl Glue {
             colors,
             template: self.setup.template,
             local: self.setup.local_slot[0] as u8,
+            // 0x512688 and 0x57eec0 (each human slot's controlled slot, by storm id 0x57ee7c).
+            local_human: self.setup.local_slot[1] as u8,
+            humans: (0..8).map(|i| {
+                let id = (0..8).find(|&j| self.setup.slot_by_storm2[j] == i as u32);
+                id.map_or(i as u8, |j| self.setup.slot_by_storm[j] as u8)
+            }).collect(),
+            human_names: Vec::new(),
+            team_leaders: self.setup.team_leaders,
+            // 0x57f1c0: set by the lobby's race commands (0x486040 / 0x471d00), not ported yet.
+            seat_races: [0; 8],
             seed,
             objectives: self.objectives,
             save: None,

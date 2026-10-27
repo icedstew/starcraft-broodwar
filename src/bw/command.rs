@@ -1444,10 +1444,13 @@ impl State {
         // 0x48fdb0: the local player's alliance dialog (UI).
     }
 
-    pub fn execute_command(&mut self, d: &Data, player: u8, sel: &[u32], p: &[u8]) {
+    /// 0x4865d0 as 0x486f50 / 0x487100 call it: `player` (0x512678) is the slot whose units
+    /// the command orders, `human` (0x51267c) the one who sent it (its selection `sel`, its
+    /// groups); the same slot except in team games.
+    pub fn execute_command(&mut self, d: &Data, player: u8, human: u8, sel: &[u32], p: &[u8]) {
         let was = self.rng.enabled;
         self.rng.enabled = true;
-        self.cmd_player = Some(player);
+        self.cmd_player = Some(human);
         self.receive_command(d, player, sel, p);
         // 0x486d7a: the command goes to the replay writer.
         crate::replay_rec::record(self, player, p);
@@ -1665,15 +1668,24 @@ impl State {
             todo_port!("0x4c4d60", "replay slot >= 0: name from 0x64097b, notice only");
             return;
         }
-        // 0x57f0b4 / 0x596875 team branches: ponytail, never set.
-        self.notices.push((0x4a + dropped as u16, player));
-        if dropped {
-            self.player_dropped(d, player);
-        } else {
-            self.leave_game(d, player);
+        // The human who left (0x51267c; its own slot, 0x57ee7c, names it in a team game) and
+        // the slot it played (0x57eec0): in a team game that slot is settled only once no
+        // human of the team is left (0x484e90). Ours: humans sharing a slot count the same way.
+        let human = self.cmd_player.unwrap_or(player);
+        self.humans_gone |= 1u32.checked_shl(human as u32).unwrap_or(0);
+        self.notices.push((0x4a + dropped as u16, human));
+        let others = (0..self.human_nation.len().min(32) as u8).any(|h| {
+            h != human && self.nation_of(h) == player && self.humans_gone & 1 << h == 0 && (h >= 8 || self.player_types[h as usize] == 2)
+        });
+        if !others {
+            if dropped {
+                self.player_dropped(d, player);
+            } else {
+                self.leave_game(d, player);
+            }
         }
-        // 0x49a740: clear the player's selection.
-        if let Some(sel) = self.selections.get_mut(player as usize) {
+        // 0x49a740: clear the human's selection.
+        if let Some(sel) = self.selections.get_mut(human as usize) {
             *sel = [NIL; 12];
         }
         // 0x4c40f0: Storm's player count (Ordinal_109) into 0x57f1e1, which nothing reads

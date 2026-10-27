@@ -142,8 +142,7 @@ pub async fn net_join(storm: Vec<u8>, archives: js_sys::Array, code: String, fra
         }
         sleep(5).await;
     };
-    let mut g = live::decode_setup(&setup, slot).ok_or_else(|| err("bad game setup".into()))?;
-    let table: Vec<(u8, u8)> = (0..8u8).filter(|&p| g.types[p as usize] == 2).enumerate().map(|(i, p)| (p, i as u8)).collect();
+    let (mut g, table) = live::decode_setup(&setup, slot).ok_or_else(|| err("bad game setup".into()))?;
     let mut net = live::NetGame::new(Session::new(slot, &table, delay), tr, false, early).map_err(err)?;
     net.set_script(&script).map_err(err)?;
     if frames > 0 {

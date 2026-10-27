@@ -551,7 +551,7 @@ impl<'a> Scene<'a> {
         while self.turns.len() > Self::LOCAL_TURNS {
             let turn = self.turns.pop_front().unwrap();
             for c in crate::replay::split_commands(&turn) {
-                self.replay_command(self.local, c);
+                self.human_command(self.st.local_human, c);
             }
         }
     }
@@ -729,7 +729,7 @@ impl<'a> Scene<'a> {
             // 0x41f1b0 formats the network.tbl line; 0x48d0c0 shows it 7 s.
             let Some(f) = ui.network.get(fmt as usize) else { continue };
             let f = f.split('\0').next().unwrap_or("");
-            let name = self.st.player_names.get(p as usize).map_or("", String::as_str);
+            let name = self.st.human_name(p);
             let t = f.replacen("%s", name, 1).replacen("%d", &(p as u32 + 1).to_string(), 1);
             self.msgs.print(&ui.font, t.as_bytes(), now, 0, 0x17, &mut self.st.ui_sounds);
         }
@@ -745,7 +745,7 @@ impl<'a> Scene<'a> {
         for (fmt, p, tail) in std::mem::take(&mut self.chat.notices) {
             // 0x41f1b0 with the player's name, then the text (0x47f7a0 / 0x485d10); 0x48d0c0.
             let Some(f) = ui.network.get(fmt) else { continue };
-            let name = self.st.player_names.get(p as usize).map_or("", String::as_str);
+            let name = self.st.human_name(p);
             let mut t = f.split('\0').next().unwrap_or("").replacen("%s", name, 1).into_bytes();
             t.extend_from_slice(&tail);
             self.msgs.print(&ui.font, &t, now, 0, 0x17, &mut self.st.ui_sounds);
@@ -753,7 +753,8 @@ impl<'a> Scene<'a> {
         for (p, text) in std::mem::take(&mut self.st.chat) {
             let st = &self.st;
             let tbl = ui.network.get(0x1a).map_or("", |s| s.split('\0').next().unwrap_or(""));
-            let (line, color) = crate::msgs::chat_line(p, &text, st.local_player, st.player_types.get(p as usize).copied().unwrap_or(0), st.player_names.get(p as usize).map_or("", String::as_str), tbl);
+            let ptype = if p >= 8 && (p as usize) < st.human_nation.len() { 2 } else { st.player_types.get(p as usize).copied().unwrap_or(0) };
+            let (line, color) = crate::msgs::chat_line(p, &text, st.local_human, ptype, st.human_name(p), tbl);
             self.msgs.add(&ui.font, &line, color, now.wrapping_add(7000), 0);
             self.st.ui_sounds.push(0x17);
         }
@@ -1161,6 +1162,21 @@ impl<'a> Scene<'a> {
                 self.fog.shade(&self.st, &self.dark, vx, vy, out, vw as usize, vh as usize);
             }
             let sp = &self.st.sprites[s as usize];
+            // A teammate's selection (sprite flag bits 1..2, 0x499a10): image 0x23b + the
+            // circle size in the owner's circle color (0x4d7070 / 0x4e65c0).
+            if (sp.flags >> 1) & 3 != 0 {
+                let id = sp.sprite_id as usize;
+                if let Some(g) = self.a.grp(0x23b + sp_dat.selection_circle[id] as u16) {
+                    let c = self.st.circle_color.get(sp.owner as usize).copied().unwrap_or(0);
+                    let mut table = [0u8; 256];
+                    for (k, t) in table.iter_mut().enumerate() {
+                        *t = if k < 8 { self.tselect.get(c as usize * 8 + k).copied().unwrap_or(k as u8) } else { k as u8 };
+                    }
+                    let x = sp.x as i32 - g.w / 2 - vx;
+                    let y = sp.y as i32 + sp_dat.selection_offset[id] as i32 - g.h / 2 - vy;
+                    g.draw(0, false, x, y, out, vw, vh, Blend::Colors(&table));
+                }
+            }
             if let Some(c) = circled.get(&s).map(|&(c, _)| c).or_else(|| flashed.iter().find(|f| f.0 == s).map(|f| f.1)) {
                 let id = sp.sprite_id as usize;
                 if let Some(g) = self.a.grp(0x231 + sp_dat.selection_circle[id] as u16) {
@@ -1736,7 +1752,16 @@ impl<'a> Scene<'a> {
     pub fn replay_command(&mut self, player: u8, p: &[u8]) {
         let sel = bw::select::selection_units(&self.st.selections[player as usize]).to_vec();
         let st = &mut self.st;
-        with_data(self.a, |d| st.execute_command(d, player, &sel, p));
+        with_data(self.a, |d| st.execute_command(d, player, player, &sel, p));
+    }
+
+    /// 0x486f50: run a command of human `h` (0x51267c = 0x57ee7c[id]) with its selection, as
+    /// the slot it controls (0x512678 = 0x57eec0[id], `State::nation_of`).
+    pub fn human_command(&mut self, h: u8, p: &[u8]) {
+        let sel = self.st.selections.get(h as usize).map_or(Vec::new(), |r| bw::select::selection_units(r).to_vec());
+        let nation = self.st.nation_of(h);
+        let st = &mut self.st;
+        with_data(self.a, |d| st.execute_command(d, nation, h, &sel, p));
     }
 
 }
@@ -1786,8 +1811,18 @@ pub struct GameSetup {
     pub forces: [u8; 8],
     pub colors: [u8; 8],
     pub template: [u8; 0x20],
-    /// The local player's slot.
+    /// The local player's slot (0x512684).
     pub local: u8,
+    /// The local human (0x512688): its own slot, or past 8 for a human without one.
+    pub local_human: u8,
+    /// Ours: the slot each human controls (`State::set_humans`); empty = each slot itself.
+    pub humans: Vec<u8>,
+    /// Ours: the names of the humans past 8 (index = human - 8).
+    pub human_names: Vec<String>,
+    /// 0x57f1cb: each force's leader slot (team games; 0xff none).
+    pub team_leaders: [u8; 5],
+    /// 0x57f1c0: each team seat's race (team games, the lobby's 0x486040 / 0x471d00).
+    pub seat_races: [u8; 8],
     /// 0x51ca10: the game seed.
     pub seed: u32,
     /// 0x58d6c4: the mission objectives string per player; nothing clears it between the
@@ -1877,6 +1912,7 @@ fn new_game(a: &Assets, chk: &Chk, rep: Option<&crate::replay::Header>, gs: Opti
             // Header byte 0: 1 = Brood War (0x58f440).
             st.is_expansion = h.engine == 1;
             st.local_player = h.slots.iter().position(|s| s.kind == 2).unwrap_or(0) as u8;
+            st.local_human = st.local_player;
         } else if let Some(g) = gs {
             // 0x4ef100 / 0x4eee00 read the slot table 0x57eee0 the glue filled (races dealt by
             // 0x4a9a30, types by 0x4a9d80).
@@ -1893,6 +1929,11 @@ fn new_game(a: &Assets, chk: &Chk, rep: Option<&crate::replay::Header>, gs: Opti
                 st.players.minerals[..8].fill(50);
             }
             st.local_player = g.local;
+            st.local_human = g.local_human;
+            st.set_humans(&g.humans);
+            st.human_names = g.human_names.clone();
+            st.team_leaders = g.team_leaders;
+            st.seat_races = g.seat_races;
         } else if melee {
             // ponytail: local player is slot 0 playing SCBW_RACE (default terran); other
             // start locations get idle computer slots cycling the races (no AI yet).
@@ -1908,6 +1949,7 @@ fn new_game(a: &Assets, chk: &Chk, rep: Option<&crate::replay::Header>, gs: Opti
                 st.players.minerals[p as usize] = 50;
             }
             st.local_player = 0;
+            st.local_human = st.local_player;
         } else {
             let (owners, races) = (chk.owners(), chk.races());
             for p in 0..12 {
@@ -1925,6 +1967,7 @@ fn new_game(a: &Assets, chk: &Chk, rep: Option<&crate::replay::Header>, gs: Opti
                 }
             }
             st.local_player = owners.iter().position(|&o| o == 6).unwrap_or(0) as u8;
+            st.local_human = st.local_player;
         }
         // Debug: SCBW_TEAMS=<game type> (11 Team Melee, 12 Team FFA, 13 Team CTF, 15 Top vs
         // Bottom) plays a team game (0x57f0b4 on): the active slots are dealt over the forces
@@ -3440,8 +3483,8 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
                 }
                 if let Some(m) = menu.as_mut().filter(|m| m.kind == crate::menu::Kind::TimeOut) {
                     let rows: Vec<(Vec<u8>, u8)> = waiting.iter().map(|&p| {
-                        let name = scene.st.player_names.get(p as usize).map_or(Vec::new(), |s| s.as_bytes().to_vec());
-                        (name, scene.minimap.player_colors[p as usize & 7])
+                        let name = scene.st.human_name(p).as_bytes().to_vec();
+                        (name, scene.minimap.player_colors[scene.st.nation_of(p) as usize & 7])
                     }).collect();
                     m.timeout_update(&rows, timeout_secs);
                 }

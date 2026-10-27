@@ -673,7 +673,7 @@ impl State {
     /// the error line when `player` is the local player and the command running is theirs
     /// (0x51267c == 0x512688; a replay's commands are run with their sender, 0x487100).
     pub fn local_error_line(&mut self, player: u8, msg: u16) {
-        if player == self.local_player && self.cmd_player.unwrap_or(self.local_player) == self.local_player {
+        if player == self.local_player && self.cmd_player.unwrap_or(self.local_human) == self.local_human {
             self.shown_error = msg;
         }
     }
@@ -886,7 +886,7 @@ impl State {
     /// local player (0x48ccb0, the front end's); either way it is cleared.
     pub fn show_last_error(&mut self, player: u8) {
         if self.last_error != 0 {
-            if player == self.local_player && self.cmd_player.unwrap_or(self.local_player) == self.local_player {
+            if player == self.local_player && self.cmd_player.unwrap_or(self.local_human) == self.local_human {
                 self.shown_error = self.last_error;
             }
             self.last_error = 0;

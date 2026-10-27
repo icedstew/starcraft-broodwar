@@ -72,11 +72,16 @@ pub fn suppress(on: bool) {
 
 /// `record` for a command of `player` that runs at `frame` (a net session's confirmed frame).
 pub fn record_at(frame: u32, player: u8, cmd: &[u8]) {
+    // The State keeps no storm ids: `set_storm_ids` gives them (a single player game's
+    // human is storm id 0).
+    let storm = STORM.with(|s| s.borrow().get(player as usize).copied()).unwrap_or(0);
+    record_storm(frame, storm, cmd);
+}
+
+/// `record_at` for the sender's storm id `storm` (a net session's human).
+pub fn record_storm(frame: u32, storm: u8, cmd: &[u8]) {
     REC.with(|c| {
         if let Some(r) = c.borrow_mut().as_mut() {
-            // The State keeps no storm ids: `set_storm_ids` gives them (a single player
-            // game's human is storm id 0).
-            let storm = STORM.with(|s| s.borrow().get(player as usize).copied()).unwrap_or(0);
             r.record(frame, storm, cmd);
         }
     });

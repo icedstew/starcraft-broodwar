@@ -142,7 +142,8 @@ pub fn chat_line(p: u8, text: &[u8], local: u8, ptype: u8, name: &str, tbl: &str
     let text = &text[..text.iter().position(|&c| c == 0).unwrap_or(text.len())];
     let mut o = Vec::new();
     let mut color = 2;
-    if p < 8 {
+    // Ours: a human past 8 (sharing a slot) is named as the slot players are.
+    if p < 8 || ptype == 2 {
         let color_c = if p == local { 7 } else { 2 };
         color = color_c;
         let nm: Vec<u8> = name.bytes().take_while(|&c| c != 0).filter(|&c| c > 0x1f || matches!(c, 9 | 10 | 13)).take(0x50).collect();

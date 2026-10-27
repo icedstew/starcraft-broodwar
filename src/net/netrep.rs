@@ -43,6 +43,7 @@ pub fn run_peer(a: &view::Assets, r: &replay::Replay, delay: u32, role: Role) ->
     scene.st = p.start.clone();
     scene.local = me;
     scene.st.local_player = me;
+    scene.st.local_human = me;
     let mut se = Session::new(me, &p.players, delay);
     se.end = p.end;
     let end = p.end;
