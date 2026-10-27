@@ -4,7 +4,6 @@
 //! units outside replays.
 
 use crate::bw::{self, Data};
-use crate::todo_port;
 
 #[derive(Default)]
 pub struct Voices {
@@ -187,11 +186,10 @@ pub fn order_ack_gate(st: &bw::State, d: &Data, sel: &bw::buttons::Selection) ->
 }
 
 impl bw::State {
-    /// 0x4564e0: the mouse moved over the map at map-screen point `p` (event x, y; `screen`
+    /// 0x4564e0: the right button went down over the map at map-screen point `p` (event x, y; `screen`
     /// = 0x62848c / 0x6284a8; `over_hud` = 0x4d1140). `sent0` is the first unit of the
     /// selection sent to the sim (0x59724c). Sends the right click (0x4c0380; `queued` =
     /// 0x596a28) and returns the point, sprite id and whether 0x48f4d0 voices the active unit.
-    #[allow(dead_code)]
     pub fn hover_cursor(&mut self, d: &Data, sel: &bw::buttons::Selection, sent0: u32, p: (i32, i32), screen: (i32, i32), over_hud: bool, queued: bool) -> Option<((i32, i32), u16, bool)> {
         let nil = bw::list::NIL;
         if over_hud {
@@ -211,19 +209,25 @@ impl bw::State {
         if t == nil && !order_gate_rc(self, d, sel) {
             return None;
         }
-        // 0x456490: the fog sprite under the point (0x487a10) is not ported; else the
-        // unit's circle flashes or the marker shows at the point.
-        todo_port!("0x487a10", "fog sprite at point");
-        if t != nil {
-            let s = self.units[t as usize].sprite;
+        // 0x456490: the remembered building under the point flashes (its type goes with the
+        // command), else the unit's circle flashes or the marker shows at the point.
+        let ty = if let Some(fog) = self.fog_thingy_at(d, x, y) {
+            let s = self.fog_thingies[fog as usize].sprite;
             self.sprites[s as usize].selection_timer = 0x1f;
+            self.fog_thingies[fog as usize].hp as u16
         } else {
-            self.show_marker(d, x as i16, y as i16);
-        }
+            if t != nil {
+                let s = self.units[t as usize].sprite;
+                self.sprites[s as usize].selection_timer = 0x1f;
+            } else {
+                self.show_marker(d, x as i16, y as i16);
+            }
+            0xe4
+        };
         // 0x4c0380: the right click command (`queued` = the shift state).
-        self.command_right_click_packet((x as i16, y as i16), t, 0xe4, queued);
+        self.command_right_click_packet((x as i16, y as i16), t, ty, queued);
         let ack = self.right_click_accepted(d, &self.selected.clone(), active, t);
-        Some(((x, y), 0xe4, ack))
+        Some(((x, y), ty, ack))
     }
 }
 

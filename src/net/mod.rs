@@ -137,6 +137,15 @@ impl Session {
         last + PRED_LIMIT + 1
     }
 
+    /// The players whose missing turn holds the game once the prediction limit is reached
+    /// (their turn at `confirmed` is not known); empty while frames can still be simulated.
+    pub fn waiting_on(&self) -> Vec<u8> {
+        if self.frame <= self.confirmed + PRED_LIMIT || self.frame >= self.end {
+            return Vec::new();
+        }
+        (0..self.players.len()).filter(|&i| !self.known(i, self.confirmed)).map(|i| self.players[i].0).collect()
+    }
+
     pub fn is_gone(&self, player: u8) -> bool {
         self.index(player).is_some_and(|i| self.gone[i].is_some())
     }

@@ -196,7 +196,7 @@ impl State {
 
     /// 0x487a10: the fogged copy whose placement box (centered on its sprite) holds
     /// map point (x, y), skipping the unit types of 0x46ed80.
-    fn fog_thingy_at(&self, d: &Data, x: i32, y: i32) -> Option<u32> {
+    pub(crate) fn fog_thingy_at(&self, d: &Data, x: i32, y: i32) -> Option<u32> {
         let mut t = self.active_fog_thingies.head;
         while t != NIL {
             let th = &self.fog_thingies[t as usize];

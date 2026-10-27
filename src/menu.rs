@@ -451,6 +451,9 @@ pub enum Kind {
     /// 0x4913d0: the minimap's replay vision button (control 4, 0x4a54f0): rezllyfltr.bin
     /// (0x5042bc), event proc 0x491310, init 0x490e90 (`Menu::vision_init`).
     ReplayVision,
+    /// 0x4a3320: a network game waits for players' turns (0x4a3380): rez\timeout.bin
+    /// (0x5040d8), event proc 0x4a3250.
+    TimeOut,
 }
 
 impl Kind {
@@ -481,6 +484,7 @@ impl Kind {
             Kind::Fatal => "rez/dlgFatal.bin",
             // 0x5042bc (0x5042d0 rez	eamfltr.bin in a team game, not ported)
             Kind::ReplayVision => "rez/allyfltr.bin",
+            Kind::TimeOut => "rez/timeout.bin",
         }
     }
 }
@@ -523,6 +527,8 @@ pub enum Action {
     /// 0x490fe0 (the replay vision dialog's OK): the shown players (0x63ff74) and the all
     /// players box; the caller runs `State::set_replay_vision`.
     ReplayVision(u16, bool),
+    /// 0x4a3010: drop the players the game waits for.
+    DropPlayers,
 }
 
 /// The open menu (0x6d5bf4) and the depth counter 0x6d1224.
@@ -913,6 +919,34 @@ impl Menu {
         }
     }
 
+    /// 0x4a3150 (event 0xe user 0) / 0x4a2f80 (each second) with 0x4a2d60: `rows` are the
+    /// players waited on (flags 0x10000 without 0x20000 in 0x57f0b8), as (name, minimap color):
+    /// labels -10.. show them with their swatch (0x4901f0), the rest are hidden; -30 shows the
+    /// time left (`secs`, "%d:%02d", 0x4a2cf0) until it reaches 0, when it is hidden and Drop
+    /// Players (2) is enabled. 0x4a2c20 shuffles the rows (CRT rand), not done here.
+    pub fn timeout_update(&mut self, rows: &[(Vec<u8>, u8)], secs: u32) {
+        for k in 0..12 {
+            let row = rows.get(k);
+            if let Some(c) = find(&mut self.dlg, -10 - k as i16) {
+                match row {
+                    Some((name, color)) => {
+                        c.text = name.clone();
+                        c.update = crate::dlg::Update::Player(*color);
+                        c.flags |= flag::VISIBLE;
+                    }
+                    None => c.flags &= !flag::VISIBLE,
+                }
+            }
+        }
+        self.set_text(-30, &format!("{}:{:02}", secs / 60, secs % 60));
+        show(&mut self.dlg, -30, secs != 0);
+        if secs == 0 {
+            enable(&mut self.dlg, 2);
+        } else {
+            disable(&mut self.dlg, 2);
+        }
+    }
+
     /// 0x47e7b0 (the tips open): a campaign mission's tips at the game start (0x47ea30 set
     /// 0x658ae0; not multiplayer) start at its entry of 0x513ba0, shown as it is; otherwise
     /// the tip kept (1 when 0 or past the last) steps to the next.
@@ -1027,6 +1061,11 @@ impl Menu {
                     self.pressed = Some(i);
                     self.dlg.controls[i].flags |= flag::PRESSED;
                 }
+                None
+            }
+            (true, Some(p)) => {
+                // 0x4e0d40: while held, the button is down only with the pointer on it.
+                self.dlg.controls[p].press_follow(hit == Some(p));
                 None
             }
             (false, Some(p)) => {
@@ -1474,6 +1513,8 @@ impl Menu {
             // box (0x19) set the vision; Cancel (-3) just closes it (0x4f5700).
             (Kind::ReplayVision, -2) => (None, Action::ReplayVision(self.vision, self.dlg.get(0x19).is_some_and(|c| c.checked))),
             (Kind::ReplayVision, -3) => (None, Action::Closed),
+            // 0x4a3250 event 0xe code 2 on Drop Players: 0x4a3010.
+            (Kind::TimeOut, 2) => (None, Action::DropPlayers),
             (Kind::Fatal, _) => {
                 sg().fatal = None;
                 return (None, Action::Closed);

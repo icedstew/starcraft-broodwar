@@ -272,3 +272,11 @@ PRED_LIMIT stalls, ~30% more ticks); tl2071 INVALID (a command at frame 0 < dela
   a menu quit kept the session alive and the host stalled forever. A closed tab already gave
   "closed by peer" at once; a killed browser is seen after the 10 s idle timeout, with no
   waiting-for-players dialog yet (0x4a3380 unported).
+- **Waiting dialog** (2026-10-27, 0x4a3380 cluster): `Session::waiting_on` (prediction limit
+  reached, turn at `confirmed` missing) -> `NetDriver::waiting` after 500 ms held (ours: 1.16.1
+  opens it at the first missing turn, its turns are buffered ahead) -> menu `Kind::TimeOut`
+  (rez\timeout.bin, 0x4a3320 45 s / carry-over countdown, 0x4a2d60 rows with swatches,
+  0x4a3150 Drop enabled at 0:00). Drop (0x4a3010): the host drops whom it waits for (reason
+  6); a client sends `C_DROP` (7). Not done: 0x4a3010's self-leave when more lag than
+  respond, the 0x4a2c20 row shuffle. Checked under Xvfb: SIGSTOPped joiner -> dialog,
+  countdown, Drop -> "Player 2 was dropped from the game.", game resumes.

@@ -151,6 +151,8 @@ pub struct Scene<'a> {
     /// The command card button held down (its slot): drawn pressed (control flag
     /// 0x40000000) while the mouse stays on it; released on it, it acts (0x4e19f0).
     pub card_held: Option<usize>,
+    /// The status panel button held down under the mouse (flag 0x40000000: its pressed frame).
+    pub stat_held: Option<i16>,
     /// Targeting mode: orders for a ground / unit / fog click (0x641691..3).
     pub targeting: Option<(u8, u8, u8)>,
     /// Last refused button or click (stat_txt message id, 0 for none), put on the
@@ -224,6 +226,12 @@ pub trait NetDriver {
     fn over(&self) -> Option<String> {
         None
     }
+    /// The players the game is waiting for (0x4a3380 runs while turns are missing).
+    fn waiting(&self) -> Vec<u8> {
+        Vec::new()
+    }
+    /// 0x4a3010 (Drop Players): drop the players waited for.
+    fn drop_waiting(&mut self) {}
 }
 
 thread_local! {
@@ -397,7 +405,7 @@ impl<'a> Scene<'a> {
         }
         // 0x4bed70 sets 0x597288 := 1 when it creates the leaderboard dialog.
         crate::leaderboard::reset_rows();
-        let mut scene = Scene { st, scroll: ScrollState::default(), creep_grp, minimap, minimap_timers, voices: crate::voices::Voices::new(), portrait: Default::default(), talk_left: 0, talk_unit: None, trans_left: None, sent_selection: Vec::new(), turns: Default::default(), card_menu: None, placing: None, card_held: None, targeting: None, error: 0, msgs: Default::default(), chat: Default::default(), clock_ms: 0, timer_running: false, timer_base: 0, timer_start: 0, from_save: false, gamma: 100, pause_tick: 0, pause_replay_saved: false, place_ok: false, place_tile: (0, 0), place_err: 0, drag_box: None, a, chk, ts, terrain, player_colors, colors: std::array::from_fn(|p| colr.get(p).copied().unwrap_or(p as u8)), end_at: std::env::var("SCBW_END_AT").ok().and_then(|v| Some((v.trim_end_matches('d').parse().ok()?, if v.ends_with('d') { 0x40 } else { 0x80 }))), local, shadow, dark, fog: crate::fog::Fog::new(), parallax, tselect, thpbar, remaps, live_net: false };
+        let mut scene = Scene { st, scroll: ScrollState::default(), creep_grp, minimap, minimap_timers, voices: crate::voices::Voices::new(), portrait: Default::default(), talk_left: 0, talk_unit: None, trans_left: None, sent_selection: Vec::new(), turns: Default::default(), card_menu: None, placing: None, card_held: None, stat_held: None, targeting: None, error: 0, msgs: Default::default(), chat: Default::default(), clock_ms: 0, timer_running: false, timer_base: 0, timer_start: 0, from_save: false, gamma: 100, pause_tick: 0, pause_replay_saved: false, place_ok: false, place_tile: (0, 0), place_err: 0, drag_box: None, a, chk, ts, terrain, player_colors, colors: std::array::from_fn(|p| colr.get(p).copied().unwrap_or(p as u8)), end_at: std::env::var("SCBW_END_AT").ok().and_then(|v| Some((v.trim_end_matches('d').parse().ok()?, if v.ends_with('d') { 0x40 } else { 0x80 }))), local, shadow, dark, fog: crate::fog::Fog::new(), parallax, tselect, thpbar, remaps, live_net: false };
         scene.timer_running = timer_running;
         if let Ok(d) = scene.a.files.read(&format!("rez/{}textbox.bin", ["z", "t", "p"][scene.local_race()])) {
             scene.chat.load(crate::dlg::Dialog::parse(&d));
@@ -1261,6 +1269,20 @@ impl<'a> Scene<'a> {
         (u != NIL).then_some(u)
     }
 
+    /// 0x4564e0: right-click on the map at map point `p`. Nothing is sent unless the
+    /// selection is the local player's and can take orders, nor when the lone selected unit
+    /// is clicked (a building with a rally point excepted).
+    pub fn map_right_click(&mut self, p: (i32, i32), queued: bool) {
+        self.sim_selection();
+        let sel = self.client_selection();
+        let sent0 = self.sent_selection.first().copied().unwrap_or(NIL);
+        let st = &mut self.st;
+        let r = with_data(self.a, |d| st.hover_cursor(d, &sel, sent0, p, (0, 0), false, queued));
+        if r.is_some_and(|(_, _, ack)| ack) {
+            self.voice_yes();
+        }
+    }
+
     /// Right-click at map point `p` (0x4c2370).
     pub fn right_click(&mut self, p: (i32, i32), queued: bool) {
         let t = self.unit_at(p.0, p.1).unwrap_or(NIL);
@@ -1646,6 +1668,17 @@ impl<'a> Scene<'a> {
     }
 
     /// A click at screen (x, y) on a status panel button (0x4573a0); true if handled.
+    /// The enabled status panel button (a queued unit, the research / upgrade cancel icon)
+    /// under (x, y): these act when released on them (0x4e1a70), drawn pressed while held.
+    pub fn status_button_at(&self, ui: &crate::ui::Ui, x: i32, y: i32) -> Option<i16> {
+        let (_, ctls) = self.status_panel(ui)?;
+        ctls.into_iter().find_map(|(id, show)| {
+            let (l, t, r, b) = ui.statdata.screen_rect(id)?;
+            let button = matches!(show, crate::statdata::Show::Button { .. } | crate::statdata::Show::Slot { num: 1.., .. });
+            (button && (l..=r).contains(&x) && (t..=b).contains(&y)).then_some(id)
+        })
+    }
+
     pub fn status_click(&mut self, ui: &crate::ui::Ui, x: i32, y: i32, shift: bool, ctrl: bool) -> bool {
         let Some((panel, ctls)) = self.status_panel(ui) else { return false };
         for (id, show) in ctls {
@@ -2526,7 +2559,8 @@ fn draw_hud(scene: &Scene, ui: &crate::ui::Ui, vx: i32, vy: i32, cursor: Option<
                     // disables empty ones (0x418640). 0x4268d0 gives a queued unit its number
                     // ("1 " for the first slot, else "\x03N\x01 "), drawn as for 0x4574e0.
                     let g = if *cmdicon { &ui.cmdicons } else { &ui.cmdbtns };
-                    stat_button(ui, *bg, g, *icon, if *num != 0 { 3 } else { 4 }, false, (l, t, r, b), out);
+                    let bg = crate::statdata::button_frame(*bg, if scene.stat_held == Some(*id) { 0x4000_0000 } else { 0 });
+                    stat_button(ui, bg, g, *icon, if *num != 0 { 3 } else { 4 }, false, (l, t, r, b), out);
                     if *num != 0 {
                         let s = if *num == 1 { "1 ".to_string() } else { format!("\x03{num}\x01 ") };
                         let o = crate::ui::TextOpts { flags: 0x44, clip: (l, t, r, b), ..crate::ui::TextOpts::new() };
@@ -2535,9 +2569,8 @@ fn draw_hud(scene: &Scene, ui: &crate::ui::Ui, vx: i32, vy: i32, cursor: Option<
                 }
                 crate::statdata::Show::Button { bg, icon, cmdicon } => {
                     // 0x457480: an enabled button (ticon row 3), frame 0x456d30.
-                    todo_port!("0x457480", "pressed state (flag 0x40000000) of status panel buttons: none is tracked");
                     let g = if *cmdicon { &ui.cmdicons } else { &ui.cmdbtns };
-                    let bg = crate::statdata::button_frame(*bg, 0);
+                    let bg = crate::statdata::button_frame(*bg, if scene.stat_held == Some(*id) { 0x4000_0000 } else { 0 });
                     let bg = if (bg as usize) < ui.cmdbtns.frame_count() { bg } else { 0 };
                     stat_button(ui, bg, g, *icon, 3, false, (l, t, r, b), out);
                 }
@@ -2546,7 +2579,9 @@ fn draw_hud(scene: &Scene, ui: &crate::ui::Ui, vx: i32, vy: i32, cursor: Option<
     }
     // 0x457ce0: the tooltip of the status panel control under the cursor (0x4576a0 for
     // info buttons, the rest via statdata::tooltip: queue slots, cancel, passengers).
-    if let (Some((panel, ctls)), Some((_, _, cx, cy))) = (scene.status_panel(ui), cursor) {
+    // 0x457e40 / 0x457fe0: no control counts as under the cursor while paused (0x6509c4).
+    let stat_hover = cursor.filter(|_| !scene.st.trig.paused || scene.st.multiplayer);
+    if let (Some((panel, ctls)), Some((_, _, cx, cy))) = (scene.status_panel(ui), stat_hover) {
         for (id, show) in &ctls {
             let Some((l, t, r, b)) = ui.statdata.screen_rect(*id) else { continue };
             if !(l..=r).contains(&cx) || !(t..=b).contains(&cy) {
@@ -3191,6 +3226,11 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
     let mut menu: Option<crate::menu::Menu> = None;
     let mut menu_paused = false;
     let mut tips_checked = false;
+    // 0x59cc80 (seconds left of the waiting dialog), 0x59cc78 (when the last wait ended), and
+    // the 1 s step of 0x4a3380's loop.
+    let mut timeout_secs = 0u32;
+    let mut timeout_closed: Option<web_time::Instant> = None;
+    let mut timeout_tick = web_time::Instant::now();
     let mut game_acc = 0u32;
     let mut ctx = crate::menu::Ctx { replay: replay.is_some(), multiplayer: false, replay_speed: 0, ..Default::default() };
     let mut menu_btn_down = false;
@@ -3204,6 +3244,7 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
     // in between are kept for the next tick (as Windows queues the messages).
     let mut pend_keys: Vec<Key> = Vec::new();
     let mut card_down: Option<usize> = None;
+    let mut stat_down: Option<i16> = None;
     let mut pend_rep: Vec<Key> = Vec::new();
     let (mut pend_l, mut pend_r) = (false, false);
     // Debug: SCBW_NET_SHOT=<frame>:<png> draws the screen once at that frame of a headless net game.
@@ -3375,6 +3416,41 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
                 }
             }
         }
+        // 0x487070 -> 0x4a3380: while a network game waits for turns, rez\timeout.bin shows
+        // whom it waits for and counts down to its Drop Players button.
+        if let Some(n) = net.as_ref() {
+            let waiting = n.waiting();
+            let open = menu.as_ref().is_some_and(|m| m.kind == crate::menu::Kind::TimeOut);
+            let second = std::time::Duration::from_secs(1);
+            if !waiting.is_empty() {
+                if !open {
+                    // 0x4a3320: 45 s, or 2 s less than was left when the last wait ended
+                    // within two minutes; then 0x4f57a0 (any open menu closes, placement and
+                    // targeting end).
+                    let recent = timeout_closed.is_some_and(|t| t.elapsed() <= std::time::Duration::from_millis(120_000));
+                    timeout_secs = if recent { timeout_secs.saturating_sub(2).min(45) } else { 45 };
+                    timeout_tick = web_time::Instant::now();
+                    scene.set_placing(None);
+                    scene.end_targeting();
+                    menu = open_plain(&scene, crate::menu::Kind::TimeOut, 0, &settings);
+                } else if timeout_tick.elapsed() >= second {
+                    // 0x4a2f80
+                    timeout_tick += second;
+                    timeout_secs = timeout_secs.saturating_sub(1);
+                }
+                if let Some(m) = menu.as_mut().filter(|m| m.kind == crate::menu::Kind::TimeOut) {
+                    let rows: Vec<(Vec<u8>, u8)> = waiting.iter().map(|&p| {
+                        let name = scene.st.player_names.get(p as usize).map_or(Vec::new(), |s| s.as_bytes().to_vec());
+                        (name, scene.minimap.player_colors[p as usize & 7])
+                    }).collect();
+                    m.timeout_update(&rows, timeout_secs);
+                }
+            } else if open {
+                // The turns came: the loop ends and the dialog closes (0x419ea0).
+                menu = None;
+                timeout_closed = Some(web_time::Instant::now());
+            }
+        }
         if menu.is_some() {
             let chars = std::mem::take(&mut *typed.borrow_mut());
             let ldown = lmb;
@@ -3517,6 +3593,12 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
                             scene.send(&[8]);
                         }
                     }
+                    crate::menu::Action::DropPlayers => {
+                        timeout_closed = Some(web_time::Instant::now());
+                        if let Some(n) = net.as_mut() {
+                            n.drop_waiting();
+                        }
+                    }
                     // 0x490fe0: the replay vision (0x6d0f18 / 0x57f0b0, all players 0x6d0f1c).
                     crate::menu::Action::ReplayVision(mask, all) => {
                         let Scene { a, st, minimap, .. } = &mut scene;
@@ -3636,6 +3718,21 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
                 }
             }
             scene.card_held = None;
+        }
+        // The same for the status panel's buttons (0x4e1a70: pressed while held under the
+        // mouse, the click on release).
+        let stat_under = ui.as_ref().and_then(|u| scene.status_button_at(u, cx, cy));
+        if clicked {
+            stat_down = stat_under;
+        }
+        let mut stat_released = false;
+        if down {
+            scene.stat_held = stat_down.filter(|&i| stat_under == Some(i));
+        } else {
+            if let Some(i) = stat_down.take() {
+                stat_released = stat_under == Some(i);
+            }
+            scene.stat_held = None;
         }
         let ctrl = win.is_key_down(Key::LeftCtrl) || win.is_key_down(Key::RightCtrl);
         let alt = win.is_key_down(Key::LeftAlt) || win.is_key_down(Key::RightAlt);
@@ -3859,7 +3956,10 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
                 pressed = Some(*b);
             }
         }
-        if clicked && pressed.is_none() {
+        if (clicked && pressed.is_none() && stat_under.is_none()) || stat_released {
+            if stat_released {
+                scene.st.ui_sounds.push(BUTTON_CLICK_SFX);
+            }
             if let Some(ui) = ui.as_ref() {
                 let ctrl = win.is_key_down(Key::LeftCtrl) || win.is_key_down(Key::RightCtrl);
                 scene.status_click(ui, cx, cy, shift, ctrl);
@@ -3946,7 +4046,7 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
         } else if replay.is_some() {
             // Watching a replay: no commands.
         } else if rdown && !rmb_was_down && cy < vh - 120 {
-            scene.right_click(map_pt, shift);
+            scene.map_right_click(map_pt, shift);
         } else if rdown && !rmb_was_down && on_minimap_pt(cx, cy) && !mm_blocked {
             scene.right_click(((cx - ox) * scale, (cy - oy) * scale), shift);
         }

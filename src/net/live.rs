@@ -264,6 +264,8 @@ pub struct NetGame {
     replay_path: Option<String>,
     /// SCBW_NET_QUIT_AT=<frame>: a headless peer quits (as the in-game menu would) at that frame.
     quit_at: Option<u32>,
+    /// Since when the session has been held by missing turns (`Session::waiting_on`).
+    stall_since: Option<Instant>,
 }
 
 /// Control messages (first byte; see the module doc).
@@ -275,6 +277,13 @@ const C_HOST_LEFT: u8 = 5;
 /// A Storm message (chat / whisper, `chat::Chat::out`): client -> host `[6, to u16, packet]`,
 /// host -> client `[6, from, packet]`; the host passes each on to the players in `to`.
 const C_CHAT: u8 = 6;
+/// A client pressed Drop Players: `[7]`; the host drops the players it is itself waiting for.
+const C_DROP: u8 = 7;
+
+/// How long the session must be held before the waiting dialog shows. Ours: 1.16.1 opens it
+/// at the first missing turn, but its turns are buffered ahead (0x57f090) where a rollback
+/// session runs into short holds that end on their own.
+const WAIT_SHOW: Duration = Duration::from_millis(500);
 
 fn rd32(b: &[u8], at: usize) -> Option<u32> {
     Some(u32::from_le_bytes(b.get(at..at + 4)?.try_into().ok()?))
@@ -353,6 +362,7 @@ impl NetGame {
                 }
             }
             (Some(C_HOST_LEFT), false) if from == HOST => self.over = Some("the host left".into()),
+            (Some(C_DROP), true) => self.drop_waiting(),
             (Some(C_CHAT), true) => {
                 if let (Some(to), Some(pkt)) = (msg.get(1..3), msg.get(3..)) {
                     self.route_chat(from, u16::from_le_bytes([to[0], to[1]]) & !(1 << from), pkt, scene);
@@ -451,7 +461,7 @@ impl NetGame {
     }
 
     fn make(se: Session, tr: Transport, next_send: u32, script: Vec<(u32, Cmd)>, headless: Option<u32>, host: bool) -> NetGame {
-        NetGame { se, tr, next_send, script, headless, finished: None, host, verbose: std::env::var_os("NETREP_DEBUG").is_some(), last_report: Instant::now(), report: None, reported: false, hashes: HashMap::new(), desync: None, over: None, quitting: Vec::new(), replay_path: std::env::var("SCBW_NET_REPLAY").ok(), quit_at: std::env::var("SCBW_NET_QUIT_AT").ok().and_then(|v| v.parse().ok()) }
+        NetGame { se, tr, next_send, script, headless, finished: None, host, verbose: std::env::var_os("NETREP_DEBUG").is_some(), last_report: Instant::now(), report: None, reported: false, hashes: HashMap::new(), desync: None, over: None, quitting: Vec::new(), replay_path: std::env::var("SCBW_NET_REPLAY").ok(), quit_at: std::env::var("SCBW_NET_QUIT_AT").ok().and_then(|v| v.parse().ok()), stall_since: None }
     }
 }
 
@@ -525,6 +535,11 @@ impl NetDriver for NetGame {
             eprintln!("net player {}: frame {} confirmed {} stalled {} rollbacks {} dgrams {:?}", se.me, se.frame, se.confirmed, se.stalled, se.rollbacks, self.tr.stats);
         }
         let stepped = self.se.tick(scene);
+        if self.se.waiting_on().is_empty() {
+            self.stall_since = None;
+        } else {
+            self.stall_since.get_or_insert_with(Instant::now);
+        }
         // Desync check: the state hash of every 8th confirmed frame goes to the host.
         for (m, h) in self.se.due_hashes(&scene.st) {
             if self.host {
@@ -547,6 +562,26 @@ impl NetDriver for NetGame {
 
     fn over(&self) -> Option<String> {
         self.over.clone()
+    }
+
+    fn waiting(&self) -> Vec<u8> {
+        match self.stall_since {
+            Some(t) if t.elapsed() >= WAIT_SHOW => self.se.waiting_on().into_iter().filter(|&p| p != self.se.me).collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// The host drops whom it waits for (reason 6, as a lost connection); a client asks the
+    /// host. ponytail: 0x4a3010's "more players lagging than responding: leave yourself"
+    /// is not done; the host decides every drop.
+    fn drop_waiting(&mut self) {
+        if self.host {
+            for p in self.se.waiting_on() {
+                self.decide_leave(p, 6);
+            }
+        } else {
+            self.tr.send_ctl(HOST, vec![C_DROP]);
+        }
     }
 
     fn pump_headless(&mut self, scene: &mut Scene<'_>) -> bool {
