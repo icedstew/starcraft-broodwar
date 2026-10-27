@@ -10,6 +10,9 @@
 use super::{Data, State};
 
 /// The join command's id (outside 1.16.1's 0x05 .. 0x5c).
+/// Notice id (not a network.tbl line): the computer took army `p`.
+pub const NOTICE_AI: u16 = 0x1000;
+
 pub const CMD_JOIN: u8 = 0xe0;
 pub const JOIN_LEN: usize = 4 + 0x18;
 
@@ -180,6 +183,7 @@ impl State {
         }
         self.player_types[p] = 1;
         self.ai_taken |= 1 << n;
+        self.notices.push((NOTICE_AI, n));
         self.ai.players[p].flags &= !0x20;
         self.start_melee_ai_for(d, p);
     }

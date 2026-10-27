@@ -761,8 +761,13 @@ impl<'a> Scene<'a> {
         }
         for (fmt, p) in std::mem::take(&mut self.st.notices) {
             // 0x41f1b0 formats the network.tbl line; 0x48d0c0 shows it 7 s.
-            let Some(f) = ui.network.get(fmt as usize) else { continue };
-            let f = f.split('\0').next().unwrap_or("");
+            // Ours (enhanced games): the computer took an army.
+            let f = if fmt == crate::bw::enhanced::NOTICE_AI {
+                "%s's army is played by the computer."
+            } else {
+                let Some(f) = ui.network.get(fmt as usize) else { continue };
+                f.split('\0').next().unwrap_or("")
+            };
             let name = self.st.human_name(p);
             let t = f.replacen("%s", name, 1).replacen("%d", &(p as u32 + 1).to_string(), 1);
             self.msgs.print(&ui.font, t.as_bytes(), now, 0, 0x17, &mut self.st.ui_sounds);

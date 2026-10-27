@@ -187,7 +187,7 @@ Message flow (host = star center; transport ids = Storm ids; lobby link reused f
    `frame K hash H` equal to the host's. Watch for: `late_game` uses `Scene::from_save_steps`
    (fine in wasm), the `web_frame` `Top::Game` late branch (glue.rs), and that
    `NetGame::report_next` is applied (it is consumed in `NetGame::new`).
-4. **Visible feedback**: when the AI takes an army, show a line (no network.tbl string
+4. **Visible feedback** (DONE 2026-10-27, notice 0x1000 in view.rs): when the AI takes an army, show a line (no network.tbl string
    exists; use `scene.msgs` with our own text, e.g. "%s's army is played by the computer").
    Push a notice kind from `ai_take_over` (e.g. a new `State` queue like `notices`) and
    print it in view.rs next to the notices loop (~line 740). Keep sim deterministic: only
