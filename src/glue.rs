@@ -29,6 +29,8 @@ mod cine;
 mod title;
 #[path = "glue_slide.rs"]
 mod slide;
+#[path = "glue_conn.rs"]
+mod conn;
 
 /// What the glue asks the sound system for (the window loop plays them: `Audio` is not
 /// the glue's).
@@ -193,6 +195,8 @@ pub enum Open {
     GameMode(bool),
     /// 0x4b6e50 from 0x4ed940 (New ID): rez\gluPEdit.bin, event proc 0x4b6cc0.
     NewId,
+    /// 0x4baf30: rez\gluConn.bin, event proc 0x4bae20 (glue_conn.rs).
+    Conn,
     /// 0x4dffc0 from 0x4b4960: rez\savegame.bin, event proc 0x4dfef0 (glue_score.rs).
     SaveReplay,
     /// 0x4dfc80: the overwrite question rez\okcancel.bin (event proc 0x4f5cb0).
@@ -354,6 +358,8 @@ pub struct Glue {
     /// The credits and mission text screens' globals (glue_credits.rs).
     credits: credits::Credits,
     title: title::Title,
+    /// The connection select screen's globals (glue_conn.rs).
+    conn: conn::Conn,
     /// The ready room's globals (glue_ready.rs).
     ready: ready::Ready,
     /// 0x51a238: the load screen's saved games, as the list rows show them (newest first; the
@@ -447,6 +453,7 @@ impl Glue {
             score: score::Score::default(),
             credits: credits::Credits::default(),
             title: title::Title::default(),
+            conn: conn::Conn::default(),
             ready: ready::Ready::default(),
             saves: Vec::new(),
             save_name: Vec::new(),
@@ -584,9 +591,10 @@ impl Glue {
         }
         match self.screen {
             screen::MAIN => self.open_main(files),
-            screen::SELCONN | screen::CHAT | screen::BATTLE_NET | screen::GAMESEL | screen::DIRECT | screen::MODEM => {
-                // Networking is deferred (re/buckets.txt): 0x4baf30 / 0x4b9e70 / 0x4ad330
-                // / 0x4b86c0 / 0x4b19c0. Back to the main menu.
+            screen::SELCONN => self.open_conn(files),
+            screen::CHAT | screen::BATTLE_NET | screen::GAMESEL | screen::DIRECT | screen::MODEM => {
+                // Not ported yet (net.md phase 3c): 0x4b9e70 / 0x4ad330 / 0x4b86c0; Battle.net,
+                // direct cable and modem stay unported. Back to the main menu.
                 self.multiplayer = false;
                 self.screen = screen::MAIN;
             }
@@ -1406,6 +1414,9 @@ impl Glue {
         }
         if matches!(open, Open::Create(_)) {
             self.create_event(id, row);
+        }
+        if open == Open::Conn && id == 5 {
+            self.conn_select();
         }
     }
 
@@ -2402,6 +2413,9 @@ impl Glue {
             Open::Login => {
                 self.login_activate(files, id);
             }
+            Open::Conn => {
+                self.conn_activate(files, id);
+            }
             Open::Ready(_) => {
                 // The event proc's activation (event 0xe code 2) is 0x46d160.
                 self.activated = id;
@@ -2424,6 +2438,7 @@ impl Glue {
                 Open::Score(won) => self.done_score(files, r, won),
                 Open::Create(which) => self.done_create(r, which),
                 Open::Login => self.done_login(r),
+                Open::Conn => self.done_conn(r),
                 Open::Ready(race) => self.done_ready(files, r, race),
                 _ => {}
             }

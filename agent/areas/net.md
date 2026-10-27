@@ -214,7 +214,18 @@ PRED_LIMIT stalls, ~30% more ticks); tl2071 INVALID (a command at frame 0 < dela
   Left: map archive sounds do not travel (clients have no map wavs); replay recording is
   still every simulated frame (3d: confirmed only); no leaves / desync hashes (3d); no lobby
   UI (3c); drops: a peer that quits stalls the others.
-- 3c: minimal lobby (host: map, slots; join: address field), LAN broadcast discovery.
+- 3c (user 2026-10-26): port the 1.16.1 multiplayer glue, plus custom UI to copy a join URL /
+  code for the joiner (1.16.1 has no join-by-address). Plan:
+  1. `src/net/snet.rs`: Storm SNet stand-in (named after the Storm calls, ordinals noted),
+     one provider 'UDPN' ("Local Area Network (UDP)") over our QUIC transport; game list
+     from LAN broadcast discovery; create / join / messages / lobby turns. BN / modem / IPX /
+     direct cable stay unported.
+  2. gluConn (screen 2, 0x4baf30 cluster): provider list -> 0x4d3cc0 -> login (5).
+  3. gluJoin (screen 10, 0x4b86c0 cluster): game list, Create -> gluCreat (11), Join; plus the
+     custom join-code entry.
+  4. gluCreat network branch (glue_create.rs) -> 0x4d3910 / SNetCreateGame.
+  5. gluChat (screen 3, 0x4b9e70 cluster): lobby slots / races / chat over lobby turns; the
+     host's custom "copy join URL"; start (0x4d4130) -> the rollback Session (live.rs).
 - 3d: UPnP, leaves (fence), desync hashes every 8 confirmed frames, confirmed-only
   replay recording.
 - **3d done except UPnP** (2026-10-26; code from 835ea06, verified here): leaves with a

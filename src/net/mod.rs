@@ -12,6 +12,7 @@ use crate::{bw, replay, view};
 pub mod live;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod netrep;
+pub mod snet;
 pub mod transport;
 #[cfg(target_arch = "wasm32")]
 pub mod web_transport;
