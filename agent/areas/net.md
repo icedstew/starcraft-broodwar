@@ -228,3 +228,10 @@ PRED_LIMIT stalls, ~30% more ticks); tl2071 INVALID (a command at frame 0 < dela
   filled in at write. Gotcha: 1.16.1 playback never runs a replay's last command group
   (0x4cdff0 returns -1 at the end), so a leave that is the last recorded command is not
   replayed (real 1.16.1 too); the tests end with a harmless select after it.
+- **Browser join with commands on both sides** (2026-10-26, Linux): `agent/tools/webjoin.sh
+  [frames] [delay]` = native `nethost` + headless Chromium (`?join=&frames=&script=`), the
+  console read over the DevTools protocol (`agent/tools/cdp_console.mjs`; `--enable-logging`
+  shows nothing with `--headless=new`). (2)Bottleneck, both peers scripted (selects + moves),
+  1500 frames: equal hashes at delay 1 / 2 / 4. The browser steps ~18 frames/s headless.
+  Fix: a client that loses the host after holding every turn up to its end plays them out
+  (the host closes once its turns are acked, the slower browser was 1-2 frames short).

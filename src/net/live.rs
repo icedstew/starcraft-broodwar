@@ -419,7 +419,9 @@ impl NetDriver for NetGame {
                 }
                 Event::Error(m) => {
                     eprintln!("net: {m}");
-                    if !self.host {
+                    // A client that already holds every turn up to its end (a test's frame
+                    // count) plays them out: the host may close as soon as its turns are acked.
+                    if !self.host && self.se.confirmed < self.se.end {
                         self.over = Some(format!("lost the host ({m})"));
                     }
                 }

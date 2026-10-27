@@ -91,8 +91,8 @@ Delegate per agents.md: Haiku triage, Sonnet porting, Opus review / hard RE / co
   (2026-10-24): src/net/web_transport.rs (JS glue over WebTransport, cert pinned by hash;
   protocol core shared with native in transport.rs), web.rs `net_join`, join field in
   web/index.html (the user's file: not committed). Headless Chrome joined a headless
-  `scbw nethost` (Bottleneck, 300 frames, no commands): equal hashes; a run with commands on
-  both sides is still to do. Determinism: wasm (node / V8) vs native rbtest hashes SAME on
+  `scbw nethost` (Bottleneck, 300 frames, no commands): equal hashes; with commands on both
+  sides: equal hashes at delay 1 / 2 / 4 (2026-10-26, agent/tools/webjoin.sh). Determinism: wasm (node / V8) vs native rbtest hashes SAME on
   18 replays (a median and the longest per matchup, up to 218k frames). Netsuite: all 300
   bw116 replays x 3 tests = 900 MATCH.
   2026-10-23, moved to a Windows box (16 cores; no wine harness yet): ShieldBattery
