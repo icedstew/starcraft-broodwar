@@ -92,7 +92,13 @@ Delegate per agents.md: Haiku triage, Sonnet porting, Opus review / hard RE / co
   recorded into the replay (1.16.1 does), whisper / squelch slash commands 0x47f8f0;
   headless `say` scripts: hashes equal, both replays carry the lines, `repview` shows them.
   Left: message dialog 0x48ff10 (recipient choice, mode 4), labels not seen in a window.
-  Lobby screens (gluConn / gluJoin / gluCreat speed, 2026-10-26/27) committed. Browser join done
+  Lobby screens (gluConn / gluJoin / gluCreat speed, 2026-10-26/27) committed. Network lobby
+  (2026-10-27, net.md "Lobby"): gluChat over Storm turns (snet.rs rounds), lobby commands
+  0x486040, map transfer to joiners (in memory, browsers too), join by LOBBY code natively
+  (SCBW_JOIN) and from the browser (the glue runs in the page from the lobby on);
+  agent/tools/lobby.sh [web] equal hashes. Alliance dialog in games (0x490300 / 0x490570).
+  Next: message dialog 0x48ff10, "[team]" chat names, 0x4a3010 team result, lobby slot
+  details (0x450d90), copy-join-code UI, the 257 wait-net verdicts. Browser join done
   (2026-10-24): src/net/web_transport.rs (JS glue over WebTransport, cert pinned by hash;
   protocol core shared with native in transport.rs), web.rs `net_join`, join field in
   web/index.html (the user's file: not committed). Headless Chrome joined a headless
