@@ -260,6 +260,7 @@ impl<'a> Scene<'a> {
         // 0x4ce280: a new game records its commands.
         crate::replay_rec::set_storm_ids([0; 12]);
         crate::replay_rec::start(None);
+        crate::replay_rec::capture_header(&s.st);
         Ok(s)
     }
 

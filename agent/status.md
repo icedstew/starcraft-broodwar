@@ -87,7 +87,7 @@ Delegate per agents.md: Haiku triage, Sonnet porting, Opus review / hard RE / co
   <map> [port] [players] [delay]` / `netjoin <code>` play a live melee game over the
   Session (src/net/live.rs, view.rs NetDriver; menus do not pause net games);
   agent/tools/netlive.sh runs host + join headless (SCBW_NET_HEADLESS / SCBW_NET_SCRIPT):
-  equal hashes at delay 1 / 2 / 4 with rollbacks. Not tried in a window yet. Browser join done
+  equal hashes at delay 1 / 2 / 4 with rollbacks. Not tried in a window yet. Phase 3d (2026-10-26): leaves / fence, desync hashes, confirmed-only recording: netlive_leave.sh a-f all PASS (header now taken at game start, 0x4dea10); left: UPnP. Browser join done
   (2026-10-24): src/net/web_transport.rs (JS glue over WebTransport, cert pinned by hash;
   protocol core shared with native in transport.rs), web.rs `net_join`, join field in
   web/index.html (the user's file: not committed). Headless Chrome joined a headless

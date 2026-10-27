@@ -217,3 +217,14 @@ PRED_LIMIT stalls, ~30% more ticks); tl2071 INVALID (a command at frame 0 < dela
 - 3c: minimal lobby (host: map, slots; join: address field), LAN broadcast discovery.
 - 3d: UPnP, leaves (fence), desync hashes every 8 confirmed frames, confirmed-only
   replay recording.
+- **3d done except UPnP** (2026-10-26; code from 835ea06, verified here): leaves with a
+  fence (`Session::apply_leave`, host picks `fence_for(last)`, 0x57 at the fence, reason 1
+  quit / 6 dropped), desync hashes, confirmed-only recording. `agent/tools/netlive_leave.sh
+  all`: a (2p, replay = live), b (3p relay), c (joiner killed, survivors equal, replay =
+  live), d (forced desync reported), e (clean quit), f (host quits) all PASS.
+  Fixes: the replay header is taken at game start (0x4dea10 from 0x4e0710, right after
+  0x4ef100; `replay_rec::capture_header`), not when the file is written, so a leaver
+  stays a human in it (was type 10 from frame 0 -> replay != live); the storm ids are
+  filled in at write. Gotcha: 1.16.1 playback never runs a replay's last command group
+  (0x4cdff0 returns -1 at the end), so a leave that is the last recorded command is not
+  replayed (real 1.16.1 too); the tests end with a harmless select after it.

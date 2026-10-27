@@ -26,7 +26,7 @@ S2="12:selw;40:14900270020000000000;300:14e00380020000000000;1300:14a001f0010000
 # JOIN_ENV_<i>="VAR=val" per joiner i, optional). Sets PIDS (host first). Output in $OUT/<tag>.<n>.*
 game() {
     local tag=$1 map=$2 n=$3 k=$4 delay=$5
-    local scripts=("$S0" "$S1" "$S2")
+    local scripts=("${SC0:-$S0}" "${SC1:-$S1}" "$S2")
     local hextra=()
     [ -n "$HOST_ENV" ] && hextra=(env "$HOST_ENV")
     SCBW_NET_HEADLESS=$k SCBW_NET_SCRIPT=${scripts[0]} SCBW_NET_REPLAY="$OUT/$tag.0.rep" "${hextra[@]}" "$SCBW" nethost "$map" 0 "$n" "$delay" > "$OUT/$tag.0.out" 2> "$OUT/$tag.0.err" &
@@ -94,8 +94,10 @@ fi
 if [[ $WHAT == c || $WHAT == all ]]; then
     # A long game; joiner 2 is killed after a few seconds (a hard kill: no goodbye, the
     # host notices through the transport timeout).
+    # The leave (~frame 11000) must not be the replay's last command group (1.16.1 playback
+    # never runs that one): the survivors select once more near the end.
     export SCBW_NET_TIMEOUT_MS=3000
-    game c "$INSTALL/maps/(4)Dark Crystal.scm" 3 20000 1
+    SC0="$S0;19900:selw" SC1="$S1;19910:selw" game c "$INSTALL/maps/(4)Dark Crystal.scm" 3 20000 1
     sleep 3
     kill -9 "${PIDS[2]}" 2>/dev/null || taskkill //F //PID "${PIDS[2]}" > /dev/null 2>&1
     wait "${PIDS[0]}" "${PIDS[1]}"

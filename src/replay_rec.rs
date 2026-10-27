@@ -196,13 +196,37 @@ pub fn live_header(st: &State, recorded: &[u8]) -> Vec<u8> {
     h
 }
 
+/// 0x4dea10, called by 0x4e0710 right after the game init 0x4ef100: a new game's header
+/// image takes the game info, slot table and colors as they are at the start (a player who
+/// leaves later stays a human in the header).
+pub fn capture_header(st: &State) {
+    REC.with(|c| {
+        if let Some(r) = c.borrow_mut().as_mut().filter(|r| r.live) {
+            r.header = live_header(st, &r.header);
+        }
+    });
+}
+
 /// The replay file's bytes of the recorded game (0x4dfab0's body); None without a recorder.
+/// A new game's header is the one `capture_header` took, with the engine, frame count and
+/// storm ids now.
 pub fn replay_bytes(st: &State, chk: &[u8]) -> Option<Vec<u8>> {
     REC.with(|c| {
         let mut c = c.borrow_mut();
         let r = c.as_mut()?;
         let recorded = r.header.clone();
-        r.header = live_header(st, &recorded);
+        if r.live {
+            r.header[0] = st.is_expansion as u8;
+            r.header[1..5].copy_from_slice(&st.frame.to_le_bytes());
+            // The storm ids (+4 of each slot) are the recorded game's (`set_storm_ids`).
+            let storm = STORM.with(|s| *s.borrow());
+            for (i, id) in storm.iter().enumerate() {
+                let o = 0xa1 + i * 0x24 + 4;
+                r.header[o..o + 4].copy_from_slice(&(*id as u32).to_le_bytes());
+            }
+        } else {
+            r.header = live_header(st, &recorded);
+        }
         let f = r.file(chk);
         r.header = recorded;
         f
