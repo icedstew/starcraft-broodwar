@@ -227,12 +227,32 @@ impl Player {
         if unit == self.unit && self.portrait == portrait {
             return;
         }
-        self.unit = unit;
-        self.talking = false;
-        self.portrait = portrait;
-        self.static_level = 0;
-        self.static_wait = true;
+        self.set(ps, files, unit, portrait, false);
+    }
+
+    /// 0x45ea30: show portrait `p` of `unit` (0 for a transmission), idle or talking. The
+    /// screen clears and the static restarts only when the unit or the portrait changed;
+    /// the video is always picked again.
+    fn set(&mut self, ps: &Portraits, files: &Storage, unit: u32, p: Option<u16>, talking: bool) {
+        if unit != self.unit || p != self.portrait {
+            self.static_level = 0;
+            self.static_wait = true;
+            self.unit = unit;
+            self.portrait = p;
+        }
+        self.talking = talking;
         self.open(ps, files);
+    }
+
+    /// 0x45ec40 event 3: the talk ended; the status unit `unit` (0 for none) shows
+    /// `portrait` idling again (0x45ea30, which keeps the static off for the same unit).
+    pub fn end_talk(&mut self, ps: &Portraits, files: &Storage, unit: u32, portrait: Option<u16>) {
+        if unit == 0 || portrait.is_none() {
+            self.unit = 0;
+            self.hide();
+            return;
+        }
+        self.set(ps, files, unit, portrait, false);
     }
 
     /// The status unit's portrait (None for no selection or a unit without one); a new
@@ -245,14 +265,10 @@ impl Player {
         }
     }
 
-    /// 0x45ea30 (mode 2) -> 0x45e8a0: another unit's portrait `p` shown talking.
-    pub fn show_talking(&mut self, ps: &Portraits, files: &Storage, p: u16) {
-        self.portrait = Some(p);
-        self.unit = 0;
-        self.talking = true;
-        self.static_level = 0;
-        self.static_wait = true;
-        self.open(ps, files);
+    /// 0x45ea30 (mode 2) -> 0x45e8a0: `unit`'s portrait `p` shown talking (unit 0: a
+    /// transmission).
+    pub fn show_talking(&mut self, ps: &Portraits, files: &Storage, unit: u32, p: u16) {
+        self.set(ps, files, unit, Some(p), true);
     }
 
     /// 0x418700 on the portrait control: nothing shown until the next `show*`.

@@ -1598,7 +1598,7 @@ impl<'a> Scene<'a> {
             if let Some(p) = Some(crate::portrait::unit_portrait(&self.a.dat().units.portrait, self.st.mission, t)).filter(|&p| p < 110 && mode != 0) {
                 self.talk_left = len;
                 self.talk_unit = None;
-                self.portrait.borrow_mut().show_talking(ps, &self.a.files, p);
+                self.portrait.borrow_mut().show_talking(ps, &self.a.files, 0, p);
             }
         }
         // 0x45ea30: the generic advisor portrait (0x52) takes the unit owner's color.
@@ -1617,14 +1617,16 @@ impl<'a> Scene<'a> {
                     // (0x68cd38) that is not read here.
                     self.talk_left = (len / 1000 * 1000).max(1000);
                     self.talk_unit = Some(u);
-                    pl.show_talking(ps, files, p);
+                    pl.show_talking(ps, files, u + 1, p);
                 }
             }
         } else {
             self.talk_left = self.talk_left.saturating_sub(ms);
             if self.talk_left == 0 {
                 self.talk_unit = None;
-                pl.portrait = None;
+                let active = self.client_selection().active;
+                let p = Some(active).filter(|&u| u != NIL).and_then(|u| portrait(self, u));
+                pl.end_talk(ps, files, if active == NIL { 0 } else { active + 1 }, p);
             }
         }
         // 0x49eb70: the talking unit died; the portrait hides until the talk timer ends
