@@ -33,6 +33,10 @@ mod slide;
 mod conn;
 #[path = "glue_join.rs"]
 mod join;
+#[path = "glue_lobby.rs"]
+mod lobby;
+#[path = "glue_chat.rs"]
+mod chat;
 
 /// What the glue asks the sound system for (the window loop plays them: `Audio` is not
 /// the glue's).
@@ -201,6 +205,8 @@ pub enum Open {
     Conn,
     /// 0x4b86c0: rez\gluJoin.bin, event proc 0x4b8590 (glue_join.rs).
     Join,
+    /// 0x4b9e70 (gluChat, the network lobby) with event proc 0x4b9c20.
+    Chat,
     /// 0x4dffc0 from 0x4b4960: rez\savegame.bin, event proc 0x4dfef0 (glue_score.rs).
     SaveReplay,
     /// 0x4dfc80: the overwrite question rez\okcancel.bin (event proc 0x4f5cb0).
@@ -370,6 +376,14 @@ pub struct Glue {
     join: join::Join,
     /// The ready room's globals (glue_ready.rs).
     ready: ready::Ready,
+    /// The network lobby's protocol and the turn exchange (glue_lobby.rs).
+    lobby: lobby::Lobby,
+    /// 0x596888: this side made the game's description (the creator of a network game).
+    lobby_host: bool,
+    /// The lobby screen's globals (glue_chat.rs).
+    chat: chat::ChatScreen,
+    /// The map arriving from the creator (net misc's file transfer, 0x4eafe0).
+    map_rx: Option<lobby::Download>,
     /// 0x51a238: the load screen's saved games, as the list rows show them (newest first; the
     /// native records are in the order 0x4b6010 made them): the file name without its
     /// extension (record +0x180). The record's other copies (+0x17c .. +0x1d8, +0x2a2: the
@@ -465,6 +479,10 @@ impl Glue {
             conn: conn::Conn::default(),
             join: join::Join::default(),
             ready: ready::Ready::default(),
+            lobby: lobby::Lobby::default(),
+            lobby_host: false,
+            chat: chat::ChatScreen::default(),
+            map_rx: None,
             saves: Vec::new(),
             save_name: Vec::new(),
             save: None,
@@ -603,9 +621,10 @@ impl Glue {
             screen::MAIN => self.open_main(files),
             screen::SELCONN => self.open_conn(files),
             screen::GAMESEL => self.open_join(files),
-            screen::CHAT | screen::BATTLE_NET | screen::DIRECT | screen::MODEM => {
-                // Not ported yet (net.md phase 3c): 0x4b9e70 / 0x4ad330; Battle.net,
-                // direct cable and modem stay unported. Back to the main menu.
+            screen::CHAT => self.open_chat(files),
+            screen::BATTLE_NET | screen::DIRECT | screen::MODEM => {
+                // Battle.net, direct cable and modem stay unported (0x4ad330). Back to the
+                // main menu.
                 self.multiplayer = false;
                 self.screen = screen::MAIN;
             }
@@ -1434,6 +1453,9 @@ impl Glue {
         }
         if open == Open::Join && id == 5 {
             self.join_info();
+        }
+        if open == Open::Chat {
+            self.chat_combo(id, row);
         }
     }
 
@@ -2437,6 +2459,9 @@ impl Glue {
             Open::Join => {
                 self.join_activate(files, id);
             }
+            Open::Chat => {
+                self.chat_activate(files, id);
+            }
             Open::Ready(_) => {
                 // The event proc's activation (event 0xe code 2) is 0x46d160.
                 self.activated = id;
@@ -2461,6 +2486,7 @@ impl Glue {
                 Open::Login => self.done_login(r),
                 Open::Conn => self.done_conn(r),
                 Open::Join => self.done_join(r),
+                Open::Chat => self.done_chat(r),
                 Open::Ready(race) => self.done_ready(files, r, race),
                 _ => {}
             }
@@ -2967,6 +2993,7 @@ impl Glue {
         self.slide_tick(files, ms);
         self.create_tick(files, ms);
         self.join_tick(ms);
+        self.chat_tick(files);
         self.score_tick(ms);
         // 0x4de150's timer: 0x4de140 ends it (0x416000) and shows a stored error.
         if let Some(left) = self.error_timer {
@@ -3272,6 +3299,18 @@ pub fn run(files: &Storage, shot: Option<&str>) -> std::io::Result<()> {
                     }
                     return Ok(());
                 };
+                // A network game from the lobby plays over its link (glue_lobby.rs).
+                #[cfg(not(target_arch = "wasm32"))]
+                if glue.setup.multiplayer && glue.setup.net_provider != 0 {
+                    match glue.lobby_net_game() {
+                        Some(n) => crate::view::set_net_driver(Box::new(n)),
+                        None => {
+                            glue.state = state::GLUE;
+                            glue.screen = screen::MAIN;
+                            continue;
+                        }
+                    }
+                }
                 // Where the in-game save / load dialogs keep the saves (0x4ce5b0's inputs).
                 crate::menu::set_save_env(crate::menu::SaveEnv {
                     exe_dir: crate::saveload::exe_dir(&glue.setup.characters_dir),
@@ -3299,6 +3338,11 @@ pub fn run(files: &Storage, shot: Option<&str>) -> std::io::Result<()> {
                         None => return Ok(()),
                     }
                     continue;
+                }
+                // A network game with SCBW_NET_HEADLESS (tests): played headless to that frame.
+                if shot.is_some() && glue.setup.multiplayer && std::env::var_os("SCBW_NET_HEADLESS").is_some() {
+                    crate::view::run_setup(&mut a, g)?;
+                    return Ok(());
                 }
                 // Screenshot mode: steps left play the game (script.rs), else one shot of it.
                 if let Some(out) = shot.filter(|_| !crate::script::pending()) {
@@ -3466,7 +3510,12 @@ pub fn run(files: &Storage, shot: Option<&str>) -> std::io::Result<()> {
                         }
                     }
                     // A pass at a time (16 ms, the window's rate), as the screens step per pass.
+                    // SCBW_GLUE_REALTIME: a pass takes its 16 ms (network peers run in real time).
                     Some("w") => {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        if std::env::var_os("SCBW_GLUE_REALTIME").is_some() {
+                            std::thread::sleep(std::time::Duration::from_millis(num(1).clamp(0, 16) as u64));
+                        }
                         glue.tick(files, num(1).clamp(0, 16) as u32);
                         if num(1) > 16 {
                             crate::script::push_front(format!("w {}", num(1) - 16));

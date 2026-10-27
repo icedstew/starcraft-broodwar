@@ -259,7 +259,7 @@ fn sstr(s: &[u8], max: usize) -> Vec<u8> {
 }
 
 /// 0x41f1b0 with one "%s": the format `f` with `arg` (up to its nul) put in.
-fn fmt_s(f: &[u8], arg: &[u8]) -> Vec<u8> {
+pub(super) fn fmt_s(f: &[u8], arg: &[u8]) -> Vec<u8> {
     let arg = arg.split(|&c| c == 0).next().unwrap_or(&[]);
     match f.windows(2).position(|w| w == b"%s") {
         Some(p) => [&f[..p], arg, &f[p + 2..]].concat(),
@@ -1813,7 +1813,7 @@ impl Glue {
         let stat = crate::net::statstr::build(d, 0x80);
         let title = cz(&d[4..0x1c]).to_vec();
         #[cfg(not(target_arch = "wasm32"))]
-        let me = crate::net::snet::create_game(&title, &stat, d[0x25]);
+        let me = crate::net::snet::create_game(&title, &stat, d[0x25], &name);
         #[cfg(target_arch = "wasm32")]
         let me: Option<u8> = {
             todo_port!("0x4d3910", "a browser cannot host (it cannot listen)");
@@ -1823,6 +1823,7 @@ impl Glue {
         let Some(me) = me else { return false };
         self.setup.local_storm_id = me as u32;
         self.create.game_desc = d.to_vec();
+        self.lobby_host = true;
         self.setup.template.copy_from_slice(&d[0x6d..0x8d]);
         true
     }
@@ -2533,9 +2534,7 @@ impl Glue {
             self.setup.snapshot_types();
         }
         // 0x51ca10 = time (a debug seed from `set_seed` or SCBW_SEED); 0x51ca14 = 0x51ca10.
-        let seed = SEED.with(|s| s.take()).or_else(|| std::env::var("SCBW_SEED").ok().and_then(|s| s.parse().ok())).unwrap_or_else(|| {
-            web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map_or(0, |t| t.as_secs() as u32)
-        });
+        let seed = self.lobby.seed.take().unwrap_or_else(create_seed);
         self.create.seed = seed;
         self.create.rand_on = true;
         self.assign_races();
@@ -2574,7 +2573,7 @@ impl Glue {
             camp_cont: self.camp_cont,
             mission: self.setup.map_dir_flag,
             expansion: self.expansion,
-            multiplayer: false,
+            multiplayer: self.setup.multiplayer,
         })
     }
 }
@@ -2586,6 +2585,13 @@ thread_local! {
 /// The next game's seed instead of the time (a scripted "seed" step: the recorded game's).
 pub fn set_seed(seed: u32) {
     SEED.with(|s| s.set(Some(seed)));
+}
+
+/// 0x51ca10 = time() (a debug seed from `set_seed` or SCBW_SEED first).
+pub(super) fn create_seed() -> u32 {
+    SEED.with(|s| s.take()).or_else(|| std::env::var("SCBW_SEED").ok().and_then(|s| s.parse().ok())).unwrap_or_else(|| {
+        web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map_or(0, |t| t.as_secs() as u32)
+    })
 }
 
 /// The text before the first NUL.

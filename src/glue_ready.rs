@@ -13,8 +13,6 @@ use crate::dlg::{flag, Ctl, Pic, Update};
 use crate::portrait::Portraits;
 use crate::smk::Smk;
 use crate::storage::Storage;
-use crate::todo_port;
-use std::collections::VecDeque;
 
 /// The controls of glurdy?.bin.
 mod ids {
@@ -87,24 +85,6 @@ struct Port {
     remap: Option<([[u8; 3]; 256], [u8; 256])>,
 }
 
-/// The turn exchange 0x485aa0 / 0x486580 / 0x486530 with Storm's single player provider:
-/// turns sent are received back (provider latency 1), the commands in them run for the
-/// player (0x486040).
-#[derive(Default)]
-struct Net {
-    /// 0x654880: the commands queued for the next turn (its length is Setup::g654aa0).
-    buf: Vec<u8>,
-    /// The turns sent and not yet received.
-    turns: VecDeque<Vec<u8>>,
-    /// 0x57f0b8: per player 0x10000 connected, 0x20000 a turn arrived; 0x654a80 its data.
-    flags: [u32; 8],
-    data: [Vec<u8>; 8],
-    /// 0x6556d8: per player, the ready command (0x54) arrived.
-    ready: [bool; 8],
-    /// 0x57ee78: the last receive got a turn.
-    rx: bool,
-}
-
 /// The ready room's globals.
 pub(super) struct Ready {
     /// +0x26 of the dialog: the briefing trigger running (an index into Setup::briefing).
@@ -115,10 +95,8 @@ pub(super) struct Ready {
     speaking: bool,
     timers: Vec<Timer>,
     ports: [Port; 4],
-    net: Net,
-    /// 0x6d63d0 / 0x6d63d4: the clock of the last poll that got a turn.
+    /// 0x6d63d0: the clock of the last poll that got a turn.
     last_poll: u32,
-    last_rx: u32,
     /// +0x26 of the message control: the ms between two scroll rows.
     msg_interval: u32,
     /// units.dat's portrait of each unit (0x662f88) and portdata.dat (0x44f0f0).
@@ -136,10 +114,8 @@ impl Default for Ready {
             speaking: false,
             timers: Vec::new(),
             ports: Default::default(),
-            net: Net::default(),
             // GetTickCount() - 0 at the first poll: long past 0xfa.
             last_poll: 0u32.wrapping_sub(0x10000),
-            last_rx: 0,
             msg_interval: 0,
             unit_portrait: Vec::new(),
             portraits: None,
@@ -221,7 +197,7 @@ impl Glue {
             self.rshow(ids::BUTTONS_PIC, false);
             self.rshow(ids::REPLAY, false);
         }
-        self.ready.net.ready = [false; 8];
+        self.lobby.net.ready = [false; 8];
         self.setup.g6554b0 = 1;
         self.net_485aa0();
         self.ready.poll = true;
@@ -810,133 +786,10 @@ impl Glue {
         }
     }
 
-    // ---- the turn exchange (single player provider) ----
-
-    /// 0x485bd0 (ECX = the bytes): a command joins the next turn.
-    fn net_485bd0(&mut self, cmd: &[u8]) {
-        if (self.setup.g654aa0 as usize) + cmd.len() > 0x200 {
-            todo_port!("0x485a40", "the command buffer is full: send it first");
-        }
-        self.ready.net.buf.extend_from_slice(cmd);
-        self.setup.g654aa0 += cmd.len() as u32;
-    }
-
-    /// 0x4c3d20 (`leave`): the turn exchange ends: the tables clear and the game is left (Storm's
-    /// SNetLeaveGame has nothing to leave with the single player provider).
-    fn net_4c3d20(&mut self, _leave: u32) {
-        self.setup.g654a80 = [0; 8];
-        self.setup.g6556e4 = 0;
-        self.setup.g6554b0 = 0;
-        self.setup.g6556e0 = 0;
-        self.setup.g57eebc = 0;
-        self.setup.g654aa0 = 0;
-        self.ready.net.buf.clear();
-        if self.setup.multiplayer {
-            todo_port!("0x4c3d20", "Sleep(1000) and Ordinal_119 (leave the network game)");
-        }
-    }
-
-    /// 0x485aa0: turns are sent until the provider holds its latency's worth (1 for the single
-    /// player provider); an empty buffer sends the no-op command 5.
-    fn net_485aa0(&mut self) {
-        if self.setup.net_provider != 0 {
-            todo_port!("0x485aa0", "turns of a network provider (Storm's SNetSendTurn)");
-            return;
-        }
-        while self.ready.net.turns.is_empty() {
-            if self.setup.g654aa0 == 0 {
-                self.ready.net.buf = vec![5];
-                self.setup.g654aa0 = 1;
-            }
-            let turn = std::mem::take(&mut self.ready.net.buf);
-            self.ready.net.turns.push_back(turn);
-            self.setup.g654aa0 = 0;
-        }
-    }
-
-    /// 0x4bb530 (Ordinal_122, SNetReceiveTurns): the oldest turn comes back; the connected player's
-    /// flags are 0x10000, and 0x20000 with a turn.
-    fn net_4bb530(&mut self) -> bool {
-        let me = (self.setup.local_storm_id as usize).min(7);
-        self.ready.net.flags[me] = 0x10000;
-        match self.ready.net.turns.pop_front() {
-            Some(t) => {
-                self.ready.net.data[me] = t;
-                self.ready.net.flags[me] |= 0x20000;
-                true
-            }
-            None => false,
-        }
-    }
-
-    /// 0x486580: receive; true when a turn came or the last one was less than 2.5 s ago.
-    fn net_486580(&mut self) -> bool {
-        let now = self.clock_ms;
-        if self.net_4bb530() {
-            self.ready.last_rx = now;
-            self.ready.net.rx = true;
-            return true;
-        }
-        self.ready.net.rx = false;
-        now.wrapping_sub(self.ready.last_rx) < 0x9c4
-    }
-
-    /// 0x486530: the commands of every player whose turn arrived run (0x486040: 5 is a no-op,
-    /// 0x54 marks the player ready).
-    fn net_486530(&mut self) {
-        for p in (0..8).rev() {
-            if self.ready.net.flags[p] & 0x20000 == 0 {
-                continue;
-            }
-            let data = self.ready.net.data[p].clone();
-            let mut i = 0;
-            while i < data.len() {
-                match data[i] {
-                    5 => i += 1,
-                    0x54 => {
-                        self.ready.net.ready[p] = true;
-                        i += 1;
-                    }
-                    _ => {
-                        todo_port!("0x486040", "the turn's other commands");
-                        break;
-                    }
-                }
-            }
-        }
-    }
-
-    /// 0x487070: receive, then (a turn came) send the next one and run the commands.
-    fn net_487070(&mut self) {
-        if self.screen == screen::EXIT {
-            return;
-        }
-        let got = self.net_486580();
-        if !got && self.setup.g6556e0 != 0 {
-            todo_port!("0x4a3380", "network timeout handling");
-        }
-        if self.ready.net.rx && self.screen != screen::EXIT {
-            self.net_485aa0();
-            if self.screen != screen::EXIT {
-                if self.setup.g6556e0 == 0 {
-                    self.net_486530();
-                } else {
-                    todo_port!("0x486f50", "replay / observer turns");
-                }
-                if self.screen != screen::EXIT {
-                    self.setup.g57eebc = self.setup.g57eebc.wrapping_add(1);
-                    if self.setup.g6556e0 != 0 {
-                        todo_port!("0x47cfc0", "turn bookkeeping of a network game");
-                    }
-                }
-            }
-        }
-    }
-
     /// 0x485820: with 0x6554b0 == 2, 1 once every connected player is ready (0x6554b0 = 0).
     fn net_485820(&mut self) -> bool {
         if self.setup.g6554b0 == 2 {
-            if (0..8).any(|p| self.ready.net.flags[p] & 0x10000 != 0 && !self.ready.net.ready[p]) {
+            if (0..8).any(|p| self.lobby.net.flags[p] & 0x10000 != 0 && !self.lobby.net.ready[p]) {
                 return false;
             }
             self.setup.g6554b0 = 0;
@@ -953,7 +806,7 @@ impl Glue {
             return (true, false);
         }
         self.net_487070();
-        if self.ready.net.rx {
+        if self.lobby.net.rx {
             self.ready.last_poll = now;
         }
         let all = self.net_485820();

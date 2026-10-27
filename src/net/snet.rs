@@ -73,6 +73,129 @@ struct Game {
     #[cfg(not(target_arch = "wasm32"))]
     advert: Option<Arc<Mutex<Advert>>>,
     code: String,
+    /// Ordinal 113's names by Storm id (the host's table, sent to every client).
+    names: [Option<Vec<u8>>; 8],
+    /// Host: each player's turns not yet in a round, and the players a round waits for.
+    queues: [VecDeque<Vec<u8>>; 8],
+    in_turns: Vec<u8>,
+    /// Rounds of turns Ordinal 122 has not returned yet.
+    rounds: VecDeque<Round>,
+    /// Ordinal 115: my turns sent and not yet back in a round.
+    in_flight: u32,
+    /// Ordinal 130's game mode (bit 2: full / private, the LAN list hides it).
+    mode: u32,
+}
+
+/// One turn of every player (Ordinal 122): flags (0x10000 in the game, 0x20000 with a turn)
+/// and the bytes.
+pub type Round = [(u32, Vec<u8>); 8];
+
+/// Control message kinds over the transport (the first byte; from 0x80: the game's own,
+/// live.rs, start at 1 on the same link once the lobby hands it over).
+mod kind {
+    /// A Storm message: client -> host `to` + bytes, host -> client `from` + bytes.
+    pub const MSG: u8 = 0x80;
+    /// A client's turn (client -> host).
+    pub const TURN: u8 = 0x81;
+    /// A round (host -> client): `n u8`, n x (`player u8`, `flags u32`, `len u16`, bytes).
+    pub const ROUND: u8 = 0x82;
+    /// A client's player name (client -> host, once after Start).
+    pub const NAME: u8 = 0x83;
+    /// The host's name table (host -> client): n x (`id u8`, `len u8`, bytes).
+    pub const NAMES: u8 = 0x84;
+    /// A player left (host -> client): `id u8`, `reason u32`.
+    pub const LEFT: u8 = 0x85;
+}
+
+impl Game {
+    fn new(tr: Transport, host: bool, code: String) -> Game {
+        Game {
+            tr,
+            host,
+            inbox: VecDeque::new(),
+            events: VecDeque::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            advert: None,
+            code,
+            names: Default::default(),
+            queues: Default::default(),
+            in_turns: Vec::new(),
+            rounds: VecDeque::new(),
+            in_flight: 0,
+            mode: 0,
+        }
+    }
+
+    fn names_msg(&self) -> Vec<u8> {
+        let mut m = vec![kind::NAMES];
+        for (i, n) in self.names.iter().enumerate() {
+            if let Some(n) = n {
+                m.extend_from_slice(&[i as u8, n.len() as u8]);
+                m.extend_from_slice(n);
+            }
+        }
+        m
+    }
+
+    /// Host: rounds while every player in the turns has one waiting.
+    fn make_rounds(&mut self) {
+        while !self.in_turns.is_empty() && self.in_turns.iter().all(|&p| !self.queues[p as usize].is_empty()) {
+            let mut r: Round = Default::default();
+            let mut m = vec![kind::ROUND, self.in_turns.len() as u8];
+            for &p in &self.in_turns {
+                let t = self.queues[p as usize].pop_front().unwrap();
+                m.push(p);
+                m.extend_from_slice(&0x30000u32.to_le_bytes());
+                m.extend_from_slice(&(t.len() as u16).to_le_bytes());
+                m.extend_from_slice(&t);
+                r[p as usize] = (0x30000, t);
+            }
+            for p in self.tr.peers().to_vec() {
+                if self.in_turns.contains(&p) {
+                    self.tr.send_ctl(p, m.clone());
+                }
+            }
+            self.rounds.push_back(r);
+        }
+    }
+
+    /// Host: `p` is gone (its link closed or it was dropped).
+    fn drop_player(&mut self, p: u8, reason: u32) {
+        if (p as usize) >= 8 {
+            return;
+        }
+        let was = self.in_turns.contains(&p) || self.names[p as usize].is_some();
+        self.in_turns.retain(|&x| x != p);
+        self.queues[p as usize].clear();
+        self.names[p as usize] = None;
+        if !was {
+            return;
+        }
+        self.events.push_back(NetEvent::Left(p, reason));
+        let mut m = vec![kind::LEFT, p];
+        m.extend_from_slice(&reason.to_le_bytes());
+        // The dropped player gets it too: for it, everyone else is gone.
+        for q in self.tr.peers().to_vec() {
+            self.tr.send_ctl(q, m.clone());
+        }
+        self.make_rounds();
+    }
+}
+
+/// A round's bytes (kind::ROUND without the kind).
+fn parse_round(b: &[u8]) -> Option<Round> {
+    let mut r: Round = Default::default();
+    let n = *b.first()? as usize;
+    let mut at = 1;
+    for _ in 0..n {
+        let p = *b.get(at)? as usize;
+        let flags = u32::from_le_bytes(b.get(at + 1..at + 5)?.try_into().ok()?);
+        let len = u16::from_le_bytes(b.get(at + 5..at + 7)?.try_into().ok()?) as usize;
+        let t = b.get(at + 7..at + 7 + len)?.to_vec();
+        at += 7 + len;
+        *r.get_mut(p)? = (flags, t);
+    }
+    Some(r)
 }
 
 #[derive(Default)]
@@ -137,6 +260,8 @@ struct Advert {
     hash: [u8; 32],
     players: u8,
     max: u8,
+    /// Ordinal 130's bit 2: not listed.
+    full: bool,
     name: Vec<u8>,
     stat: Vec<u8>,
 }
@@ -170,7 +295,7 @@ fn advertise(advert: &Arc<Mutex<Advert>>) {
         let mut buf = [0u8; 64];
         while let Some(a) = weak.upgrade() {
             if let Ok((n, from)) = sock.recv_from(&mut buf) {
-                if &buf[..n] == QUERY {
+                if &buf[..n] == QUERY && !a.lock().unwrap().full {
                     let reply = a.lock().unwrap().bytes();
                     let _ = sock.send_to(&reply, from);
                 }
@@ -191,7 +316,7 @@ fn with_ip(code: &str, ip: &str) -> String {
 /// creator's Storm id is 0 (0x51268c). Ours: a lobby host (transport.rs) bound to
 /// SCBW_NET_BIND (default 0.0.0.0 here: a LAN game), advertised on the LAN.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn create_game(name: &[u8], stat: &[u8], max: u8) -> Option<u8> {
+pub fn create_game(name: &[u8], stat: &[u8], max: u8, player: &[u8]) -> Option<u8> {
     if std::env::var_os("SCBW_NET_BIND").is_none() {
         // SAFETY: the game thread sets it before the transport thread starts.
         unsafe { std::env::set_var("SCBW_NET_BIND", "0.0.0.0") };
@@ -205,11 +330,13 @@ pub fn create_game(name: &[u8], stat: &[u8], max: u8) -> Option<u8> {
     };
     let (addr, hash) = code.split_once('#')?;
     let port: u16 = addr.rsplit_once(':')?.1.parse().ok()?;
-    let advert = Arc::new(Mutex::new(Advert { port, hash: transport::unhex(hash).ok()?, players: 1, max, name: name.to_vec(), stat: stat.to_vec() }));
+    let advert = Arc::new(Mutex::new(Advert { port, hash: transport::unhex(hash).ok()?, players: 1, max, full: false, name: name.to_vec(), stat: stat.to_vec() }));
     advertise(&advert);
-    NET.with(|n| {
-        n.borrow_mut().game = Some(Game { tr, host: true, inbox: VecDeque::new(), events: VecDeque::new(), advert: Some(advert), code });
-    });
+    let mut g = Game::new(tr, true, code);
+    g.advert = Some(advert);
+    g.names[0] = Some(player.to_vec());
+    g.in_turns.push(0);
+    NET.with(|n| n.borrow_mut().game = Some(g));
     Some(0)
 }
 
@@ -277,7 +404,7 @@ fn parse_answer(b: &[u8], ip: &str) -> Option<GameEntry> {
 
 /// Ordinal 118 (0x4d3b50): join the listed game `id`; our join code entry joins by `code`
 /// directly. The local Storm id once the host has answered (waits up to 5 s).
-pub fn join_game(id: u32, code: Option<&str>) -> Option<u8> {
+pub fn join_game(id: u32, code: Option<&str>, player: &[u8]) -> Option<u8> {
     let code = match code {
         Some(c) => c.to_string(),
         None => NET.with(|n| n.borrow().games.iter().find(|g| g.id == id).map(|g| g.code.clone()))?,
@@ -290,7 +417,12 @@ pub fn join_game(id: u32, code: Option<&str>) -> Option<u8> {
             for e in tr.poll() {
                 match e {
                     Event::Start { slot, .. } => {
-                        NET.with(|n| n.borrow_mut().game = Some(Game { tr, host: false, inbox: VecDeque::new(), events: VecDeque::new(), advert: None, code }));
+                        let mut m = vec![kind::NAME];
+                        m.extend_from_slice(player);
+                        tr.send_ctl(transport::HOST, m);
+                        let mut g = Game::new(tr, false, code);
+                        g.names[slot as usize & 7] = Some(player.to_vec());
+                        NET.with(|n| n.borrow_mut().game = Some(g));
                         return Some(slot);
                     }
                     Event::Error(m) => {
@@ -307,7 +439,7 @@ pub fn join_game(id: u32, code: Option<&str>) -> Option<u8> {
     #[cfg(target_arch = "wasm32")]
     {
         crate::todo_port!("snet::join_game", "the browser join (WebTransport) from the glue");
-        let _ = code;
+        let _ = (code, player);
         None
     }
 }
@@ -318,7 +450,7 @@ pub fn send_message(to: u8, msg: &[u8]) {
     NET.with(|n| {
         let mut n = n.borrow_mut();
         let Some(g) = n.game.as_mut() else { return };
-        let mut m = vec![to];
+        let mut m = vec![kind::MSG, to];
         m.extend_from_slice(msg);
         if g.host {
             if to == 0xff {
@@ -336,46 +468,194 @@ pub fn send_message(to: u8, msg: &[u8]) {
 
 /// A message as the host forwards it: `from u8` + the bytes.
 fn framed(from: u8, msg: &[u8]) -> Vec<u8> {
-    let mut m = vec![from];
+    let mut m = vec![kind::MSG, from];
     m.extend_from_slice(msg);
     m
 }
 
-/// Drive the game's link: messages and joins / leaves arrive (call often).
+/// Drive the game's link: messages, turns and joins / leaves arrive (call often).
 pub fn pump() {
     NET.with(|n| {
         let mut n = n.borrow_mut();
         let Some(g) = n.game.as_mut() else { return };
         for e in g.tr.poll() {
             match e {
-                Event::Joined { player } => g.events.push_back(NetEvent::Joined(player)),
-                Event::Lost { player, .. } => g.events.push_back(NetEvent::Left(player, 0x4000_0004)),
+                // A client counts as joined once its name came (Storm knows it at once).
+                Event::Joined { .. } => {}
+                Event::Lost { player, .. } => g.drop_player(player, 0x4000_0004),
                 Event::Ctl { from, msg } if g.host => {
-                    // A client's message: `to` + bytes; the host keeps or forwards it.
-                    let Some((&to, body)) = msg.split_first() else { continue };
-                    if to == 0 || to == 0xff {
-                        g.inbox.push_back((from, body.to_vec()));
-                    }
-                    for p in g.tr.peers().to_vec() {
-                        if p != from && (to == 0xff || to == p) {
-                            g.tr.send_ctl(p, framed(from, body));
+                    let Some((&k, body)) = msg.split_first() else { continue };
+                    match k {
+                        kind::MSG => {
+                            // `to` + bytes; the host keeps or forwards it.
+                            let Some((&to, body)) = body.split_first() else { continue };
+                            if to == 0 || to == 0xff {
+                                g.inbox.push_back((from, body.to_vec()));
+                            }
+                            for p in g.tr.peers().to_vec() {
+                                if p != from && (to == 0xff || to == p) {
+                                    g.tr.send_ctl(p, framed(from, body));
+                                }
+                            }
                         }
+                        kind::TURN if g.in_turns.contains(&from) => {
+                            g.queues[from as usize].push_back(body.to_vec());
+                            g.make_rounds();
+                        }
+                        kind::NAME if (from as usize) < 8 && g.names[from as usize].is_none() => {
+                            g.names[from as usize] = Some(body[..body.len().min(0x18)].to_vec());
+                            let m = g.names_msg();
+                            for p in g.tr.peers().to_vec() {
+                                g.tr.send_ctl(p, m.clone());
+                            }
+                            // Its turns count from the next round on.
+                            g.in_turns.push(from);
+                            g.events.push_back(NetEvent::Joined(from));
+                        }
+                        _ => {}
                     }
                 }
                 Event::Ctl { msg, .. } => {
-                    if let Some((&from, body)) = msg.split_first() {
-                        g.inbox.push_back((from, body.to_vec()));
+                    let Some((&k, body)) = msg.split_first() else { continue };
+                    match k {
+                        kind::MSG => {
+                            if let Some((&from, body)) = body.split_first() {
+                                g.inbox.push_back((from, body.to_vec()));
+                            }
+                        }
+                        kind::ROUND => {
+                            if let Some(r) = parse_round(body) {
+                                g.rounds.push_back(r);
+                            }
+                        }
+                        kind::NAMES => {
+                            let mut at = 0;
+                            let mut names: [Option<Vec<u8>>; 8] = Default::default();
+                            while let (Some(&id), Some(&len)) = (body.get(at), body.get(at + 1)) {
+                                let Some(t) = body.get(at + 2..at + 2 + len as usize) else { break };
+                                if let Some(x) = names.get_mut(id as usize) {
+                                    *x = Some(t.to_vec());
+                                }
+                                at += 2 + len as usize;
+                            }
+                            for (i, x) in names.iter().enumerate() {
+                                if x.is_some() && g.names[i].is_none() && i as u8 != g.tr.me() {
+                                    g.events.push_back(NetEvent::Joined(i as u8));
+                                }
+                            }
+                            g.names = names;
+                        }
+                        kind::LEFT if body.len() >= 5 => {
+                            let reason = u32::from_le_bytes(body[1..5].try_into().unwrap());
+                            let gone: Vec<u8> = if body[0] == g.tr.me() { (0..8).filter(|&i| i != body[0]).collect() } else { vec![body[0]] };
+                            for p in gone {
+                                if g.names[p as usize].take().is_some() {
+                                    g.events.push_back(NetEvent::Left(p, reason));
+                                }
+                            }
+                        }
+                        _ => {}
                     }
                 }
-                Event::Error(m) => eprintln!("net: {m}"),
+                Event::Error(m) => {
+                    eprintln!("net: {m}");
+                    // A client's link to the host closed: the host and everyone with it are gone.
+                    if !g.host {
+                        for i in 0..8u8 {
+                            if i != g.tr.me() && g.names[i as usize].take().is_some() {
+                                g.events.push_back(NetEvent::Left(i, 0x4000_0004));
+                            }
+                        }
+                    }
+                }
                 _ => {}
             }
         }
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(a) = g.advert.as_ref() {
-            a.lock().unwrap().players = 1 + g.tr.peers().len() as u8;
+            let mut a = a.lock().unwrap();
+            a.players = 1 + g.tr.peers().len() as u8;
+            a.full = g.mode & 2 != 0;
         }
     });
+}
+
+/// Ordinal 128 (SNetSendTurn, from 0x485aa0): my next turn.
+pub fn send_turn(t: &[u8]) {
+    NET.with(|n| {
+        let mut n = n.borrow_mut();
+        let Some(g) = n.game.as_mut() else { return };
+        g.in_flight += 1;
+        if g.host {
+            let me = g.tr.me();
+            g.queues[me as usize].push_back(t.to_vec());
+            g.make_rounds();
+        } else {
+            let mut m = vec![kind::TURN];
+            m.extend_from_slice(t);
+            g.tr.send_ctl(transport::HOST, m);
+        }
+    });
+}
+
+/// Ordinal 115 (0x485aa0): my turns not yet back in a round.
+pub fn turns_in_flight() -> u32 {
+    NET.with(|n| n.borrow().game.as_ref().map_or(0, |g| g.in_flight))
+}
+
+/// Ordinal 122 (SNetReceiveTurns, 0x4bb530): the next round of every player's turn, if
+/// it is complete.
+pub fn receive_turns() -> Option<Round> {
+    pump();
+    NET.with(|n| {
+        let mut n = n.borrow_mut();
+        let g = n.game.as_mut()?;
+        let r = g.rounds.pop_front()?;
+        if r[g.tr.me() as usize & 7].0 & 0x20000 != 0 {
+            g.in_flight = g.in_flight.saturating_sub(1);
+        }
+        Some(r)
+    })
+}
+
+/// Ordinal 113 (SNetGetPlayerName): the name of Storm id `id`.
+pub fn player_name(id: u32) -> Option<Vec<u8>> {
+    NET.with(|n| n.borrow().game.as_ref()?.names.get(id as usize)?.clone())
+}
+
+/// Ordinal 106 (SNetDropPlayer, host): drop `id` (its link closes; everyone gets the leave).
+pub fn drop_player(id: u32, reason: u32) {
+    NET.with(|n| {
+        let mut n = n.borrow_mut();
+        let Some(g) = n.game.as_mut().filter(|g| g.host) else { return };
+        if id < 8 {
+            g.drop_player(id as u8, reason);
+        }
+    });
+}
+
+/// Ordinal 107 type 4 / Ordinal 130 (0x4c4160): the game mode bits (2: no open slot, the
+/// game is not listed as joinable).
+pub fn game_mode() -> u32 {
+    NET.with(|n| n.borrow().game.as_ref().map_or(0, |g| g.mode))
+}
+
+pub fn set_game_mode(mode: u32) {
+    NET.with(|n| {
+        if let Some(g) = n.borrow_mut().game.as_mut() {
+            g.mode = mode;
+        }
+    });
+}
+
+/// The transport of the game, for the in-game session (live.rs) once the lobby starts it:
+/// (it, this side created the game, the players still in it).
+pub fn take_transport() -> Option<(Transport, bool, Vec<u8>)> {
+    NET.with(|n| {
+        let g = n.borrow_mut().game.take()?;
+        let ids = (0..8u8).filter(|&i| g.names[i as usize].is_some()).collect();
+        Some((g.tr, g.host, ids))
+    })
 }
 
 /// Ordinal 121: the next message (from, bytes).
@@ -412,7 +692,7 @@ mod tests {
         let (tx, rx) = std::sync::mpsc::channel();
         let host = std::thread::spawn(move || {
             assert!(initialize_provider(UDPN));
-            assert_eq!(create_game(b"test game", b",,,,\rhost\rmap\r", 2), Some(0));
+            assert_eq!(create_game(b"test game", b",,,,\rhost\rmap\r", 2, b"host"), Some(0));
             let t0 = Instant::now();
             let mut joined = None;
             while t0.elapsed().as_secs() < 10 {
@@ -425,6 +705,17 @@ mod tests {
                 }
                 if let Some(m) = receive_message() {
                     tx.send(m).unwrap();
+                    // One round of turns: the host's and the joiner's.
+                    send_turn(b"h");
+                    let t1 = Instant::now();
+                    let mut r = None;
+                    while t1.elapsed().as_secs() < 10 && r.is_none() {
+                        r = receive_turns();
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                    let r = r.expect("host round");
+                    assert_eq!((r[0].0, r[0].1.as_slice(), r[1].0, r[1].1.as_slice()), (0x30000, &b"h"[..], 0x30000, &b"j"[..]));
+                    assert_eq!(player_name(1), Some(b"joiner".to_vec()));
                     // Keep the link up until the joiner has had time to ack our message.
                     let t1 = Instant::now();
                     while t1.elapsed().as_secs() < 3 {
@@ -450,8 +741,9 @@ mod tests {
         assert_eq!(games.len(), 1, "the game is listed");
         assert_eq!(games[0].name, b"test game");
         assert_eq!((games[0].players, games[0].max), (1, 2));
-        assert_eq!(join_game(games[0].id, None), Some(1));
+        assert_eq!(join_game(games[0].id, None, b"joiner"), Some(1));
         send_message(0, b"hello host");
+        send_turn(b"j");
         let t0 = Instant::now();
         let mut got = None;
         while t0.elapsed().as_secs() < 10 && got.is_none() {
@@ -460,6 +752,16 @@ mod tests {
             std::thread::sleep(Duration::from_millis(5));
         }
         assert_eq!(got, Some((0, b"hello joiner".to_vec())));
+        let t0 = Instant::now();
+        let mut r = None;
+        while t0.elapsed().as_secs() < 10 && r.is_none() {
+            r = receive_turns();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let r = r.expect("joiner round");
+        assert_eq!((r[0].1.as_slice(), r[1].1.as_slice()), (&b"h"[..], &b"j"[..]));
+        assert_eq!(turns_in_flight(), 0);
+        assert_eq!(player_name(0), Some(b"host".to_vec()));
         assert_eq!(rx.recv_timeout(Duration::from_secs(10)).unwrap(), (1, b"hello host".to_vec()));
         assert_eq!(host.join().unwrap(), Some(1));
     }

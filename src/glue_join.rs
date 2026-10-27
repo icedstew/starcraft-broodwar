@@ -210,7 +210,7 @@ impl Glue {
     /// 0x4b8090's game type texts: the type's name (the first game type node with this type
     /// and byte 1), its subtype heading (+0x28, ':' appended) and, when the exact template is
     /// listed (0x4aac90), the subtype's text (0x4ab6c0 with the most players).
-    fn join_type_texts(&self, gt: u8, b1: u8, sub: u16, most: u8) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+    pub(super) fn join_type_texts(&self, gt: u8, b1: u8, sub: u16, most: u8) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
         let Some(t) = self.find_by_type(gt, b1) else { return (Vec::new(), Vec::new(), Vec::new()) };
         let name = cstr(&t.name).to_vec();
         let mut label = cstr(&t.desc).to_vec();
@@ -249,11 +249,17 @@ impl Glue {
         if self.spawn {
             todo_port!("0x4d3b50", "the spawn version check (0x4d9cd0 vs the description +0x2c)");
         }
-        let Some(me) = snet::join_game(g.id, None) else {
+        let Some(me) = snet::join_game(g.id, None, cstr(&self.setup.local_name)) else {
             self.error_popup(files, 0x59);
             return false;
         };
         self.setup.local_storm_id = me as u32;
+        self.lobby_host = false;
+        // 0x4b8090 / 0x4aac90 made the selected game's type record the template (0x596865).
+        let (gt, b1, sub) = (g.desc[0x28], g.desc[0x29], u16::from_le_bytes([g.desc[0x2a], g.desc[0x2b]]));
+        if let Some(t) = self.find_template(gt, b1, sub).map(|t| t.rec) {
+            self.setup.template.copy_from_slice(&t);
+        }
         let template = self.setup.template;
         let mut d = g.desc.clone();
         d[0x6d..0x8d].copy_from_slice(&template);

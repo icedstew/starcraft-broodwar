@@ -116,6 +116,10 @@ pub struct Setup {
     pub net_slot: [u8; 8],
     /// 0x66fbfa.
     pub g66fbfa: u8,
+    /// 0x57f090: Storm turns in flight (1 single player; a provider's caps +0x20, 2 ..= 8).
+    pub turns_in_flight: u32,
+    /// 0x596bb0.
+    pub g596bb0: u32,
     /// 0x57f0b4: a network game.
     pub multiplayer: bool,
     /// 0x59688c: the network provider id ('BNET' 0x424e4554 = battle.net).
@@ -171,6 +175,9 @@ pub struct Setup {
     pub briefing: Vec<Box<[u8; 0x960]>>,
     /// 0x57fd3c: the map path; 0x57fe40: the map title.
     pub map_path: [u8; 0x104],
+    /// Ours: the map archive's bytes when it came over the network (the lobby's transfer):
+    /// opened from memory instead of `map_path`.
+    pub map_data: Option<Vec<u8>>,
     pub map_title: [u8; 0x20],
     /// 0x5994dc.
     pub map_loaded: u32,
@@ -204,6 +211,8 @@ impl Default for Setup {
             results: [0; 12],
             net_slot: [0; 8],
             g66fbfa: 0,
+            turns_in_flight: 1,
+            g596bb0: 0,
             multiplayer: false,
             net_provider: 0,
             template: [0; 0x20],
@@ -236,6 +245,7 @@ impl Default for Setup {
             map_archive: None,
             briefing: Vec::new(),
             map_path: [0; 0x104],
+            map_data: None,
             map_title: [0; 0x20],
             map_loaded: 0,
             map_width: 0,
@@ -624,7 +634,7 @@ impl Setup {
             // reads in view.rs.
             return Some((data.to_vec(), None));
         }
-        if self.map_path[0] == 0 {
+        if self.map_path[0] == 0 && self.map_data.is_none() {
             return None;
         }
         let n = self.map_path.iter().position(|&c| c == 0).unwrap_or(self.map_path.len());
@@ -647,7 +657,10 @@ impl Setup {
     /// (0x4137f0 with 0x4ca540: priorities 6..1; the "Tourn" one needs League_<id>.cnd too).
     /// Returns the league priority (0 none); the archive is kept when `keep`.
     fn open_map_archive(&mut self, path: &str, keep: bool) -> Option<u32> {
-        let a = Mpq::open(std::path::Path::new(path)).ok()?;
+        let a = match &self.map_data {
+            Some(d) => Mpq::new(d.clone()).ok()?,
+            None => Mpq::open(std::path::Path::new(path)).ok()?,
+        };
         let mut found = 0;
         'prio: for prio in (1..=6).rev() {
             for (name, p) in LEAGUE_FILES.iter().rev() {
@@ -987,6 +1000,7 @@ impl Setup {
     /// `param_3` flag (0: forget the loose-directory mode).
     pub fn load_map(&mut self, files: &Storage, path: &str, hdr: &mut MapHeader, keep_dir: bool, net_tbl: &[u8]) -> bool {
         self.map_path[0] = 0;
+        self.map_data = None;
         if !keep_dir {
             self.map_dir_flag = 0;
         }

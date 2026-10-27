@@ -206,6 +206,7 @@ impl Glue {
         // 0x57f0d8 / 0x57f090 size Storm's turns; the game's turns go through our rollback
         // session instead (net/mod.rs), which has its own delay.
         self.setup.net_provider = id;
+        self.setup.turns_in_flight = snet::provider_caps().map_or(1, |c| c.turns_in_flight.clamp(2, 8));
         todo_port!("0x4d3cc0", "the Storm event handlers 0x4c4980 / 0x4c3c90 / 0x47f750 / 0x4aaea0 (Ordinal 123)");
         true
     }

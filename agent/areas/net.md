@@ -297,3 +297,36 @@ PRED_LIMIT stalls, ~30% more ticks); tl2071 INVALID (a command at frame 0 < dela
   the member's move changes the hash. Not checked against native (needs 3+ real clients).
   Left: team chat filter dialog (teamfltr.bin 0x490570), "[team]" chat names, 0x4a3010 team
   result, lobby seat races (0x486040 / 0x471d00), gluChat team slots.
+
+## Lobby (gluChat) and map transfer (2026-10-27)
+
+- Storm turns over snet.rs (Ordinal 128 / 122 / 115): the host is the turn server: each
+  player's turns queue at the host, a round (one turn of every player in the game) goes out
+  once all are there; a joiner counts from its NAME message on (that is also when the host's
+  Joined event fires: Storm knows names at join). Control kinds 0x80.. (live.rs's 1.. share
+  the link after the start). Names (Ordinal 113), drops (106), game mode (107 / 130: bit 2
+  hides the game from the LAN list).
+- glue_lobby.rs: the turn exchange (moved from glue_ready.rs; network-aware), 0x486040 lobby
+  commands 0x3c .. 0x5b, net_chat_cmds.cpp senders / pending buffers (0x6d5c30 .. 0x6d5c94,
+  flushed by 0x471a50 in its order), 'I' .. 'P' messages (0x470a30), 0x4d4130 / 0x4d4340 /
+  0x4f40f0 / 0x4719d0 (countdown: 24 turns, 0x48 seed + slot order from the creator),
+  0x4c4980 / 0x4c3c90 handlers. glue_chat.rs: the gluChat screen (rows by force or in
+  order, owner / race combos, chat list + entry, description, countdown).
+- The game the lobby starts runs on the rollback Session over the lobby's transport
+  (`lobby_net_game`, delay 2); Session::map_humans maps Storm ids to the slots.
+- Map transfer ('O', 0x4eafe0 sub-messages, our wire): 1 offer (id, size, CRC32, name) sent
+  on Joined, 2 request from an offset, 4 data (`O 4 id 0 off u32 len u16 bytes`, 499-byte
+  chunks, 8 in flight), 5 ack, 0 state (1 = has it). The joiner checks maps\ and
+  maps\download\ for the name + CRC first; what arrives stays in memory
+  (`Setup::map_data`, opened by Mpq::new: browsers too). Start (0x452460 / 0x472a70)
+  waits for every member. 0x3d carries the percent (shown in the row's fourth box).
+- Test: two `scbw glue` processes with SCBW_GLUE_REALTIME=1 (waits take real time),
+  SCBW_LAN_PORT, SCBW_NET_HEADLESS=300 (the started game runs headless), scripts: main "t m",
+  Enter (expansion), "t o", New ID "t name; k 0d", login Enter, join "t o" / create "t g",
+  "t o"; the creator's Ok is "c 500 393" (the entry takes the keys). Checked: join, slots,
+  chat both ways, start -> equal hashes at 300; a joiner whose install has no maps folder
+  downloads the map and plays (equal hashes).
+- Not done: slot row details of 0x450d90 (ban, team seats, Make Game Public), the minimap
+  preview (0x4a5d10), saved network games (0x6d1218), the ready room's network path in a
+  window, team / UMS force moves (0x42 / 0x43) from the UI, slash commands in the lobby,
+  0x4a3010 when the lobby stalls 20 s, a browser joining from the glue.

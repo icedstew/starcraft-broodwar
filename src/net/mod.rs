@@ -58,9 +58,19 @@ pub struct Session {
     /// Test: SCBW_NET_DEBUG_DESYNC=<f>: skip the first non-empty frame at or after f.
     debug_desync: Option<u32>,
     skipped: Option<u32>,
+    /// The human each transport player plays (identity unless `map_humans`: a lobby's Storm
+    /// ids play the slots the lobby gave them).
+    human_of: [u8; 256],
 }
 
 impl Session {
+    /// Transport player -> human (the slot the lobby gave each Storm id).
+    pub fn map_humans(&mut self, m: &[(u8, u8)]) {
+        for &(p, h) in m {
+            self.human_of[p as usize] = h;
+        }
+    }
+
     /// `players`: (map player, storm id) of every player in the game.
     pub fn new(me: u8, players: &[(u8, u8)], delay: u32) -> Session {
         let mut players = players.to_vec();
@@ -88,6 +98,7 @@ impl Session {
             hash_next: 8,
             debug_desync: std::env::var("SCBW_NET_DEBUG_DESYNC").ok().and_then(|v| v.parse().ok()),
             skipped: None,
+            human_of: std::array::from_fn(|i| i as u8),
         }
     }
 
@@ -219,7 +230,7 @@ impl Session {
             for (i, &(player, _)) in self.players.iter().enumerate() {
                 if let Some(Some(turn)) = self.table[i].get(f as usize) {
                     for c in replay::split_commands(turn) {
-                        scene.human_command(player, c);
+                        scene.human_command(self.human_of[player as usize], c);
                     }
                 }
             }
@@ -250,8 +261,11 @@ impl Session {
             return;
         }
         let mut ids = [0u8; 12];
-        for &(p, s) in self.players.iter().filter(|p| p.0 < 12) {
-            ids[p as usize] = s;
+        for &(p, s) in self.players.iter() {
+            let h = self.human_of[p as usize];
+            if h < 12 {
+                ids[h as usize] = s;
+            }
         }
         crate::replay_rec::set_storm_ids(ids);
         while self.recorded < self.confirmed.min(self.frame) {
