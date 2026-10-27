@@ -355,6 +355,8 @@ pub struct Glue {
     /// The last left button press (clock, control id): a second one on the same control
     /// within the double-click time (500 ms) is event 6.
     last_press: Option<(u32, i16)>,
+    /// The tick slider (type 6) the left button holds (its index in the top dialog).
+    slider_held: Option<usize>,
     /// The create game screen's globals (glue_create.rs).
     create: create::Create,
     /// The score screen's globals (glue_score.rs).
@@ -453,6 +455,7 @@ impl Glue {
             error_timer: None,
             edit_refuse: Vec::new(),
             last_press: None,
+            slider_held: None,
             hist: None,
             hist_list: 0,
             create: create::Create::default(),
@@ -1609,6 +1612,7 @@ impl Glue {
     /// goes to the chat (3); anything but 0xd / -3 (cancel) goes to the main menu; cancel
     /// drops the mission map and goes back (campaign select, or the provider's screen).
     fn done_create(&mut self, result: i32, _which: u8) {
+        self.create_speed_close();
         match result {
             0xc => {
                 if self.setup.multiplayer {
@@ -2786,7 +2790,7 @@ impl Glue {
             }
         }
         let Some(i) = dlg.hit(mx, my) else { return };
-        let (id, ty) = (dlg.controls[i].id, dlg.controls[i].ty);
+        let (id, ty, cflags) = (dlg.controls[i].id, dlg.controls[i].ty, dlg.controls[i].flags);
         let dbl = self.last_press.is_some_and(|(t, last)| last == id && clock.wrapping_sub(t) < 500);
         self.last_press = if dbl { None } else { Some((clock, id)) };
         match ty {
@@ -2840,13 +2844,49 @@ impl Glue {
                     dlg.controls[i].edit_click(mx - ox, &font);
                 }
             }
+            6 if cflags & (crate::dlg::flag::TICK_SLIDER | crate::dlg::flag::DISABLED) == crate::dlg::flag::TICK_SLIDER => {
+                self.slider_held = Some(i);
+                self.slider_follow(files);
+            }
             _ => {}
+        }
+    }
+
+    /// The held tick slider follows the pointer (0x415910), snapping to whole values; a
+    /// new value is the control's event 0xe code 0xb.
+    fn slider_follow(&mut self, files: &Storage) {
+        let Some(i) = self.slider_held else { return };
+        let p = self.palette_id();
+        self.look(files, p);
+        let skin = &self.looks[p].as_ref().unwrap().skin;
+        let half = skin.grp.frame(0x63).map_or(5, |f| f.w / 2);
+        let x = self.mouse.0;
+        let top = if self.popup.is_some() { self.popup.as_mut() } else { self.dlg.as_mut() };
+        let Some((dlg, _)) = top else { return };
+        let Some(c) = dlg.controls.get(i) else { return };
+        let r = dlg.abs(c);
+        let range = skin.slider_range(r).max(1);
+        let c = &mut dlg.controls[i];
+        let (lo, hi) = (c.value.1 as i32, c.value.2 as i32);
+        let v = (lo + ((x - r.0 - half) * (hi - lo) + range / 2).div_euclid(range)).clamp(lo, hi) as i16;
+        if v != c.value.0 {
+            c.value.0 = v;
+            let id = c.id;
+            self.slider_changed(id, v);
+        }
+    }
+
+    /// A slider's new value (event 0xe code 0xb to its proc).
+    fn slider_changed(&mut self, id: i16, v: i16) {
+        if matches!(self.dlg, Some((_, Open::Create(_)))) {
+            self.create_speed_changed(id, v);
         }
     }
 
     /// The mouse moved with the button down (event 3 to the captured list, 0x41ae90): the
     /// row under it is highlighted.
-    pub fn drag(&mut self) {
+    pub fn drag(&mut self, files: &Storage) {
+        self.slider_follow(files);
         let (mx, my) = self.mouse;
         let Some((dlg, _)) = self.top() else { return };
         let (ox, oy) = dlg.origin();
@@ -2868,6 +2908,7 @@ impl Glue {
     /// The left button went up (event 5): a list that was pressed selects the highlighted
     /// row (0x41a490: event 0xb when it differs and is a row).
     pub fn release(&mut self) {
+        self.slider_held = None;
         let (mx, my) = self.mouse;
         let Some((dlg, _)) = self.top() else { return };
         let (ox, oy) = dlg.origin();
@@ -3401,7 +3442,7 @@ pub fn run(files: &Storage, shot: Option<&str>) -> std::io::Result<()> {
                     }
                     Some("m") => {
                         glue.mouse_to(num(1), num(2));
-                        glue.drag();
+                        glue.drag(files);
                     }
                     Some("u") => {
                         glue.mouse_to(num(1), num(2));
@@ -3494,7 +3535,7 @@ pub fn run(files: &Storage, shot: Option<&str>) -> std::io::Result<()> {
             if down && !was_down {
                 glue.press(files);
             } else if down {
-                glue.drag();
+                glue.drag(files);
             } else if was_down {
                 glue.release();
             }

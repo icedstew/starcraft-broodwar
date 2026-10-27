@@ -41,6 +41,9 @@ mod ids {
     pub const OWNER_LAST: i16 = 27;
     pub const RACE_FIRST: i16 = 28;
     pub const RACE_LAST: i16 = 35;
+    /// The network screen's game speed label and slider (0x4ae860).
+    pub const SPEED_LABEL: i16 = 15;
+    pub const SPEED: i16 = 16;
     /// "Computer Slots" / "Human Slots" (Use Map Settings).
     pub const COMP_SLOTS: i16 = 36;
     pub const HUMAN_SLOTS: i16 = 37;
@@ -525,7 +528,7 @@ impl Glue {
         // the folder label gets its draw 0x4ad980.
         self.slide_in(0x51a9f0, 5, 0);
         if self.setup.multiplayer {
-            todo_port!("0x4ae860", "the network screen's game speed slider (id 16, 0x4ae250 / 0x4ae3c0) and game name");
+            self.create_speed_init();
         }
         if let Some(c) = self.cctl(ids::DIR) {
             c.update = Update::DirLabel;
@@ -795,6 +798,52 @@ impl Glue {
     fn saved_game_speed(&self) -> u8 {
         let Some(v) = registry::load_string("Game Speed", 0x80) else { return 3 };
         (0..7u8).find(|&i| self.glu(85 + i as usize).as_bytes().eq_ignore_ascii_case(&v)).unwrap_or(3)
+    }
+
+    /// 0x4ae860 (the network screen's game speed slider, 16) event 10 (flag 0x2000000, 0x414c00:
+    /// thumb 100, step 1) and 0: values 0 .. 6 (0x415340), the speed of last time (0x4ae320,
+    /// 0x417e50), the label (0x4ae250).
+    fn create_speed_init(&mut self) {
+        let v = self.saved_game_speed() as i16;
+        if let Some(c) = self.cctl(ids::SPEED) {
+            c.flags |= flag::TICK_SLIDER;
+            c.thumb = 100;
+            c.step = 1;
+            c.value = (v, 0, 6);
+        }
+        self.create_speed_label(v);
+    }
+
+    /// 0x4ae250 (EAX = the slider): its value is the game speed (0x59bb6c) and the label (15)
+    /// reads gluAll 0x5d, '\x12' and the speed's name (gluAll 0x55 + speed, 0x500b98).
+    fn create_speed_label(&mut self, v: i16) {
+        if !(0..7).contains(&v) {
+            return;
+        }
+        self.create.speed = v as u8;
+        let mut text = self.glu(0x5d).into_bytes();
+        text.push(0x12);
+        text.extend_from_slice(self.glu(0x55 + v as usize).as_bytes());
+        if let Some(c) = self.cctl(ids::SPEED_LABEL) {
+            c.text = text;
+        }
+    }
+
+    /// 0x4ae860 event 0xe code 0xb (the slider moved): 0x4ae250.
+    pub(super) fn create_speed_changed(&mut self, id: i16, v: i16) {
+        if id == ids::SPEED && self.setup.multiplayer {
+            self.create_speed_label(v);
+        }
+    }
+
+    /// 0x4ae860 event 1 (the dialog closes): 0x4ae3c0 saves the slider's speed.
+    pub(super) fn create_speed_close(&mut self) {
+        if !self.setup.multiplayer {
+            return;
+        }
+        if let Some(v) = self.cctl(ids::SPEED).map(|c| c.value.0) {
+            self.save_game_speed(v);
+        }
     }
 
     /// 0x4ae3c0 (`speed`, the slider's value +0x3a): saves the name of the game speed as
