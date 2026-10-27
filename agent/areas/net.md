@@ -341,3 +341,13 @@ PRED_LIMIT stalls, ~30% more ticks); tl2071 INVALID (a command at frame 0 < dela
   window, team / UMS force moves (0x42 / 0x43) from the UI, slash commands in the lobby,
   0x4a3010 when the lobby stalls 20 s, an in-lobby "copy join code" UI (the code is on
   stdout), the browser front end from the title screen (it starts at the lobby).
+
+## Alliance dialog in games (2026-10-27)
+
+Minimap button 4 outside a replay: 0x4913d0 takes the local alliances (0x63ff64) and shared
+vision; rows 0x490300 (other players; computers only in Team CTF; boxes off with locked
+alliances / computers), in a team game rez\teamfltr.bin with 0x490570 (a row per team
+without a computer, member names in labels -30..); allied victory 0x490c40; Accept 0x490fe0
+sends 0x0e (2 bits per player) and 0x0d. Checked in a window shot (melee rows); the team
+layout opens but its member labels did not show in a SCBW_TEAMS shot: not checked vs native.
+The message dialog (minimap button 3, 0x48ff10 recipients) is still not ported.

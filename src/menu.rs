@@ -379,6 +379,8 @@ pub struct Ctx {
     pub replay_speed: i16,
     /// 0x51268c: the local player's storm id.
     pub local_storm: u32,
+    /// 0x57f0b4 && 0x596875: a team game (the alliance dialog is rez\teamfltr.bin, 0x5042d0).
+    pub team: bool,
     /// 0x66fe20 (stride 0x22): per storm id, the net slot is connected (1).
     pub net_slot: [u8; 8],
     /// 0x596877 (game template +0x12): set, the game cannot be saved.
@@ -457,7 +459,7 @@ pub enum Kind {
 }
 
 impl Kind {
-    fn bin(self, replay: bool) -> &'static str {
+    fn bin(self, replay: bool, team: bool) -> &'static str {
         match self {
             Kind::Game => "rez/gamemenu.bin",
             Kind::Options => "rez/options.bin",
@@ -482,10 +484,35 @@ impl Kind {
             Kind::OkCancel => "rez/okcancel.bin",
             Kind::Ok => "rez/ok.bin",
             Kind::Fatal => "rez/dlgFatal.bin",
-            // 0x5042bc (0x5042d0 rez	eamfltr.bin in a team game, not ported)
+            // 0x5042bc / 0x5042d0
+            Kind::ReplayVision if team => "rez/teamfltr.bin",
             Kind::ReplayVision => "rez/allyfltr.bin",
             Kind::TimeOut => "rez/timeout.bin",
         }
+    }
+}
+
+/// The alliance dialog's view of the game (0x490300 / 0x490570).
+pub struct AllyRows {
+    /// 0x512684: the local slot.
+    pub local: usize,
+    /// 0x57eee8 per slot.
+    pub types: [u8; 12],
+    /// 0x57eeea per slot.
+    pub forces: [u8; 12],
+    /// 0x58d634 + 0xc * local: the local player's alliances.
+    pub ally: [u8; 12],
+    pub template: [u8; 0x20],
+    pub team: bool,
+    /// Per slot: a human still in the game (0x66fe20 of its storm id, not defeated), its name.
+    pub members: [bool; 8],
+    pub member_names: [Vec<u8>; 8],
+}
+
+impl AllyRows {
+    /// 0x4aabb0: alliances can change (0x596874 == 1 and not 0x596877).
+    pub fn alliances_allowed(&self) -> bool {
+        self.template[0xf] == 1 && self.template[0x12] == 0
     }
 }
 
@@ -527,6 +554,9 @@ pub enum Action {
     /// 0x490fe0 (the replay vision dialog's OK): the shown players (0x63ff74) and the all
     /// players box; the caller runs `State::set_replay_vision`.
     ReplayVision(u16, bool),
+    /// 0x490fe0 outside a replay: the alliance (command 0x0e, 2 bits per player) and the
+    /// shared vision (0x0d) go out.
+    Alliance([u8; 12], u16),
     /// 0x4a3010: drop the players the game waits for.
     DropPlayers,
 }
@@ -566,6 +596,13 @@ pub struct Menu {
     ctx: Ctx,
     /// 0x63ff74: the replay vision dialog's shown players (a bit per player).
     vision: u16,
+    /// 0x63ff64: the alliance dialog's alliance with each player (0 none, 1 allied, 2 allied
+    /// victory too).
+    ally: [u8; 12],
+    /// 0x63ff64 + the local slot: the value a box turned on takes.
+    ally_self: u8,
+    /// The dialog shows a replay's vision rows (0x6d0f14).
+    replay_rows: bool,
 }
 
 /// 0x512768: button graphics by style (0 minimap, 3 OK, 4 menu buttons, 5 Cancel, ...).
@@ -654,7 +691,7 @@ impl Menu {
     /// 0x460d60 / 0x480e70 (`saved` = the copy of the 9 settings dwords).
     /// 0x4cda30: the Cancel / Previous (-3) graphic and the WIDE flag (inline here).
     pub fn open(kind: Kind, depth: u8, files: &Storage, skin: &Skin, ctx: Ctx, set: &Settings) -> Option<Menu> {
-        let mut dlg = Dialog::parse(&files.read(kind.bin(ctx.replay)).ok()?);
+        let mut dlg = Dialog::parse(&files.read(kind.bin(ctx.replay, ctx.team)).ok()?);
         dlg.this.flags |= flag::VISIBLE;
         // 0x4c9cc0 / 0x4c90c0
         skin.menu_background(&mut dlg);
@@ -875,7 +912,7 @@ impl Menu {
         }
         // The edit has the focus (0x418580).
         dlg.active = dlg.controls.iter().position(|c| c.ty == 8 && c.flags & flag::VISIBLE != 0);
-        Some(Menu { kind, dlg, depth, saved: *set, pressed: None, dragging: None, click: false, was_down: false, clock: None, last_press: None, timers, tick_count: 0, pump_ms: 0, ctx, vision: 0 })
+        Some(Menu { kind, dlg, depth, saved: *set, pressed: None, dragging: None, click: false, was_down: false, clock: None, last_press: None, timers, tick_count: 0, pump_ms: 0, ctx, vision: 0, ally: [0; 12], ally_self: 0, replay_rows: false })
     }
 
     /// 0x490e90 (the replay vision dialog's init) with 0x490d70 (event 10) in a replay, and
@@ -886,10 +923,27 @@ impl Menu {
     /// 0x4901f0), the ally box hidden (0x418700), the vision box shown, graphic 0xb, checked by
     /// the mask bit (0x490850 event 0). Not a replay (alliance rows) and team games
     /// (0x490570) are not ported.
-    pub fn vision_init(&mut self, order: &[u32], names: &[Vec<u8>; 12], colors: &[u8; 12], mask: u16, replay: bool, glu: &[u8]) {
+    pub fn vision_init(&mut self, order: &[u32], names: &[Vec<u8>; 12], colors: &[u8; 12], mask: u16, replay: bool, glu: &[u8], rows: Option<&AllyRows>) {
         self.vision = mask;
+        self.replay_rows = replay;
+        if let (false, Some(r)) = (replay, rows) {
+            self.ally = r.ally;
+            self.ally_self = r.ally[r.local];
+            if r.team {
+                self.team_rows(order, names, colors, mask, r);
+            } else {
+                self.ally_rows(order, names, colors, mask, r);
+            }
+            // 0x490c40 event 0: allied victory only where alliances are allowed (0x4aabb0).
+            if let Some(c) = find(&mut self.dlg, 0x19) {
+                c.checked = r.ally.iter().any(|&a| a == 2);
+                if !r.alliances_allowed() {
+                    c.flags |= flag::DISABLED;
+                }
+            }
+            return;
+        }
         if !replay {
-            crate::todo_port!("0x490300", "the alliance rows outside a replay");
             return;
         }
         // 0x490d70: label 0x1a takes gluAll 0xb6, label 0x1b is hidden; 0x490c40 event 10: box
@@ -916,6 +970,85 @@ impl Menu {
                 c.value.0 = p as i16;
                 c.checked = mask >> p & 1 != 0;
             }
+        }
+    }
+
+    /// 0x490250 / 0x4901f0: row label `k` shows player `p` with its color.
+    fn ally_label(&mut self, k: usize, p: usize, names: &[Vec<u8>; 12], colors: &[u8; 12]) {
+        if let Some(c) = find(&mut self.dlg, -10 - k as i16) {
+            c.text = names[p].clone();
+            c.value.0 = p as i16;
+            c.update = crate::dlg::Update::Player(colors[p]);
+            c.flags |= flag::VISIBLE;
+        }
+    }
+
+    /// A row's ally (1 + k) or vision (13 + k) box for player `p`: graphic 0xb, checked,
+    /// disabled.
+    fn ally_box(&mut self, id: i16, p: usize, on: bool, off: bool) {
+        if let Some(c) = find(&mut self.dlg, id) {
+            c.flags |= flag::VISIBLE;
+            c.graphic = 0xb;
+            c.value.0 = p as i16;
+            c.checked = on;
+            if off {
+                c.flags |= flag::DISABLED;
+            }
+        }
+    }
+
+    /// 0x490300 (not a replay, not a team game): a row per other player (computers only in
+    /// Team CTF, 0x596865 == 0xf) in 0x490000's order: the ally box (off with locked
+    /// alliances, 0x596874 != 1 or 0x596877, and for a computer), the vision box (off for a
+    /// computer, and unless the local or that player is an observer (9) with locked alliances).
+    fn ally_rows(&mut self, order: &[u32], names: &[Vec<u8>; 12], colors: &[u8; 12], mask: u16, r: &AllyRows) {
+        let locked = !r.alliances_allowed();
+        let mut k = 0;
+        for &p in order.iter().rev() {
+            let p = p as usize & 15;
+            if p >= 12 || p == r.local || (r.template[0] != 0xf && r.types[p] == 1) {
+                continue;
+            }
+            self.ally_label(k, p, names, colors);
+            let comp = r.types[p] == 1;
+            self.ally_box(1 + k as i16, p, r.ally[p] != 0, locked || comp);
+            let vis_off = comp || r.types[r.local] == 9 || (r.types[p] != 9 && locked);
+            self.ally_box(13 + k as i16, p, mask >> p & 1 != 0, vis_off);
+            k += 1;
+        }
+    }
+
+    /// 0x490570 (a team game, rez\teamfltr.bin): a row per team without a computer, in
+    /// 0x490000's order of its leaders: the boxes for another team (allied victory needs
+    /// 0x4ab050), then labels -30.. name the team's humans still in the game.
+    fn team_rows(&mut self, order: &[u32], names: &[Vec<u8>; 12], colors: &[u8; 12], mask: u16, r: &AllyRows) {
+        let locked = !r.alliances_allowed();
+        let (mut k, mut m) = (0usize, 0usize);
+        for &p in order.iter().rev() {
+            let p = p as usize & 15;
+            if p >= 8 {
+                continue;
+            }
+            let f = r.forces[p];
+            if (0..8).any(|q| r.forces[q] == f && matches!(r.types[q], 1 | 5)) {
+                continue;
+            }
+            self.ally_label(k, p, names, colors);
+            if f != r.forces[r.local] {
+                self.ally_box(1 + k as i16, p, r.ally[p] != 0, locked || r.types[p] == 1);
+                self.ally_box(13 + k as i16, p, mask >> p & 1 != 0, r.types[p] == 1);
+            }
+            for q in 0..8 {
+                if r.forces[q] != f || !r.members[q] {
+                    continue;
+                }
+                if let Some(c) = find(&mut self.dlg, -30 - m as i16) {
+                    c.text = r.member_names[q].clone();
+                    c.flags |= flag::VISIBLE;
+                }
+                m += 1;
+            }
+            k += 1;
         }
     }
 
@@ -1290,6 +1423,20 @@ impl Menu {
                 if self.kind == Kind::ReplayVision && (13..=24).contains(&id) {
                     self.vision ^= 1 << (c.value.0 & 15);
                 }
+                // 0x490960 user 2 (the ally boxes 1..12): off, or the local player's own value.
+                if self.kind == Kind::ReplayVision && (1..=12).contains(&id) {
+                    let p = c.value.0 as usize & 15;
+                    if p < 12 {
+                        self.ally[p] = if self.ally[p] != 0 { 0 } else { self.ally_self };
+                    }
+                }
+                // 0x490c40 user 2 (allied victory, 0x19) outside a replay: every ally 1 or 2.
+                if self.kind == Kind::ReplayVision && id == 0x19 && !self.replay_rows {
+                    let v = if c.checked { 2 } else { 1 };
+                    for a in self.ally.iter_mut().filter(|a| **a != 0) {
+                        *a = v;
+                    }
+                }
                 self.store(set);
                 None
             }
@@ -1511,6 +1658,7 @@ impl Menu {
             // 0x4e4980 event 0xe code 2 (0x419ea0): the dialog closes.
             // 0x491310 event 0xe code 2 -> 0x490fe0 (OK, id -2): the shown players and the all-players
             // box (0x19) set the vision; Cancel (-3) just closes it (0x4f5700).
+            (Kind::ReplayVision, -2) if !ctx.replay => (None, Action::Alliance(self.ally, self.vision)),
             (Kind::ReplayVision, -2) => (None, Action::ReplayVision(self.vision, self.dlg.get(0x19).is_some_and(|c| c.checked))),
             (Kind::ReplayVision, -3) => (None, Action::Closed),
             // 0x4a3250 event 0xe code 2 on Drop Players: 0x4a3010.

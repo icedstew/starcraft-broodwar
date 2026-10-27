@@ -493,9 +493,6 @@ impl<'a> Scene<'a> {
     /// 0x4913d0 (the vision button) + 0x490e90 (the dialog's init) in a replay: 0x63ff74 = the
     /// shown players 0x6d0f18; the rows follow 0x490000's shuffled order.
     pub fn init_vision_menu(&mut self, m: &mut crate::menu::Menu, replay: bool) {
-        if bw::players::is_team_game(self.st.multiplayer, &self.st.template) {
-            todo_port!("0x490570", "team games use rez\teamfltr.bin (0x5042d0) and its rows");
-        }
         let order = self.st.vision_player_order();
         let mut names: [Vec<u8>; 12] = Default::default();
         for (n, s) in names.iter_mut().zip(self.st.player_names.iter()) {
@@ -503,7 +500,22 @@ impl<'a> Scene<'a> {
         }
         let glu = self.a.files.read("rez/gluAll.tbl").unwrap_or_default();
         let mask = self.st.local_vision_mask as u16;
-        m.vision_init(&order, &names, &self.minimap.player_colors, mask, replay, &glu);
+        // 0x4913d0 outside a replay: 0x63ff64 = the local player's alliances, 0x63ff74 its
+        // shared vision (0x57f1ec).
+        let st = &self.st;
+        let local = st.local_player as usize;
+        let rows = (!replay).then(|| crate::menu::AllyRows {
+            local,
+            types: st.player_types,
+            forces: std::array::from_fn(|i| st.player_force.get(i).copied().unwrap_or(0)),
+            ally: st.alliances[local],
+            template: st.template,
+            team: bw::players::is_team_game(st.multiplayer, &st.template),
+            members: std::array::from_fn(|i| st.player_types[i] == 2 && st.player_left[i] == 0),
+            member_names: std::array::from_fn(|i| st.player_names[i].as_bytes().to_vec()),
+        });
+        let mask = if replay { mask } else { (st.player_vision[local] & 0xff) as u16 };
+        m.vision_init(&order, &names, &self.minimap.player_colors, mask, replay, &glu, rows.as_ref());
     }
 
     pub fn game_end(&self) -> GameEnd {
@@ -3412,6 +3424,7 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
         // single player and replays pause under it (0x4f57a0 -> 0x488790).
         ctx.replay_speed = scene.st.replay_speed as i16;
         ctx.multiplayer = scene.st.multiplayer;
+        ctx.team = bw::players::is_team_game(scene.st.multiplayer, &scene.st.template);
         ctx.paused = scene.st.trig.paused;
         ctx.player_type = scene.st.player_types.get(scene.st.local_player as usize).copied().unwrap_or(0);
         ctx.local_result = scene.st.player_left.get(scene.st.local_player as usize).copied().unwrap_or(0);
@@ -3643,6 +3656,16 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
                         }
                     }
                     // 0x490fe0: the replay vision (0x6d0f18 / 0x57f0b0, all players 0x6d0f1c).
+                    // 0x490fe0: 0x0e with the 12 alliances (2 bits each), 0x0d with the vision.
+                    crate::menu::Action::Alliance(ally, mask) => {
+                        let v = ally.iter().enumerate().fold(0u32, |v, (k, &a)| v | ((a as u32 & 3) << (2 * k)));
+                        let mut c = vec![0x0e];
+                        c.extend_from_slice(&v.to_le_bytes());
+                        scene.st.send_command(&c);
+                        let mut c = vec![0x0d];
+                        c.extend_from_slice(&mask.to_le_bytes());
+                        scene.st.send_command(&c);
+                    }
                     crate::menu::Action::ReplayVision(mask, all) => {
                         let Scene { a, st, minimap, .. } = &mut scene;
                         with_data(a, |d| st.set_replay_vision(d, mask, all));
