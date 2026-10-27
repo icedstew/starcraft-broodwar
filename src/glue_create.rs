@@ -113,6 +113,8 @@ struct NodeInfo {
 
 /// The create game screen's globals.
 pub(super) struct Create {
+    /// Ours: the network game is enhanced (bw/enhanced.rs; the create screen's added box).
+    pub enhanced: bool,
     /// 0x51a270: the game types.
     templates: Vec<Template>,
     /// 0x51a27c: the map list's nodes.
@@ -186,6 +188,7 @@ impl Default for Create {
             seed: 0,
             game_desc: Vec::new(),
             replay: None,
+            enhanced: false,
         }
     }
 }
@@ -249,6 +252,27 @@ fn insert_sorted(nodes: &mut Vec<MapNode>, node: MapNode) {
             Some(_) => prev = cand,
             None => return,
         }
+    }
+}
+
+/// Ours: the create screen's "Enhanced" box (network games: players join while it runs and
+/// share armies, the AI keeps armies left by everyone). Not a 1.16.1 control.
+const ENHANCED_BOX: i16 = 0x7e0;
+
+impl Glue {
+    /// The Enhanced box under the speed row (a copy of the speed label made a check box).
+    fn add_enhanced_box(&mut self) {
+        let on = self.create.enhanced;
+        let Some(d) = self.cdlg() else { return };
+        let Some(mut c) = d.get(38).cloned() else { return };
+        c.id = ENHANCED_BOX;
+        c.ty = 4;
+        c.rect = (58, 330, 360, 347);
+        c.text = b"     Enhanced game".to_vec();
+        c.flags |= flag::VISIBLE;
+        c.flags &= !flag::DISABLED;
+        c.checked = on;
+        d.controls.push(c);
     }
 }
 
@@ -495,6 +519,10 @@ impl Glue {
     pub(super) fn create_open(&mut self, files: &Storage, which: u8) {
         self.load_templates(files);
         self.create.which = which;
+        self.create.enhanced = std::env::var_os("SCBW_ENHANCED").is_some();
+        if self.setup.multiplayer {
+            self.add_enhanced_box();
+        }
         // 0x4af6d0: 0x59ba60 is iCreate.grp (the row and label icons); 0x6d5a74 = 1.
         let icons = files.read("glue/create/iCreate.grp").ok().map(Grp::parse);
         // Event 10 of the controls' procs: the list (0x4af020) takes flags 0x30000, the combos
@@ -1570,6 +1598,14 @@ impl Glue {
     /// 0x4af5c0 event 0xe code 2 (control `cid` activated): Ok runs 0x4af1b0 and stays when it
     /// says so; everything else (Cancel) ends the dialog with its id (0x4dd040).
     pub(super) fn create_activate(&mut self, files: &Storage, cid: i16) {
+        // Ours: the Enhanced box toggles.
+        if cid == ENHANCED_BOX {
+            if let Some(c) = self.cctl(ENHANCED_BOX) {
+                c.checked = !c.checked;
+                self.create.enhanced = c.checked;
+            }
+            return;
+        }
         self.activated = cid;
         if cid == ids::OK && !self.create_ok(files) {
             return;
@@ -1810,14 +1846,22 @@ impl Glue {
             d[0x25] = self.setup.slots[..8].iter().filter(|s| s[slot::TYPE] == 6).count() as u8;
         }
         todo_port!("0x4d9cd0", "the version hash (Storm SStrHash, Ordinal 502, of the font.gid key) at +0x2c");
+        // Ours: an enhanced game sets bit 31 of +0x2c (our builds' hash is 0), and any free
+        // Storm id may join (late joiners: up to 8 links).
+        let max = if self.create.enhanced {
+            d[0x2f] |= 0x80;
+            8
+        } else {
+            d[0x25]
+        };
         let stat = crate::net::statstr::build(d, 0x80);
         let title = cz(&d[4..0x1c]).to_vec();
         #[cfg(not(target_arch = "wasm32"))]
-        let me = crate::net::snet::create_game(&title, &stat, d[0x25], &name);
+        let me = crate::net::snet::create_game(&title, &stat, max, &name);
         #[cfg(target_arch = "wasm32")]
         let me: Option<u8> = {
             todo_port!("0x4d3910", "a browser cannot host (it cannot listen)");
-            let _ = (title, stat);
+            let _ = (title, stat, max);
             None
         };
         let Some(me) = me else { return false };
@@ -2526,6 +2570,7 @@ impl Glue {
                 mission: self.setup.map_dir_flag,
                 expansion: self.expansion,
             multiplayer: false,
+            enhanced: false,
             });
         }
         self.race_picks_apply();
@@ -2574,6 +2619,7 @@ impl Glue {
             mission: self.setup.map_dir_flag,
             expansion: self.expansion,
             multiplayer: self.setup.multiplayer,
+            enhanced: self.setup.multiplayer && self.create.enhanced,
         })
     }
 }

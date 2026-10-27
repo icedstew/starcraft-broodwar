@@ -1677,7 +1677,9 @@ impl State {
         let others = (0..self.human_nation.len().min(32) as u8).any(|h| {
             h != human && self.nation_of(h) == player && self.humans_gone & 1 << h == 0 && (h >= 8 || self.player_types[h as usize] == 2)
         });
-        if !others {
+        if !others && self.enhanced {
+            self.ai_take_over(d, player);
+        } else if !others {
             if dropped {
                 self.player_dropped(d, player);
             } else {
@@ -1756,6 +1758,7 @@ impl State {
             0x2d => self.command_unburrow(d, player, sel),
             0x36 => self.command_stim(d, player, sel),
             0x57 => self.command_leave_game(d, player, byte(1)),
+            super::enhanced::CMD_JOIN => self.enhanced_join(d, p),
             0x58 => self.command_minimap_ping(player, u16_at(1), u16_at(3)),
             0x55 => self.command_latency(player, byte(1)),
             0x21 => self.command_cloak(d, player, sel),

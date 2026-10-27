@@ -301,11 +301,18 @@ impl<'a> Scene<'a> {
             let u16_at = |a: usize| u16::from_le_bytes([g[a - 0x57f0f0], g[a - 0x57f0f0 + 1]]);
             Some(((u16_at(0x57f1d4) as usize, u16_at(0x57f1d6) as usize), u16_at(0x57f1dc)))
         })();
-        let Some((wh, tileset)) = dims else { return Err(io::Error::other("bad saved game")) };
+        let Some((wh, tileset)) = dims else { return Err(io::Error::other("bad saved game (its game data)")) };
+        // Brood War or not as the save is (1.16.1's glue refuses the other kind; ours opens
+        // what an enhanced game's host sends, either kind).
         let mut tmp = bw::State::new(wh, tileset, 1700);
         if !load_save(a, &mut tmp, file) {
-            return Err(io::Error::other("bad saved game"));
+            tmp = bw::State::new(wh, tileset, 1700);
+            tmp.is_expansion = false;
+            if !load_save(a, &mut tmp, file) {
+                return Err(io::Error::other("bad saved game (its state)"));
+            }
         }
+        SAVE_EXPANSION.with(|e| e.set(tmp.is_expansion));
         let slots = std::array::from_fn(|p| tmp.color_slot[p] as u8);
         let chk = Chk::parse(&std::mem::take(&mut tmp.chk));
         let seed = tmp.rng.seed;
@@ -366,6 +373,7 @@ impl<'a> Scene<'a> {
             st.mission = g.mission;
         }
         if let Some((f, _, _, _)) = save {
+            st.is_expansion = SAVE_EXPANSION.with(|e| e.get());
             if !load_save(a, &mut st, f) {
                 return Err(io::Error::other("bad saved game"));
             }
@@ -416,6 +424,20 @@ impl<'a> Scene<'a> {
             scene.chat.game_start(&scene.st);
         }
         Ok(scene)
+    }
+
+    /// An enhanced game's join frame (bw/enhanced.rs): the game goes through a save and a load
+    /// of itself, as the joiner's did; what the save does not hold is kept. False when either
+    /// failed (the game goes on as it was: the joiner will not match).
+    pub fn reload_through_save(&mut self) -> bool {
+        let keep = bw::enhanced::Extras::of(&self.st);
+        let human = self.st.local_human;
+        let Some(f) = self.save_file(b"enhanced", true) else { return false };
+        let Ok(s) = Scene::from_save_steps(self.a, &f, false) else { return false };
+        self.st.restore_sim(&s.st);
+        keep.apply(&mut self.st);
+        self.st.local_human = human;
+        true
     }
 
     /// 0x4d02d0 after the header: the player table and game data (`save_head`), then the
@@ -1852,10 +1874,16 @@ pub struct GameSetup {
     pub expansion: bool,
     /// 0x57f0b4: a network game (phase 3b: menus do not pause it, speed commands are ignored).
     pub multiplayer: bool,
+    /// Ours (bw/enhanced.rs): players may join while the game runs; armies left by every
+    /// human go to the AI.
+    pub enhanced: bool,
 }
 
-/// Engine state for a new game on `chk` (map load, players, melee starting units), or
-/// for the game replay header `rep` recorded.
+thread_local! {
+    /// The kind of game (Brood War or not) `from_save` found its save to be.
+    static SAVE_EXPANSION: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+}
+
 /// 0x4cf5f0 then 0x4cfef0: the saved game `file` read over `st`.
 fn load_save(a: &Assets, st: &mut bw::State, file: &[u8]) -> bool {
     let mut i = bw::save::In::new(file);
@@ -1871,6 +1899,8 @@ fn load_save(a: &Assets, st: &mut bw::State, file: &[u8]) -> bool {
     })
 }
 
+/// Engine state for a new game on `chk` (map load, players, melee starting units), or
+/// for the game replay header `rep` recorded.
 fn new_game(a: &Assets, chk: &Chk, rep: Option<&crate::replay::Header>, gs: Option<&GameSetup>, save_seed: Option<u32>) -> io::Result<bw::State> {
     let loading = save_seed.is_some();
     let (w, h) = chk.dims();
@@ -1878,6 +1908,7 @@ fn new_game(a: &Assets, chk: &Chk, rep: Option<&crate::replay::Header>, gs: Opti
     if let Some(g) = gs {
         st.is_expansion = g.expansion;
         st.multiplayer = g.multiplayer;
+        st.enhanced = g.enhanced;
         // Ours: network games run at Fastest (1.16.1 takes the creator's speed, game data
         // +0x26; our lobby does not carry it yet). Command 0x0f cannot change it (0x4bf7f0).
         if g.multiplayer {
@@ -2987,6 +3018,13 @@ pub fn run(a: &mut Assets, chk: Chk) -> io::Result<()> {
 /// Play the game the glue menus set up (0x4e0710).
 /// Runs the game; `Some` when it ended in victory / defeat (0x51ce90 = 6 / 7: the glue
 /// shows the score screen), `None` when the mission was quit (4) or the window closed.
+/// A scene made elsewhere (an enhanced game's joiner: the host's saved state) played to its end.
+pub fn run_scene(a: &Assets, scene: Scene) -> io::Result<()> {
+    let mut frame = frame_loop_end(a, scene, None, Default::default())?;
+    while frame()? {}
+    Ok(())
+}
+
 pub fn run_setup(a: &mut Assets, mut g: GameSetup) -> io::Result<Option<GameEnd>> {
     prepare_setup(a, &mut g);
     let a: &Assets = a;

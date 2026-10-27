@@ -263,6 +263,7 @@ impl Glue {
         let template = self.setup.template;
         let mut d = g.desc.clone();
         d[0x6d..0x8d].copy_from_slice(&template);
+        self.create.enhanced = d[0x2f] & 0x80 != 0;
         self.create.game_desc = d;
         if g.desc[0x32] != 0 {
             todo_port!("0x4d3b50", "joining a saved game or replay (0x6d0f14 = +0x32)");
@@ -299,6 +300,7 @@ impl Glue {
             self.setup.template.copy_from_slice(&t);
         }
         d[0x6d..0x8d].copy_from_slice(&self.setup.template.clone());
+        self.create.enhanced = d[0x2f] & 0x80 != 0;
         self.create.game_desc = d;
         self.state = super::state::GLUE;
         self.first = false;

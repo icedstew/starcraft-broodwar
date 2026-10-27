@@ -88,7 +88,12 @@ struct Game {
     info: Option<(Vec<u8>, Vec<u8>)>,
     /// Game turns that came before the game took the link (a peer started first).
     early: Vec<(u8, u32, Vec<u8>)>,
+    /// An enhanced game already running: the host's state for us, in parts (live.rs C_LATE).
+    late: Vec<Option<Vec<u8>>>,
 }
+
+/// live.rs's C_LATE control message: `idx u16`, `count u16`, a part of the joiner's start.
+pub const LATE: u8 = 8;
 
 /// One turn of every player (Ordinal 122): flags (0x10000 in the game, 0x20000 with a turn)
 /// and the bytes.
@@ -132,6 +137,7 @@ impl Game {
             mode: 0,
             info: None,
             early: Vec::new(),
+            late: Vec::new(),
         }
     }
 
@@ -454,8 +460,12 @@ pub fn join_game(id: u32, code: Option<&str>, player: &[u8]) -> Option<u8> {
 
 /// A joined link (its Start came as `slot`): it becomes the game; our name goes to the host.
 pub fn adopt(mut tr: Transport, slot: u8, code: String, player: &[u8]) {
+    // Ours: an enhanced game's joiner may ask for an army (SCBW_ARMY / ?army=): after a NUL.
     let mut m = vec![kind::NAME];
     m.extend_from_slice(player);
+    if let Some(a) = ARMY.with(|a| a.get()) {
+        m.extend_from_slice(&[0, a]);
+    }
     tr.send_ctl(transport::HOST, m);
     let mut g = Game::new(tr, false, code);
     g.names[slot as usize & 7] = Some(player.to_vec());
@@ -465,6 +475,27 @@ pub fn adopt(mut tr: Transport, slot: u8, code: String, player: &[u8]) {
 /// This side's Storm id in the game.
 pub fn local_id() -> Option<u8> {
     NET.with(|n| n.borrow().game.as_ref().map(|g| g.tr.me()))
+}
+
+/// The running game's start for this joiner (an enhanced game), once all of it came.
+pub fn late() -> Option<Vec<u8>> {
+    NET.with(|n| {
+        let n = n.borrow();
+        let g = n.game.as_ref()?;
+        if g.late.is_empty() || g.late.iter().any(|x| x.is_none()) {
+            return None;
+        }
+        Some(g.late.iter().flatten().flatten().copied().collect())
+    })
+}
+
+thread_local! {
+    static ARMY: std::cell::Cell<Option<u8>> = const { std::cell::Cell::new(None) };
+}
+
+/// The army (slot) to ask for when joining a running enhanced game.
+pub fn want_army(a: u8) {
+    ARMY.with(|x| x.set(Some(a)));
 }
 
 /// The game's name and stat string (a joiner has them once the host answered its name).
@@ -531,7 +562,8 @@ pub fn pump() {
                             g.make_rounds();
                         }
                         kind::NAME if (from as usize) < 8 && g.names[from as usize].is_none() => {
-                            g.names[from as usize] = Some(body[..body.len().min(0x18)].to_vec());
+                            let end = body.iter().position(|&c| c == 0).unwrap_or(body.len()).min(0x18);
+                            g.names[from as usize] = Some(body[..end].to_vec());
                             if let Some((name, stat)) = g.info.clone() {
                                 let mut m = vec![kind::GAME];
                                 m.extend_from_slice(&name);
@@ -580,6 +612,15 @@ pub fn pump() {
                                 }
                             }
                             g.names = names;
+                        }
+                        LATE if body.len() >= 4 => {
+                            let (i, n) = (u16::from_le_bytes([body[0], body[1]]) as usize, u16::from_le_bytes([body[2], body[3]]) as usize);
+                            if g.late.len() != n {
+                                g.late = vec![None; n];
+                            }
+                            if let Some(x) = g.late.get_mut(i) {
+                                *x = Some(body[4..].to_vec());
+                            }
                         }
                         kind::GAME => {
                             let mut it = body.split(|&c| c == 0);

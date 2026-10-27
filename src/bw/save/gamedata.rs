@@ -256,6 +256,9 @@ impl State {
         }
         self.game_data_io(&mut g, false);
         // A Brood War save needs 0x6d11e4 (not kept, not checked) and both must agree.
+        if std::env::var_os("SCBW_SAVE_DEBUG").is_some() && self.is_expansion != was_expansion {
+            eprintln!("load: the save is {} Brood War, the game {}", self.is_expansion, was_expansion);
+        }
         self.is_expansion == was_expansion
     }
 }

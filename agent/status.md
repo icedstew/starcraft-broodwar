@@ -71,6 +71,10 @@ Delegate per agents.md: Haiku triage, Sonnet porting, Opus review / hard RE / co
 
 ## In flight
 
+- **Enhanced games** (ours: join a running game, shared armies, AI takes armies left by
+  everyone, fast drops): committed 2026-10-27 (suite, repcmp, netlive_leave, lobby, enhanced.sh pass), hand-off plan
+  agent/plans/enhanced.md (read it first; open items listed there).
+
 - Networking (user 2026-10-22: rollback netcode after ShieldBattery, N players, .exe
   hosts reachable without our servers, browsers join over WebTransport):
   agent/areas/net.md (design, phases, 1.16.1 turn loop facts). Phase 0 done: `State:

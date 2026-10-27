@@ -5,6 +5,7 @@
 //! callees are explicit `todo_port!` markers, never approximations.
 
 pub mod addon;
+pub mod enhanced;
 pub mod rollback;
 pub mod ai;
 pub mod ai_areas;
@@ -287,6 +288,11 @@ pub struct State {
     pub template: [u8; 0x20],
     /// 0x57f0b4: a network game (set by the glue's main menu only).
     pub multiplayer: bool,
+    /// Ours (enhanced.rs): players join a running game and share armies; an army with no
+    /// human left goes to the AI.
+    pub enhanced: bool,
+    /// Ours: the armies the AI took over from humans who left (bit per slot).
+    pub ai_taken: u8,
     /// 0x57f1e3: a campaign map continues into the next (the glue's 0x51ca1c).
     pub camp_cont: u8,
     /// 0x57f244: the campaign mission number (0 outside campaigns).
@@ -576,6 +582,8 @@ impl State {
             forward_offsets: Vec::new(),
             template: [0; 0x20],
             multiplayer: false,
+            enhanced: false,
+            ai_taken: 0,
             camp_cont: 0,
             mission: 0,
             game_secs: 0,

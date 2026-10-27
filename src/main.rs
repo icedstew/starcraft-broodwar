@@ -389,6 +389,15 @@ fn main() -> std::io::Result<()> {
             }
             std::fs::write(&args[2], o)?;
         }
+        Some("loadsave") => {
+            // loadsave <file>: open a saved game (as the game does) and say which part fails.
+            let a = view::Assets::load(files)?;
+            let f = std::fs::read(&args[1])?;
+            match view::Scene::from_save_steps(&a, &f, false) {
+                Ok(s) => println!("ok: frame {} hash {:016x}", s.st.frame, s.st.state_hash()),
+                Err(e) => println!("failed: {e}"),
+            }
+        }
         Some("savetest") => {
             // savetest <rep> <frame> [frames]: play the replay to <frame>, save the game state,
             // load it into a fresh game of the same replay and check that saving again gives

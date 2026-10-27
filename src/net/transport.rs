@@ -486,6 +486,28 @@ impl Transport {
         }
     }
 
+    /// Host, an enhanced game's joiner: no turns go to `peer` until `start_peer`.
+    pub fn hold_peer(&mut self, peer: u8) {
+        for p in self.got.keys().copied().collect::<Vec<_>>() {
+            self.acked.insert((peer, p), u32::MAX / 2);
+        }
+    }
+
+    /// Host: `peer` gets every player's turns from frame `from` on.
+    pub fn start_peer(&mut self, peer: u8, from: u32) {
+        for p in self.got.keys().copied().collect::<Vec<_>>() {
+            self.acked.insert((peer, p), from);
+        }
+    }
+
+    /// Player `p`'s turns exist from frame `from` on (an enhanced game's joiner): the ones
+    /// below are not waited for.
+    pub fn player_from(&mut self, p: u8, from: u32) {
+        let n = self.next.entry(p).or_insert(from);
+        *n = (*n).max(from);
+        self.advance();
+    }
+
     /// Every peer has every turn below `upto` of every player it should get from me.
     pub fn fully_acked(&self, upto: u32) -> bool {
         let a = |peer: u8, p: u8| *self.acked.get(&(peer, p)).unwrap_or(&self.first) >= upto;

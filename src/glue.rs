@@ -384,6 +384,9 @@ pub struct Glue {
     chat: chat::ChatScreen,
     /// The map arriving from the creator (net misc's file transfer, 0x4eafe0).
     map_rx: Option<lobby::Download>,
+    /// Ours: a running enhanced game's state for us (net/live.rs `late_game`): the game starts
+    /// from it instead of the lobby.
+    pub late: Option<Vec<u8>>,
     /// 0x51a238: the load screen's saved games, as the list rows show them (newest first; the
     /// native records are in the order 0x4b6010 made them): the file name without its
     /// extension (record +0x180). The record's other copies (+0x17c .. +0x1d8, +0x2a2: the
@@ -483,6 +486,7 @@ impl Glue {
             lobby_host: false,
             chat: chat::ChatScreen::default(),
             map_rx: None,
+            late: None,
             saves: Vec::new(),
             save_name: Vec::new(),
             save: None,
@@ -3352,6 +3356,19 @@ pub fn web_frame(a: *mut crate::view::Assets, mut glue: Glue) -> std::io::Result
             Top::Quit => return Ok(false),
             Top::Game => {
                 glue.set_notice();
+                if let Some(late) = glue.late.take() {
+                    if let Some(w) = win.take() {
+                        crate::view::park_window(w);
+                    }
+                    if let Some(au) = audio.take() {
+                        crate::view::park_audio(au);
+                    }
+                    let ar: &'static crate::view::Assets = unsafe { &*a };
+                    let (scene, net) = crate::net::live::late_game(ar, &late)?;
+                    crate::view::set_net_driver(Box::new(net));
+                    game = Some(Box::new(crate::view::frame_loop_end(ar, scene, None, end.clone())?));
+                    return Ok(true);
+                }
                 let Some(mut g) = glue.begin_game(files) else {
                     web_sys::console::error_1(&"scbw: the game could not be set up".into());
                     return Ok(glue.state == state::GLUE);
@@ -3462,13 +3479,25 @@ pub fn run(files: &Storage, shot: Option<&str>) -> std::io::Result<()> {
     #[cfg(not(target_arch = "wasm32"))]
     if let Ok(code) = std::env::var("SCBW_JOIN") {
         let name = std::env::var("SCBW_NAME").unwrap_or_else(|_| "Player".into());
+        if let Some(a) = std::env::var("SCBW_ARMY").ok().and_then(|a| a.parse().ok()) {
+            crate::net::snet::want_army(a);
+        }
         crate::net::snet::initialize_provider(crate::net::snet::UDPN);
         if crate::net::snet::join_game(0, Some(&code), name.as_bytes()).is_none() {
             return Err(std::io::Error::other(format!("cannot join {code}")));
         }
         let t0 = web_time::Instant::now();
         while !glue.join_by_code(files, name.as_bytes()) {
-            if t0.elapsed().as_secs() > 10 {
+            // An enhanced game already running sends its state instead (net/live.rs).
+            if let Some(late) = crate::net::snet::late() {
+                eprintln!("net: the game's state came ({} bytes, {} ms)", late.len(), t0.elapsed().as_millis());
+                let a = crate::view::Assets::load(crate::storage::Storage::open(&crate::install_dir())?)?;
+                let (scene, net) = crate::net::live::late_game(&a, &late)?;
+                eprintln!("net: loaded ({} ms)", t0.elapsed().as_millis());
+                crate::view::set_net_driver(Box::new(net));
+                return crate::view::run_scene(&a, scene);
+            }
+            if t0.elapsed().as_secs() > 60 {
                 return Err(std::io::Error::other("no answer from the game"));
             }
             crate::net::snet::pump();
@@ -3568,6 +3597,23 @@ pub fn run(files: &Storage, shot: Option<&str>) -> std::io::Result<()> {
                         Some(e) => glue.state = if e.results[e.local as usize] == 2 { 7 } else { 6 },
                         None => return Ok(()),
                     }
+                    continue;
+                }
+                // A running enhanced game we joined (ours): its state came from the host.
+                #[cfg(not(target_arch = "wasm32"))]
+                if let Some(late) = glue.late.take() {
+                    let a = crate::view::Assets::load(crate::storage::Storage::open(&crate::install_dir())?)?;
+                    let (scene, net) = crate::net::live::late_game(&a, &late)?;
+                    crate::view::set_net_driver(Box::new(net));
+                    match win.as_mut() {
+                        Some(_) => hand_over(&mut win, &mut audio, &input.typed, |w| {
+                            crate::view::park_window(w);
+                            crate::view::run_scene(&a, scene)
+                        })?,
+                        None => crate::view::run_scene(&a, scene)?,
+                    }
+                    glue.state = state::GLUE;
+                    glue.screen = screen::MAIN;
                     continue;
                 }
                 // A network game with SCBW_NET_HEADLESS (tests): played headless to that frame.

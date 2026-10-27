@@ -15,7 +15,6 @@
 use super::transport::ANY;
 use super::transport::{Event, HOST, Transport};
 use super::Session;
-#[cfg(not(target_arch = "wasm32"))]
 use crate::view;
 use crate::view::{GameSetup, NetDriver, Scene};
 use std::collections::HashMap;
@@ -78,7 +77,7 @@ pub fn encode_setup(g: &GameSetup, order: &[u8]) -> Vec<u8> {
         o.u32(v);
     }
     o.0.extend_from_slice(&g.mission.to_le_bytes());
-    o.0.push(g.camp_cont as u8 | (g.expansion as u8) << 1 | (g.multiplayer as u8) << 2);
+    o.0.push(g.camp_cont as u8 | (g.expansion as u8) << 1 | (g.multiplayer as u8) << 2 | (g.enhanced as u8) << 3);
     // Team games and shared control: who controls which slot, the extra humans' names, the
     // leaders and seat races, and the humans in storm id order (`order`, empty = the slots).
     o.bytes(&g.humans);
@@ -145,6 +144,7 @@ pub fn decode_setup(b: &[u8], local: u8) -> Option<(GameSetup, Vec<(u8, u8)>)> {
         mission,
         expansion: fl & 2 != 0,
         multiplayer: fl & 4 != 0,
+        enhanced: fl & 8 != 0,
     };
     Some((g, table))
 }
@@ -211,6 +211,7 @@ pub fn melee_setup(a: &view::Assets, chk_raw: Vec<u8>, humans: usize, seed: u32)
         mission: 0,
         expansion: true,
         multiplayer: true,
+        enhanced: std::env::var_os("SCBW_NET_ENHANCED").is_some(),
     };
     let forc = chk.section(b"FORC").filter(|f| f.len() >= 8);
     for (i, &p) in slots.iter().enumerate() {
@@ -295,6 +296,7 @@ fn team_setup(a: &view::Assets, chk_raw: Vec<u8>, teams: &[usize], humans: usize
         mission: 0,
         expansion: true,
         multiplayer: true,
+        enhanced: std::env::var_os("SCBW_NET_ENHANCED").is_some(),
     };
     let mut order = Vec::new();
     for (k, (&n, &lead)) in teams.iter().zip(&leaders).enumerate() {
@@ -406,7 +408,24 @@ pub struct NetGame {
     quit_at: Option<u32>,
     /// Since when the session has been held by missing turns (`Session::waiting_on`).
     stall_since: Option<Instant>,
+    /// Host of an enhanced game: players asking to join (link id, army wanted, name), and the
+    /// one being let in (link id, human, army, its join command's frame once sent).
+    join_queue: Vec<(u8, u8, Vec<u8>)>,
+    joining: Option<(u8, u8, u8, Option<u32>)>,
+    /// An enhanced game: players who hold it are dropped after ENH_DROP, no waiting dialog.
+    drops_fast: bool,
+    /// Joiners sent their start: when (they load it before their turns come).
+    joined_at: Vec<(u8, Instant)>,
 }
+
+/// A joiner's time to take the game's state in and load it before a stall drops it.
+const JOIN_GRACE: Duration = Duration::from_secs(60);
+
+/// Enhanced games: a player whose turns hold the game this long is dropped (no waiting
+/// dialog).
+const ENH_DROP: Duration = Duration::from_secs(3);
+/// The parts of a joiner's start (C_LATE): under the transport's 600-byte control budget.
+const LATE_PART: usize = 500;
 
 thread_local! {
     static REPORT_NEXT: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
@@ -424,6 +443,9 @@ const C_HOST_LEFT: u8 = 5;
 const C_CHAT: u8 = 6;
 /// A client pressed Drop Players: `[7]`; the host drops the players it is itself waiting for.
 const C_DROP: u8 = 7;
+/// Host -> an enhanced game's joiner: a part of its start (`late_game`): `idx u16`,
+/// `count u16`, bytes (snet::LATE).
+const C_LATE: u8 = super::snet::LATE;
 
 /// How long the session must be held before the waiting dialog shows. Ours: 1.16.1 opens it
 /// at the first missing turn, but its turns are buffered ahead (0x57f090) where a rollback
@@ -465,7 +487,7 @@ impl NetGame {
         for (p, f, b) in early {
             se.remote_turn(p, f, b);
         }
-        let next_send = se.delay;
+        let next_send = se.frame + se.delay;
         let mut n = NetGame::make(se, tr, next_send, script, headless, host);
         if let Some(k) = REPORT_NEXT.with(|r| r.take()) {
             n.report_at(k);
@@ -489,6 +511,56 @@ impl NetGame {
         eprintln!("net: LEAVE player {player} (reason {reason}): turns below {last} kept, fence frame {fence}, host at frame {}", self.se.frame);
         self.se.apply_leave(player, last, fence, reason);
         self.tr.broadcast_ctl(&msg);
+    }
+
+    /// Host of an enhanced game, each frame: players holding the game too long are dropped;
+    /// the next asking player's join command goes into my turn (the army it gets, 0x51267c
+    /// / 0x512678 as `enhanced_pick` chose); once that frame is final its start state (a
+    /// saved game of it, compressed, with what the save does not keep) goes to the joiner
+    /// in parts and its turns flow from there.
+    fn enhanced_host(&mut self, scene: &mut Scene<'_>) {
+        self.drops_fast = true;
+        self.joined_at.retain(|j| j.1.elapsed() < JOIN_GRACE);
+        if self.stall_since.is_some_and(|t| t.elapsed() >= ENH_DROP) {
+            for p in self.se.waiting_on() {
+                if !self.joined_at.iter().any(|j| j.0 == p) {
+                    eprintln!("net: player {p} held the game {} ms: dropped", self.stall_since.map_or(0, |t| t.elapsed().as_millis()));
+                    self.decide_leave(p, 6);
+                }
+            }
+        }
+        if self.joining.is_none() && !self.join_queue.is_empty() {
+            let (p, want, name) = self.join_queue.remove(0);
+            match scene.st.enhanced_pick(want) {
+                Some((h, n)) => {
+                    eprintln!("net: player {p} joins as human {h}, army {n}");
+                    scene.st.send_command(&crate::bw::enhanced::join_command(h, n, p, &name));
+                    self.joining = Some((p, h, n, None));
+                }
+                None => eprintln!("net: player {p} cannot join: no army"),
+            }
+        }
+        let Some((p, h, n, Some(f))) = self.joining else { return };
+        let Some(snap) = self.se.kept(f).cloned() else { return };
+        let players: Vec<(u8, u8, u8)> = self.se.live_players().into_iter().filter(|q| q.0 != p).collect();
+        let Some(start) = late_bytes(scene, &snap, f, p, h, n, self.se.delay, &players) else {
+            eprintln!("net: the game state for player {p} could not be saved");
+            self.joining = None;
+            return;
+        };
+        let parts: Vec<&[u8]> = start.chunks(LATE_PART).collect();
+        for (i, c) in parts.iter().enumerate() {
+            let mut m = vec![C_LATE];
+            m.extend_from_slice(&(i as u16).to_le_bytes());
+            m.extend_from_slice(&(parts.len() as u16).to_le_bytes());
+            m.extend_from_slice(c);
+            self.tr.send_ctl(p, m);
+        }
+        eprintln!("net: player {p} gets the game at frame {f} ({} bytes)", start.len());
+        self.tr.start_peer(p, f);
+        self.joined_at.push((p, Instant::now()));
+        self.se.keep = None;
+        self.joining = None;
     }
 
     /// A control message from `from` (see the constants above).
@@ -518,7 +590,20 @@ impl NetGame {
                 }
             }
             (Some(C_HOST_LEFT), false) if from == HOST => self.over = Some("the host left".into()),
-            (Some(C_DROP), true) => self.drop_waiting(),
+            // snet's NAME (a link that joined after the start): an enhanced game lets it in.
+            (Some(0x83), true) if scene.st.enhanced && self.se.live_players().iter().all(|p| p.0 != from) => {
+                let body = &msg[1..];
+                let end = body.iter().position(|&c| c == 0).unwrap_or(body.len());
+                let want = body.get(end + 1).copied().unwrap_or(0xff);
+                if !self.join_queue.iter().any(|q| q.0 == from) && self.joining.is_none_or(|j| j.0 != from) {
+                    eprintln!("net: player {from} asks to join the running game");
+                    self.join_queue.push((from, want, body[..end.min(0x17)].to_vec()));
+                }
+            }
+            (Some(C_DROP), true) => {
+                eprintln!("net: player {from} asks to drop the players the game waits for");
+                self.drop_waiting();
+            }
             (Some(C_CHAT), true) => {
                 if let (Some(to), Some(pkt)) = (msg.get(1..5), msg.get(5..)) {
                     self.route_chat(from, u32::from_le_bytes([to[0], to[1], to[2], to[3]]) & !(1 << from), pkt, scene);
@@ -617,7 +702,7 @@ impl NetGame {
     }
 
     fn make(se: Session, tr: Transport, next_send: u32, script: Vec<(u32, Cmd)>, headless: Option<u32>, host: bool) -> NetGame {
-        NetGame { se, tr, next_send, script, headless, finished: None, host, verbose: std::env::var_os("NETREP_DEBUG").is_some(), last_report: Instant::now(), report: None, reported: false, hashes: HashMap::new(), desync: None, over: None, quitting: Vec::new(), replay_path: std::env::var("SCBW_NET_REPLAY").ok(), quit_at: std::env::var("SCBW_NET_QUIT_AT").ok().and_then(|v| v.parse().ok()), stall_since: None }
+        NetGame { se, tr, next_send, script, headless, finished: None, host, verbose: std::env::var_os("NETREP_DEBUG").is_some(), last_report: Instant::now(), report: None, reported: false, hashes: HashMap::new(), desync: None, over: None, quitting: Vec::new(), replay_path: std::env::var("SCBW_NET_REPLAY").ok(), quit_at: std::env::var("SCBW_NET_QUIT_AT").ok().and_then(|v| v.parse().ok()), stall_since: None, join_queue: Vec::new(), joining: None, drops_fast: false, joined_at: Vec::new() }
     }
 }
 
@@ -652,6 +737,13 @@ impl NetDriver for NetGame {
             }
             let bytes = std::mem::take(&mut scene.st.turn_out);
             let (f, b) = self.se.local_turn(bytes);
+            // The join command went out in this turn: its frame's start state is kept.
+            if let Some(j) = self.joining.as_mut().filter(|j| j.3.is_none()) {
+                if crate::replay::split_commands(&b).iter().any(|c| c[0] == crate::bw::enhanced::CMD_JOIN && c.get(3) == Some(&j.0)) {
+                    j.3 = Some(f);
+                    self.se.keep = Some((f, None));
+                }
+            }
             self.tr.send_turns(f, b);
         }
         scene.chat.active = self.active();
@@ -674,7 +766,9 @@ impl NetDriver for NetGame {
                         self.over = Some(format!("lost the host ({m})"));
                     }
                 }
-                Event::Start { .. } | Event::Joined { .. } => {}
+                // A link after the start (an enhanced game's joiner): no turns until it is let in.
+                Event::Joined { player } => self.tr.hold_peer(player),
+                Event::Start { .. } => {}
             }
         }
         // Host: a clean quitter's leave once its last turns are in (or after a grace period).
@@ -686,12 +780,19 @@ impl NetDriver for NetGame {
         if self.over.is_some() {
             return None;
         }
+        self.drops_fast = scene.st.enhanced;
+        if self.host && scene.st.enhanced {
+            self.enhanced_host(scene);
+        }
         if self.verbose && self.last_report.elapsed() > Duration::from_secs(2) {
             self.last_report = Instant::now();
             let se = &self.se;
             say(&format!("net player {}: frame {} confirmed {} stalled {} rollbacks {} dgrams {:?}", se.me, se.frame, se.confirmed, se.stalled, se.rollbacks, self.tr.stats));
         }
         let stepped = self.se.tick(scene);
+        for (p, f) in std::mem::take(&mut self.se.added) {
+            self.tr.player_from(p, f);
+        }
         if self.se.waiting_on().is_empty() {
             self.stall_since = None;
         } else {
@@ -722,6 +823,9 @@ impl NetDriver for NetGame {
     }
 
     fn waiting(&self) -> Vec<u8> {
+        if self.drops_fast {
+            return Vec::new();
+        }
         match self.stall_since {
             Some(t) if t.elapsed() >= WAIT_SHOW => self.se.waiting_on().into_iter().filter(|&p| p != self.se.me).collect(),
             _ => Vec::new(),
@@ -874,4 +978,82 @@ impl Drop for NetGame {
             std::thread::sleep(Duration::from_millis(5));
         }
     }
+}
+
+/// An enhanced game's joiner start (C_LATE): the frame `f` it starts at, the joiner (link id,
+/// human, army), the delay, the players (link id, storm order, human), what the saved game
+/// does not keep (the humans' armies, names, the AI's armies, the slot names), the saved
+/// game of `snap` (zlib).
+#[allow(clippy::too_many_arguments)]
+fn late_bytes(scene: &mut Scene<'_>, snap: &crate::bw::State, f: u32, p: u8, h: u8, n: u8, delay: u32, players: &[(u8, u8, u8)]) -> Option<Vec<u8>> {
+    use std::io::Write;
+    let live = std::mem::replace(&mut scene.st, snap.clone());
+    let save = scene.save_file(b"enhanced", true);
+    scene.st = live;
+    let save = save?;
+    let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+    z.write_all(&save).ok()?;
+    let save = z.finish().ok()?;
+    let mut b = Vec::new();
+    b.extend_from_slice(&f.to_le_bytes());
+    b.extend_from_slice(&[p, h, n]);
+    b.extend_from_slice(&delay.to_le_bytes());
+    b.push(players.len() as u8);
+    for q in players {
+        b.extend_from_slice(&[q.0, q.1, q.2]);
+    }
+    crate::bw::enhanced::Extras::of(snap).encode(&mut b);
+    b.extend_from_slice(&(save.len() as u32).to_le_bytes());
+    b.extend_from_slice(&save);
+    Some(b)
+}
+
+/// The joiner of an enhanced game: its scene from the host's start (`late_bytes`, which came
+/// through snet: `snet::late`) and its net game over the link it joined with, from that frame.
+pub fn late_game<'a>(a: &'a view::Assets, b: &[u8]) -> std::io::Result<(Scene<'a>, NetGame)> {
+    use std::io::Read;
+    let bad = || std::io::Error::other("bad game start from the host");
+    let mut i = In(b);
+    let mut parse = || -> Option<_> {
+        let f = i.u32()?;
+        let (p, h, n) = (i.u8()?, i.u8()?, i.u8()?);
+        let delay = i.u32()?;
+        let mut players = Vec::new();
+        for _ in 0..i.u8()? {
+            players.push((i.u8()?, i.u8()?, i.u8()?));
+        }
+        let mut at = b.len() - i.0.len();
+        let ex = crate::bw::enhanced::Extras::decode(b, &mut at)?;
+        i = In(&b[at..]);
+        let zl = i.u32()? as usize;
+        let z = i.take(zl)?.to_vec();
+        Some((f, p, h, n, delay, players, ex, z))
+    };
+    let (f, p, h, n, delay, players, ex, z) = parse().ok_or_else(bad)?;
+    let mut save = Vec::new();
+    flate2::read::ZlibDecoder::new(&z[..]).read_to_end(&mut save)?;
+    if let Ok(path) = std::env::var("SCBW_LATE_DUMP") {
+        let _ = std::fs::write(path, &save);
+    }
+    let mut scene = Scene::from_save_steps(a, &save, false)?;
+    let st = &mut scene.st;
+    ex.apply(st);
+    st.local_player = n;
+    st.local_human = h;
+    scene.local = n;
+    let (mut tr, _, _, early) = super::snet::take_transport().ok_or_else(|| std::io::Error::other("no link to the game"))?;
+    tr.set_first(f);
+    let table: Vec<(u8, u8)> = players.iter().map(|q| (q.0, q.1)).collect();
+    let mut se = Session::new_at(p, &table, delay, f);
+    se.map_humans(&players.iter().map(|q| (q.0, q.2)).collect::<Vec<_>>());
+    se.add_player(p, p, h, f + super::JOIN_LAG);
+    let mut net = NetGame::new(se, tr, false, early).map_err(std::io::Error::other)?;
+    // The replay of a game joined late would lack its start.
+    net.se.record = false;
+    // The link counts my turns from the join frame: the ones before my first are empty.
+    for fr in f..f + delay {
+        net.tr.send_turns(fr, Vec::new());
+    }
+    eprintln!("net: joined the running game at frame {f} as human {h}, army {n}");
+    Ok((scene, net))
 }

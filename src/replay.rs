@@ -243,6 +243,7 @@ pub fn split_commands(turn: &[u8]) -> Vec<&[u8]> {
     while let Some(&id) = turn.get(p) {
         let n = match id {
             0x09..=0x0b => turn.get(p + 1).map_or(0, |&k| k as usize * 2 + 2),
+            crate::bw::enhanced::CMD_JOIN => crate::bw::enhanced::JOIN_LEN,
             _ => match CMD_LEN.get(id as usize) {
                 Some(&n) if n > 0 => n as usize,
                 _ => break,

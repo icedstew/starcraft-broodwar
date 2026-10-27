@@ -1165,21 +1165,25 @@ impl State {
     /// "..Cu" without Brood War) around its start location.
     fn start_melee_ai(&mut self, d: &Data) {
         for p in 0..8usize {
-            if self.player_types[p] != 1 {
-                continue;
+            if self.player_types[p] == 1 {
+                self.start_melee_ai_for(d, p);
             }
-            let r = match self.player_races[p] {
-                0 => b'Z',
-                1 => b'T',
-                2 => b'P',
-                _ => continue,
-            };
-            let id = u32::from_le_bytes([r, b'M', b'C', if self.is_expansion { b'x' } else { b'u' }]);
-            let (x, y) = self.start_locations[p];
-            let (x, y) = (x as i32, y as i32);
-            if let Some((pos, bw)) = find_ai_script(d, id) {
-                self.start_ai_script(p as u32, pos, bw, Some([x - 1, y - 1, x + 1, y + 1]));
-            }
+        }
+    }
+
+    /// 0x4ab230's body for one computer `p`.
+    pub(super) fn start_melee_ai_for(&mut self, d: &Data, p: usize) {
+        let r = match self.player_races[p] {
+            0 => b'Z',
+            1 => b'T',
+            2 => b'P',
+            _ => return,
+        };
+        let id = u32::from_le_bytes([r, b'M', b'C', if self.is_expansion { b'x' } else { b'u' }]);
+        let (x, y) = self.start_locations[p];
+        let (x, y) = (x as i32, y as i32);
+        if let Some((pos, bw)) = find_ai_script(d, id) {
+            self.start_ai_script(p as u32, pos, bw, Some([x - 1, y - 1, x + 1, y + 1]));
         }
     }
 }

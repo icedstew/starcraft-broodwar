@@ -61,7 +61,21 @@ pub struct Session {
     /// The human each transport player plays (identity unless `map_humans`: a lobby's Storm
     /// ids play the slots the lobby gave them).
     human_of: [u8; 256],
+    /// Enhanced games: turns of players not in the session yet (their join command not run).
+    orphans: Vec<(u8, u32, Vec<u8>)>,
+    /// Enhanced games: the frame whose start state is kept for a joiner, and that state.
+    pub keep: Option<(u32, Option<bw::State>)>,
+    /// The frame this session started at (a joiner's: its state is already past that
+    /// frame's save pass).
+    start: u32,
+    /// Players added since the last look (link id, the frame their turns count from in the
+    /// link: the join frame): the transport counts their turns from there.
+    pub added: Vec<(u8, u32)>,
 }
+
+/// Enhanced games: a joiner's turns count from this many frames after its join command
+/// (more than PRED_LIMIT: no peer has confirmed that frame when it learns of the join).
+pub const JOIN_LAG: u32 = 2 * PRED_LIMIT;
 
 impl Session {
     /// Transport player -> human (the slot the lobby gave each Storm id).
@@ -99,6 +113,77 @@ impl Session {
             debug_desync: std::env::var("SCBW_NET_DEBUG_DESYNC").ok().and_then(|v| v.parse().ok()),
             skipped: None,
             human_of: std::array::from_fn(|i| i as u8),
+            orphans: Vec::new(),
+            keep: None,
+            start: 0,
+            added: Vec::new(),
+        }
+    }
+
+    /// A session that starts at frame `start` (a joiner of a running game: the state of
+    /// `start` came from the host); the frames before it are known empty.
+    pub fn new_at(me: u8, players: &[(u8, u8)], delay: u32, start: u32) -> Session {
+        let mut s = Session::new(me, players, delay);
+        for t in s.table.iter_mut() {
+            t.resize(start.max(delay) as usize, Some(Vec::new()));
+        }
+        s.frame = start;
+        s.start = start;
+        s.confirmed = start;
+        s.recorded = start;
+        s.hash_next = start.div_ceil(8) * 8;
+        s
+    }
+
+    /// `player` (link id, `storm` its order) plays human `human` from frame `from` on (its
+    /// turns below are empty); a player that left before comes back. Turns that came early
+    /// are taken now.
+    pub fn add_player(&mut self, player: u8, storm: u8, human: u8, from: u32) {
+        self.human_of[player as usize] = human;
+        let i = match self.index(player) {
+            Some(i) if self.gone[i].is_none() => return,
+            Some(i) => {
+                self.gone[i] = None;
+                i
+            }
+            None => {
+                let at = self.players.iter().position(|p| p.1 < storm).unwrap_or(self.players.len());
+                self.players.insert(at, (player, storm));
+                self.table.insert(at, Vec::new());
+                self.gone.insert(at, None);
+                at
+            }
+        };
+        let t = &mut self.table[i];
+        t.truncate(from as usize);
+        t.resize(from as usize, None);
+        for x in t.iter_mut() {
+            if x.is_none() {
+                *x = Some(Vec::new());
+            }
+        }
+        for (p, f, b) in std::mem::take(&mut self.orphans) {
+            if p == player {
+                self.store(i, f, b);
+            } else {
+                self.orphans.push((p, f, b));
+            }
+        }
+        self.advance_confirmed();
+    }
+
+    /// The kept start state of frame `f` once it is final: every turn below `f` is known and
+    /// no rollback below it is pending.
+    pub fn kept(&self, f: u32) -> Option<&bw::State> {
+        match &self.keep {
+            Some((k, Some(st))) if *k == f && self.confirmed >= f && self.rollback.is_none_or(|g| g >= f) => Some(st),
+            _ => None,
+        }
+    }
+
+    fn keep_snap(&mut self, f: u32, st: &bw::State) {
+        if let Some((_, s)) = self.keep.as_mut().filter(|k| k.0 == f) {
+            *s = Some(st.clone());
         }
     }
 
@@ -204,7 +289,10 @@ impl Session {
 
     /// `player`'s turn for `frame` arrived (duplicates are ignored).
     pub fn remote_turn(&mut self, player: u8, frame: u32, bytes: Vec<u8>) {
-        let Some(i) = self.index(player) else { return };
+        let Some(i) = self.index(player) else {
+            self.orphans.push((player, frame, bytes));
+            return;
+        };
         let empty = bytes.is_empty();
         if self.store(i, frame, bytes) && frame < self.frame && !empty {
             self.rollback = Some(self.rollback.map_or(frame, |r| r.min(frame)));
@@ -226,14 +314,30 @@ impl Session {
                 eprintln!("net: DEBUG_DESYNC: skipping the commands of frame {f}");
             }
         }
+        let mut joins = Vec::new();
+        // A join this frame: the save pass first (the joiner's state had it, `bw::enhanced`).
+        let has_join = |t: &Option<Vec<u8>>| t.as_ref().is_some_and(|t| replay::split_commands(t).iter().any(|c| c[0] == bw::enhanced::CMD_JOIN));
+        if !skip && f != self.start && scene.st.enhanced && self.table.iter().any(|t| t.get(f as usize).is_some_and(has_join)) {
+            if !scene.reload_through_save() {
+                eprintln!("net: the join frame's save and load failed");
+            }
+        }
         if !skip {
             for (i, &(player, _)) in self.players.iter().enumerate() {
                 if let Some(Some(turn)) = self.table[i].get(f as usize) {
                     for c in replay::split_commands(turn) {
+                        if c[0] == bw::enhanced::CMD_JOIN && c.len() >= bw::enhanced::JOIN_LEN && scene.st.enhanced {
+                            joins.push((c[3], c[1]));
+                        }
                         scene.human_command(self.human_of[player as usize], c);
                     }
                 }
             }
+        }
+        // An enhanced game's join (ours): the joiner's turns count from JOIN_LAG frames on.
+        for (p, h) in joins {
+            self.add_player(p, p, h, f + JOIN_LAG);
+            self.added.push((p, f));
         }
         let r = scene.step();
         if self.record {
@@ -248,6 +352,11 @@ impl Session {
         if self.record {
             self.chat_rec.push((self.frame.max(self.recorded), cmd));
         }
+    }
+
+    /// The players still in the game: (link id, storm order, human).
+    pub fn live_players(&self) -> Vec<(u8, u8, u8)> {
+        self.players.iter().zip(&self.gone).filter(|(_, g)| g.is_none()).map(|(p, _)| (p.0, p.1, self.human_of[p.0 as usize])).collect()
     }
 
     /// The players in the game.
@@ -335,6 +444,7 @@ impl Session {
                 if h > g {
                     self.snaps[(h % ring) as usize] = Some(scene.st.clone());
                 }
+                self.keep_snap(h, &scene.st);
                 self.run_frame(scene, h);
                 self.resimulated += 1;
             }
@@ -348,6 +458,8 @@ impl Session {
             return false;
         }
         self.snaps[(self.frame % ring) as usize] = Some(scene.st.clone());
+        let f = self.frame;
+        self.keep_snap(f, &scene.st);
         self.sounds = self.run_frame(scene, self.frame);
         self.frame += 1;
         true

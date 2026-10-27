@@ -168,17 +168,23 @@ impl State {
     /// 0x4ead50, 0x4dbc00, 0x49c440). False when the file is short or bad (the game then
     /// shows gluAll error 0x62 and goes back to the menu).
     pub fn load_state(&mut self, d: &Data, i: &mut In) -> bool {
-        self.load_images(d, i) // 0x4d6220
-            && self.load_sprites(d, i) // 0x498570
-            && self.load_fog_thingies(d, i) // 0x488100
-            && self.load_flingies(d, i) // 0x495a50
-            && self.load_units(d, i) // 0x49e910
-            && self.load_bullets(d, i) // 0x48ae40
-            && self.load_orders(d, i) // 0x48c870
-            && self.load_tiles(d, i) // 0x413900 / 0x4138c0 blocks, 0x47d9d0, the three maps
-            && self.load_trig_state(d, i) // 0x4897e0
-            && self.load_chk(d, i) // 0x5994d8 / 0x5993d4, 0x6284e8, 0x4ceda0
-            && self.load_ai(d, i) // 0x46ea70, 0x4a1180
-            && self.load_tail(d, i) // 0x4bf020, 0x62848c, 0x6284a8, 0x4ce440, 0x4ead50, 0x4dbc00, 0x49c440
+        let dbg = |n: &str, ok: bool| {
+            if !ok && std::env::var_os("SCBW_SAVE_DEBUG").is_some() {
+                eprintln!("load: {n} failed");
+            }
+            ok
+        };
+        dbg("images", self.load_images(d, i)) // 0x4d6220
+            && dbg("sprites", self.load_sprites(d, i)) // 0x498570
+            && dbg("fog", self.load_fog_thingies(d, i)) // 0x488100
+            && dbg("flingies", self.load_flingies(d, i)) // 0x495a50
+            && dbg("units", self.load_units(d, i)) // 0x49e910
+            && dbg("bullets", self.load_bullets(d, i)) // 0x48ae40
+            && dbg("orders", self.load_orders(d, i)) // 0x48c870
+            && dbg("tiles", self.load_tiles(d, i)) // 0x413900 / 0x4138c0 blocks, 0x47d9d0, the three maps
+            && dbg("triggers", self.load_trig_state(d, i)) // 0x4897e0
+            && dbg("chk", self.load_chk(d, i)) // 0x5994d8 / 0x5993d4, 0x6284e8, 0x4ceda0
+            && dbg("ai", self.load_ai(d, i)) // 0x46ea70, 0x4a1180
+            && dbg("tail", self.load_tail(d, i)) // 0x4bf020, 0x62848c, 0x6284a8, 0x4ce440, 0x4ead50, 0x4dbc00, 0x49c440
     }
 }

@@ -192,6 +192,15 @@ impl Glue {
         if !self.chat.idle || !matches!(self.dlg, Some((_, Open::Chat))) || self.popup.is_some() {
             return;
         }
+        // Ours: a running enhanced game answered with its state: the game starts from it.
+        if !self.lobby_host {
+            if let Some(l) = crate::net::snet::late() {
+                self.late = Some(l);
+                self.lobby.start_game = true;
+                self.chat_4b9830(files, None, 0x22c);
+                return;
+            }
+        }
         let code = self.lobby_4d4340(files);
         self.chat_lines();
         if code == 0x53 {

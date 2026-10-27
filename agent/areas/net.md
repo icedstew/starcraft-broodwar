@@ -351,3 +351,15 @@ without a computer, member names in labels -30..); allied victory 0x490c40; Acce
 sends 0x0e (2 bits per player) and 0x0d. Checked in a window shot (melee rows); the team
 layout opens but its member labels did not show in a SCBW_TEAMS shot: not checked vs native.
 The message dialog (minimap button 3, 0x48ff10 recipients) is still not ported.
+
+## Enhanced games (ours, 2026-10-27)
+
+Full hand-off design: [../plans/enhanced.md](../plans/enhanced.md). Summary: create-game
+option (description byte +0x2f bit 7); join a running game by code (`SCBW_JOIN`, `?join=`);
+joiner picks an army (`SCBW_ARMY`), a taken army makes a second human on it (shared
+control); a leaving army with no human goes to the AI (`ai_take_over`, melee script), a
+joiner can take it back. Join = command 0xe0 (`src/bw/enhanced.rs`); every peer reloads
+through a 1.16.1 save at the join frame so the state equals the joiner's load. State sent
+as C_LATE control parts. Drops wait 3 s (no dialog). Test: `agent/tools/enhanced.sh`
+(`QUIT_AT`, `ARMY`). Host leaving ends the game. Open: LAN list advert for running games,
+browser late-join test, visible "AI took army" line, window check.
