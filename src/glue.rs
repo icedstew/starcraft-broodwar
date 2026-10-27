@@ -31,6 +31,8 @@ mod title;
 mod slide;
 #[path = "glue_conn.rs"]
 mod conn;
+#[path = "glue_join.rs"]
+mod join;
 
 /// What the glue asks the sound system for (the window loop plays them: `Audio` is not
 /// the glue's).
@@ -197,6 +199,8 @@ pub enum Open {
     NewId,
     /// 0x4baf30: rez\gluConn.bin, event proc 0x4bae20 (glue_conn.rs).
     Conn,
+    /// 0x4b86c0: rez\gluJoin.bin, event proc 0x4b8590 (glue_join.rs).
+    Join,
     /// 0x4dffc0 from 0x4b4960: rez\savegame.bin, event proc 0x4dfef0 (glue_score.rs).
     SaveReplay,
     /// 0x4dfc80: the overwrite question rez\okcancel.bin (event proc 0x4f5cb0).
@@ -360,6 +364,8 @@ pub struct Glue {
     title: title::Title,
     /// The connection select screen's globals (glue_conn.rs).
     conn: conn::Conn,
+    /// The join game screen's globals (glue_join.rs).
+    join: join::Join,
     /// The ready room's globals (glue_ready.rs).
     ready: ready::Ready,
     /// 0x51a238: the load screen's saved games, as the list rows show them (newest first; the
@@ -454,6 +460,7 @@ impl Glue {
             credits: credits::Credits::default(),
             title: title::Title::default(),
             conn: conn::Conn::default(),
+            join: join::Join::default(),
             ready: ready::Ready::default(),
             saves: Vec::new(),
             save_name: Vec::new(),
@@ -592,8 +599,9 @@ impl Glue {
         match self.screen {
             screen::MAIN => self.open_main(files),
             screen::SELCONN => self.open_conn(files),
-            screen::CHAT | screen::BATTLE_NET | screen::GAMESEL | screen::DIRECT | screen::MODEM => {
-                // Not ported yet (net.md phase 3c): 0x4b9e70 / 0x4ad330 / 0x4b86c0; Battle.net,
+            screen::GAMESEL => self.open_join(files),
+            screen::CHAT | screen::BATTLE_NET | screen::DIRECT | screen::MODEM => {
+                // Not ported yet (net.md phase 3c): 0x4b9e70 / 0x4ad330; Battle.net,
                 // direct cable and modem stay unported. Back to the main menu.
                 self.multiplayer = false;
                 self.screen = screen::MAIN;
@@ -706,11 +714,14 @@ impl Glue {
             2 => self.state = 2,
             3 => {
                 self.multiplayer = false;
+                self.setup.multiplayer = false;
                 self.screen = screen::LOGIN;
                 self.template = Self::default_template(files);
             }
             4 => {
+                // 0x57f0b4 (`multiplayer` here and in the setup).
                 self.multiplayer = true;
+                self.setup.multiplayer = true;
                 self.screen = screen::SELCONN;
                 self.template = Self::default_template(files);
             }
@@ -1417,6 +1428,9 @@ impl Glue {
         }
         if open == Open::Conn && id == 5 {
             self.conn_select();
+        }
+        if open == Open::Join && id == 5 {
+            self.join_info();
         }
     }
 
@@ -2416,6 +2430,9 @@ impl Glue {
             Open::Conn => {
                 self.conn_activate(files, id);
             }
+            Open::Join => {
+                self.join_activate(files, id);
+            }
             Open::Ready(_) => {
                 // The event proc's activation (event 0xe code 2) is 0x46d160.
                 self.activated = id;
@@ -2439,6 +2456,7 @@ impl Glue {
                 Open::Create(which) => self.done_create(r, which),
                 Open::Login => self.done_login(r),
                 Open::Conn => self.done_conn(r),
+                Open::Join => self.done_join(r),
                 Open::Ready(race) => self.done_ready(files, r, race),
                 _ => {}
             }
@@ -2907,6 +2925,7 @@ impl Glue {
         self.clock_ms = self.clock_ms.wrapping_add(ms);
         self.slide_tick(files, ms);
         self.create_tick(files, ms);
+        self.join_tick(ms);
         self.score_tick(ms);
         // 0x4de150's timer: 0x4de140 ends it (0x416000) and shows a stored error.
         if let Some(left) = self.error_timer {

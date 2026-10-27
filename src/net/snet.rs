@@ -425,6 +425,12 @@ mod tests {
                 }
                 if let Some(m) = receive_message() {
                     tx.send(m).unwrap();
+                    // Keep the link up until the joiner has had time to ack our message.
+                    let t1 = Instant::now();
+                    while t1.elapsed().as_secs() < 3 {
+                        pump();
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
                     break;
                 }
                 std::thread::sleep(Duration::from_millis(5));

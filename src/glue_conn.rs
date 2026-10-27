@@ -91,7 +91,7 @@ impl Glue {
         self.setup.net_provider = u32::MAX;
         snet::destroy();
         todo_port!("0x4bab10", "the Battle.net connect event 0x6d5ecc (ResetEvent) and 0x66ff30");
-        let hint = self.glu_str(0xb9).into_bytes();
+        let hint = self.glu(0xb9).into_bytes();
         if let Some(c) = self.dlg.as_mut().and_then(|(d, _)| d.get_mut(ids::GATEWAY_HINT)) {
             c.text = hint;
         }
@@ -104,16 +104,11 @@ impl Glue {
         self.load_templates(files);
     }
 
-    /// gluAll.tbl string `n` (0x4ddd30, 1-based).
-    fn glu_str(&self, n: usize) -> String {
-        self.glu_all.get(n.wrapping_sub(1)).cloned().unwrap_or_default()
-    }
-
     /// 0x4ba610 (Ordinal 105's callback): a row for provider `p` at the end of the list; the
     /// providers of 0x5129bc show a gluAll.tbl string as their description.
     fn conn_add(&mut self, p: snet::Provider) {
         let desc = match DESC_STRINGS.iter().find(|d| d.0 == p.id) {
-            Some(&(_, n)) => self.glu_str(n).into_bytes(),
+            Some(&(_, n)) => self.glu(n).into_bytes(),
             None => p.desc.as_bytes().to_vec(),
         };
         self.conn.rows.push(Row { id: p.id, max_players: p.max_players.min(8), name: p.name.as_bytes().to_vec(), desc });
@@ -153,7 +148,7 @@ impl Glue {
         self.disable(ids::OK, false);
         self.conn.prev = self.conn.sel;
         self.conn.sel = self.conn.rows[k].id;
-        let players = self.glu_str(0x68).replace("%d", &self.conn.rows[k].max_players.to_string()).into_bytes();
+        let players = self.glu(0x68).replace("%d", &self.conn.rows[k].max_players.to_string()).into_bytes();
         let (name, desc) = (self.conn.rows[k].name.clone(), self.conn.rows[k].desc.clone());
         let Some((dlg, _)) = self.dlg.as_mut() else { return };
         for (id, text) in [(ids::NAME, name), (ids::DESC, desc), (ids::PLAYERS, players)] {
@@ -194,7 +189,7 @@ impl Glue {
     /// the turn size 0x57f0d8 = min(caps +8, 0x200) (under 0x80 refused), the turns in flight
     /// 0x57f090 (1 single player, else caps +0x20 clamped to 2 ..= 8); 0x59688c = the provider;
     /// 0x4b0fb0 picks a device (Ordinal 103: UDP has none); the Storm event handlers (Ordinal
-    /// 123: 2 0x4c4980, 3 0x4c3c90, 4 0x47f750, 1 0x4aaea0). A failure shows gluAll 0x53 /
+    /// 123: 2 0x4c4980, 3 0x4c3c90, 4 0x47f750, 1 0x4aaea0). A failure shows network.tbl 0x53 /
     /// 0x55 / 0x56 (0x4bb0b0) and drops the provider (Ordinal 102).
     fn init_provider(&mut self, files: &Storage, id: u32) -> bool {
         todo_port!("0x4d3cc0", "0x472770, 0x4ad190 (the Storm UI callbacks), 0x4d9b50 before Ordinal 117");
@@ -205,8 +200,7 @@ impl Glue {
         };
         if let Some(n) = msg {
             snet::destroy();
-            let msg = self.glu_str(n);
-            self.open_popup(files, &msg);
+            self.error_popup(files, n);
             return false;
         }
         // 0x57f0d8 / 0x57f090 size Storm's turns; the game's turns go through our rollback

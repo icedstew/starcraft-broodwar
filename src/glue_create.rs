@@ -51,9 +51,9 @@ mod ids {
 /// (u16), +4 the subtype's number, +8 / +0xc / +0x12 the settings 4aaf50 tests, +0xe, +0x12
 /// what a single-player game lists).
 pub(super) struct Template {
-    name: Vec<u8>,
-    desc: Vec<u8>,
-    rec: [u8; 0x20],
+    pub(super) name: Vec<u8>,
+    pub(super) desc: Vec<u8>,
+    pub(super) rec: [u8; 0x20],
 }
 
 /// A map list node (0x544 bytes, the list 0x51a27c).
@@ -150,7 +150,7 @@ pub(super) struct Create {
     rand_on: bool,
     seed: u32,
     /// 0x5967f8: the description of the single-player game (0x8d bytes) 0x4d3fc0 takes.
-    game_desc: Vec<u8>,
+    pub(super) game_desc: Vec<u8>,
     /// The replay file started from the list (0x6d0f24 holds its data natively); the game
     /// start has to play it.
     pub(super) replay: Option<Vec<u8>>,
@@ -394,7 +394,7 @@ impl Glue {
     }
 
     /// gluAll.tbl string `n` (1-based, 0x4ddd30).
-    fn glu(&self, n: usize) -> String {
+    pub(super) fn glu(&self, n: usize) -> String {
         self.glu_all.get(n.wrapping_sub(1)).cloned().unwrap_or_default()
     }
 
@@ -437,7 +437,7 @@ impl Glue {
     }
 
     /// 0x4aac90: the record of the game type (`gt`, `b1`, `sub` at +0 / +1 / +2).
-    fn find_template(&self, gt: u8, b1: u8, sub: u16) -> Option<&Template> {
+    pub(super) fn find_template(&self, gt: u8, b1: u8, sub: u16) -> Option<&Template> {
         self.create.templates.iter().find(|t| t.rec[0] == gt && t.rec[1] == b1 && u16::from_le_bytes([t.rec[2], t.rec[3]]) == sub)
     }
 
@@ -473,7 +473,7 @@ impl Glue {
     }
 
     /// 0x4ab6c0: a subtype's text: its number, or "%d vs %d" for Top vs Bottom.
-    fn subtype_text(&self, rec: &[u8; 0x20], players: u32) -> Vec<u8> {
+    pub(super) fn subtype_text(&self, rec: &[u8; 0x20], players: u32) -> Vec<u8> {
         let n = u32::from_le_bytes(rec[4..8].try_into().unwrap());
         match rec[0] {
             9 => self.glu(n as usize + 0xa4).into_bytes(),
@@ -1291,7 +1291,7 @@ impl Glue {
 
     /// 0x4ab0b0 / 0x4ab0e0: the first game type with (`gt`, byte 1): its record (+0x28) /
     /// its name (+8).
-    fn find_by_type(&self, gt: u8, b1: u8) -> Option<&Template> {
+    pub(super) fn find_by_type(&self, gt: u8, b1: u8) -> Option<&Template> {
         self.create.templates.iter().find(|t| t.rec[0] == gt && t.rec[1] == b1)
     }
 
@@ -1609,7 +1609,7 @@ impl Glue {
                         return if u16::from_le_bytes([hdr[0x18], hdr[0x19]]) > 0x3b { -0x7fff_ffff } else { -0x7fff_fff9 };
                     }
                 }
-                self.start_map(idx, packed)
+                self.start_map(files, idx, packed)
             }
             1 => {
                 if !loaded {
@@ -1663,7 +1663,7 @@ impl Glue {
     /// game description (0x8d bytes), 0x4a68d0 (the game type and its settings), the local
     /// slot (0x4dbea0) and the game (0x4d3fc0).
     /// 0x4dbea0: 0x51ca1c = 1, 0x57f1e3 = 1, then 0x4dbe50 (inline here).
-    fn start_map(&mut self, idx: usize, packed: u32) -> i32 {
+    fn start_map(&mut self, files: &Storage, idx: usize, packed: u32) -> i32 {
         let n = self.create.nodes[idx].clone();
         let (gt, b1, sub) = (packed as u8, (packed >> 8) as u8, (packed >> 16) as u16);
         if !self.setup.multiplayer {
@@ -1700,6 +1700,15 @@ impl Glue {
         if rc != 0 {
             return rc;
         }
+        // 0x596888 = 0; a network game is Storm's to create (0x4d3910), a single-player one
+        // takes its slot (0x4dbea0) and starts (0x4d3fc0).
+        if self.setup.multiplayer {
+            if !self.net_create_game(files, &mut d) {
+                return -0x7fff_fffa;
+            }
+            self.save_recent_maps(idx);
+            return 0;
+        }
         // 0x4dbea0 (inline here): 0x51ca1c = 1, 0x57f1e3 = 1, then 0x4dbe50.
         self.create.race_picked = true;
         if !self.setup.local_slot_setup() {
@@ -1711,6 +1720,62 @@ impl Glue {
         }
         self.save_recent_maps(idx);
         0
+    }
+
+    /// 0x4d3910 (`d` the description, the password empty: gluCreat has no field for one): the
+    /// network game. The spawn version cannot create (network.tbl 0x68). The game type record
+    /// (0x4aac90) goes to +0x6d (none: network.tbl 0x5d), one player (+0x24), the creator's name
+    /// (0x57ee9c, under 0x19 characters) to +0x34; the most players (+0x25): 8 for a team game
+    /// (+0x7d) and 2 at most for one-on-one (+0x75 == 7) unless +0x1c is set, the open slots
+    /// (0x4a8cf0) for a Use Map Settings game (0x4aaa10); +0x2c the version hash (0x4d9cd0); the
+    /// stat string (0x472300, 0x80 bytes) and Ordinal 138 create it. Done, the description
+    /// is the game's (0x5967f8) and 0x596888 = 1.
+    pub(super) fn net_create_game(&mut self, files: &Storage, d: &mut [u8]) -> bool {
+        if self.spawn {
+            self.error_popup(files, 0x68);
+            return false;
+        }
+        let (gt, b1, sub) = (d[0x28], d[0x29], u16::from_le_bytes([d[0x2a], d[0x2b]]));
+        let Some(rec) = self.find_template(gt, b1, sub).map(|t| t.rec) else {
+            self.error_popup(files, 0x5d);
+            return false;
+        };
+        d[0x6d..0x8d].copy_from_slice(&rec);
+        d[0x24] = 1;
+        let name = cz(&self.setup.local_name).to_vec();
+        if name.len() >= 0x19 {
+            return false;
+        }
+        d[0x34..0x4d].fill(0);
+        d[0x34..0x34 + name.len()].copy_from_slice(&name);
+        let saved = u32::from_le_bytes(d[0x1c..0x20].try_into().unwrap()) != 0;
+        if d[0x7d] != 0 && !saved {
+            d[0x25] = 8;
+        }
+        // Ordinal 138's category (+0x7f: 0 / 1 / 3 / 5; team games 0x11 .. 0x16 their record's
+        // +0x124, 0x4aac60) only sorts Battle.net's lists.
+        if d[0x75] == 7 && !saved {
+            d[0x25] = d[0x25].min(2);
+        }
+        if d[0x75] == 0 && d[0x79] == 0 && d[0x7f] == 0 && !saved {
+            d[0x25] = self.setup.slots[..8].iter().filter(|s| s[slot::TYPE] == 6).count() as u8;
+        }
+        todo_port!("0x4d9cd0", "the version hash (Storm SStrHash, Ordinal 502, of the font.gid key) at +0x2c");
+        let stat = crate::net::statstr::build(d, 0x80);
+        let title = cz(&d[4..0x1c]).to_vec();
+        #[cfg(not(target_arch = "wasm32"))]
+        let me = crate::net::snet::create_game(&title, &stat, d[0x25]);
+        #[cfg(target_arch = "wasm32")]
+        let me: Option<u8> = {
+            todo_port!("0x4d3910", "a browser cannot host (it cannot listen)");
+            let _ = (title, stat);
+            None
+        };
+        let Some(me) = me else { return false };
+        self.setup.local_storm_id = me as u32;
+        self.create.game_desc = d.to_vec();
+        self.setup.template.copy_from_slice(&d[0x6d..0x8d]);
+        true
     }
 
     /// 0x4a68d0 (`d` the description): the game type's settings must suit the game; the game
@@ -2457,4 +2522,9 @@ thread_local! {
 /// The next game's seed instead of the time (a scripted "seed" step: the recorded game's).
 pub fn set_seed(seed: u32) {
     SEED.with(|s| s.set(Some(seed)));
+}
+
+/// The text before the first NUL.
+fn cz(b: &[u8]) -> &[u8] {
+    &b[..b.iter().position(|&c| c == 0).unwrap_or(b.len())]
 }
