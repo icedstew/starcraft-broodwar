@@ -52,7 +52,9 @@ export function wt_connect(url, hash, hello, on_start, on_dgram, on_err) {
     } catch (e) { fail(e); }
   })();
   return {
-    send(d) { if (dw && !closed) dw.write(d).catch(fail); },
+    // A datagram that cannot go is lost like any other (the protocol resends); it does not
+    // end the session.
+    send(d) { if (dw && !closed) dw.write(d).catch(e => console.warn("datagram: " + ((e && e.message) || e))); },
     // A short grace so the last datagrams (the leave) go out before the session closes.
     close() { closed = true; setTimeout(() => { try { if (wt) wt.close(); } catch (e) {} }, 200); },
   };

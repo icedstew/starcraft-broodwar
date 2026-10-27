@@ -1354,17 +1354,16 @@ impl Glue {
     /// Ours: the game the lobby started runs on our rollback session (net/mod.rs) over the
     /// lobby's link instead of Storm's turns (0x486f50): every Storm id plays the slot the
     /// lobby gave it (0x57ee7c), the input delay is fixed.
-    #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn lobby_net_game(&mut self) -> Option<crate::net::live::NetGame> {
         const DELAY: u32 = 2;
-        let (mut tr, host, ids) = snet::take_transport()?;
+        let (mut tr, host, ids, early) = snet::take_transport()?;
         tr.set_first(DELAY);
         let me = self.setup.local_storm_id as u8;
         let table: Vec<(u8, u8)> = ids.iter().map(|&i| (i, i)).collect();
         let mut se = crate::net::Session::new(me, &table, DELAY);
         let humans: Vec<(u8, u8)> = ids.iter().map(|&i| (i, self.setup.slot_by_storm2[i as usize] as u8)).collect();
         se.map_humans(&humans);
-        crate::net::live::NetGame::new(se, tr, host, Vec::new()).map_err(|e| eprintln!("net: {e}")).ok()
+        crate::net::live::NetGame::new(se, tr, host, early).map_err(|e| eprintln!("net: {e}")).ok()
     }
 
     // ---- Storm messages ----

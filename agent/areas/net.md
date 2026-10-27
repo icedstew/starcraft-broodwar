@@ -326,7 +326,18 @@ PRED_LIMIT stalls, ~30% more ticks); tl2071 INVALID (a command at frame 0 < dela
   "t o"; the creator's Ok is "c 500 393" (the entry takes the keys). Checked: join, slots,
   chat both ways, start -> equal hashes at 300; a joiner whose install has no maps folder
   downloads the map and plays (equal hashes).
+- Join by code (ours: 1.16.1 lists LAN / Battle.net games only): the creator prints
+  `LOBBY ip:port#hash`; the host sends a joiner the game's name + stat string (kind 0x86) so
+  `Glue::join_by_code` can make the description. Native: `SCBW_JOIN=<code> SCBW_NAME=<n> scbw
+  glue`. Browser: the page's join field / `?join=<code>&name=` (net_join sees a Start with no
+  setup and runs `glue::web_frame`: the glue in the browser from the lobby on, the game inside
+  it). Game turns that reach a peer while its lobby still owns the link are kept for the game
+  (snet `early`); `Transport::set_first` lifts the lobby's ack counters to the first frame.
+  Browser datagram send errors are not fatal (they had cleared the lobby's player table).
+- `agent/tools/lobby.sh [web]`: creator glue + joiner glue with no maps folder (or headless
+  Chromium): equal hashes at 300 (2026-10-27, both).
 - Not done: slot row details of 0x450d90 (ban, team seats, Make Game Public), the minimap
   preview (0x4a5d10), saved network games (0x6d1218), the ready room's network path in a
   window, team / UMS force moves (0x42 / 0x43) from the UI, slash commands in the lobby,
-  0x4a3010 when the lobby stalls 20 s, a browser joining from the glue.
+  0x4a3010 when the lobby stalls 20 s, an in-lobby "copy join code" UI (the code is on
+  stdout), the browser front end from the title screen (it starts at the lobby).

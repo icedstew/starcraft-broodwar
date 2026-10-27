@@ -121,7 +121,7 @@ async fn sleep(ms: i32) {
 /// game is running; `frames` > 0 logs `frame K hash H` to the console at that frame (the
 /// headless-net check) and stops the game there.
 #[wasm_bindgen]
-pub async fn net_join(storm: Vec<u8>, archives: js_sys::Array, code: String, frames: u32, script: String) -> Result<(), JsError> {
+pub async fn net_join(storm: Vec<u8>, archives: js_sys::Array, code: String, frames: u32, script: String, name: String) -> Result<(), JsError> {
     use crate::net::{Session, live, transport};
     console_error_panic_hook::set_once();
     let archives = archives.iter().map(|a| js_sys::Uint8Array::new(&a).to_vec()).collect();
@@ -142,6 +142,13 @@ pub async fn net_join(storm: Vec<u8>, archives: js_sys::Array, code: String, fra
         }
         sleep(5).await;
     };
+    // A lobby's Start has no setup (the glue made the game): its front end takes over.
+    if setup.is_empty() {
+        if frames > 0 {
+            live::NetGame::report_next(frames);
+        }
+        return glue_lobby(a, tr, slot, code, name).await;
+    }
     let (mut g, table) = live::decode_setup(&setup, slot).ok_or_else(|| err("bad game setup".into()))?;
     let mut net = live::NetGame::new(Session::new(slot, &table, delay), tr, false, early).map_err(err)?;
     net.set_script(&script).map_err(err)?;
@@ -153,6 +160,28 @@ pub async fn net_join(storm: Vec<u8>, archives: js_sys::Array, code: String, fra
     view::prepare_setup(a, &mut g);
     let a: &'static view::Assets = a;
     let frame = view::frame_loop_end(a, view::Scene::for_setup(a, &g).map_err(js)?, None, Default::default()).map_err(js)?;
+    run_raf(Box::new(frame));
+    Ok(())
+}
+
+/// The lobby of a game made in the glue (`net_join` found it): the link becomes the Storm
+/// game (snet.rs) and the front end runs from the lobby (gluChat) as `name`: the map comes
+/// from the creator if needed, the game starts from there.
+async fn glue_lobby(a: &'static mut view::Assets, tr: crate::net::transport::Transport, slot: u8, code: String, name: String) -> Result<(), JsError> {
+    use crate::net::snet;
+    let err = |m: String| JsError::new(&m);
+    snet::initialize_provider(snet::UDPN);
+    snet::adopt(tr, slot, code, name.as_bytes());
+    let mut glue = crate::glue::Glue::new(&a.files);
+    let t0 = web_time::Instant::now();
+    while !glue.join_by_code(&a.files, name.as_bytes()) {
+        if t0.elapsed().as_secs() > 10 {
+            return Err(err("no answer from the game".into()));
+        }
+        snet::pump();
+        sleep(5).await;
+    }
+    let frame = crate::glue::web_frame(a as *mut view::Assets, glue).map_err(js)?;
     run_raf(Box::new(frame));
     Ok(())
 }

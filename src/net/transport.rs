@@ -260,6 +260,13 @@ impl Transport {
     /// The game starts (a lobby's): frames below `first` are known empty.
     pub fn set_first(&mut self, first: u32) {
         self.first = first;
+        // What a lobby counted from 0: the frames below `first` are known.
+        for n in self.next.values_mut() {
+            *n = (*n).max(first);
+        }
+        for a in self.acked.values_mut() {
+            *a = (*a).max(first);
+        }
     }
 
     /// This side's id (a lobby client's comes with its Start event).

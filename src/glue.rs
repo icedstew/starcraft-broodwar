@@ -3195,6 +3195,228 @@ fn hand_over<T>(win: &mut Option<minifb::Window>, audio: &mut Option<crate::audi
     r
 }
 
+/// The window's input for the glue (native `run` and the browser's `web_frame`): keys,
+/// typed characters, the mouse and the buttons it presses.
+struct WinInput {
+    pressed: Option<i16>,
+    btn_down: bool,
+    was_down: bool,
+    was_rdown: bool,
+    keys_held: crate::script::Held,
+    typed: std::rc::Rc<std::cell::RefCell<Vec<u32>>>,
+}
+
+impl WinInput {
+    fn new(win: Option<&mut minifb::Window>) -> WinInput {
+        let typed = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        if let Some(w) = win {
+            w.set_input_callback(Box::new(Typed(typed.clone())));
+        }
+        #[cfg(target_arch = "wasm32")]
+        crate::web::typed_chars(typed.clone());
+        WinInput { pressed: None, btn_down: false, was_down: false, was_rdown: false, keys_held: Default::default(), typed }
+    }
+
+    fn pass(&mut self, glue: &mut Glue, files: &Storage, win: &mut minifb::Window) {
+        use minifb::{MouseButton, MouseMode};
+        // Keys (WM_KEYDOWN with repeat: virtual key codes) and characters (WM_CHAR; Enter,
+        // Escape, Backspace and Tab come as their control characters).
+        {
+            use minifb::{Key, KeyRepeat};
+            self.keys_held.sync(win);
+            let alt = self.keys_held.down(Key::LeftAlt) || self.keys_held.down(Key::RightAlt);
+            glue.shift = self.keys_held.down(Key::LeftShift) || self.keys_held.down(Key::RightShift);
+            for k in win.get_keys_pressed(KeyRepeat::Yes) {
+                let vk = match k {
+                    Key::PageUp => 0x21,
+                    Key::PageDown => 0x22,
+                    Key::End => 0x23,
+                    Key::Home => 0x24,
+                    Key::Left => 0x25,
+                    Key::Up => 0x26,
+                    Key::Right => 0x27,
+                    Key::Down => 0x28,
+                    Key::Insert => 0x2d,
+                    Key::Delete => 0x2e,
+                    Key::Enter | Key::NumPadEnter => 0x0d,
+                    Key::Escape => 0x1b,
+                    Key::Backspace => 8,
+                    Key::Tab => 9,
+                    _ => match format!("{k:?}").as_bytes() {
+                        [c] if c.is_ascii_uppercase() || c.is_ascii_digit() => *c as u16,
+                        _ => continue,
+                    },
+                };
+                glue.key_down(files, vk, if alt { 8 } else { 0 });
+                if matches!(vk, 8 | 9 | 0x0d | 0x1b) {
+                    glue.char_in(files, vk as u8);
+                }
+            }
+            for c in self.typed.borrow_mut().drain(..) {
+                if (0x20..=0xff).contains(&c) && c != 0x7f && !alt {
+                    glue.char_in(files, c as u8);
+                }
+            }
+        }
+        if let Some((x, y)) = win.get_mouse_pos(MouseMode::Clamp) {
+            glue.mouse_to(x as i32, y as i32);
+            if let Some((_, dy)) = win.get_scroll_wheel().filter(|w| w.1 != 0.0) {
+                glue.create_wheel(dy < 0.0);
+            }
+            let down = win.get_mouse_down(MouseButton::Left);
+            if down && !self.was_down {
+                glue.press(files);
+            } else if down {
+                glue.drag(files);
+            } else if self.was_down {
+                glue.release();
+            }
+            self.was_down = down;
+            // Event 7 (the right button went down): the credits go on (0x4d8d60).
+            let rdown = win.get_mouse_down(MouseButton::Right);
+            if rdown && !self.was_rdown && glue.credits_open_now() {
+                glue.press(files);
+            }
+            self.was_rdown = rdown;
+            // 0x418eb0's button behavior: activate on release over the pressed control.
+            let top = glue.popup.as_ref().or(glue.dlg.as_ref());
+            let hit = top.and_then(|(dlg, _)| dlg.hit(x as i32, y as i32).filter(|&i| activates(&dlg.controls[i])).map(|i| dlg.controls[i].id));
+            // The press is captured only when the button goes down over a control; while
+            // held, the control's pressed look follows the mouse (0x4e0d40); the release
+            // activates it when it is still pressed (0x4e19f0).
+            if down && !self.btn_down {
+                self.pressed = hit;
+                if let Some(id) = hit {
+                    glue.button_follow(id, true);
+                }
+            } else if down {
+                if let Some(id) = self.pressed {
+                    glue.button_follow(id, hit == Some(id));
+                }
+            } else if let Some(id) = self.pressed.take() {
+                if glue.button_release(id) {
+                    glue.activate(files, id);
+                }
+            }
+            self.btn_down = down;
+        }
+    }
+}
+
+/// The browser's front end (web.rs `glue_join`): the glue loop as one call per displayed
+/// frame (no cinematics, credits or replays); a game it starts runs inside it until it ends.
+/// `a` holds the storage the glue reads and the assets the game borrows.
+#[cfg(target_arch = "wasm32")]
+pub fn web_frame(a: *mut crate::view::Assets, mut glue: Glue) -> std::io::Result<impl FnMut() -> std::io::Result<bool>> {
+    use minifb::{Window, WindowOptions};
+    let (w, h) = (640usize, 480usize);
+    let err = |e: minifb::Error| std::io::Error::other(e.to_string());
+    let opts = WindowOptions { scale: minifb::Scale::X2, ..WindowOptions::default() };
+    let mut win = Some(Window::new("scbw", w, h, opts).map_err(err)?);
+    let mut input = WinInput::new(win.as_mut());
+    let mut idx = vec![0u8; w * h];
+    let mut rgb = vec![0u32; w * h];
+    // SAFETY (here and below): `a` lives for the page; the storage is borrowed only within a
+    // call, and the assets mutably only while no game frame loop holds them.
+    let mut audio = crate::audio::Audio::open(unsafe { &(*a).files });
+    let dat = crate::dat::Dat::load(unsafe { &(*a).files }).ok();
+    let mut last = web_time::Instant::now();
+    let mut game: Option<Box<dyn FnMut() -> std::io::Result<bool>>> = None;
+    let end = std::rc::Rc::new(std::cell::RefCell::new(None));
+    Ok(move || {
+        if let Some(f) = game.as_mut() {
+            if f()? {
+                return Ok(true);
+            }
+            game = None;
+            win = crate::view::take_window();
+            audio = crate::view::take_audio();
+            if let Some(w) = win.as_mut() {
+                w.set_input_callback(Box::new(Typed(input.typed.clone())));
+            }
+            glue.flush_notice();
+            glue.game_end = end.borrow_mut().take();
+            match &glue.game_end {
+                Some(e) => glue.state = if e.results[e.local as usize] == 2 { 7 } else { 6 },
+                None => {
+                    glue.state = state::GLUE;
+                    glue.screen = screen::MAIN;
+                }
+            }
+            last = web_time::Instant::now();
+            return Ok(true);
+        }
+        let files = unsafe { &(*a).files };
+        match glue.top_step(files) {
+            Top::Glue | Top::Cine(_) | Top::Credits => {}
+            Top::Quit => return Ok(false),
+            Top::Game => {
+                glue.set_notice();
+                let Some(mut g) = glue.begin_game(files) else {
+                    web_sys::console::error_1(&"scbw: the game could not be set up".into());
+                    return Ok(glue.state == state::GLUE);
+                };
+                if glue.setup.multiplayer && glue.setup.net_provider != 0 {
+                    match glue.lobby_net_game() {
+                        Some(n) => crate::view::set_net_driver(Box::new(n)),
+                        None => {
+                            web_sys::console::error_1(&"scbw: the game's link is gone".into());
+                            glue.state = state::GLUE;
+                            glue.screen = screen::MAIN;
+                            return Ok(true);
+                        }
+                    }
+                }
+                glue.music_playing = false;
+                if let Some(w) = win.take() {
+                    crate::view::park_window(w);
+                }
+                if let Some(au) = audio.take() {
+                    crate::view::park_audio(au);
+                }
+                crate::view::prepare_setup(unsafe { &mut *a }, &mut g);
+                let ar: &'static crate::view::Assets = unsafe { &*a };
+                let scene = crate::view::Scene::for_setup(ar, &g)?;
+                game = Some(Box::new(crate::view::frame_loop_end(ar, scene, None, end.clone())?));
+                return Ok(true);
+            }
+        }
+        if let Some(au) = audio.as_mut() {
+            au.tick_fade();
+        }
+        for cmd in std::mem::take(&mut glue.cmds) {
+            let (Some(au), Some(dat)) = (audio.as_mut(), dat.as_ref()) else { continue };
+            match cmd {
+                AudioCmd::Sound(id) => au.play_pan(files, dat, id, 99, 0, None),
+                AudioCmd::Music { path, fade } => {
+                    au.play_music(files, path);
+                    if fade {
+                        au.start_fade_in();
+                    }
+                }
+                AudioCmd::Track(i) => au.start_track(files, i),
+                AudioCmd::FadeOutMusic => au.fade_out(),
+                AudioCmd::CreditsVolume(on) => au.credits_volume(on),
+                AudioCmd::StopSounds => au.stop_sounds(),
+                AudioCmd::Wav(d) => au.play_file(d),
+                AudioCmd::StopWavs => au.stop_files(),
+            }
+        }
+        let ms = last.elapsed().as_millis() as u32;
+        glue.tick(files, ms);
+        last += std::time::Duration::from_millis(ms as u64);
+        let pal = glue.draw(files, &mut idx);
+        for (o, &i) in rgb.iter_mut().zip(&idx) {
+            let [r, g, b] = pal[i as usize];
+            *o = (r as u32) << 16 | (g as u32) << 8 | b as u32;
+        }
+        let Some(win) = win.as_mut() else { return Ok(false) };
+        input.pass(&mut glue, files, win);
+        crate::view::present(win, &rgb, w, h)?;
+        Ok(true)
+    })
+}
+
 /// Typed characters (WM_CHAR).
 struct Typed(std::rc::Rc<std::cell::RefCell<Vec<u32>>>);
 
@@ -3205,7 +3427,7 @@ impl minifb::InputCallback for Typed {
 }
 
 pub fn run(files: &Storage, shot: Option<&str>) -> std::io::Result<()> {
-    use minifb::{MouseButton, MouseMode, Scale, Window, WindowOptions};
+    use minifb::{Scale, Window, WindowOptions};
     let (w, h) = (640usize, 480usize);
     let mut glue = Glue::new(files);
     // 0x4e0820: the title screen opens before the glue loop (screenshot runs start at the menu).
@@ -3229,21 +3451,30 @@ pub fn run(files: &Storage, shot: Option<&str>) -> std::io::Result<()> {
     } else {
         None
     };
-    let mut pressed: Option<i16> = None;
-    let mut btn_down = false;
-    let mut was_down = false;
-    let mut was_rdown = false;
     let mut held: Option<i16> = None;
     let mut popped = false;
     let mut game_wait = 0u32;
-    let mut keys_held = crate::script::Held::default();
-    let typed = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-    if let Some(w) = win.as_mut() {
-        w.set_input_callback(Box::new(Typed(typed.clone())));
-    }
+    let mut input = WinInput::new(win.as_mut());
     let mut audio = if shot.is_none() { crate::audio::Audio::open(files) } else { None };
     let dat = crate::dat::Dat::load(files).ok();
     let mut last = web_time::Instant::now();
+    // SCBW_JOIN=<ip:port#hash> (SCBW_NAME the player's name): straight into that game's lobby.
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Ok(code) = std::env::var("SCBW_JOIN") {
+        let name = std::env::var("SCBW_NAME").unwrap_or_else(|_| "Player".into());
+        crate::net::snet::initialize_provider(crate::net::snet::UDPN);
+        if crate::net::snet::join_game(0, Some(&code), name.as_bytes()).is_none() {
+            return Err(std::io::Error::other(format!("cannot join {code}")));
+        }
+        let t0 = web_time::Instant::now();
+        while !glue.join_by_code(files, name.as_bytes()) {
+            if t0.elapsed().as_secs() > 10 {
+                return Err(std::io::Error::other("no answer from the game"));
+            }
+            crate::net::snet::pump();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
     // SCBW_CINE=<number>: plays that cinematic first (screenshot mode: its frame
     // SCBW_CINE_FRAME to the PNG).
     if let Some(i) = std::env::var("SCBW_CINE").ok().and_then(|s| s.parse::<u32>().ok()) {
@@ -3280,7 +3511,7 @@ pub fn run(files: &Storage, shot: Option<&str>) -> std::io::Result<()> {
                         // 0x4ef100 -> 0x4a5f50: the front-end music fades out (the game's
                         // `fade_out` on the shared audio).
                         glue.music_playing = false;
-                        hand_over(&mut win, &mut audio, &typed, |w| {
+                        hand_over(&mut win, &mut audio, &input.typed, |w| {
                             crate::view::park_window(w);
                             crate::view::run_replay(&mut a, rep)
                         })?;
@@ -3355,7 +3586,7 @@ pub fn run(files: &Storage, shot: Option<&str>) -> std::io::Result<()> {
                 // on the shared audio).
                 glue.music_playing = false;
                 glue.game_end = match win {
-                    Some(_) => hand_over(&mut win, &mut audio, &typed, |w| {
+                    Some(_) => hand_over(&mut win, &mut audio, &input.typed, |w| {
                         crate::view::park_window(w);
                         crate::view::run_setup(&mut a, g)
                     })?,
@@ -3536,87 +3767,7 @@ pub fn run(files: &Storage, shot: Option<&str>) -> std::io::Result<()> {
         if !win.is_open() {
             return Ok(());
         }
-        // Keys (WM_KEYDOWN with repeat: virtual key codes) and characters (WM_CHAR; Enter,
-        // Escape, Backspace and Tab come as their control characters).
-        {
-            use minifb::{Key, KeyRepeat};
-            keys_held.sync(win);
-            let alt = keys_held.down(Key::LeftAlt) || keys_held.down(Key::RightAlt);
-            glue.shift = keys_held.down(Key::LeftShift) || keys_held.down(Key::RightShift);
-            for k in win.get_keys_pressed(KeyRepeat::Yes) {
-                let vk = match k {
-                    Key::PageUp => 0x21,
-                    Key::PageDown => 0x22,
-                    Key::End => 0x23,
-                    Key::Home => 0x24,
-                    Key::Left => 0x25,
-                    Key::Up => 0x26,
-                    Key::Right => 0x27,
-                    Key::Down => 0x28,
-                    Key::Insert => 0x2d,
-                    Key::Delete => 0x2e,
-                    Key::Enter | Key::NumPadEnter => 0x0d,
-                    Key::Escape => 0x1b,
-                    Key::Backspace => 8,
-                    Key::Tab => 9,
-                    _ => match format!("{k:?}").as_bytes() {
-                        [c] if c.is_ascii_uppercase() || c.is_ascii_digit() => *c as u16,
-                        _ => continue,
-                    },
-                };
-                glue.key_down(files, vk, if alt { 8 } else { 0 });
-                if matches!(vk, 8 | 9 | 0x0d | 0x1b) {
-                    glue.char_in(files, vk as u8);
-                }
-            }
-            for c in typed.borrow_mut().drain(..) {
-                if (0x20..=0xff).contains(&c) && c != 0x7f && !alt {
-                    glue.char_in(files, c as u8);
-                }
-            }
-        }
-        if let Some((x, y)) = win.get_mouse_pos(MouseMode::Clamp) {
-            glue.mouse_to(x as i32, y as i32);
-            if let Some((_, dy)) = win.get_scroll_wheel().filter(|w| w.1 != 0.0) {
-                glue.create_wheel(dy < 0.0);
-            }
-            let down = win.get_mouse_down(MouseButton::Left);
-            if down && !was_down {
-                glue.press(files);
-            } else if down {
-                glue.drag(files);
-            } else if was_down {
-                glue.release();
-            }
-            was_down = down;
-            // Event 7 (the right button went down): the credits go on (0x4d8d60).
-            let rdown = win.get_mouse_down(MouseButton::Right);
-            if rdown && !was_rdown && glue.credits_open_now() {
-                glue.press(files);
-            }
-            was_rdown = rdown;
-            // 0x418eb0's button behavior: activate on release over the pressed control.
-            let top = glue.popup.as_ref().or(glue.dlg.as_ref());
-            let hit = top.and_then(|(dlg, _)| dlg.hit(x as i32, y as i32).filter(|&i| activates(&dlg.controls[i])).map(|i| dlg.controls[i].id));
-            // The press is captured only when the button goes down over a control; while
-            // held, the control's pressed look follows the mouse (0x4e0d40); the release
-            // activates it when it is still pressed (0x4e19f0).
-            if down && !btn_down {
-                pressed = hit;
-                if let Some(id) = hit {
-                    glue.button_follow(id, true);
-                }
-            } else if down {
-                if let Some(id) = pressed {
-                    glue.button_follow(id, hit == Some(id));
-                }
-            } else if let Some(id) = pressed.take() {
-                if glue.button_release(id) {
-                    glue.activate(files, id);
-                }
-            }
-            btn_down = down;
-        }
+        input.pass(&mut glue, files, win);
         win.update_with_buffer(&rgb, w, h).map_err(|e| std::io::Error::other(e.to_string()))?;
     }
 }

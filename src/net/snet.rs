@@ -84,6 +84,10 @@ struct Game {
     in_flight: u32,
     /// Ordinal 130's game mode (bit 2: full / private, the LAN list hides it).
     mode: u32,
+    /// The game's name and stat string (host: its own; a joiner: from kind::GAME).
+    info: Option<(Vec<u8>, Vec<u8>)>,
+    /// Game turns that came before the game took the link (a peer started first).
+    early: Vec<(u8, u32, Vec<u8>)>,
 }
 
 /// One turn of every player (Ordinal 122): flags (0x10000 in the game, 0x20000 with a turn)
@@ -105,6 +109,9 @@ mod kind {
     pub const NAMES: u8 = 0x84;
     /// A player left (host -> client): `id u8`, `reason u32`.
     pub const LEFT: u8 = 0x85;
+    /// The game (host -> a joiner, with its first NAMES): its name and stat string, each
+    /// NUL-terminated (what the LAN list carries; a join by code has no list).
+    pub const GAME: u8 = 0x86;
 }
 
 impl Game {
@@ -123,6 +130,8 @@ impl Game {
             rounds: VecDeque::new(),
             in_flight: 0,
             mode: 0,
+            info: None,
+            early: Vec::new(),
         }
     }
 
@@ -328,12 +337,16 @@ pub fn create_game(name: &[u8], stat: &[u8], max: u8, player: &[u8]) -> Option<u
             return None;
         }
     };
+    // The join code for SCBW_JOIN / a browser (ours: the LAN list needs none).
+    println!("LOBBY {code}");
+    std::io::Write::flush(&mut std::io::stdout()).ok();
     let (addr, hash) = code.split_once('#')?;
     let port: u16 = addr.rsplit_once(':')?.1.parse().ok()?;
     let advert = Arc::new(Mutex::new(Advert { port, hash: transport::unhex(hash).ok()?, players: 1, max, full: false, name: name.to_vec(), stat: stat.to_vec() }));
     advertise(&advert);
     let mut g = Game::new(tr, true, code);
     g.advert = Some(advert);
+    g.info = Some((name.to_vec(), stat.to_vec()));
     g.names[0] = Some(player.to_vec());
     g.in_turns.push(0);
     NET.with(|n| n.borrow_mut().game = Some(g));
@@ -417,12 +430,7 @@ pub fn join_game(id: u32, code: Option<&str>, player: &[u8]) -> Option<u8> {
             for e in tr.poll() {
                 match e {
                     Event::Start { slot, .. } => {
-                        let mut m = vec![kind::NAME];
-                        m.extend_from_slice(player);
-                        tr.send_ctl(transport::HOST, m);
-                        let mut g = Game::new(tr, false, code);
-                        g.names[slot as usize & 7] = Some(player.to_vec());
-                        NET.with(|n| n.borrow_mut().game = Some(g));
+                        adopt(tr, slot, code, player);
                         return Some(slot);
                     }
                     Event::Error(m) => {
@@ -442,6 +450,26 @@ pub fn join_game(id: u32, code: Option<&str>, player: &[u8]) -> Option<u8> {
         let _ = (code, player);
         None
     }
+}
+
+/// A joined link (its Start came as `slot`): it becomes the game; our name goes to the host.
+pub fn adopt(mut tr: Transport, slot: u8, code: String, player: &[u8]) {
+    let mut m = vec![kind::NAME];
+    m.extend_from_slice(player);
+    tr.send_ctl(transport::HOST, m);
+    let mut g = Game::new(tr, false, code);
+    g.names[slot as usize & 7] = Some(player.to_vec());
+    NET.with(|n| n.borrow_mut().game = Some(g));
+}
+
+/// This side's Storm id in the game.
+pub fn local_id() -> Option<u8> {
+    NET.with(|n| n.borrow().game.as_ref().map(|g| g.tr.me()))
+}
+
+/// The game's name and stat string (a joiner has them once the host answered its name).
+pub fn game_info() -> Option<(Vec<u8>, Vec<u8>)> {
+    NET.with(|n| n.borrow().game.as_ref()?.info.clone())
 }
 
 /// Ordinal 127: a message to Storm id `to` (Storm's 0xff = everyone else). Ours: the
@@ -504,6 +532,14 @@ pub fn pump() {
                         }
                         kind::NAME if (from as usize) < 8 && g.names[from as usize].is_none() => {
                             g.names[from as usize] = Some(body[..body.len().min(0x18)].to_vec());
+                            if let Some((name, stat)) = g.info.clone() {
+                                let mut m = vec![kind::GAME];
+                                m.extend_from_slice(&name);
+                                m.push(0);
+                                m.extend_from_slice(&stat);
+                                m.push(0);
+                                g.tr.send_ctl(from, m);
+                            }
                             let m = g.names_msg();
                             for p in g.tr.peers().to_vec() {
                                 g.tr.send_ctl(p, m.clone());
@@ -545,6 +581,12 @@ pub fn pump() {
                             }
                             g.names = names;
                         }
+                        kind::GAME => {
+                            let mut it = body.split(|&c| c == 0);
+                            if let (Some(a), Some(b)) = (it.next(), it.next()) {
+                                g.info = Some((a.to_vec(), b.to_vec()));
+                            }
+                        }
                         kind::LEFT if body.len() >= 5 => {
                             let reason = u32::from_le_bytes(body[1..5].try_into().unwrap());
                             let gone: Vec<u8> = if body[0] == g.tr.me() { (0..8).filter(|&i| i != body[0]).collect() } else { vec![body[0]] };
@@ -557,7 +599,10 @@ pub fn pump() {
                         _ => {}
                     }
                 }
+                Event::Turn { player, frame, bytes } => g.early.push((player, frame, bytes)),
                 Event::Error(m) => {
+                    #[cfg(target_arch = "wasm32")]
+                    web_sys::console::warn_1(&format!("net: {m}").into());
                     eprintln!("net: {m}");
                     // A client's link to the host closed: the host and everyone with it are gone.
                     if !g.host {
@@ -649,12 +694,14 @@ pub fn set_game_mode(mode: u32) {
 }
 
 /// The transport of the game, for the in-game session (live.rs) once the lobby starts it:
-/// (it, this side created the game, the players still in it).
-pub fn take_transport() -> Option<(Transport, bool, Vec<u8>)> {
+/// (it, this side created the game, the players still in it, the game turns that came
+/// already).
+pub fn take_transport() -> Option<(Transport, bool, Vec<u8>, Vec<(u8, u32, Vec<u8>)>)> {
+    pump();
     NET.with(|n| {
         let g = n.borrow_mut().game.take()?;
         let ids = (0..8u8).filter(|&i| g.names[i as usize].is_some()).collect();
-        Some((g.tr, g.host, ids))
+        Some((g.tr, g.host, ids, g.early))
     })
 }
 

@@ -270,6 +270,42 @@ impl Glue {
         true
     }
 
+    /// Ours (1.16.1 finds games on the LAN or Battle.net only): the game joined by its code
+    /// (`snet::adopt`) once the host sent its name and stat string: the provider (0x4d3cc0),
+    /// the description as 0x4d3b50 makes it from a listed game, `name` as the player's, then
+    /// the lobby (screen 3). False until the game's information came.
+    pub fn join_by_code(&mut self, files: &Storage, name: &[u8]) -> bool {
+        let (Some((_, stat)), Some(me)) = (snet::game_info(), snet::local_id()) else { return false };
+        let mut d = vec![0u8; 0x8d];
+        if !statstr::parse(&stat, &mut d) {
+            return false;
+        }
+        snet::initialize_provider(snet::UDPN);
+        self.setup.net_provider = snet::UDPN;
+        self.setup.turns_in_flight = snet::provider_caps().map_or(1, |c| c.turns_in_flight.clamp(2, 8));
+        self.load_templates(files);
+        let n = name.len().min(0x18);
+        self.setup.local_name = [0; 0x20];
+        self.setup.local_name[..n].copy_from_slice(&name[..n]);
+        self.player_name = String::from_utf8_lossy(&name[..n]).into_owned();
+        self.multiplayer = true;
+        self.setup.multiplayer = true;
+        self.expansion = true;
+        self.setup.expansion = true;
+        self.setup.local_storm_id = me as u32;
+        self.lobby_host = false;
+        let (gt, b1, sub) = (d[0x28], d[0x29], u16::from_le_bytes([d[0x2a], d[0x2b]]));
+        if let Some(t) = self.find_template(gt, b1, sub).map(|t| t.rec) {
+            self.setup.template.copy_from_slice(&t);
+        }
+        d[0x6d..0x8d].copy_from_slice(&self.setup.template.clone());
+        self.create.game_desc = d;
+        self.state = super::state::GLUE;
+        self.first = false;
+        self.screen = screen::CHAT;
+        true
+    }
+
     /// The 1000 ms timer 0x2d (event 8 to the list: 0x4b8340).
     pub(super) fn join_tick(&mut self, ms: u32) {
         if !matches!(self.dlg, Some((_, Open::Join))) {

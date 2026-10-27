@@ -192,7 +192,8 @@ async function run(load) {
     if (joinCode) {
       status.textContent = "joining...";
       // ?frames=K: log "frame K hash H" to the console at frame K (headless-net check).
-      await net_join(storm, archives, joinCode, Number(new URLSearchParams(location.search).get("frames")) || 0, new URLSearchParams(location.search).get("script") || "");
+      // ?name=: the player's name in a lobby (a game made in the glue's create screen).
+      await net_join(storm, archives, joinCode, Number(new URLSearchParams(location.search).get("frames")) || 0, new URLSearchParams(location.search).get("script") || "", new URLSearchParams(location.search).get("name") || "Web");
     } else start(storm, archives, name, map);
     document.getElementById("setup").remove();
     box.querySelector("canvas").focus({ preventScroll: true });
@@ -243,7 +244,8 @@ if (drive?.[3]) {
   run(async () => [await driveGet("storm.dll"), await Promise.all(ARCHIVES.map(driveGet)), name, await driveGet(name)]);
 }
 
-// Join a game hosted with `scbw nethost` (its LISTEN code): the install only, no map.
+// Join a game hosted with `scbw nethost` (its LISTEN code) or made in the glue (its LOBBY code):
+// the install only, no map (a lobby sends it).
 let joinCode = null;
 async function joinGame(code, loadInstall) {
   joinCode = code.trim();

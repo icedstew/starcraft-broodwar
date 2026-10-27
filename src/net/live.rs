@@ -408,6 +408,10 @@ pub struct NetGame {
     stall_since: Option<Instant>,
 }
 
+thread_local! {
+    static REPORT_NEXT: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+}
+
 /// Control messages (first byte; see the module doc).
 const C_LEAVE: u8 = 1;
 const C_LEAVE_REQ: u8 = 2;
@@ -443,6 +447,12 @@ impl NetGame {
         self.se.end = k;
     }
 
+    /// The next game reports at frame `k` (`report_at`; the browser's ?frames= for a game the
+    /// lobby starts).
+    pub(crate) fn report_next(k: u32) {
+        REPORT_NEXT.with(|r| r.set(Some(k)));
+    }
+
     pub(crate) fn new(se: Session, tr: Transport, host: bool, early: Vec<(u8, u32, Vec<u8>)>) -> Result<NetGame, String> {
         let script = parse_script(&std::env::var("SCBW_NET_SCRIPT").unwrap_or_default())?;
         let headless = std::env::var("SCBW_NET_HEADLESS").ok().and_then(|v| v.parse().ok());
@@ -456,7 +466,12 @@ impl NetGame {
             se.remote_turn(p, f, b);
         }
         let next_send = se.delay;
-        Ok(NetGame::make(se, tr, next_send, script, headless, host))
+        let mut n = NetGame::make(se, tr, next_send, script, headless, host);
+        if let Some(k) = REPORT_NEXT.with(|r| r.take()) {
+            n.report_at(k);
+            n.verbose = true;
+        }
+        Ok(n)
     }
 
     /// Host: `player` is gone (quit, or its connection died). Fence at `Session::fence_for`
@@ -652,7 +667,7 @@ impl NetDriver for NetGame {
                     self.decide_leave(player, 6);
                 }
                 Event::Error(m) => {
-                    eprintln!("net: {m}");
+                    say(&format!("net: {m}"));
                     // A client that already holds every turn up to its end (a test's frame
                     // count) plays them out: the host may close as soon as its turns are acked.
                     if !self.host && self.se.confirmed < self.se.end {
@@ -674,7 +689,7 @@ impl NetDriver for NetGame {
         if self.verbose && self.last_report.elapsed() > Duration::from_secs(2) {
             self.last_report = Instant::now();
             let se = &self.se;
-            eprintln!("net player {}: frame {} confirmed {} stalled {} rollbacks {} dgrams {:?}", se.me, se.frame, se.confirmed, se.stalled, se.rollbacks, self.tr.stats);
+            say(&format!("net player {}: frame {} confirmed {} stalled {} rollbacks {} dgrams {:?}", se.me, se.frame, se.confirmed, se.stalled, se.rollbacks, self.tr.stats));
         }
         let stepped = self.se.tick(scene);
         if self.se.waiting_on().is_empty() {
