@@ -1798,6 +1798,11 @@ fn new_game(a: &Assets, chk: &Chk, rep: Option<&crate::replay::Header>, gs: Opti
     if let Some(g) = gs {
         st.is_expansion = g.expansion;
         st.multiplayer = g.multiplayer;
+        // Ours: network games run at Fastest (1.16.1 takes the creator's speed, game data
+        // +0x26; our lobby does not carry it yet). Command 0x0f cannot change it (0x4bf7f0).
+        if g.multiplayer {
+            st.game_speed = 6;
+        }
     }
     let name = map::TILESETS[chk.tileset()];
     let vf4 = a.files.read(&format!("tileset/{name}.vf4"))?;
