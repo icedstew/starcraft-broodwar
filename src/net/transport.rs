@@ -58,12 +58,15 @@ pub enum Event {
     Ctl { from: u8, msg: Vec<u8> },
     /// Host: the connection of `player` ended (closed or timed out).
     Lost { player: u8, why: String },
+    /// Host of a lobby (`host_lobby`): `player` connected and was given that id.
+    Joined { player: u8 },
     /// The runtime thread failed or the link closed.
     Error(String),
 }
 
 pub(super) enum Inbound {
     Start { slot: u8, first: u32, setup: Vec<u8> },
+    Joined { player: u8 },
     Dgram { from: u8, data: Vec<u8> },
     Lost { player: u8, why: String },
     Error(String),
@@ -192,6 +195,18 @@ impl Transport {
     /// `setup` goes to every client (and back to the host's own Start event). The address is
     /// `127.0.0.1` unless `SCBW_NET_BIND` names another (`0.0.0.0` for a LAN).
     pub fn host(port: u16, me: u8, clients: &[u8], first: u32, setup: Vec<u8>) -> Result<(Transport, String), String> {
+        Self::host_mode(port, me, clients, first, setup, false)
+    }
+
+    /// A lobby (net phase 3c, Storm's game the glue creates): clients join any time while it
+    /// runs and get the next free id of `ids` at once (their Start event, empty setup; the host
+    /// gets `Event::Joined`); control messages flow from then on. The game's turns start
+    /// later: `set_first` gives the frames known empty.
+    pub fn host_lobby(port: u16, me: u8, ids: &[u8]) -> Result<(Transport, String), String> {
+        Self::host_mode(port, me, ids, 0, Vec::new(), true)
+    }
+
+    fn host_mode(port: u16, me: u8, clients: &[u8], first: u32, setup: Vec<u8>, lobby: bool) -> Result<(Transport, String), String> {
         let bind: std::net::IpAddr = match std::env::var("SCBW_NET_BIND") {
             Ok(b) => b.parse().map_err(|_| format!("bad SCBW_NET_BIND {b:?}"))?,
             Err(_) => [127, 0, 0, 1].into(),
@@ -214,8 +229,9 @@ impl Transport {
         let (itx, rx) = mpsc::channel();
         let (tx, orx) = tmpsc::unbounded_channel();
         let max_dgram = Arc::new(AtomicUsize::new(1000));
-        spawn_runtime(itx.clone(), rt, host_run(ep, clients.to_vec(), Arc::new(setup.clone()), first, itx, orx, max_dgram.clone()))?;
-        let mut tr = Transport::new(me, true, clients.to_vec(), first, rx, Box::new(move |to, d| drop(tx.send((to, d)))), max_dgram);
+        spawn_runtime(itx.clone(), rt, host_run(ep, clients.to_vec(), Arc::new(setup.clone()), first, lobby, itx, orx, max_dgram.clone()))?;
+        let peers = if lobby { Vec::new() } else { clients.to_vec() };
+        let mut tr = Transport::new(me, true, peers, first, rx, Box::new(move |to, d| drop(tx.send((to, d)))), max_dgram);
         tr.setup = setup;
         Ok((tr, format!("{addr}#{}", hex(&hash))))
     }
@@ -241,7 +257,16 @@ impl Transport {
 }
 
 impl Transport {
-    /// The datagram size cap (diagnostics).
+    /// The game starts (a lobby's): frames below `first` are known empty.
+    pub fn set_first(&mut self, first: u32) {
+        self.first = first;
+    }
+
+    /// This side's id (a lobby client's comes with its Start event).
+    pub fn me(&self) -> u8 {
+        self.me
+    }
+
     /// A control message to `peer`: reliable and in order (resent in every datagram until the
     /// peer acks it). A client's only peer is `HOST`.
     pub fn send_ctl(&mut self, peer: u8, msg: Vec<u8>) {
@@ -318,6 +343,12 @@ impl Transport {
                     ev.push(Event::Start { slot, first: self.first, setup })
                 }
                 Inbound::Error(e) => ev.push(Event::Error(e)),
+                Inbound::Joined { player } => {
+                    if !self.peers.contains(&player) {
+                        self.peers.push(player);
+                    }
+                    ev.push(Event::Joined { player });
+                }
                 Inbound::Lost { player, why } => {
                     self.peers.retain(|&p| p != player);
                     ev.push(Event::Lost { player, why });
@@ -479,7 +510,7 @@ async fn read_msg(r: &mut RecvStream) -> Result<(u8, Vec<u8>), String> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-async fn host_run(ep: Endpoint<Server>, expected: Vec<u8>, setup: Arc<Vec<u8>>, first: u32, itx: mpsc::Sender<Inbound>, mut orx: tmpsc::UnboundedReceiver<(u8, Vec<u8>)>, md: Arc<AtomicUsize>) -> Result<(), String> {
+async fn host_run(ep: Endpoint<Server>, expected: Vec<u8>, setup: Arc<Vec<u8>>, first: u32, lobby: bool, itx: mpsc::Sender<Inbound>, mut orx: tmpsc::UnboundedReceiver<(u8, Vec<u8>)>, md: Arc<AtomicUsize>) -> Result<(), String> {
     let conns: Conns = Default::default();
     let count = Arc::new(AtomicUsize::new(0));
     let (ready, _) = tokio::sync::watch::channel(false);
@@ -489,7 +520,7 @@ async fn host_run(ep: Endpoint<Server>, expected: Vec<u8>, setup: Arc<Vec<u8>>, 
             let inc = ep.accept().await;
             let (expected, setup, first, conns, count, ready, itx, md) = (expected.clone(), setup.clone(), first, conns.clone(), count.clone(), ready.clone(), itx.clone(), md.clone());
             tokio::spawn(async move {
-                if let Err(e) = host_conn(inc, expected, setup, first, conns, count, ready, itx.clone(), md).await {
+                if let Err(e) = host_conn(inc, expected, setup, first, lobby, conns, count, ready, itx.clone(), md).await {
                     let _ = itx.send(Inbound::Error(e));
                 }
             });
@@ -518,6 +549,7 @@ async fn host_conn(
     expected: Vec<u8>,
     setup: Arc<Vec<u8>>,
     first: u32,
+    lobby: bool,
     conns: Conns,
     count: Arc<AtomicUsize>,
     ready: Arc<tokio::sync::watch::Sender<bool>>,
@@ -543,12 +575,16 @@ async fn host_conn(
     if let Some(n) = conn.max_datagram_size() {
         md.fetch_min(n, Ordering::Relaxed);
     }
-    let mut rdy = ready.subscribe();
-    if count.fetch_add(1, Ordering::SeqCst) + 1 == expected.len() {
-        let _ = ready.send(true);
-        let _ = itx.send(Inbound::Start { slot: 0, first, setup: Vec::new() });
+    if lobby {
+        let _ = itx.send(Inbound::Joined { player });
+    } else {
+        let mut rdy = ready.subscribe();
+        if count.fetch_add(1, Ordering::SeqCst) + 1 == expected.len() {
+            let _ = ready.send(true);
+            let _ = itx.send(Inbound::Start { slot: 0, first, setup: Vec::new() });
+        }
+        rdy.wait_for(|v| *v).await.map_err(|e| e.to_string())?;
     }
-    rdy.wait_for(|v| *v).await.map_err(|e| e.to_string())?;
     let mut start = ((setup.len() + 6) as u32).to_le_bytes().to_vec();
     start.extend_from_slice(&[2, player]);
     start.extend_from_slice(&first.to_le_bytes());

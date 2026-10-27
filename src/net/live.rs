@@ -425,7 +425,7 @@ impl NetDriver for NetGame {
                         self.over = Some(format!("lost the host ({m})"));
                     }
                 }
-                Event::Start { .. } => {}
+                Event::Start { .. } | Event::Joined { .. } => {}
             }
         }
         // Host: a clean quitter's leave once its last turns are in (or after a grace period).
