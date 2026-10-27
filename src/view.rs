@@ -2544,13 +2544,20 @@ fn draw_hud(scene: &Scene, ui: &crate::ui::Ui, vx: i32, vy: i32, cursor: Option<
             }
         }
     }
-    // 0x4576a0: an info button's tooltip under the cursor.
-    if let (Some((_, ctls)), Some((_, _, cx, cy))) = (scene.status_panel(ui), cursor) {
+    // 0x457ce0: the tooltip of the status panel control under the cursor (0x4576a0 for
+    // info buttons, the rest via statdata::tooltip: queue slots, cancel, passengers).
+    if let (Some((panel, ctls)), Some((_, _, cx, cy))) = (scene.status_panel(ui), cursor) {
         for (id, show) in &ctls {
-            let crate::statdata::Show::Info { tip, .. } = show else { continue };
             let Some((l, t, r, b)) = ui.statdata.screen_rect(*id) else { continue };
-            if (l..=r).contains(&cx) && (t..=b).contains(&cy) {
-                tooltip(ui, tip, r, t, out, w, h);
+            if !(l..=r).contains(&cx) || !(t..=b).contains(&cy) {
+                continue;
+            }
+            let tip = match show {
+                crate::statdata::Show::Info { tip, .. } => Some(tip.clone()),
+                _ => with_data(scene.a, |d| crate::statdata::tooltip(&scene.st, d, &ui.stat_txt, panel, *id, show)),
+            };
+            if let Some(tip) = tip {
+                tooltip(ui, &tip, r, t, out, w, h);
             }
         }
     }
