@@ -1,5 +1,7 @@
 # Status (updated 2026-10-27)
 
+Enhanced late join: dealt colours now reach the joiner (`color_slot` set from the setup; plan Task 5).
+
 Read first. Kept short: what is in flight and what is next. Rewrite it in the same commit
 as each step (conventions.md). Durable facts per area: [areas/sim.md](areas/sim.md),
 [areas/ui.md](areas/ui.md), [areas/ai.md](areas/ai.md); read only the one you work in.

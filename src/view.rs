@@ -371,6 +371,9 @@ impl<'a> Scene<'a> {
         if let Some(g) = gs {
             st.camp_cont = g.camp_cont as u8;
             st.mission = g.mission;
+            // 0x57f21c: the dealt colors, so a save of this game (an enhanced game's late
+            // join) gives the joiner the same ones.
+            st.color_slot = g.colors.map(u32::from);
         }
         if let Some((f, _, _, _)) = save {
             st.is_expansion = SAVE_EXPANSION.with(|e| e.get());

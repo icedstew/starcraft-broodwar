@@ -325,10 +325,10 @@ view.rs notice branch; `enhanced_win.sh` now shoots all three screens every 2 s.
   re-simulation pushes to the output queues, and the join command arrives late there. Fix:
   `Session::announced` / `new_announcements` keep the join / AI lines a re-simulation makes
   for the first time (not the repeats). Same loss hit the old 0x49 line.
-- Not fixed, seen once: in one run the host's own colour for army 0 was white (row 6, dealt
-  by 0x49b360) while the late joiner drew the same army red: joiners may not get the host's
-  dealt colours (`GameSetup.colors`), so unit and name colours can differ per viewer.
-  Check before relying on colours across peers.
+- Fixed 2026-10-27: the host's dealt colours (`GameSetup.colors`, 0x49b360) were never written to
+  `st.color_slot` (0x57f21c), so the save a late joiner loads (`from_save_steps` reads
+  `color_slot`) held 0..7 and its unit / name colours differed from the host's. `Scene::start`
+  now sets `color_slot` from the setup. The lobby join (`encode_setup`) already sent them.
 
 ### Known limits (tell the user if asked, do not fix)
 
