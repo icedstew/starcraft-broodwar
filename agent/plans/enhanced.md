@@ -229,7 +229,14 @@ Goal: a browser joins a running enhanced game by code and ends with the same has
    `live::late_game`; that `NetGame::report_next` is applied. Datagrams must stay under the
    browser's `maxDatagramSize` (~1200; C_LATE parts are 500 bytes).
 
-### Task 3: edge cases (headless, extend enhanced.sh)
+### Task 3: edge cases (headless, extend enhanced.sh) - partly done 2026-10-27
+
+Done: `FOURTH=1 K=200000` (two joins queued: human 8 / army 0, human 9 / army 1, four equal
+hashes) and `QUIT_AT=15000 FOURTH=1 K=200000` (a leaver's army taken back by the third, the
+fourth joins as a second human; four equal hashes). Still to do: link id reuse (needs the
+transport to hand out a gone player's id again; with the current join order ids are not
+reused, so this may not be reachable), a defeated player's army (`ARMY4=<slot>` env of the
+fourth player exists), the 8th link refused. Original list:
 
 Each as an env option of enhanced.sh, all three (or four) hashes equal:
 - `FOURTH=1`: a fourth player joins by code 2 s after the third (two joins queued; the

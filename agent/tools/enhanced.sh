@@ -6,6 +6,7 @@
 # WEB=1: the third player is headless chromium (needs web/build.sh); the others run paced
 # (PACE_US, default 70000 us a frame, about game speed Normal) so use a small K (2500).
 # LAN=1: the third player joins through the LAN game list instead of SCBW_JOIN.
+# FOURTH=1: a fourth player (native, by code) joins FOURTH_AFTER (default 2) s after the third.
 # QUIT_AT=<frame>: the second player quits there (its army goes to the AI); ARMY=<slot>: the
 # third asks for that army (taking it back from the AI).
 T=$(cd "$(dirname "$0")" && pwd); cd "$T/../.."
@@ -31,6 +32,10 @@ else
 if [ -n "$LAN" ]; then J=(SCBW_GLUE_INPUT="w 2500;t m;w 1500;k 0d;w 1500;t o;w 2000;t three;k 0d;w 1500;k 0d;w 6000;c 200 100;w 500;t o;w 60000"); else J=(SCBW_JOIN=$code); fi
 (cd $O; env NETREP_DEBUG=${LATE_DEBUG:-} SCBW_ARMY=${ARMY:-} "${J[@]}" SCBW_NAME=three SCBW_INSTALL=$O/inst SCBW_CHARACTERS=$O/k timeout 300 $B glue $O/k.png > $O/late.log 2>&1) & LP=$!
 fi
+if [ -n "$FOURTH" ]; then
+  mkdir -p $O/m; sleep ${FOURTH_AFTER:-2}
+  (cd $O; SCBW_ARMY=${ARMY4:-} SCBW_JOIN=$code SCBW_NAME=four SCBW_INSTALL=$O/inst SCBW_CHARACTERS=$O/m timeout 300 $B glue $O/m.png > $O/four.log 2>&1) & FP=$!
+fi
 wait $HP $JP; [ -n "$WEB" ] && sleep 5; kill $CP $SP $LP 2>/dev/null; wait 2>/dev/null
-for f in host join late; do echo "$f: $(grep -o "frame $K hash [0-9a-f]*" $O/$f.log)"; done
+for f in host join late ${FOURTH:+four}; do echo "$f: $(grep -o "frame $K hash [0-9a-f]*" $O/$f.log)"; done
 grep -h "net:" $O/*.log | grep -v "net player" | head -12
