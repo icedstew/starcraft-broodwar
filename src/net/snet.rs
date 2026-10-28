@@ -250,10 +250,12 @@ pub fn provider_caps() -> Option<Caps> {
 
 /// Ordinal 102 (0x4bab10, 0x4d3cc0's failure path): leave any game and drop the provider.
 pub fn destroy() {
+    #[cfg(not(target_arch = "wasm32"))]
     KEPT_ADVERT.with(|k| *k.borrow_mut() = None);
     NET.with(|n| *n.borrow_mut() = Net::default());
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 thread_local! {
     /// The LAN advert of a running enhanced game (dropping it ends the answering thread).
     static KEPT_ADVERT: RefCell<Option<Arc<Mutex<Advert>>>> = const { RefCell::new(None) };
@@ -746,9 +748,13 @@ pub fn set_game_mode(mode: u32) {
 pub fn take_transport(keep_advert: bool) -> Option<(Transport, bool, Vec<u8>, Vec<(u8, u32, Vec<u8>)>)> {
     pump();
     NET.with(|n| {
+        #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
         let mut g = n.borrow_mut().game.take()?;
         // An enhanced game stays on the LAN list: joiners may come while it runs.
+        #[cfg(not(target_arch = "wasm32"))]
         let kept = if keep_advert { g.advert.take() } else { None };
+        #[cfg(target_arch = "wasm32")]
+        let _ = keep_advert;
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(a) = kept.as_ref() {
             // The lobby closed the game to start it; a running enhanced game takes joiners.
@@ -756,6 +762,7 @@ pub fn take_transport(keep_advert: bool) -> Option<(Transport, bool, Vec<u8>, Ve
             a.full = false;
             a.players = 1 + g.tr.peers().len() as u8;
         }
+        #[cfg(not(target_arch = "wasm32"))]
         KEPT_ADVERT.with(|k| *k.borrow_mut() = kept);
         let ids = (0..8u8).filter(|&i| g.names[i as usize].is_some()).collect();
         Some((g.tr, g.host, ids, g.early))
@@ -779,6 +786,7 @@ pub fn join_code(ip: &str) -> Option<String> {
 
 /// Ordinal 119: leave the game (the link closes).
 pub fn leave_game() {
+    #[cfg(not(target_arch = "wasm32"))]
     KEPT_ADVERT.with(|k| *k.borrow_mut() = None);
     NET.with(|n| n.borrow_mut().game = None);
 }
