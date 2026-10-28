@@ -183,32 +183,18 @@ agent/tools/lobby.sh | tail -2                                         # equal h
 K=60000 LATE_AFTER=1 agent/tools/enhanced.sh | head -3                 # 3 equal hashes
 ```
 
-### Task 1: list box border colour on the Games screen (user report, UI) - half done
+### Task 1: list box border colour on the Games screen (DONE 2026-10-27)
 
-User (2026-10-27) circled the Games list of our join screen: "This looks wrong, the border
-color maybe?" (a bright blue outline when the mouse was over the list).
-
-Done (2026-10-27): native captures with `re/native_join.sh <dir>` (Xvfb + wine; keys need the
-pointer inside the window; `NATIVE_COLORS=1` also reads the colour table 0x6ceb20 through
-gdb into `<dir>/colors.txt`). Findings, all measured against 1.16.1's own screens:
-- The colour table is right: native `[0xc]=0xab, [0xf]=0x96, [0x10]=0x65` = ours for the
-  Games screen's palette.
-- The blue came from the focus flag: native glue dialogs have dialog flag 0x20000000
-  (0x4dd9e0), and 0x4180d0 then keeps the dialog's active control at 0, so a hovered list is
-  never focused. Our `Glue::mouse_to` set `dlg.active = hit`; now `None` for such dialogs
-  (glue.rs). Ours vs native Games screen with the mouse over the list: identical except
-  the list's outer outline.
-- Left: our list draws the 1 px outer outline (`list_frame`, colour 0xab = #303030) and
-  native draws nothing there (native pixel (64,200) = the background; same for the Select
-  Connection list). The inner outline is invisible either way (colour 0x96 = bg). Not found
-  who suppresses it natively: the draw proc is 0x41b950 (data table 0x501504, type 12),
-  its frame call is skipped only with control flag 0x20000; the join list's flags are 0x818
-  (bin) and neither 0x4b8340 / 0x4b8460 / 0x4b8560 nor the slide-in table (ids 1-4 only)
-  set it. Ideas: read the list control's flags from native memory (gdb: the control
-  struct is on the heap; find it through the dialog list 0x6d5e..), or find which function
-  clears/sets flags +0x18 of type 12 controls during glue dialog creation (0x41a080 path).
-  Once the cause is known, port it (do not special-case Games); check the Select Connection,
-  Games and lobby lists against native shots from `re/native_join.sh`.
+User report: a bright blue outline around our Games list. Two causes, both fixed, checked
+pixel-exact against 1.16.1 (`re/native_join.sh`, gdb on the real game with
+`NATIVE_COLORS=1 NATIVE_GDB_EX=<gdb script>`):
+- Glue dialogs have dialog flag 0x20000000 and 0x4180d0 keeps their active control at 0, so a
+  hovered list is never focused: `Glue::mouse_to` no longer sets `active` for them.
+- Each glue list's own event proc sets flag 0x20000 (no frame) on event 10: the join list
+  (0x4b84a0 / 0x4b84c3) and the provider list (0x4bad10 / 0x4bad41) were missing it; the
+  login and registry lists already had it. The native list draws all had flags 0x20818.
+Games screen ours vs native with the mouse over the list: 0 differing pixels. Battle.net
+screens are out of scope (user, 2026-10-27).
 
 ### Task 2: browser late join (DONE 2026-10-27: `WEB=1 K=2500 LATE_AFTER=1 agent/tools/enhanced.sh`, three equal hashes; `SCBW_NET_PACE_US` paces native headless peers because a headless browser runs ~18 fps; not run with ARMY)
 

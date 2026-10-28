@@ -31,7 +31,7 @@ if [ -n "$NATIVE_COLORS" ]; then
   (cd "$G" && winedbg --gdb --no-start 'C:\StarCraft\StarCraft.exe' > "$W/wdbg.txt" 2>&1 &)
   for _ in $(seq 30); do grep -q 'localhost:' "$W/wdbg.txt" && break; sleep 1; done
   PORT=$(grep -o 'localhost:[0-9]*' "$W/wdbg.txt" | cut -d: -f2)
-  gdb -q -batch -ex 'set debuginfod enabled off' -ex 'set architecture i386' -ex "target remote localhost:$PORT" -ex continue \
+  gdb -q -batch -ex 'set debuginfod enabled off' -ex 'set architecture i386' -ex "target remote localhost:$PORT" ${NATIVE_GDB_EX:+-x "$NATIVE_GDB_EX"} -ex continue \
     -ex 'x/26xb 0x6ceb20' -ex 'x/8xw 0x6ceb20' > "$OUT/colors.txt" 2>&1 &
   GDBP=$!
 else
@@ -50,5 +50,6 @@ key Return; sleep 3; save games_in            # the ID's Ok
 mv_ 600 20; save games_out
 mv_ 200 150; save games_over
 mv_ 200 250; save games_over2
+mv_ 110 345; xdotool mousedown 1; sleep 0.1; xdotool mouseup 1; sleep 4; mv_ 600 20; save create
 if [ -n "$GDBP" ]; then kill -INT $GDBP; sleep 5; fi
 echo "$n shots in $OUT"

@@ -62,7 +62,11 @@ impl Glue {
     /// proc 0x4bae20; ended by Ok (9) the screen is 0x5999bc (Battle.net: 0x4a5f50 and
     /// 0x452a30 first), else the main menu.
     pub(super) fn open_conn(&mut self, files: &Storage) {
-        let dlg = self.open_glue_dialog(files, "rez/gluConn.bin");
+        let mut dlg = self.open_glue_dialog(files, "rez/gluConn.bin");
+        // The provider list's event 10 (0x4bad10, 0x4bad41): no frame.
+        if let Some(c) = dlg.controls.iter_mut().find(|c| c.ty == 12) {
+            c.flags |= 0x20000;
+        }
         self.dlg = Some((dlg, Open::Conn));
         self.conn_init(files);
         self.show_palette();

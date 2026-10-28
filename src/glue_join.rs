@@ -54,7 +54,11 @@ impl Glue {
     /// (11), else the main menu.
     pub(super) fn open_join(&mut self, files: &Storage) {
         self.setup.mission = false;
-        let dlg = self.open_glue_dialog(files, "rez/gluJoin.bin");
+        let mut dlg = self.open_glue_dialog(files, "rez/gluJoin.bin");
+        // The list's event 10 (0x4b84a0, 0x4b84c3): no frame.
+        if let Some(c) = dlg.get_mut(ids::LIST) {
+            c.flags |= 0x20000;
+        }
         self.dlg = Some((dlg, Open::Join));
         self.join_init();
         self.show_palette();
