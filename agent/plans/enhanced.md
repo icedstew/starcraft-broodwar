@@ -22,8 +22,7 @@ fake `0x...` addresses on our functions (cite the 1.16.1 functions we imitate, e
 
 ## State of the work
 
-**All of it is uncommitted** in the working tree (18 modified files + `src/bw/enhanced.rs`
-+ `agent/tools/enhanced.sh`). It builds natively and for wasm with no warnings
+All of it is committed (2026-10-27). It builds natively and for wasm with no warnings
 (`cargo build --release`, `cargo build --release --target wasm32-unknown-unknown`).
 
 Verified with `agent/tools/enhanced.sh` (headless, real network over localhost):
@@ -34,8 +33,10 @@ Verified with `agent/tools/enhanced.sh` (headless, real network over localhost):
 | `QUIT_AT=15000`: 2nd player quits, its army goes to the AI; 3rd joins, takes it back (human id reused) | host and joiner equal at 40000 |
 | `QUIT_AT=15000 ARMY=<host's army>`: 3rd joins the host's army as a second human (id 8) | equal at 60000 |
 
-Not verified: the regression suite / net tests after these changes (run them, see
-"Before committing"), the browser late join, the LAN-list late join, anything in a window,
+| `LAN=1 K=300000`: 3rd finds the running game on the join screen's LAN list | all 3 equal at 300000 |
+
+Regression set passed after these changes. Not verified: the browser late join, anything in
+a window,
 whether the AI actually plays well after taking over (only that its script starts).
 
 ## Design (settled)
@@ -156,58 +157,118 @@ Message flow (host = star center; transport ids = Storm ids; lobby link reused f
 | `src/view.rs` | `GameSetup.enhanced`, `run_scene`, `reload_through_save`, save kind retry |
 | `src/glue.rs`, `glue_chat.rs`, `glue_join.rs`, `glue_create.rs`, `web.rs`, `web/index.html` | entry points and the option |
 | `src/bw/save.rs`, `save/gamedata.rs`, `main.rs` | debug aids |
-| `agent/tools/enhanced.sh` | the end-to-end test (env: K, QUIT_AT, ARMY, LATE_AFTER, LATE_DEBUG, P, O) |
+| `agent/tools/enhanced.sh` | the end-to-end test (env: K, QUIT_AT, ARMY, LAN, LATE_AFTER, LATE_DEBUG, P, O) |
 
 ## Open items, in order
 
-1. **Before committing** (do these first, in this order; each command must pass):
-   - `cargo test --release` (27 pass before).
-   - `agent/tools/suite.sh | grep -v MATCH` -> no output.
-   - `agent/tools/repcmp.sh ~/games/Starcraft/broodwar-reps-116/tl1412*.rep 3000` -> MATCH.
-   - `agent/tools/netlive_leave.sh all` -> a..f PASS (they use non-enhanced games: the
-     fast-drop / Session changes must not affect them).
-   - `agent/tools/lobby.sh` and `agent/tools/lobby.sh web` -> equal hashes (needs
-     `web/build.sh` first for web).
-   - `agent/tools/enhanced.sh` (K=60000 LATE_AFTER=1), and with `QUIT_AT=15000`.
-   - Then commit (trailers from conventions.md), update `agent/areas/net.md` (new section
-     "Enhanced games" summarizing the design above, shorter) and `agent/status.md`.
-     Ask the user before pushing.
-2. **LAN list for running enhanced games** (DONE 2026-10-27: `snet::take_transport(keep_advert)`, `KEPT_ADVERT`; test `LAN=1 K=300000 agent/tools/enhanced.sh`; also fixed glue.rs native late branch running after begin_game). The LAN
-   advert is owned by snet's `Game` and dies in `snet::take_transport` when the game
-   starts. Plan: give `take_transport` a `keep_advert: bool` (glue passes
-   `self.create.enhanced` from `lobby_net_game`); when true, move `g.advert` into a
-   thread-local `KEPT_ADVERT: RefCell<Option<Arc<Mutex<Advert>>>>`, dropped by
-   `snet::leave_game` / `destroy`. Then a joiner on the join screen sees the game; joining
-   it goes to the lobby screen, where `chat_tick` already switches to the late start.
-   Test: like `enhanced.sh`, but the 3rd player uses the join screen script (`"$L;t
-   three;k 0d;w 1500;k 0d;w 3000;t o"` as in `lobby.sh`) instead of SCBW_JOIN.
-3. **Browser late join test**: `lobby.sh web` style: host via `enhanced.sh` steps, then
-   headless Chromium `?join=<code>&frames=K&name=web` after the game started (see
-   `lobby.sh` web branch and `agent/tools/cdp_console.mjs`). Expect the console line
-   `frame K hash H` equal to the host's. Watch for: `late_game` uses `Scene::from_save_steps`
-   (fine in wasm), the `web_frame` `Top::Game` late branch (glue.rs), and that
-   `NetGame::report_next` is applied (it is consumed in `NetGame::new`).
-4. **Visible feedback** (DONE 2026-10-27, notice 0x1000 in view.rs): when the AI takes an army, show a line (no network.tbl string
-   exists; use `scene.msgs` with our own text, e.g. "%s's army is played by the computer").
-   Push a notice kind from `ai_take_over` (e.g. a new `State` queue like `notices`) and
-   print it in view.rs next to the notices loop (~line 740). Keep sim deterministic: only
-   push to an output queue (listed in `outs!` in bw/rollback.rs so rollbacks trim it).
-5. **Host leaving ends the game** (star topology). Host migration is out of scope; tell the
-   user if asked. A non-host leaving works (AI takeover).
-6. **Edge cases to check**: two players asking to join at once (queue serializes; second
-   pick happens after the first's frame ran on the host scene — verify with two late
-   joiners); a joiner reusing a link id of a player that left earlier (`add_player`
-   handles a gone row; untested); joiner asking for an army of a defeated player
-   (`enhanced_pick` refuses: `player_left != 0`); more than 7 links (transport ids 1..7
-   only: an 8th link is refused "game full").
-7. **Throughput**: the start is ~180 KB in 500-byte control messages (~2 s on localhost).
-   If it is slow over real networks, raise the control budget in `transport.rs flush`
-   (the `> 600` check) for a peer in the C_LATE phase, or send several datagrams per
-   flush. Do not exceed the browser's `maxDatagramSize` (~1200).
-8. **Window check** (user-visible, see memory "Visual checks need native"): run a host in
-   a window (`scbw glue`, Multiplayer, LAN, Create with the Enhanced box), join from a
-   second window mid-game, check: the "has joined" line, shared selection rows, the
-   Enhanced box look (its text was cut off at a wider label; now "Enhanced game").
+Done 2026-10-27 (committed): the full pre-commit run (cargo test 27, suite, repcmp tl1412
+MATCH, netlive_leave a..f, lobby.sh, enhanced.sh plain / QUIT_AT), the LAN list for
+running enhanced games (`snet::take_transport(keep_advert)`, `KEPT_ADVERT`, native only),
+the glue.rs native late-start branch moved before `begin_game` (it used to exit silently),
+the "army is played by the computer" line (`NOTICE_AI` = 0x1000, view.rs notices loop).
+
+Rules for every task below: build both targets with no warnings
+(`~/.cargo/bin/cargo build --release` and `... --target wasm32-unknown-unknown`; native-only
+code such as `Advert` / `UdpSocket` needs `#[cfg(not(target_arch = "wasm32"))]`), run the
+"Regression set" before each commit, one commit per task (trailers: conventions.md), update
+this file's task to DONE in the same commit. Do not push; ask the user.
+
+Regression set (each must pass; ~10 min):
+```sh
+~/.cargo/bin/cargo test --release 2>&1 | grep "^test result"          # 27 passed
+agent/tools/suite.sh | grep -v MATCH                                   # no output
+agent/tools/repcmp.sh ~/games/Starcraft/broodwar-reps-116/tl1412*.rep 3000 | tail -1   # MATCH
+agent/tools/netlive_leave.sh all 2>&1 | grep -E "^(PASS|FAIL)"         # a..f PASS
+agent/tools/lobby.sh | tail -2                                         # equal hashes
+K=60000 LATE_AFTER=1 agent/tools/enhanced.sh | head -3                 # 3 equal hashes
+```
+
+### Task 1: list box border colour on the Games screen (user report, UI)
+
+User (2026-10-27) circled the Games list of the join screen (Multiplayer -> LAN -> ID)
+in our screenshot: "This looks wrong, the border color maybe?". Ours: an inner outline in
+bright blue at about x 65..349, y 93..300 when the mouse is over the list; dim when not.
+
+What is known: `dlg.rs list_frame` (0x4f02c0) matches the disassembly: inner outline colour
+= the colour table byte 0x6ceb30 (`colors[0x10]`) when the control has the focus flag 0x1000,
+else 0x6ceb2f (`colors[0xf]`); outer 0x6ceb2c (`colors[0xc]`). The focus flag comes from
+`dlg.rs focus()` (0x418440). Not known: what the real game shows. Rule (memory "Visual
+checks need native"): compare with the real 1.16.1 screen before changing anything.
+
+Steps:
+1. Native capture. Copy `re/native_menu.sh` to `re/native_join.sh` (same prefix / Xvfb /
+   regedit setup; no replay needed). Drive: main menu -> Multiplayer -> Expansion (if asked)
+   -> select "Local Area Network (UDP)" -> Ok -> new ID dialog: type a name, Enter -> ID Ok
+   -> the Games screen. Find button positions from screenshots (`import -window root`);
+   AGENTS.md lists Single Player (217,120), Expansion (367,275), Ok (515,392). Save two shots:
+   `games_out.png` (mouse at 600,20) and `games_over.png` (mouse at 200,150, wait 1 s).
+   Also one of the Select Connection screen (mouse off the list and over it).
+2. Ours, same screens: `SCBW_CHARACTERS=<empty dir> SCBW_GLUE_INPUT="w 2500;t m;w 1500;k 0d;
+   w 1500;s <dir>/conn.png;t o;w 2000;t three;k 0d;w 1500;k 0d;w 2500;p 600 20;w 500;
+   s <dir>/games_out.png;p 200 150;w 1000;s <dir>/games_over.png" target/release/scbw glue
+   <dir>/x.png` (`p x y` moves the mouse, `s file` saves the screen; key `m` = Multiplayer,
+   `t o` = Ok).
+3. Compare the outline pixels (e.g. `magick x.png -format '%[pixel:p{65,150}]' info:` on the
+   left inner edge, and the outer edge one pixel out) in both states, native vs ours. Also
+   compare the whole frame visually (send both to the user with SendUserFile).
+4. Decide from the evidence:
+   - Native has the same colours in both states: ours is right; tell the user with the two
+     native shots. Done.
+   - Native never shows the bright outline on hover: the focus flag is set wrongly; trace
+     0x418440 / 0x418600 (`agent/tools/dis.sh 0x418440 80`) against `dlg.rs focus()` and the
+     hover -> active-control path (dialog +0x3e) and fix to match.
+   - Native shows a different colour: the colour table is filled wrong. Find where
+     0x6ceb20..0x6ceb39 is written (`grep -n "DAT_006ceb[23]" agent/local/scratch/dump/bw116n.c`,
+     look for assignments `DAT_006ceb30 = ...`) and compare with how glue.rs builds
+     `colors` (glue.rs ~3171). Fix to match.
+5. Test after a fix: repeat step 2, the outline pixels equal native's; the regression set.
+
+### Task 2: browser late join
+
+Goal: a browser joins a running enhanced game by code and ends with the same hash.
+1. `web/build.sh` (builds wasm into `web/pkg`). It must succeed.
+2. Add `WEB=1` to `agent/tools/enhanced.sh` for the third player, copying `lobby.sh`'s web
+   branch: `python3 -m http.server -d web 8767 -b 127.0.0.1`, headless chromium with
+   `--remote-debugging-port=9335 --user-data-dir=$O/prof`, and
+   `node agent/tools/cdp_console.mjs 9335 "http://127.0.0.1:8767/?join=<code with # as %23>&frames=$K&name=web"`
+   writing `$O/late.log`; kill chromium / server / node after the host exits. Add `&army=N`
+   when `ARMY` is set.
+3. Run `WEB=1 K=300000 LATE_AFTER=1 agent/tools/enhanced.sh`. Expect `frame 300000 hash H`
+   in all three logs, equal. (The browser runs slower; if the game ends before it joins,
+   raise K. A long K is fine: headless games are unthrottled.)
+4. If it fails, look in order at: the console log (`late.log`) for panics; `web.rs net_join`
+   -> `glue_lobby` loop setting `glue.late` and state START; the wasm `Top::Game` branch in
+   glue.rs (~line 3359, it checks `glue.late` before `begin_game`: keep it that way);
+   `live::late_game`; that `NetGame::report_next` is applied. Datagrams must stay under the
+   browser's `maxDatagramSize` (~1200; C_LATE parts are 500 bytes).
+
+### Task 3: edge cases (headless, extend enhanced.sh)
+
+Each as an env option of enhanced.sh, all three (or four) hashes equal:
+- `FOURTH=1`: a fourth player joins by code 2 s after the third (two joins queued; the
+  second is picked after the first's frame ran on the host).
+- `QUIT_AT=15000` then the third joins with no `ARMY`: it should take the AI-held army
+  (already passes) — also check a fourth player joining after the third quits reuses its
+  link id (`add_player` with a gone row).
+- Asking for a defeated player's army (`ARMY=<that slot>` after it lost): `enhanced_pick`
+  must refuse and pick another army; check the host log line "joins as human h, army n".
+- 8 links: the 8th is refused "game full" (transport ids 1..7); the joiner must show an
+  error, not hang.
+
+### Task 4: window check (user-visible; needs the user or a native-style capture)
+
+Run a host in a window (`target/release/scbw glue`, Multiplayer, LAN, Create Game with the
+"Enhanced game" box ticked), join from a second window mid-game (join screen list, or
+`SCBW_JOIN=<code>`). Check: the "has joined the game." line, shared selection, the
+"army is played by the computer" line after a player quits, the Enhanced box text not cut.
+Take screenshots (ScrollLock) and send them to the user.
+
+### Known limits (tell the user if asked, do not fix)
+
+- Host leaving ends the game (star topology; no host migration).
+- The start state is ~180 KB in 500-byte control messages (~2 s on localhost). If slow on
+  real networks: raise the per-flush control budget in `transport.rs flush` (the `> 600`
+  check) for a peer receiving C_LATE, never above ~1200 bytes per datagram.
 
 ## Gotchas learned
 
