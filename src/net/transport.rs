@@ -351,6 +351,14 @@ impl Transport {
                 }
                 Inbound::Error(e) => ev.push(Event::Error(e)),
                 Inbound::Joined { player } => {
+                    // A link id comes back after its player left: the new link's control
+                    // sequence and acks start over.
+                    self.ctl_in.remove(&player);
+                    self.ctl_next.remove(&player);
+                    self.ctl_unacked.remove(&player);
+                    self.sent_acks.remove(&player);
+                    self.dirty.remove(&player);
+                    self.acked.retain(|(c, _), _| *c != player);
                     if !self.peers.contains(&player) {
                         self.peers.push(player);
                     }

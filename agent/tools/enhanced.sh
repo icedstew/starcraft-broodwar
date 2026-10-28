@@ -7,6 +7,9 @@
 # (PACE_US, default 70000 us a frame, about game speed Normal) so use a small K (2500).
 # LAN=1: the third player joins through the LAN game list instead of SCBW_JOIN.
 # FOURTH=1: a fourth player (native, by code) joins FOURTH_AFTER (default 2) s after the third.
+# EXTRA=<n>: n more native players join, 1.5 s apart (7 links in all: EXTRA=5 fills the game,
+# EXTRA=6 gets one refused; its log x6.log).
+# KILL2=1: the second player's process is killed right after its QUIT_AT quit (frees its link).
 # QUIT_AT=<frame>: the second player quits there (its army goes to the AI); ARMY=<slot>: the
 # third asks for that army (taking it back from the AI).
 T=$(cd "$(dirname "$0")" && pwd); cd "$T/../.."
@@ -14,12 +17,13 @@ export SCBW_INSTALL=${SCBW_INSTALL:-$HOME/Downloads/StarCraft-BroodWar_1.16.1}
 B=${SCBW:-$PWD/target/release/scbw}; O=${O:-/tmp/scbw-enhanced}; P=${P:-16400}; K=${K:-12000}
 mkdir -p $O/h $O/j $O/k $O/inst
 for f in "$SCBW_INSTALL"/*; do n=$(basename "$f"); [ "$n" = maps ] || ln -sf "$f" "$O/inst/$n"; done
-[ -n "$WEB" ] && export SCBW_NET_PACE_US=${PACE_US:-70000}   # a browser is slower than an unthrottled host
+[ -n "$WEB$PACE_US" ] && export SCBW_NET_PACE_US=${PACE_US:-70000}   # WEB: a browser is slower than an unthrottled host; PACE_US=<us> paces any run
 export SCBW_GLUE_REALTIME=1 SCBW_LAN_PORT=$P SCBW_NET_HEADLESS=$K
 (cd $O; NETREP_DEBUG=1 SCBW_ENHANCED=1 SCBW_CHARACTERS=$O/h SCBW_GLUE_INPUT="w 2500;t m;w 1500;k 0d;w 1500;t o;w 2000;t host;k 0d;w 1500;k 0d;w 2500;t g;w 2500;t o;w 8000;c 500 393;w 40000" timeout 300 $B glue $O/h.png > $O/host.log 2>&1) & HP=$!
 for i in $(seq 80); do grep -q LOBBY $O/host.log 2>/dev/null && break; sleep 0.5; done
 code=$(sed -n 's/^LOBBY //p' $O/host.log | sed 's/0\.0\.0\.0/127.0.0.1/')
 (cd $O; SCBW_NET_QUIT_AT=${QUIT_AT:-} SCBW_JOIN=$code SCBW_NAME=two SCBW_CHARACTERS=$O/j SCBW_GLUE_INPUT="w 60000" timeout 300 $B glue $O/j.png > $O/join.log 2>&1) & JP=$!
+[ -n "$KILL2" ] && (until grep -q "quit at frame" $O/join.log 2>/dev/null; do sleep 0.2; done; sleep 1; pkill -f "glue $O/j.png") &
 for i in $(seq 120); do grep -q "net player" $O/host.log 2>/dev/null && break; sleep 0.5; done
 sleep ${LATE_AFTER:-3}
 if [ -n "$WEB" ]; then
@@ -36,6 +40,10 @@ if [ -n "$FOURTH" ]; then
   mkdir -p $O/m; sleep ${FOURTH_AFTER:-2}
   (cd $O; SCBW_ARMY=${ARMY4:-} SCBW_JOIN=$code SCBW_NAME=four SCBW_INSTALL=$O/inst SCBW_CHARACTERS=$O/m timeout 300 $B glue $O/m.png > $O/four.log 2>&1) & FP=$!
 fi
+for i in $(seq ${EXTRA:-0}); do
+  mkdir -p $O/x$i; sleep 1.5
+  (cd $O; SCBW_JOIN=$code SCBW_NAME=x$i SCBW_INSTALL=$O/inst SCBW_CHARACTERS=$O/x$i timeout 300 $B glue $O/x$i.png > $O/x$i.log 2>&1) &
+done
 wait $HP $JP; [ -n "$WEB" ] && sleep 5; kill $CP $SP $LP 2>/dev/null; wait 2>/dev/null
-for f in host join late ${FOURTH:+four}; do echo "$f: $(grep -o "frame $K hash [0-9a-f]*" $O/$f.log)"; done
+for f in host join late ${FOURTH:+four} $(for i in $(seq ${EXTRA:-0}); do echo x$i; done); do echo "$f: $(grep -o "frame $K hash [0-9a-f]*" $O/$f.log)"; done
 grep -h "net:" $O/*.log | grep -v "net player" | head -12
