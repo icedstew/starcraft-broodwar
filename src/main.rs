@@ -3,6 +3,7 @@
 mod audio;
 mod chat;
 mod bw;
+mod campaign;
 mod saveload;
 mod registry;
 mod setup;
@@ -662,6 +663,14 @@ fn main() -> std::io::Result<()> {
                     std::process::exit(1);
                 }
             }
+        }
+        Some("campaign") if args.get(1).map(String::as_str) == Some("check") => {
+            // campaign check <world>: parse a campaign world, deal owners if it has none, print
+            // the factions and live borders (src/campaign/world.rs).
+            let text = std::fs::read_to_string(args.get(2).ok_or_else(|| std::io::Error::other("campaign check <world>"))?)?;
+            let mut w = campaign::world::World::parse(&text).map_err(std::io::Error::other)?;
+            w.deal().map_err(std::io::Error::other)?;
+            print!("{}", w.summary());
         }
         Some("rephash") => {
             // rephash <rep> [frames]: play the replay straight (default: to its end) and print
