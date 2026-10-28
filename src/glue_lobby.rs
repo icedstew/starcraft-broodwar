@@ -1356,7 +1356,7 @@ impl Glue {
     /// lobby gave it (0x57ee7c), the input delay is fixed.
     pub(super) fn lobby_net_game(&mut self) -> Option<crate::net::live::NetGame> {
         const DELAY: u32 = 2;
-        let (mut tr, host, ids, early) = snet::take_transport()?;
+        let (mut tr, host, ids, early) = snet::take_transport(self.create.enhanced)?;
         tr.set_first(DELAY);
         let me = self.setup.local_storm_id as u8;
         let table: Vec<(u8, u8)> = ids.iter().map(|&i| (i, i)).collect();

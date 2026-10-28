@@ -172,7 +172,7 @@ Message flow (host = star center; transport ids = Storm ids; lobby link reused f
    - Then commit (trailers from conventions.md), update `agent/areas/net.md` (new section
      "Enhanced games" summarizing the design above, shorter) and `agent/status.md`.
      Ask the user before pushing.
-2. **LAN list for running enhanced games** (was in progress when interrupted). The LAN
+2. **LAN list for running enhanced games** (DONE 2026-10-27: `snet::take_transport(keep_advert)`, `KEPT_ADVERT`; test `LAN=1 K=300000 agent/tools/enhanced.sh`; also fixed glue.rs native late branch running after begin_game). The LAN
    advert is owned by snet's `Game` and dies in `snet::take_transport` when the game
    starts. Plan: give `take_transport` a `keep_advert: bool` (glue passes
    `self.create.enhanced` from `lobby_net_game`); when true, move `g.advert` into a

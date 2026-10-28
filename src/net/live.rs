@@ -1041,7 +1041,7 @@ pub fn late_game<'a>(a: &'a view::Assets, b: &[u8]) -> std::io::Result<(Scene<'a
     st.local_player = n;
     st.local_human = h;
     scene.local = n;
-    let (mut tr, _, _, early) = super::snet::take_transport().ok_or_else(|| std::io::Error::other("no link to the game"))?;
+    let (mut tr, _, _, early) = super::snet::take_transport(false).ok_or_else(|| std::io::Error::other("no link to the game"))?;
     tr.set_first(f);
     let table: Vec<(u8, u8)> = players.iter().map(|q| (q.0, q.1)).collect();
     let mut se = Session::new_at(p, &table, delay, f);

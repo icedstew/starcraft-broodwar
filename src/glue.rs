@@ -3550,6 +3550,23 @@ pub fn run(files: &Storage, shot: Option<&str>) -> std::io::Result<()> {
                     }
                     return Ok(());
                 }
+                // A running enhanced game we joined (ours): its state came from the host.
+                #[cfg(not(target_arch = "wasm32"))]
+                if let Some(late) = glue.late.take() {
+                    let a = crate::view::Assets::load(crate::storage::Storage::open(&crate::install_dir())?)?;
+                    let (scene, net) = crate::net::live::late_game(&a, &late)?;
+                    crate::view::set_net_driver(Box::new(net));
+                    match win.as_mut() {
+                        Some(_) => hand_over(&mut win, &mut audio, &input.typed, |w| {
+                            crate::view::park_window(w);
+                            crate::view::run_scene(&a, scene)
+                        })?,
+                        None => crate::view::run_scene(&a, scene)?,
+                    }
+                    glue.state = state::GLUE;
+                    glue.screen = screen::MAIN;
+                    continue;
+                }
                 // 0x4d9950 (the game wrapper) starts with 0x4be060.
                 glue.set_notice();
                 let Some(g) = glue.begin_game(files) else {
@@ -3597,23 +3614,6 @@ pub fn run(files: &Storage, shot: Option<&str>) -> std::io::Result<()> {
                         Some(e) => glue.state = if e.results[e.local as usize] == 2 { 7 } else { 6 },
                         None => return Ok(()),
                     }
-                    continue;
-                }
-                // A running enhanced game we joined (ours): its state came from the host.
-                #[cfg(not(target_arch = "wasm32"))]
-                if let Some(late) = glue.late.take() {
-                    let a = crate::view::Assets::load(crate::storage::Storage::open(&crate::install_dir())?)?;
-                    let (scene, net) = crate::net::live::late_game(&a, &late)?;
-                    crate::view::set_net_driver(Box::new(net));
-                    match win.as_mut() {
-                        Some(_) => hand_over(&mut win, &mut audio, &input.typed, |w| {
-                            crate::view::park_window(w);
-                            crate::view::run_scene(&a, scene)
-                        })?,
-                        None => crate::view::run_scene(&a, scene)?,
-                    }
-                    glue.state = state::GLUE;
-                    glue.screen = screen::MAIN;
                     continue;
                 }
                 // A network game with SCBW_NET_HEADLESS (tests): played headless to that frame.
