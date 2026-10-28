@@ -2973,7 +2973,9 @@ impl Glue {
             let over = !(n == 0 && top_is_popup);
             dlg.mouse = if over { (x, y) } else { (-1, -1) };
             let hit = if over { dlg.hit(x, y) } else { None };
-            dlg.active = hit;
+            // 0x4180d0: a dialog with flag 0x20000000 (every glue dialog, 0x4dd9e0) never makes
+            // a control active: the focus outline (0x418440) does not follow the mouse.
+            dlg.active = hit.filter(|_| dlg.this.flags & 0x2000_0000 == 0);
             for (i, c) in dlg.controls.iter_mut().enumerate() {
                 if hit == Some(i) { c.flags |= 0x80 } else { c.flags &= !0x80 }
             }

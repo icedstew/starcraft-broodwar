@@ -183,45 +183,32 @@ agent/tools/lobby.sh | tail -2                                         # equal h
 K=60000 LATE_AFTER=1 agent/tools/enhanced.sh | head -3                 # 3 equal hashes
 ```
 
-### Task 1: list box border colour on the Games screen (user report, UI)
+### Task 1: list box border colour on the Games screen (user report, UI) - half done
 
-User (2026-10-27) circled the Games list of the join screen (Multiplayer -> LAN -> ID)
-in our screenshot: "This looks wrong, the border color maybe?". Ours: an inner outline in
-bright blue at about x 65..349, y 93..300 when the mouse is over the list; dim when not.
+User (2026-10-27) circled the Games list of our join screen: "This looks wrong, the border
+color maybe?" (a bright blue outline when the mouse was over the list).
 
-What is known: `dlg.rs list_frame` (0x4f02c0) matches the disassembly: inner outline colour
-= the colour table byte 0x6ceb30 (`colors[0x10]`) when the control has the focus flag 0x1000,
-else 0x6ceb2f (`colors[0xf]`); outer 0x6ceb2c (`colors[0xc]`). The focus flag comes from
-`dlg.rs focus()` (0x418440). Not known: what the real game shows. Rule (memory "Visual
-checks need native"): compare with the real 1.16.1 screen before changing anything.
-
-Steps:
-1. Native capture. Copy `re/native_menu.sh` to `re/native_join.sh` (same prefix / Xvfb /
-   regedit setup; no replay needed). Drive: main menu -> Multiplayer -> Expansion (if asked)
-   -> select "Local Area Network (UDP)" -> Ok -> new ID dialog: type a name, Enter -> ID Ok
-   -> the Games screen. Find button positions from screenshots (`import -window root`);
-   AGENTS.md lists Single Player (217,120), Expansion (367,275), Ok (515,392). Save two shots:
-   `games_out.png` (mouse at 600,20) and `games_over.png` (mouse at 200,150, wait 1 s).
-   Also one of the Select Connection screen (mouse off the list and over it).
-2. Ours, same screens: `SCBW_CHARACTERS=<empty dir> SCBW_GLUE_INPUT="w 2500;t m;w 1500;k 0d;
-   w 1500;s <dir>/conn.png;t o;w 2000;t three;k 0d;w 1500;k 0d;w 2500;p 600 20;w 500;
-   s <dir>/games_out.png;p 200 150;w 1000;s <dir>/games_over.png" target/release/scbw glue
-   <dir>/x.png` (`p x y` moves the mouse, `s file` saves the screen; key `m` = Multiplayer,
-   `t o` = Ok).
-3. Compare the outline pixels (e.g. `magick x.png -format '%[pixel:p{65,150}]' info:` on the
-   left inner edge, and the outer edge one pixel out) in both states, native vs ours. Also
-   compare the whole frame visually (send both to the user with SendUserFile).
-4. Decide from the evidence:
-   - Native has the same colours in both states: ours is right; tell the user with the two
-     native shots. Done.
-   - Native never shows the bright outline on hover: the focus flag is set wrongly; trace
-     0x418440 / 0x418600 (`agent/tools/dis.sh 0x418440 80`) against `dlg.rs focus()` and the
-     hover -> active-control path (dialog +0x3e) and fix to match.
-   - Native shows a different colour: the colour table is filled wrong. Find where
-     0x6ceb20..0x6ceb39 is written (`grep -n "DAT_006ceb[23]" agent/local/scratch/dump/bw116n.c`,
-     look for assignments `DAT_006ceb30 = ...`) and compare with how glue.rs builds
-     `colors` (glue.rs ~3171). Fix to match.
-5. Test after a fix: repeat step 2, the outline pixels equal native's; the regression set.
+Done (2026-10-27): native captures with `re/native_join.sh <dir>` (Xvfb + wine; keys need the
+pointer inside the window; `NATIVE_COLORS=1` also reads the colour table 0x6ceb20 through
+gdb into `<dir>/colors.txt`). Findings, all measured against 1.16.1's own screens:
+- The colour table is right: native `[0xc]=0xab, [0xf]=0x96, [0x10]=0x65` = ours for the
+  Games screen's palette.
+- The blue came from the focus flag: native glue dialogs have dialog flag 0x20000000
+  (0x4dd9e0), and 0x4180d0 then keeps the dialog's active control at 0, so a hovered list is
+  never focused. Our `Glue::mouse_to` set `dlg.active = hit`; now `None` for such dialogs
+  (glue.rs). Ours vs native Games screen with the mouse over the list: identical except
+  the list's outer outline.
+- Left: our list draws the 1 px outer outline (`list_frame`, colour 0xab = #303030) and
+  native draws nothing there (native pixel (64,200) = the background; same for the Select
+  Connection list). The inner outline is invisible either way (colour 0x96 = bg). Not found
+  who suppresses it natively: the draw proc is 0x41b950 (data table 0x501504, type 12),
+  its frame call is skipped only with control flag 0x20000; the join list's flags are 0x818
+  (bin) and neither 0x4b8340 / 0x4b8460 / 0x4b8560 nor the slide-in table (ids 1-4 only)
+  set it. Ideas: read the list control's flags from native memory (gdb: the control
+  struct is on the heap; find it through the dialog list 0x6d5e..), or find which function
+  clears/sets flags +0x18 of type 12 controls during glue dialog creation (0x41a080 path).
+  Once the cause is known, port it (do not special-case Games); check the Select Connection,
+  Games and lobby lists against native shots from `re/native_join.sh`.
 
 ### Task 2: browser late join
 
