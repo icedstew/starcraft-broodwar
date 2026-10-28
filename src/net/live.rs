@@ -851,6 +851,9 @@ impl NetDriver for NetGame {
         let Some(t0) = self.finished else {
             if self.frame(scene).is_none() {
                 nap();
+            } else if let Some(us) = std::env::var("SCBW_NET_PACE_US").ok().and_then(|v| v.parse().ok()) {
+                // Tests: a slow peer (a browser) can keep up with a paced headless one.
+                std::thread::sleep(Duration::from_micros(us));
             }
             if self.over.is_some() {
                 println!("game over: {}", self.over.as_deref().unwrap_or(""));

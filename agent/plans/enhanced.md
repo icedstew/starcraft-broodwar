@@ -210,7 +210,7 @@ gdb into `<dir>/colors.txt`). Findings, all measured against 1.16.1's own screen
   Once the cause is known, port it (do not special-case Games); check the Select Connection,
   Games and lobby lists against native shots from `re/native_join.sh`.
 
-### Task 2: browser late join
+### Task 2: browser late join (DONE 2026-10-27: `WEB=1 K=2500 LATE_AFTER=1 agent/tools/enhanced.sh`, three equal hashes; `SCBW_NET_PACE_US` paces native headless peers because a headless browser runs ~18 fps; not run with ARMY)
 
 Goal: a browser joins a running enhanced game by code and ends with the same hash.
 1. `web/build.sh` (builds wasm into `web/pkg`). It must succeed.
