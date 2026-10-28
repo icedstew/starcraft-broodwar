@@ -160,9 +160,42 @@ pub fn chat_line(p: u8, text: &[u8], local: u8, ptype: u8, name: &str, tbl: &str
     (o, color)
 }
 
+/// Ours: the text color code (0x41f610 rows of tfontgam.pcx) that draws like tunit.pcx
+/// player color row `row` (red, blue, teal, purple, orange, brown, white, yellow, green,
+/// pale yellow, tan, azure). Checked against the files: each row's first tunit entry equals
+/// the brightest entry of the font row (0x1c, not 0x1f, for row 11); other rows give 2.
+pub fn player_text_code(row: u8) -> u8 {
+    [0x08, 0x0e, 0x0f, 0x10, 0x11, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1b, 0x1c].get(row as usize).copied().unwrap_or(2)
+}
+
+/// Ours (enhanced games): the line for human `name` joining army `n` (tunit row `row`):
+/// the name in the army's color, then who owns the army (`owner`, empty if nobody) or, when
+/// the joiner took the slot itself (`own`), "as Player n+1". Control bytes are dropped.
+pub fn join_line(name: &str, row: u8, n: u8, owner: &str, own: bool) -> Vec<u8> {
+    let clean = |s: &str| -> Vec<u8> { s.bytes().take_while(|&c| c != 0).filter(|&c| c > 0x1f || matches!(c, 9 | 10 | 13)).take(0x50).collect() };
+    let mut o = vec![player_text_code(row)];
+    o.extend(clean(name));
+    o.push(1);
+    if !own && !owner.is_empty() {
+        o.extend_from_slice(b" has joined ");
+        o.extend(clean(owner));
+        o.extend_from_slice(b"'s army.");
+    } else {
+        o.extend_from_slice(format!(" has joined as Player {}.", n + 1).as_bytes());
+    }
+    o
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn join_lines() {
+        assert_eq!(join_line("x", 1, 1, "bob", false), b"\x0ex\x01 has joined bob's army.");
+        assert_eq!(join_line("x", 11, 2, "x", true), b"\x1cx\x01 has joined as Player 3.");
+        assert_eq!(join_line("a\x03b", 12, 0, "", false), b"\x02ab\x01 has joined as Player 1.");
+    }
 
     #[test]
     fn ring_order_and_expiry() {

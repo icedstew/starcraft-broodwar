@@ -72,8 +72,8 @@ Delegate per agents.md: Haiku triage, Sonnet porting, Opus review / hard RE / co
 ## In flight
 
 - **Enhanced games** (ours: join a running game, shared armies, AI takes armies left by
-  everyone, fast drops): committed 2026-10-27 (LAN list, AI-takeover line too); list border, browser late join, edge cases, window check done; open: Task 5 (announce a join with army and player colour) in the hand-off plan
-  agent/plans/enhanced.md (read it first; open items listed there).
+  everyone, fast drops): committed 2026-10-27 (LAN list, AI-takeover line too); list border, browser late join, edge cases, window check done; Task 5 (join line with army and player colour) done; open: joiners may not get the host's dealt player colours
+  (agent/plans/enhanced.md, Task 5 notes; read it first).
 
 - Networking (user 2026-10-22: rollback netcode after ShieldBattery, N players, .exe
   hosts reachable without our servers, browsers join over WebTransport):

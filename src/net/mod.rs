@@ -41,6 +41,9 @@ pub struct Session {
     rollback: Option<u32>,
     pub rollbacks: u32,
     pub resimulated: u32,
+    /// Ours (enhanced): the (frame, notice, player) of the join / AI lines already shown, so a
+    /// re-simulation shows the ones its late command made and not the ones it repeats.
+    announced: Vec<(u32, u16, u8)>,
     pub stalled: u32,
     /// The sounds the last first-run step returned.
     pub sounds: Vec<(u16, i32, i32)>,
@@ -103,6 +106,7 @@ impl Session {
             rollback: None,
             rollbacks: 0,
             resimulated: 0,
+            announced: Vec::new(),
             stalled: 0,
             sounds: Vec::new(),
             gone,
@@ -440,6 +444,19 @@ impl Session {
         stepped
     }
 
+    /// Ours: of the notices frame `h` made, the join / AI lines not announced before (they are
+    /// remembered); a rollback keeps those, as its first run could not have made them.
+    fn new_announcements(&mut self, h: u32, made: &[(u16, u8)]) -> Vec<(u16, u8)> {
+        let mut new = Vec::new();
+        for &(id, p) in made.iter().filter(|n| n.0 == bw::enhanced::NOTICE_JOIN || n.0 == bw::enhanced::NOTICE_AI) {
+            if !self.announced.contains(&(h, id, p)) {
+                self.announced.push((h, id, p));
+                new.push((id, p));
+            }
+        }
+        new
+    }
+
     fn tick_inner(&mut self, scene: &mut view::Scene) -> bool {
         let ring = PRED_LIMIT + 1;
         if let Some(g) = self.rollback.take() {
@@ -452,15 +469,19 @@ impl Session {
             // twice (voices.tick, minimap pings, show_error); upgrade path: SB matches the
             // re-run's effects against the first run's.
             let outs = scene.st.out_lens();
+            let mut shown = Vec::new();
             for h in g..self.frame {
                 if h > g {
                     self.snaps[(h % ring) as usize] = Some(scene.st.clone());
                 }
                 self.keep_snap(h, &scene.st);
+                let n0 = scene.st.notices.len();
                 self.run_frame(scene, h);
+                shown.extend(self.new_announcements(h, &scene.st.notices[n0..]));
                 self.resimulated += 1;
             }
             scene.st.truncate_outs(&outs);
+            scene.st.notices.extend(shown);
         }
         if self.frame >= self.end {
             return false;
@@ -472,7 +493,9 @@ impl Session {
         self.snaps[(self.frame % ring) as usize] = Some(scene.st.clone());
         let f = self.frame;
         self.keep_snap(f, &scene.st);
+        let n0 = scene.st.notices.len();
         self.sounds = self.run_frame(scene, self.frame);
+        self.new_announcements(self.frame, &scene.st.notices[n0..]);
         self.frame += 1;
         true
     }

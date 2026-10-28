@@ -12,6 +12,8 @@ use super::{Data, State};
 /// The join command's id (outside 1.16.1's 0x05 .. 0x5c).
 /// Notice id (not a network.tbl line): the computer took army `p`.
 pub const NOTICE_AI: u16 = 0x1000;
+/// Notice id (not a network.tbl line): human `p` joined the army `nation_of(p)`.
+pub const NOTICE_JOIN: u16 = 0x1001;
 
 pub const CMD_JOIN: u8 = 0xe0;
 pub const JOIN_LEN: usize = 4 + 0x18;
@@ -170,8 +172,8 @@ impl State {
         if self.ai_taken & 1 << n != 0 {
             self.ai_release(d, n);
         }
-        // network.tbl 0x49: "%s has joined the game."
-        self.notices.push((0x49, h));
+        // Ours: "<name> has joined <owner>'s army." in the army's colour (the view builds it).
+        self.notices.push((NOTICE_JOIN, h));
     }
 
     /// The last human of army `n` left: the army is the AI's (a computer, 0x57eee8 = 1, with

@@ -762,6 +762,13 @@ impl<'a> Scene<'a> {
         for (fmt, p) in std::mem::take(&mut self.st.notices) {
             // 0x41f1b0 formats the network.tbl line; 0x48d0c0 shows it 7 s.
             // Ours (enhanced games): the computer took an army.
+            if fmt == crate::bw::enhanced::NOTICE_JOIN {
+                let n = self.st.nation_of(p);
+                let owner = self.st.player_names.get(n as usize).map_or("", String::as_str);
+                let line = crate::msgs::join_line(self.st.human_name(p), self.colors.get(n as usize).copied().unwrap_or(n), n, owner, p == n);
+                self.msgs.print(&ui.font, &line, now, 0, 0x17, &mut self.st.ui_sounds);
+                continue;
+            }
             let f = if fmt == crate::bw::enhanced::NOTICE_AI {
                 "%s's army is played by the computer."
             } else {

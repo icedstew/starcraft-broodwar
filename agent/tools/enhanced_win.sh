@@ -27,7 +27,9 @@ echo "code $code"
 sleep 15; shot 92 joiner_lobby; shot 91 lobby2
 click 91 500 393; sleep 15; shot 91 game_host; shot 92 game_two
 (cd $O; DISPLAY=:93 SCBW_JOIN=$code SCBW_NAME=three SCBW_CHARACTERS=$O/k SCBW_INSTALL=$SCBW_INSTALL $B glue > late.log 2>&1 &)
-sleep 25; shot 93 game_three; shot 91 game_host2; shot 92 game_two2
+# The join line lasts 7 s: shoot every 2 s (join_host_N, join_two_N, join_three_N).
+for i in $(seq 15); do sleep 2; shot 91 join_host_$i; shot 92 join_two_$i; shot 93 join_three_$i; done
+shot 93 game_three; shot 91 game_host2; shot 92 game_two2
 # The second player's display goes away: its window ends, the game drops it (3 s) and the
 # computer takes its army.
 pkill -f "^Xvfb :92"; sleep 8; shot 91 host_after_quit; shot 93 three_after_quit

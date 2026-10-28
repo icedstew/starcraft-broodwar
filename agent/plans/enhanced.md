@@ -249,23 +249,86 @@ Not verified: the "army is played by the computer" line in a window (the last bl
 enhanced_win.sh kills display :92 and shoots host / third 8 s later; it was never run to the
 end because of the pkill problem above), the Enhanced box text cut-off at other widths.
 
-### Task 5: announce the join with the army and colour (user request 2026-10-27, TODO)
+### Task 5: announce the join with the army and colour (user request 2026-10-27, DONE 2026-10-27)
 
-"Announce for all players which team (slot) the new player has joined. Also style the
-player's name as the colour they are joining."
-Today `State::enhanced_join` (src/bw/enhanced.rs) pushes notice 0x49 ("%s has joined the
-game.", network.tbl) and view.rs prints notices with `ui.network` + `human_name(p)` in colour
-0x17. Wanted: a line for every player such as "<name> has joined <army>'s army" (slot / team
-= the army `n`; use the army owner's name or "slot n+1" like the leave notices do, check
-network.tbl for a fitting string first, else our own text like `NOTICE_AI` = 0x1000) and the
-player's name drawn in the player colour of the army joined (`self.st.player_colors`? see how
-chat lines colour names: `crate::msgs::chat_line` and `ui` colour tables; the in-game chat
-uses the sender's player colour). The notice queue holds `(u16 fmt, u8 player)`; the army is
-needed too, so either add a field (rollback.rs lists `notices` in `outs!`, update every
-`notices.push`) or push a second notice kind carrying the army. Keep the sim deterministic
-(only push to an output queue). Test: window run (`enhanced_win.sh`, check game_three /
-game_host screenshots right after the join; the line lasts 7 s so shoot sooner than the
-script does now) and the regression set.
+User: "Announce for all players which team (slot) the new player has joined. Also style the
+player's name as the colour they are joining." Ours (no 1.16.1 counterpart), so no address
+to port; keep it small and keep the sim deterministic (it only pushes to an output queue).
+
+Facts checked 2026-10-27 (do not re-derive):
+- `State::enhanced_join` (src/bw/enhanced.rs ~174) pushes `(0x49, h)`; `notices` is
+  `Vec<(u16, u8)>` (src/bw/mod.rs ~406), listed in rollback.rs `outs!` (no change needed
+  there if the tuple type stays the same).
+- view.rs ~762 drains `st.notices`: network.tbl line `fmt` with `%s` = `st.human_name(p)`,
+  printed by `msgs.print(.., sound 0x17)` (line colour 3). `NOTICE_AI` (0x1000) is the
+  precedent for our own text.
+- network.tbl has no "joined <army>" line (only 0x49 "%s has joined the game."): use our
+  own text.
+- After the join, `st.nation_of(h)` is the army `n` (`human_nation[h] = n` is set in
+  `enhanced_join`), so the view can find the army from `h` alone: no new tuple field.
+- Inline colour bytes in a line: `ui.rs color_row` (0x41f610 `Color::set`). Code 1 =
+  back to the previous colour. Valid codes: 2..=8, 0x0e..=0x11, 0x15..=0x19, 0x1b..=0x1f
+  (0x1a has no row in 1.16.1).
+- `Scene.colors[n]` (view.rs ~192 / 416) = army n's tunit.pcx colour row (0x57f21c through
+  the map's COLR). That row decides which text code to use.
+
+Steps:
+1. enhanced.rs: add `pub const NOTICE_JOIN: u16 = 0x1001;` next to `NOTICE_AI` (doc line:
+   "Notice id (not a network.tbl line): human `p` joined the army `nation_of(p)`."). In
+   `enhanced_join` replace the 0x49 push with `self.notices.push((NOTICE_JOIN, h));` and
+   fix the comment above it.
+2. Text colour for a tunit row: a small pure fn, e.g. in msgs.rs,
+   `pub fn player_text_code(row: u8) -> u8` with the table
+   `[0x08, 0x0e, 0x0f, 0x10, 0x11, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1b, 0x1f]`
+   (red, blue, teal, purple, orange, brown, white, yellow, green, pale yellow, tan,
+   aqua), anything else -> 2. This table is a best guess (BWAPI's text colour names):
+   VERIFY it before trusting it. Write a throwaway script in the scratchpad that reads
+   game/tfontgam.pcx and game/tunit.pcx (extract them with `scbw extract
+   'game\tunit.pcx' <out>`) and prints, for each tunit row 0..11, its first entry's RGB
+   and the RGB of the brightest entry of the tfontgam row `color_row(code)`. Fix any row
+   whose colours clearly differ. Note in the doc comment that it was checked this way.
+3. view.rs notice loop: add a branch for `NOTICE_JOIN` before the network.tbl lookup.
+   Build the line as bytes (names may hold non-UTF-8):
+   `code, name, 0x01, rest` where `n = st.nation_of(p)`, `code =
+   player_text_code(self.colors[n])`, and `rest` is
+   - `" has joined <owner>'s army."` with `owner = st.player_names[n]` when `p != n` and
+     that name is non-empty (the slot's own player, may be a computer's name),
+   - else `" has joined as Player <n+1>."` (the joiner took the slot itself: its
+     `player_names[n]` is now the joiner's own name).
+   Print it with the same `self.msgs.print(&ui.font, &line, now, 0, 0x17, ..)` call. Keep
+   the `NOTICE_AI` branch as is (optionally colour its name the same way; ask nothing,
+   just do it only if it is one line).
+   Strip control bytes (< 0x20) from the names as `msgs::chat_line` does, so a name cannot
+   change colours.
+4. One unit test (msgs.rs `mod tests` has the pattern): the line builder gives
+   `[0x0e, b'x', 1, ..]` for row 1, and the "as Player" form for `p == n`. Put the line
+   building in a pure fn so it is testable without a Scene.
+5. Window check: agent/tools/enhanced_win.sh shoots 25 s after the late joiner starts;
+   the line lasts 7 s, so it is gone. Change that step to a loop that shoots :91 and :92
+   every 2 s for ~30 s (`join_host_$i`, `join_two_$i`), look at the PNGs (Read tool) and
+   confirm the line, the colour of the name, and that both see it. Note whether the late
+   joiner (:93) sees it too (it starts from the join frame's saved state; seeing it is
+   not required, write down which).
+6. Regression set (above) before the commit; `cargo test` count becomes 28. Then mark this
+   task DONE here with what was checked, update agent/status.md "In flight", one commit
+   (trailers: conventions.md). Do not push.
+
+Done: `NOTICE_JOIN` (enhanced.rs), `msgs::player_text_code` / `join_line` (+ test),
+view.rs notice branch; `enhanced_win.sh` now shoots all three screens every 2 s.
+- Colour table checked with a script over game/tunit.pcx and tfontgam.pcx: rows 0..10 match
+  (first tunit entry == brightest font entry); row 11 (64,104,212) is font row 19 = code
+  0x1c, not 0x1f (0x1f is aqua 0,228,252): table fixed.
+- Window run: the line "three has joined <owner>'s army." shows on host AND joiner at the
+  join, name in red (army colour) in all three windows; the late joiner sees it too (about
+  20 s later, when its state arrives: the notice is in the transferred state).
+- Found: the joiner never saw the line: `Session::tick_inner` drops what a rollback's
+  re-simulation pushes to the output queues, and the join command arrives late there. Fix:
+  `Session::announced` / `new_announcements` keep the join / AI lines a re-simulation makes
+  for the first time (not the repeats). Same loss hit the old 0x49 line.
+- Not fixed, seen once: in one run the host's own colour for army 0 was white (row 6, dealt
+  by 0x49b360) while the late joiner drew the same army red: joiners may not get the host's
+  dealt colours (`GameSetup.colors`), so unit and name colours can differ per viewer.
+  Check before relying on colours across peers.
 
 ### Known limits (tell the user if asked, do not fix)
 
