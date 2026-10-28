@@ -398,6 +398,13 @@ impl Session {
         }
     }
 
+    /// A player joins at frame `f` (a join command in a known turn), or `f` is where this
+    /// session started as a joiner.
+    fn joins_at(&self, f: u32) -> bool {
+        let has_join = |t: &Option<Vec<u8>>| t.as_ref().is_some_and(|t| replay::split_commands(t).iter().any(|c| c[0] == bw::enhanced::CMD_JOIN));
+        (self.start != 0 && f == self.start) || self.table.iter().any(|t| t.get(f as usize).is_some_and(has_join))
+    }
+
     /// The (frame, hash) pairs now due: every multiple of 8 the confirmed frame has reached,
     /// hashed from the snapshot of the state before that frame (the live state when it is the
     /// next frame). Nothing while a rollback is pending (`tick` clears it first).
@@ -409,6 +416,11 @@ impl Session {
         while self.hash_next <= self.confirmed && self.hash_next <= self.frame {
             let m = self.hash_next;
             self.hash_next += 8;
+            // A join frame (ours, enhanced): the others hash the state before their save /
+            // load pass, the joiner the loaded one; they agree from the next frame on.
+            if self.joins_at(m) {
+                continue;
+            }
             if m == self.frame {
                 out.push((m, st.state_hash()));
             } else if let (Some(s), true) = (&self.snaps[(m % (PRED_LIMIT + 1)) as usize], self.frame - m <= PRED_LIMIT + 1) {

@@ -215,33 +215,57 @@ Goal: a browser joins a running enhanced game by code and ends with the same has
    `live::late_game`; that `NetGame::report_next` is applied. Datagrams must stay under the
    browser's `maxDatagramSize` (~1200; C_LATE parts are 500 bytes).
 
-### Task 3: edge cases (headless, extend enhanced.sh) - partly done 2026-10-27
+### Task 3: edge cases (DONE 2026-10-27)
 
-Done: `FOURTH=1 K=200000` (two joins queued: human 8 / army 0, human 9 / army 1, four equal
-hashes) and `QUIT_AT=15000 FOURTH=1 K=200000` (a leaver's army taken back by the third, the
-fourth joins as a second human; four equal hashes). Still to do: link id reuse (needs the
-transport to hand out a gone player's id again; with the current join order ids are not
-reused, so this may not be reachable), a defeated player's army (`ARMY4=<slot>` env of the
-fourth player exists), the 8th link refused. Original list:
+- Two joins queued: `FOURTH=1` (human 8 / army 0, human 9 / army 1): equal hashes.
+- A leaver's army taken back plus a fourth player: `QUIT_AT=15000 FOURTH=1`: equal.
+- Full game: `PACE_US=4000 EXTRA=5 K=12000` (8 players) equal; `EXTRA=6`: the 8th joiner exits
+  with "cannot join ..." ("game full" from `transport.rs host_conn`), the rest unaffected.
+  Unthrottled 8 native peers starve the CPU and time out: always pace them (PACE_US).
+- Link id reuse: found and fixed a real bug: a reused link id kept the old occupant's control
+  sequence / ack state in `Transport` (`ctl_in` etc.), so the joiner was never heard
+  ("no answer from the game"). Reset on `Inbound::Joined`. Test (needs the old link to time
+  out, ~30 s): `PACE_US=2000 KILL2=1 QUIT_AT=3000 K=60000 LATE_AFTER=45 agent/tools/enhanced.sh`
+  -> "player 1 joins as human 1, army 1", equal hashes.
+- A defeated player's army: not run, by code reading `enhanced_pick` skips it (`alive` needs
+  `player_left == 0`). With no army at all the host logs "cannot join: no army" and the joiner
+  times out with "no answer from the game" (no explicit refusal message yet).
 
-Each as an env option of enhanced.sh, all three (or four) hashes equal:
-- `FOURTH=1`: a fourth player joins by code 2 s after the third (two joins queued; the
-  second is picked after the first's frame ran on the host).
-- `QUIT_AT=15000` then the third joins with no `ARMY`: it should take the AI-held army
-  (already passes) — also check a fourth player joining after the third quits reuses its
-  link id (`add_player` with a gone row).
-- Asking for a defeated player's army (`ARMY=<that slot>` after it lost): `enhanced_pick`
-  must refuse and pick another army; check the host log line "joins as human h, army n".
-- 8 links: the 8th is refused "game full" (transport ids 1..7); the joiner must show an
-  error, not hang.
+### Task 4: window check (mostly done 2026-10-27)
 
-### Task 4: window check (user-visible; needs the user or a native-style capture)
+`agent/tools/enhanced_win.sh <dir>` runs host / joiner / late joiner in real windows (three
+Xvfb displays 1280x960 because the window is 2x) driven by xdotool and saves screenshots.
+Seen: hotkeys m / e / o work, the Enhanced box on the create screen, the lobby, the game, and
+"three has joined the game." on the late joiner's screen. It found a real bug: DESYNC at the
+join frame when that frame is a multiple of 8 (the others hashed the state before their
+save / load pass, the joiner the loaded one): `Session::joins_at` now skips that hash
+(`due_hashes`). Regression for it: `PACE_US=40000 K=1500 LATE_AFTER=0 agent/tools/enhanced.sh`
+(must print no "hash mismatch" / DESYNC).
+Harness gotchas: do not send Escape (a second one quits from the main menu; a click skips
+the title); keys must be held ~0.04 s (the window samples key state per frame); never
+`pkill -f` a pattern that also appears in your own command line (it kills your shell:
+exit 144) - anchor it with ^.
+Not verified: the "army is played by the computer" line in a window (the last block of
+enhanced_win.sh kills display :92 and shoots host / third 8 s later; it was never run to the
+end because of the pkill problem above), the Enhanced box text cut-off at other widths.
 
-Run a host in a window (`target/release/scbw glue`, Multiplayer, LAN, Create Game with the
-"Enhanced game" box ticked), join from a second window mid-game (join screen list, or
-`SCBW_JOIN=<code>`). Check: the "has joined the game." line, shared selection, the
-"army is played by the computer" line after a player quits, the Enhanced box text not cut.
-Take screenshots (ScrollLock) and send them to the user.
+### Task 5: announce the join with the army and colour (user request 2026-10-27, TODO)
+
+"Announce for all players which team (slot) the new player has joined. Also style the
+player's name as the colour they are joining."
+Today `State::enhanced_join` (src/bw/enhanced.rs) pushes notice 0x49 ("%s has joined the
+game.", network.tbl) and view.rs prints notices with `ui.network` + `human_name(p)` in colour
+0x17. Wanted: a line for every player such as "<name> has joined <army>'s army" (slot / team
+= the army `n`; use the army owner's name or "slot n+1" like the leave notices do, check
+network.tbl for a fitting string first, else our own text like `NOTICE_AI` = 0x1000) and the
+player's name drawn in the player colour of the army joined (`self.st.player_colors`? see how
+chat lines colour names: `crate::msgs::chat_line` and `ui` colour tables; the in-game chat
+uses the sender's player colour). The notice queue holds `(u16 fmt, u8 player)`; the army is
+needed too, so either add a field (rollback.rs lists `notices` in `outs!`, update every
+`notices.push`) or push a second notice kind carrying the army. Keep the sim deterministic
+(only push to an output queue). Test: window run (`enhanced_win.sh`, check game_three /
+game_host screenshots right after the join; the line lasts 7 s so shoot sooner than the
+script does now) and the regression set.
 
 ### Known limits (tell the user if asked, do not fix)
 
