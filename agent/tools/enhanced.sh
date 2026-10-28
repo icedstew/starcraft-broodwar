@@ -28,6 +28,7 @@ if [ -n "$WEB" ]; then
   sleep 2
   timeout 400 node "$T/cdp_console.mjs" 9335 "http://127.0.0.1:8767/?join=$(printf %s "$code" | sed 's/#/%23/')&frames=$K&name=three${ARMY:+&army=$ARMY}" > $O/late.log 2>&1 & LP=$!
 else
+if [ -n "$LAN" ]; then J=(SCBW_GLUE_INPUT="w 2500;t m;w 1500;k 0d;w 1500;t o;w 2000;t three;k 0d;w 1500;k 0d;w 6000;c 200 100;w 500;t o;w 60000"); else J=(SCBW_JOIN=$code); fi
 (cd $O; env NETREP_DEBUG=${LATE_DEBUG:-} SCBW_ARMY=${ARMY:-} "${J[@]}" SCBW_NAME=three SCBW_INSTALL=$O/inst SCBW_CHARACTERS=$O/k timeout 300 $B glue $O/k.png > $O/late.log 2>&1) & LP=$!
 fi
 wait $HP $JP; [ -n "$WEB" ] && sleep 5; kill $CP $SP $LP 2>/dev/null; wait 2>/dev/null
