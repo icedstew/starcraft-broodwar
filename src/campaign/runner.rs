@@ -515,8 +515,10 @@ pub fn morph_test(map: &str) -> Result<(), String> {
     for _ in 0..30 {
         s.step();
     }
-    view::with_data(a, |d| s.st.command_building_morph(d, n, &[u], 0x92));
     for f in 0..260 {
+        if f == 10 {
+            view::with_data(a, |d| s.st.command_building_morph(d, n, &[u], 0x92));
+        }
         if f == 100 {
             println!("reload: {}", s.reload_through_save());
         }
