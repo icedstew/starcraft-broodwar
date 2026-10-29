@@ -38,6 +38,9 @@ code { font-size: 11px; word-break: break-all; color: var(--dim); }
 [hidden] { display: none !important; }
 #game { height: calc(100vh - 50px); display: flex; align-items: center; justify-content: center; }
 #stage { position: relative; background: #000; outline: 1px solid var(--line); contain: strict; }
+#stage:fullscreen { outline: 0; }
+#stage::backdrop { background: #000; }
+#game { position: relative; }
 #scbw, #scbw canvas { width: 100%; height: 100%; display: block; }
 #scbw canvas { image-rendering: pixelated; outline: none; cursor: none; }
 </style>
@@ -55,7 +58,7 @@ code { font-size: 11px; word-break: break-all; color: var(--dim); }
     <div id="loadstatus"></div>
   </section>
 </div>
-<div id="game" hidden><div id="stage"><div id="scbw"></div></div></div>
+<div id="game" hidden><button id="fs" style="position:absolute;top:4px;right:8px;z-index:1">Fullscreen</button><div id="stage"><div id="scbw"></div></div></div>
 <main hidden>
   <svg id="map" viewBox="0 0 800 520" role="img" aria-label="Campaign map"></svg>
   <div>
@@ -209,12 +212,13 @@ $("cmd").onkeydown = e => { if (e.key === "Enter") run(); };
 // The browser build (stage.js, then pkg/scbw.js: it reads AudioContext when imported) and
 // the player's files: once, before the map. `game` = the build's exports once loaded.
 let game = null;
-const showOnly = id => { for (const x of ["load", "game"]) $(x).hidden = x !== id; document.querySelector("main").hidden = id !== "main"; };
+let fitStage = () => {};
+const showOnly = id => { for (const x of ["load", "game"]) $(x).hidden = x !== id; document.querySelector("main").hidden = id !== "main"; if (id === "game") fitStage(); };
 async function loadGame(get) {
   $("loadstatus").textContent = "loading…";
   try {
     const files = await get();
-    await import("/play/stage.js").then(m => m.setupStage($("scbw"), $("stage")));
+    fitStage = await import("/play/stage.js").then(m => m.setupStage($("scbw"), $("stage"), $("fs")));
     const wasm = await import("/play/pkg/scbw.js");
     await wasm.default();
     wasm.campaign_load(files.storm, files.archives);
@@ -243,7 +247,14 @@ async function start() {
   // ?files=auto: the host's own copy (tests; served only on the host's opt-in).
   if (params.get("files") === "auto") return loadGame(() => filesMod.fromUrl("/play/auto/"));
   // #drive=<API key>/<folder id> (the web build's link form): the player's Drive folder.
-  const drive = location.hash.match(/^#drive=([^/]+)\/([^/]+)/);
+  let drive = location.hash.match(/^#drive=([^/]+)\/([^/]+)/);
+  // Else the host's preloaded link (SCBW_CAMPAIGN_DRIVE).
+  if (!drive) {
+    try {
+      const r = await fetch("/drive");
+      if (r.ok) drive = (await r.text()).trim().match(/^([^/]+)\/([^/]+)/);
+    } catch (e) {}
+  }
   showOnly("load");
   if (drive) return loadGame(() => filesMod.fromDrive(drive[1], drive[2]));
 }

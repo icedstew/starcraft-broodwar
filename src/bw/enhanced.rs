@@ -164,7 +164,7 @@ impl State {
 
     /// `CMD_JOIN`: human `h` controls army `n` from now on (its selection row and groups made
     /// if new); an army the AI held is the humans' again.
-    pub(super) fn enhanced_join(&mut self, d: &Data, p: &[u8]) {
+    pub fn enhanced_join(&mut self, d: &Data, p: &[u8]) {
         if !self.enhanced || p.len() < JOIN_LEN {
             return;
         }
@@ -194,6 +194,12 @@ impl State {
         }
         if self.ai_taken & 1 << n != 0 {
             self.ai_release(d, n);
+            // The army's own slot is also a human index (< 8). A computer army never had a
+            // human there, so it never leaves: without this its last human leaving finds
+            // "another human" on the army and the AI never takes it back.
+            if h != n && n < 8 {
+                self.humans_gone |= 1 << n;
+            }
         }
         // Ours: "<name> has joined <owner>'s army." in the army's colour (the view builds it).
         self.notices.push((NOTICE_JOIN, h));
@@ -201,7 +207,7 @@ impl State {
 
     /// The last human of army `n` left: the army is the AI's (a computer, 0x57eee8 = 1, with
     /// its race's melee script around its start location, as 0x4ab230).
-    pub(super) fn ai_take_over(&mut self, d: &Data, n: u8) {
+    pub fn ai_take_over(&mut self, d: &Data, n: u8) {
         let p = n as usize;
         if p >= 8 || self.player_left[p] != 0 {
             return;
@@ -211,6 +217,15 @@ impl State {
         self.notices.push((NOTICE_AI, n));
         self.ai.players[p].flags &= !0x20;
         self.start_melee_ai_for(d, p);
+        // Units made while a human had the army belong to no AI list (0x463040 runs when a
+        // computer's unit is created): the AI takes them now, workers into its town, so they
+        // are not left idle for good.
+        for u in 0..self.units.len() as u32 {
+            let un = &self.units[u as usize];
+            if un.player == n && un.sprite != super::NIL && un.ai == super::NIL && un.status & 1 != 0 && un.unit_type < 0xe4 {
+                self.ai_take_unit(d, u);
+            }
+        }
     }
 
     /// A human took army `n` back from the AI: it is a human's again and its AI scripts end

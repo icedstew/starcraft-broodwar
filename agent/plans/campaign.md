@@ -316,6 +316,25 @@ match 1, box select (own units green), F10 opens the game menu, End Mission show
 Leave -> the map, join match 2, F10 menu, Leave -> the map; screenshots looked at. Native late joiner on army 1
 (scripted box select): own units green-circled, the minimap fogged but for its own base.
 
+### F10. Handoff fixes (DONE 2026-10-29)
+User report from a live game: after changing players buildings stopped, drones stopped, workers
+"return minerals and just stay there".
+- **The AI never took an army back** (campaign matches): a campaign army is a computer from the
+  start, so its own slot is human index n (< 8) that never was a human and never leaves. After a
+  joiner left, `leave_notice` found that slot as "another human" on the army and skipped
+  `ai_take_over`: the army stayed type 2 with no AI (no new buildings, nothing re-tasked).
+  `enhanced_join` now marks the slot gone when it takes an AI army (unless the joiner is that slot).
+- `ai_take_over` also claims units made while a human had the army (0x463040 `ai_take_unit`,
+  those with no AI state).
+- Experiment: `scbw campaign handoff <map> [at] [more]` (SEED=<n> picks the races): one match four
+  ways (untouched / save+load / +join / join, leave, rejoin); per 120 frames minerals mined, unfinished
+  buildings, workers by order. After the fix the AI builds again after a leave (3 unfinished at +840).
+- Not reproduced: workers parked at the mineral line after returning cargo (mining carries on through
+  every handoff, income within a few percent); one drone (the AI's builder) stops at the join, and is
+  not re-tasked by the AI after a take-over (open).
+- Campaign page: the game canvas scales (`fitStage` after the stage is shown; Fullscreen button);
+  `/drive` serves `SCBW_CAMPAIGN_DRIVE` (`<key>/<folder>`, env only) and the page loads from it.
+
 ### Later (not now)
 Area bonuses (start extras per owned areas), spectating with faction vision, several armies
 per side, `scbw://` URL handler.

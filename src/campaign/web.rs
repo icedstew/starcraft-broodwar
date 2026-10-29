@@ -173,6 +173,11 @@ impl Web {
                 self.text(rx.recv_timeout(Duration::from_secs(5)).map_err(|_| "no answer".to_string()))
             }
             p if p.starts_with("/play/") => self.file(&p["/play/".len()..]),
+            // The host's own Drive link `<key>/<folder>` (env, never in the repo): the page loads from it.
+            "/drive" => match std::env::var("SCBW_CAMPAIGN_DRIVE") {
+                Ok(d) if !d.is_empty() => ("200 OK", "text/plain; charset=utf-8", d.into_bytes()),
+                _ => ("404 Not Found", "text/plain; charset=utf-8", Vec::new()),
+            },
             "/favicon.ico" => ("204 No Content", "image/x-icon", Vec::new()),
             _ => ("404 Not Found", "text/plain", b"not found".to_vec()),
         };

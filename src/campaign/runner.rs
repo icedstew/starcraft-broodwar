@@ -425,3 +425,59 @@ pub fn stats(st: &State, seats: &Seats) -> Stats {
     };
     Stats { frame: st.frame, idle_frames: st.idle_frames, sides: seats.armies.map(side) }
 }
+
+/// `scbw campaign handoff <map> [at] [more]` (experiment): the AI's army and what a join does to
+/// it. Three runs of one match: untouched; saved and loaded at frame `at` (what every peer does
+/// when someone joins); saved, loaded and army 0 handed to a human. Per 120 frames: the army's
+/// workers by order, and its buildings' build time left.
+pub fn handoff_test(map: &str, at: u32, more: u32) -> Result<(), String> {
+    crate::view::forbid_windows();
+    let files = crate::storage::Storage::open(&crate::install_dir()).map_err(|e| e.to_string())?;
+    let mut a = view::Assets::load(files).map_err(|e| e.to_string())?;
+    let side = |f: u8| Side { faction: f, race: 6, colour: f, name: format!("Faction {f}") };
+    let spec = Spec { border: 0, game: 0, map: map.to_string(), sides: [side(0), side(1)], seed: std::env::var("SEED").ok().and_then(|v| v.parse().ok()).unwrap_or(1), resume: None };
+    let (mut g, seats) = setup(&a, &spec)?;
+    view::prepare_setup(&mut a, &mut g);
+    let a: &view::Assets = &a;
+    for variant in 0..4 {
+        let mut s = Scene::from_setup(a, &g).map_err(|e| e.to_string())?;
+        s.st.campaign = true;
+        s.st.ai_taken = 1 << seats.armies[0] | 1 << seats.armies[1];
+        let n = seats.armies[0];
+        println!("== variant {variant}: {}", ["untouched", "save+load", "save+load+join", "join, leave at +600, rejoin at +1000"][variant]);
+        for f in 0..at + more {
+            if f == at && variant >= 1 {
+                println!("reload: {}", s.reload_through_save());
+            }
+            if variant == 3 && f == at + 600 {
+                view::with_data(a, |d| {
+                    s.st.cmd_player = Some(1);
+                    s.st.leave_notice(d, None, n, 0x4000_0006);
+                    s.st.cmd_player = None;
+                });
+            }
+            if variant == 3 && f == at + 1000 {
+                println!("reload: {}", s.reload_through_save());
+                view::with_data(a, |d| s.st.enhanced_join(d, &crate::bw::enhanced::join_command(2, n, 2, b"joiner2")));
+            }
+            if f == at && variant >= 2 {
+                view::with_data(a, |d| s.st.enhanced_join(d, &crate::bw::enhanced::join_command(1, n, 1, b"joiner")));
+            }
+            s.step();
+            if f % 120 == 0 && f + 60 >= at {
+                let (mut orders, mut left, mut bldg) = (std::collections::BTreeMap::<(u16, u8), u32>::new(), 0u32, 0u32);
+                for un in s.st.units.iter().filter(|u| u.player == n && u.unit_type < 0xe4 && u.sprite != crate::bw::list::NIL) {
+                    if matches!(un.unit_type, 0x07 | 0x29 | 0x40) {
+                        *orders.entry((un.unit_type, un.order)).or_default() += 1;
+                    }
+                    if un.status & 1 == 0 {
+                        bldg += 1;
+                        left += un.remaining_build_time as u32;
+                    }
+                }
+                println!("f{f}: mined {} incomplete {bldg} left {left} workers {orders:?}", s.st.players.minerals_gathered[n as usize]);
+            }
+        }
+    }
+    Ok(())
+}

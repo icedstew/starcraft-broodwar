@@ -76,7 +76,7 @@ Delegate per agents.md: Haiku triage, Sonnet porting, Opus review / hard RE / co
 - **Campaign mode** (ours: Risk-style world, every border a live enhanced game; branch
   `campaign`, plan agent/plans/campaign.md): tasks 1-8 and follow-ups F1-F9 done
   (`scbw campaign gen / check / host / join`; the map page plays matches itself; checks
-  agent/tools/campaign_*.sh). Next: WebRTC for plain-http pages. Open: ~70 MB per match.
+  agent/tools/campaign_*.sh). F10 handoff fix done (AI retakes a left army; plan F10). Next: WebRTC for plain-http pages (undecided). Open: ~70 MB per match; the AI builder drone that stops at a join is not re-tasked; "workers stay at minerals" not reproduced.
 
 - **Enhanced games** (ours: join a running game, shared armies, AI takes armies left by
   everyone, fast drops): committed 2026-10-27 (LAN list, AI-takeover line too); list border, browser late join, edge cases, window check done; Task 5 (join line with army and player colour) done; open: joiners may not get the host's dealt player colours
