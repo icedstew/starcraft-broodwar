@@ -309,6 +309,64 @@ impl World {
     }
 }
 
+/// Area names the generator draws from (then numbered when it runs out).
+const NAMES: [&str; 40] = [
+    "Char", "Aiur", "Mar Sara", "Tarsonis", "Korhal", "Shakuras", "Braxis", "Chau Sara", "Umoja", "Moria", "Antiga", "Halcyon", "Brontes", "Dylar",
+    "Ulnar", "Zerus", "Bel'Shir", "Redstone", "Typhon", "Haven", "Tyrador", "Meinhoff", "Agria", "Ursa", "Xil", "Endion", "Glacius", "Kaldir",
+    "Avernus", "Monlyth", "Abaddon", "Castanar", "Dead Man's Rock", "Erebus", "Feronis", "Gantris", "Jarban", "Kheyvar", "Lysos", "Nemaka",
+];
+
+impl World {
+    /// A world of `areas` areas for `factions` factions (races Z, T, P in turn, colours
+    /// 0, 1, 2...; 3 factions are named after their race), maps from `pool`. Areas sit on a
+    /// jittered grid; borders join areas whose diameter circle holds no other area (the
+    /// Gabriel graph: planar, connected). Owners are dealt in connected blocks (`deal`).
+    pub fn generate(areas: usize, factions: usize, pool: &[String], seed: u32) -> Result<World, String> {
+        if !(2..=8).contains(&factions) || areas < factions || areas > 400 {
+            return Err("2 to 8 factions, at least as many areas, at most 400".into());
+        }
+        let mut r = seed | 1;
+        let mut rand = move |n: u32| {
+            r ^= r << 13;
+            r ^= r >> 17;
+            r ^= r << 5;
+            r % n
+        };
+        let mut w = World { pool: pool.to_vec(), eliminated_pick: true, ..World::default() };
+        const RACE_NAMES: [&str; 3] = ["Zerg", "Terran", "Protoss"];
+        for f in 0..factions {
+            let name = if factions == 3 { RACE_NAMES[f].to_string() } else { format!("Faction {}", f + 1) };
+            w.factions.push(Faction { name, race: f as u8 % 3, colour: f as u8 });
+        }
+        // A grid a bit wider than tall; each cell gets one area somewhere in its middle.
+        let cols = ((areas as f64 * 1.5).sqrt().ceil() as usize).max(1);
+        let rows = areas.div_ceil(cols);
+        let mut cells: Vec<usize> = (0..cols * rows).collect();
+        while cells.len() > areas {
+            let i = rand(cells.len() as u32) as usize;
+            cells.remove(i);
+        }
+        for (k, c) in cells.into_iter().enumerate() {
+            let (x, y) = ((c % cols) as i32 * 100 + 20 + rand(60) as i32, (c / cols) as i32 * 100 + 20 + rand(60) as i32);
+            let name = NAMES.get(k).map_or(format!("Area {}", k + 1), |n| n.to_string());
+            w.areas.push(Area { name, x, y, owner: None });
+        }
+        let p: Vec<(i64, i64)> = w.areas.iter().map(|a| (a.x as i64, a.y as i64)).collect();
+        for a in 0..p.len() {
+            for b in a + 1..p.len() {
+                // c inside the circle on a-b: the angle a-c-b is obtuse, (a - c) . (b - c) < 0.
+                let blocked = (0..p.len()).any(|c| c != a && c != b && (p[a].0 - p[c].0) * (p[b].0 - p[c].0) + (p[a].1 - p[c].1) * (p[b].1 - p[c].1) <= 0);
+                if !blocked {
+                    w.borders.push(Border { a: a as u16, b: b as u16, map: None });
+                }
+            }
+        }
+        w.check()?;
+        w.deal()?;
+        Ok(w)
+    }
+}
+
 /// The remaining words of a line, joined by single spaces.
 fn rest<'a>(f: impl Iterator<Item = &'a str>) -> String {
     f.collect::<Vec<_>>().join(" ")
@@ -368,6 +426,18 @@ mod tests {
         assert_eq!(w.apply(0, None).unwrap().start, vec![0]);
         assert!(w.apply(0, Some(2)).is_err());
         assert!(w.apply(3, Some(1)).is_err());
+    }
+
+    #[test]
+    fn generated_worlds() {
+        for (n, f, seed) in [(30, 3, 1), (12, 2, 7), (60, 8, 3), (5, 5, 9)] {
+            let w = World::generate(n, f, &["maps".into()], seed).unwrap();
+            assert_eq!((w.areas.len(), w.factions.len()), (n, f));
+            assert!(w.distances(&[0]).iter().all(|&d| d != u32::MAX), "connected");
+            assert!((0..f as u8).all(|i| w.areas_of(i) >= 1));
+            assert!(!w.live_borders().is_empty());
+            assert_eq!(World::parse(&w.write()).unwrap().write(), w.write());
+        }
     }
 
     #[test]

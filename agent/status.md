@@ -74,7 +74,7 @@ Delegate per agents.md: Haiku triage, Sonnet porting, Opus review / hard RE / co
 ## In flight
 
 - **Campaign mode** (ours: Risk-style world, every border a live enhanced game; branch
-  `campaign`, plan agent/plans/campaign.md): tasks 1-7 done 2026-10-28 (`scbw campaign check / host / join`; next: task 8 generator;
+  `campaign`, plan agent/plans/campaign.md): all 8 tasks done 2026-10-28 (`scbw campaign gen / check / host / join`;
   checks agent/tools/campaign_{match,host,web}.sh). Open: in-game match list dialog, browser
   join unverified, ~70 MB per match.
 

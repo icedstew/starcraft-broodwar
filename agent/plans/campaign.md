@@ -159,9 +159,12 @@ Not done (decision): the match list is a terminal prompt, not an in-game glue di
 Check: campaign_web.sh with CHOOSER=1 (lists 2 matches, plays one headless to frame 700,
 "!hi from the game" said at 400 shows in the faction chat, lists again).
 
-### 8. World generator — `scbw campaign gen <areas> <factions> <map dir> > world.txt`
-Planar graph (points + Delaunay-ish neighbours, or a grid with jitter), maps from a pool
-(e.g. mappacks/iccup 2-player-capable), contiguous start blocks per faction.
+### 8. World generator — `scbw campaign gen <areas> <factions> <maps>... [--seed N]` (DONE 2026-10-28)
+Done: `World::generate`: areas on a jittered grid, borders = Gabriel graph (planar,
+connected), names from a list, factions Z / T / P in turn (3 factions named after races),
+colours 0.., owners dealt (`deal`), `eliminated pick`. 30 areas: ~52 borders, 14 live,
+owners 11 / 10 / 9. Check: unit test `generated_worlds` (4 sizes: counts, connected, every
+faction owns land, live borders exist, write / parse round trip).
 
 ### Later (not now)
 Area bonuses (start extras per owned areas), spectating with faction vision, several armies
