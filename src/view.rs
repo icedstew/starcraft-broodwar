@@ -3372,6 +3372,7 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
     let mut timeout_closed: Option<web_time::Instant> = None;
     let mut timeout_tick = web_time::Instant::now();
     let mut game_acc = 0u32;
+    let mut last_pass = web_time::Instant::now();
     let mut ctx = crate::menu::Ctx { replay: replay.is_some(), multiplayer: false, replay_speed: 0, ..Default::default() };
     let mut menu_btn_down = false;
     let mut last_scroll = 0u64;
@@ -4237,7 +4238,10 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
             }
         } else {
             // The game speed (0x6cdfd4) picks the ms per frame (0x5124d8).
-            game_acc += 42;
+            // Network games run on the clock: a slow pass (a browser drawing at 17 passes a
+            // second) runs the frames it missed, else the peers wait on this one (at most 8).
+            game_acc += if net.is_some() { (last_pass.elapsed().as_millis() as u32).clamp(42, 336) } else { 42 };
+            last_pass = web_time::Instant::now();
             // 0x6cdfd4 is both the setting and what command 0x0f sets.
             settings.game_speed = scene.st.game_speed as i16;
             let ms = bw::triggers::FRAME_MS[settings.game_speed.clamp(0, 6) as usize];

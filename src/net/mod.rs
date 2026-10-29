@@ -45,6 +45,9 @@ pub struct Session {
     /// re-simulation shows the ones its late command made and not the ones it repeats.
     announced: Vec<(u32, u16, u8)>,
     pub stalled: u32,
+    /// Diagnostics, microseconds: the snapshot clone and the simulation of the frames run
+    /// (first runs and re-runs), and the whole `tick`.
+    pub prof: [u64; 3],
     /// The sounds the last first-run step returned.
     pub sounds: Vec<(u16, i32, i32)>,
     /// Per player (as `players`): `(last, fence)` once it left: its turns below `last` are
@@ -108,6 +111,7 @@ impl Session {
             resimulated: 0,
             announced: Vec::new(),
             stalled: 0,
+            prof: [0; 3],
             sounds: Vec::new(),
             gone,
             record: false,
@@ -490,11 +494,15 @@ impl Session {
             self.stalled += 1;
             return false;
         }
+        let t0 = web_time::Instant::now();
         self.snaps[(self.frame % ring) as usize] = Some(scene.st.clone());
         let f = self.frame;
         self.keep_snap(f, &scene.st);
+        let t1 = web_time::Instant::now();
         let n0 = scene.st.notices.len();
         self.sounds = self.run_frame(scene, self.frame);
+        self.prof[0] += (t1 - t0).as_micros() as u64;
+        self.prof[1] += t1.elapsed().as_micros() as u64;
         self.new_announcements(self.frame, &scene.st.notices[n0..]);
         self.frame += 1;
         true

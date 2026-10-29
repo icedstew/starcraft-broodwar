@@ -373,6 +373,14 @@ fn select_worker(st: &crate::bw::State, player: u8) -> Vec<u8> {
     Vec::new()
 }
 
+/// A diagnostic line: stderr natively, the console in the browser.
+fn elog(s: &str) {
+    #[cfg(target_arch = "wasm32")]
+    web_sys::console::warn_1(&s.into());
+    #[cfg(not(target_arch = "wasm32"))]
+    eprintln!("{s}");
+}
+
 /// A result line: stdout natively, the console in the browser.
 fn say(s: &str) {
     #[cfg(target_arch = "wasm32")]
@@ -420,6 +428,42 @@ pub struct NetGame {
     pub(crate) join_filter: Option<Box<dyn FnMut(&[u8]) -> Result<u8, String>>>,
     /// Links refused or kicked, and since when (`take_refused` hands them over to close).
     refused: Vec<(u8, Instant)>,
+    /// Network diagnostics: a line per second that had a stall or a gap (`NetLog`).
+    nl: NetLog,
+}
+
+/// What `NetGame::frame` saw in the current second: the longest time between two calls (the
+/// host or browser loop stuttering), per player the turns that came and the longest silence
+/// between them (the link), and the session's stalls and rollbacks since the last line.
+struct NetLog {
+    window: Instant,
+    last_call: Instant,
+    max_loop: Duration,
+    last_turn: HashMap<u8, Instant>,
+    max_gap: HashMap<u8, Duration>,
+    turns: HashMap<u8, u32>,
+    frame0: u32,
+    stalled0: u32,
+    rollbacks0: u32,
+    dgrams0: (u32, u32, u32),
+    stall_began: Option<Instant>,
+    prof0: [u64; 3],
+}
+
+impl NetLog {
+    fn new() -> Self {
+        let now = Instant::now();
+        NetLog { window: now, last_call: now, max_loop: Duration::ZERO, last_turn: HashMap::new(), max_gap: HashMap::new(), turns: HashMap::new(), frame0: 0, stalled0: 0, rollbacks0: 0, dgrams0: (0, 0, 0), stall_began: None, prof0: [0; 3] }
+    }
+
+    fn turn(&mut self, player: u8) {
+        let now = Instant::now();
+        if let Some(t) = self.last_turn.insert(player, now) {
+            let g = self.max_gap.entry(player).or_default();
+            *g = (*g).max(now - t);
+        }
+        *self.turns.entry(player).or_default() += 1;
+    }
 }
 
 /// A joiner's time to take the game's state in and load it before a stall drops it.
@@ -466,6 +510,37 @@ fn rd32(b: &[u8], at: usize) -> Option<u32> {
 }
 
 impl NetGame {
+    /// Per player, ms since its last turn arrived.
+    fn gaps_ms(&self) -> Vec<(u8, u128)> {
+        let mut v: Vec<_> = self.nl.last_turn.iter().map(|(&p, t)| (p, t.elapsed().as_millis())).collect();
+        v.sort();
+        v
+    }
+
+    /// Once a second, when it had a stall, a loop gap over 100 ms or a turn gap over 250 ms:
+    /// one line with what the second looked like (frames run, stalls, rollbacks, datagrams
+    /// sent / received / bad, the longest loop gap, per player turns and longest silence).
+    fn net_log(&mut self) {
+        let nl = &mut self.nl;
+        if nl.window.elapsed() < Duration::from_secs(1) {
+            return;
+        }
+        let se = &self.se;
+        let worst = nl.max_gap.values().max().copied().unwrap_or_default();
+        let stalled = se.stalled - nl.stalled0;
+        if stalled > 0 || nl.max_loop > Duration::from_millis(100) || worst > Duration::from_millis(250) {
+            let mut peers: Vec<_> = nl.turns.iter().map(|(&p, &n)| format!("p{p} {n} turns gap {} ms", nl.max_gap.get(&p).map_or(0, |g| g.as_millis()))).collect();
+            peers.sort();
+            let d = self.tr.stats;
+            elog(&format!("net: 1s: me {} frame {} (+{}) confirmed {} stalled ticks {stalled} rollbacks +{} loop gap {} ms (ms in tick {}, snapshot clone {}, simulating {}) dgrams +{}/+{}/+{} bad: {}", se.me, se.frame, se.frame - nl.frame0, se.confirmed, se.rollbacks - nl.rollbacks0, nl.max_loop.as_millis(), (se.prof[2] - nl.prof0[2]) / 1000, (se.prof[0] - nl.prof0[0]) / 1000, (se.prof[1] - nl.prof0[1]) / 1000, d.0 - nl.dgrams0.0, d.1 - nl.dgrams0.1, d.2 - nl.dgrams0.2, peers.join(", ")));
+        }
+        nl.window = Instant::now();
+        nl.max_loop = Duration::ZERO;
+        nl.max_gap.clear();
+        nl.turns.clear();
+        (nl.frame0, nl.stalled0, nl.rollbacks0, nl.dgrams0, nl.prof0) = (se.frame, se.stalled, se.rollbacks, self.tr.stats, se.prof);
+    }
+
     /// Browser: the SCBW_NET_SCRIPT text (`<frame>:<hex>;...`) for this peer.
     pub(crate) fn set_script(&mut self, s: &str) -> Result<(), String> {
         self.script = parse_script(s)?;
@@ -776,7 +851,7 @@ impl NetGame {
     }
 
     fn make(se: Session, tr: Transport, next_send: u32, script: Vec<(u32, Cmd)>, headless: Option<u32>, host: bool) -> NetGame {
-        NetGame { se, tr, next_send, script, headless, finished: None, host, verbose: std::env::var_os("NETREP_DEBUG").is_some(), last_report: Instant::now(), report: None, reported: false, hashes: HashMap::new(), desync: None, over: None, quitting: Vec::new(), replay_path: std::env::var("SCBW_NET_REPLAY").ok(), quit_at: std::env::var("SCBW_NET_QUIT_AT").ok().and_then(|v| v.parse().ok()), stall_since: None, join_queue: Vec::new(), joining: None, drops_fast: false, joined_at: Vec::new(), join_filter: None, refused: Vec::new() }
+        NetGame { se, tr, next_send, script, headless, finished: None, host, verbose: std::env::var_os("NETREP_DEBUG").is_some(), last_report: Instant::now(), report: None, reported: false, hashes: HashMap::new(), desync: None, over: None, quitting: Vec::new(), replay_path: std::env::var("SCBW_NET_REPLAY").ok(), quit_at: std::env::var("SCBW_NET_QUIT_AT").ok().and_then(|v| v.parse().ok()), stall_since: None, join_queue: Vec::new(), joining: None, drops_fast: false, joined_at: Vec::new(), join_filter: None, refused: Vec::new(), nl: NetLog::new() }
     }
 }
 
@@ -793,6 +868,8 @@ impl NetDriver for NetGame {
         if self.over.is_some() {
             return None;
         }
+        let now = Instant::now();
+        self.nl.max_loop = self.nl.max_loop.max(now - std::mem::replace(&mut self.nl.last_call, now));
         // My turn for frame + delay: the commands the UI queued since the last one.
         if self.se.frame + self.se.delay == self.next_send && self.se.frame < self.se.end {
             self.next_send += 1;
@@ -826,7 +903,10 @@ impl NetDriver for NetGame {
         }
         for e in self.tr.poll() {
             match e {
-                Event::Turn { player, frame, bytes } => self.se.remote_turn(player, frame, bytes),
+                Event::Turn { player, frame, bytes } => {
+                    self.nl.turn(player);
+                    self.se.remote_turn(player, frame, bytes)
+                }
                 Event::Ctl { from, msg } => self.ctl(from, &msg, scene),
                 Event::Lost { player, why } => {
                     eprintln!("net: player {player} lost: {why}");
@@ -863,15 +943,25 @@ impl NetDriver for NetGame {
             let se = &self.se;
             say(&format!("net player {}: frame {} confirmed {} stalled {} rollbacks {} dgrams {:?}", se.me, se.frame, se.confirmed, se.stalled, se.rollbacks, self.tr.stats));
         }
+        let t0 = Instant::now();
         let stepped = self.se.tick(scene);
+        self.se.prof[2] += t0.elapsed().as_micros() as u64;
         for (p, f) in std::mem::take(&mut self.se.added) {
             self.tr.player_from(p, f);
         }
         if self.se.waiting_on().is_empty() {
             self.stall_since = None;
+            if let Some(t) = self.nl.stall_began.take() {
+                elog(&format!("net: stall over after {} ms (frame {}, confirmed {})", t.elapsed().as_millis(), self.se.frame, self.se.confirmed));
+            }
         } else {
             self.stall_since.get_or_insert_with(Instant::now);
+            if self.nl.stall_began.is_none() {
+                self.nl.stall_began = Some(Instant::now());
+                elog(&format!("net: stall began: waiting on {:?} (frame {}, confirmed {}, turn gaps {:?} ms)", self.se.waiting_on(), self.se.frame, self.se.confirmed, self.gaps_ms()));
+            }
         }
+        self.net_log();
         // Desync check: the state hash of every 8th confirmed frame goes to the host.
         for (m, h) in self.se.due_hashes(&scene.st) {
             if self.host {
