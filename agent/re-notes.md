@@ -168,3 +168,13 @@ ShieldBattery pathing.rs: walkability 0x1ffd = unwalkable split-region minitile 
   0x435bd0, 0x43e7d0).
 - Pool inits the emulator harness runs at game init: 0x447680, 0x462a50, 0x437a70(0),
   0x45b5f0, 0x432610.
+
+## Reference: decompile-sc (cloned 2026-10-29)
+
+`../reference/decompile-sc` (github.com/inwenis/decompile-sc @ 475f0a1; a 1.16.1 binary mod, C++ with
+Ghidra specs). Not our code; read for 1.16.1 facts only (never commit its text here). Useful:
+`src/sc_addresses.h` (named 1.16.1 globals / struct offsets: status pane, command card, statUser
+records), `research/command-card.md`, `production-queue.md`, `upgrade-queue.md`, `status-pane-text.md`,
+`selection-cap.md`, `hud-selection-row.md`, `command-opcodes.md`. Facts confirmed there: a status
+queue slot / egg icon is a cmdicons.grp frame = the unit type (0x68c1e0 grp, statUser +4 icon),
+upgrade icons u16[0x655ac0 + id], tech icons u16[0x656430 + id].

@@ -719,6 +719,10 @@ fn main() -> std::io::Result<()> {
             glue::run(&files, None)?;
         }
         #[cfg(not(target_arch = "wasm32"))]
+        Some("campaign") if args.get(1).map(String::as_str) == Some("morph") => {
+            campaign::runner::morph_test(args.get(2).ok_or_else(|| std::io::Error::other("campaign morph <map>"))?).map_err(std::io::Error::other)?;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
         Some("campaign") if args.get(1).map(String::as_str) == Some("handoff") => {
             let n = |i: usize, d: u32| args.get(i).and_then(|v| v.parse().ok()).unwrap_or(d);
             campaign::runner::handoff_test(args.get(2).ok_or_else(|| std::io::Error::other("campaign handoff <map>"))?, n(3, 3000), n(4, 1200)).map_err(std::io::Error::other)?;

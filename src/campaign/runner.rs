@@ -475,8 +475,67 @@ pub fn handoff_test(map: &str, at: u32, more: u32) -> Result<(), String> {
                         left += un.remaining_build_time as u32;
                     }
                 }
+                for (i, un) in s.st.units.iter().enumerate().filter(|(_, u)| matches!(u.unit_type, 0x24 | 0x3b | 0x61) && u.sprite != crate::bw::list::NIL) {
+                    println!("  f{f} morph unit {i} type {:#x} player {} slot {} queue {:x?}", un.unit_type, un.player, un.build_queue_slot, un.build_queue);
+                }
                 println!("f{f}: mined {} incomplete {bldg} left {left} workers {orders:?}", s.st.players.minerals_gathered[n as usize]);
             }
+        }
+    }
+    Ok(())
+}
+
+/// `scbw campaign morph <map>` (experiment): a Creep Colony morphs into a Sunken Colony; its
+/// queue, status and shown wireframe type every 20 frames.
+pub fn morph_test(map: &str) -> Result<(), String> {
+    crate::view::forbid_windows();
+    let files = crate::storage::Storage::open(&crate::install_dir()).map_err(|e| e.to_string())?;
+    let mut a = view::Assets::load(files).map_err(|e| e.to_string())?;
+    let side = |f: u8| Side { faction: f, race: 0, colour: f, name: format!("Faction {f}") };
+    let spec = Spec { border: 0, game: 0, map: map.to_string(), sides: [side(0), side(1)], seed: 3, resume: None };
+    let (mut g, seats) = setup(&a, &spec)?;
+    view::prepare_setup(&mut a, &mut g);
+    let a: &view::Assets = &a;
+    let mut s = Scene::from_setup(a, &g).map_err(|e| e.to_string())?;
+    for _ in 0..200 {
+        s.step();
+    }
+    let n = seats.armies[0];
+    let (x, y) = s.st.start_locations[n as usize];
+    let u = view::with_data(a, |d| {
+        s.st.players.minerals[n as usize] = 5000;
+        let u = s.st.create_unit(d, 0x8f, x as i16 + 160, y as i16, n).expect("colony");
+        s.st.finish_unit_pre(d, u);
+        s.st.finish_unit_post(d, u);
+        let pool = s.st.create_unit(d, 0x8e, x as i16 + 160, y as i16 + 120, n).expect("pool");
+        s.st.finish_unit_pre(d, pool);
+        s.st.finish_unit_post(d, pool);
+        u
+    });
+    for _ in 0..30 {
+        s.step();
+    }
+    view::with_data(a, |d| s.st.command_building_morph(d, n, &[u], 0x92));
+    for f in 0..260 {
+        if f == 100 {
+            println!("reload: {}", s.reload_through_save());
+        }
+        if f == 150 || f == 5 {
+            // The status panel as the army's player sees it.
+            s.st.local_player = n;
+            s.local = n;
+            s.st.selected = vec![u];
+            let ui = crate::ui::Ui::load_with(&a.files, "zerg", true).map_err(|e| e.to_string())?;
+            let (mut idx, mut out) = (vec![0u8; 640 * 480], vec![0u32; 640 * 480]);
+            let (cx, cy) = (((x as i32 + 160 - 320).max(0)), ((y as i32 - 200).max(0)));
+            s.st.screen_tile = ((cx / 32) as u16, (cy / 32) as u16);
+            view::compose_with_cursor(&s, Some(&ui), cx, cy, None, None, &mut idx, &mut out);
+            crate::write_png_rgb(&format!("/tmp/claude-1000/morph{f}.png"), 640, 480, &out).map_err(|e| e.to_string())?;
+        }
+        s.step();
+        if f % 20 == 0 {
+            let un = &s.st.units[u as usize];
+            println!("f{f}: button_set {:#x} type {:#x} status {:#x} order {:#x} slot {} queue {:x?} wire {:#x} left {}", un.button_set, un.unit_type, un.status, un.order, un.build_queue_slot, un.build_queue, crate::ui::wire_type(&s.st, u), un.remaining_build_time);
         }
     }
     Ok(())
