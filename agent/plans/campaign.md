@@ -73,11 +73,20 @@ check <world>` (prints factions and live borders). A 6x5 grid deals 10/10/10 wit
 borders; small odd graphs can deal unevenly (3x3: 4/3/2).
 All campaign work goes on branch `campaign` (user, 2026-10-28).
 
-### 2. Draw timer in the sim — `src/bw/enhanced.rs` (or `campaign.rs` in bw)
+### 2. Draw timer in the sim — `src/bw/enhanced.rs` (DONE 2026-10-28)
 `State.campaign: bool` from `GameSetup`. Each frame: if any death / gather counter changed,
 reset `idle_frames`; at 5..9 min push a notice to all players ("No fighting or mining: draw
 in N minutes"); at 10 min set every player's result to draw (5) and end the game. Checks:
 replays and the suite unaffected (flag off); a headless AI-vs-AI run that idles hits it.
+Done: `State.campaign / idle_frames / activity`, `State::campaign_tick` after each trigger pass
+(view.rs `Scene::step`); activity = men + buildings lost + minerals + gas gathered, every
+player. A minute = 60000 / 42 = 1428 frames (Fastest). Warnings `NOTICE_DRAW` (0x1002, our
+text "No fighting or mining: the game is a draw in N minutes.") at 5..9 idle minutes; at 10,
+every in-game human / computer gets `player_left` 5 and the end-screen timer 0x2d (as a
+trigger draw 0x4c5070 settled by 0x48a200). Carried to joiners in `Extras` (campaign,
+idle_frames). Checked: unit test `bw::enhanced::tests::draw_timer` (warnings 5..1, reset by
+mining and by a death, draw at 10 min, nothing when off); full regression set passed (flag
+off: replays / normal games unchanged).
 
 ### 3. Headless match runner — `src/campaign/match.rs`
 One thread per match: load map, enhanced + campaign setup, two armies both AI from frame 0,

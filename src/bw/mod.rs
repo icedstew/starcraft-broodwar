@@ -293,6 +293,11 @@ pub struct State {
     pub enhanced: bool,
     /// Ours: the armies the AI took over from humans who left (bit per slot).
     pub ai_taken: u8,
+    /// Ours (enhanced.rs, campaign matches): the draw timer runs.
+    pub campaign: bool,
+    /// Ours: frames since anything died or was mined, and the count those last changed from.
+    pub idle_frames: u32,
+    pub activity: i64,
     /// 0x57f1e3: a campaign map continues into the next (the glue's 0x51ca1c).
     pub camp_cont: u8,
     /// 0x57f244: the campaign mission number (0 outside campaigns).
@@ -584,6 +589,9 @@ impl State {
             multiplayer: false,
             enhanced: false,
             ai_taken: 0,
+            campaign: false,
+            idle_frames: 0,
+            activity: 0,
             camp_cont: 0,
             mission: 0,
             game_secs: 0,

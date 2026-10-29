@@ -772,6 +772,11 @@ impl<'a> Scene<'a> {
                 self.msgs.print(&ui.font, &line, now, 0, 0x17, &mut self.st.ui_sounds);
                 continue;
             }
+            if fmt == crate::bw::enhanced::NOTICE_DRAW {
+                let t = format!("No fighting or mining: the game is a draw in {p} minute{}.", if p == 1 { "" } else { "s" });
+                self.msgs.print(&ui.font, t.as_bytes(), now, 0, 0x17, &mut self.st.ui_sounds);
+                continue;
+            }
             let f = if fmt == crate::bw::enhanced::NOTICE_AI {
                 "%s's army is played by the computer."
             } else {
@@ -986,6 +991,8 @@ impl<'a> Scene<'a> {
             st.rng.enabled = true;
             st.run_triggers(d, bw::triggers::FRAME_MS[st.replay_speed.min(6) as usize]);
             st.rng.enabled = false;
+            // Ours: a campaign match's draw timer (bw/enhanced.rs).
+            st.campaign_tick();
             self.minimap.take_pings(st);
         });
         // 0x4bd580: the game screen is drawn every frame, its visible tiles refreshed

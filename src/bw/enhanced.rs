@@ -14,6 +14,14 @@ use super::{Data, State};
 pub const NOTICE_AI: u16 = 0x1000;
 /// Notice id (not a network.tbl line): human `p` joined the army `nation_of(p)`.
 pub const NOTICE_JOIN: u16 = 0x1001;
+/// Notice id (campaign matches): a draw in `p` minutes if nothing dies and nobody mines.
+pub const NOTICE_DRAW: u16 = 0x1002;
+
+/// Campaign matches: a minute at Fastest (42 ms frames), the warnings from 5 idle minutes
+/// and the draw at 10.
+pub const MINUTE: u32 = 60_000 / 42;
+pub const DRAW_WARN: u32 = 5 * MINUTE;
+pub const DRAW_AT: u32 = 10 * MINUTE;
 
 pub const CMD_JOIN: u8 = 0xe0;
 pub const JOIN_LEN: usize = 4 + 0x18;
@@ -39,6 +47,9 @@ pub struct Extras {
     pub ai_taken: u8,
     pub human_names: Vec<String>,
     pub names: Vec<String>,
+    /// Campaign matches: the draw timer (`State::campaign_tick`).
+    pub campaign: bool,
+    pub idle_frames: u32,
 }
 
 /// A cursor over received bytes.
@@ -59,7 +70,7 @@ impl<'a> Rd<'a> {
 
 impl Extras {
     pub fn of(st: &State) -> Extras {
-        Extras { nation: st.human_nation.clone(), gone: st.humans_gone, ai_taken: st.ai_taken, human_names: st.human_names.clone(), names: st.player_names.iter().take(8).cloned().collect() }
+        Extras { nation: st.human_nation.clone(), gone: st.humans_gone, ai_taken: st.ai_taken, human_names: st.human_names.clone(), names: st.player_names.iter().take(8).cloned().collect(), campaign: st.campaign, idle_frames: st.idle_frames }
     }
 
     pub fn apply(&self, st: &mut State) {
@@ -72,6 +83,9 @@ impl Extras {
         for (k, t) in self.names.iter().enumerate() {
             st.player_names[k] = t.clone();
         }
+        st.campaign = self.campaign;
+        st.idle_frames = self.idle_frames;
+        st.activity = st.activity_count();
     }
 
     pub fn encode(&self, b: &mut Vec<u8>) {
@@ -91,6 +105,8 @@ impl Extras {
         for t in &self.names {
             s(b, t);
         }
+        b.push(self.campaign as u8);
+        b.extend_from_slice(&self.idle_frames.to_le_bytes());
     }
 
     /// `encode`'s inverse from `b[*at..]` (`at` moves past it).
@@ -103,8 +119,10 @@ impl Extras {
         let nh = r.take(1)?[0];
         let human_names = (0..nh).map(|_| r.text()).collect::<Option<Vec<_>>>()?;
         let names = (0..8).map(|_| r.text()).collect::<Option<Vec<_>>>()?;
+        let campaign = r.take(1)?[0] != 0;
+        let idle_frames = u32::from_le_bytes(r.take(4)?.try_into().ok()?);
         *at = r.1;
-        Some(Extras { nation, gone, ai_taken, human_names, names })
+        Some(Extras { nation, gone, ai_taken, human_names, names, campaign, idle_frames })
     }
 }
 
@@ -200,5 +218,77 @@ impl State {
                 s.flags |= 4;
             }
         }
+    }
+
+    /// Deaths (men and buildings lost, 0x581e74 / 0x581fc4) and minerals and gas gathered
+    /// (0x57f180 / 0x57f150), every player: the campaign draw timer's activity.
+    pub fn activity_count(&self) -> i64 {
+        let p = &self.players;
+        (0..12).map(|i| p.men_lost[i] as i64 + p.buildings_lost[i] as i64 + p.minerals_gathered[i] as i64 + p.gas_gathered[i] as i64).sum()
+    }
+
+    /// Campaign matches, after each frame's trigger pass: a death or anything mined restarts
+    /// the idle count; from 5 idle minutes every player is warned each minute; at 10 every
+    /// player still in the game gets a draw (0x58d700 = 5, the end screen as a trigger's
+    /// draw 0x4c5070 then 0x48a200 settle it).
+    pub fn campaign_tick(&mut self) {
+        if !self.campaign {
+            return;
+        }
+        let a = self.activity_count();
+        if a != self.activity {
+            self.activity = a;
+            self.idle_frames = 0;
+            return;
+        }
+        self.idle_frames += 1;
+        let t = self.idle_frames;
+        if (DRAW_WARN..DRAW_AT).contains(&t) && t % MINUTE == 0 {
+            self.notices.push((NOTICE_DRAW, ((DRAW_AT - t) / MINUTE) as u8));
+        }
+        if t == DRAW_AT {
+            for p in 0..8 {
+                if self.trig.in_game[p] != 0 && self.player_left[p] == 0 && matches!(self.player_types[p], 1 | 2) {
+                    self.trig.result[p] = 5;
+                    self.player_left[p] = 5;
+                }
+            }
+            self.trig.end_screen_timer = 0x2d;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn draw_timer() {
+        let mut st = State::new((64, 64), 0, 1700);
+        st.campaign = true;
+        st.trig.in_game = [1, 1, 0, 0, 0, 0, 0, 0];
+        st.player_types[..2].copy_from_slice(&[2, 1]);
+        // Mining at frame 100 restarts the count.
+        for f in 0..DRAW_AT + 100 {
+            if f == 100 {
+                st.players.minerals_gathered[0] += 8;
+            }
+            st.campaign_tick();
+        }
+        let warn: Vec<u8> = st.notices.iter().filter(|n| n.0 == NOTICE_DRAW).map(|n| n.1).collect();
+        assert_eq!(warn, vec![5, 4, 3, 2, 1]);
+        assert_eq!(st.player_left[..3], [0, 0, 0]);
+        // A death restarts it again; then 10 idle minutes end the game in a draw.
+        st.players.men_lost[1] += 1;
+        for _ in 0..=DRAW_AT {
+            st.campaign_tick();
+        }
+        assert_eq!(st.player_left[..3], [5, 5, 0]);
+        // Off: nothing happens.
+        let mut st = State::new((64, 64), 0, 1700);
+        for _ in 0..=DRAW_AT {
+            st.campaign_tick();
+        }
+        assert!(st.notices.is_empty());
     }
 }
