@@ -414,7 +414,7 @@ pub struct AiRegion {
 }
 
 impl AiRegion {
-    fn new(id: u16, player: u8) -> AiRegion {
+    pub(super) fn new(id: u16, player: u8) -> AiRegion {
         AiRegion {
             id,
             target_region_id: 0,

@@ -335,6 +335,26 @@ User report from a live game: after changing players buildings stopped, drones s
 - Campaign page: the game canvas scales (`fitStage` after the stage is shown; Fullscreen button);
   `/drive` serves `SCBW_CAMPAIGN_DRIVE` (`<key>/<folder>`, env only) and the page loads from it.
 
+### F11. AI <-> human switching (DONE 2026-10-29)
+`scbw campaign switch <map> [cycles]` (SEED=<n>; SWITCH_AT=<frame> first join, default 3000;
+SWITCH_DEBUG=1 prints scripts, towns, buildings, requests): army 0 goes AI -> human (1200 frames)
+-> AI (1800) ... through the live commands (join with its save and load, the human's select / stop
+/ right-click, leave 0x57); `BUG:` lines per failed check. Fixed in `bw/enhanced.rs`:
+- **Retaken AI dead**: `ai_release` set flag 4 on every script-pool entry of the army, free ones
+  too; 0x45aef0 keeps a reused entry's `flags & 7`, so the next take-over's melee script was
+  killed on its first run. Release now unlinks the army's scripts and clears their flags.
+- **AI still ran the human's army**: units kept their AI (towns, worker / guard posts): stopped
+  workers went back to mining, units sent away were attack-moved back. Release now takes every
+  unit out of the AI (0x4a1e50, as for a change of owner).
+- **Retaken AI never trained**: idle units kept the human's idle order, and only 0x9c serves the
+  AI's requests. Take-over gives idle units units.dat's computer idle order (as 0x49fa40 does for
+  a computer's new unit), and starts the player's AI data fresh (0x447680 / 0x437a70 for it).
+Sweep (4 maps x 9 seeds x 3 cycles): clean apart from armies wiped out while the human idled.
+Left: orders a worker already had at the join (walking to place, queued build) still run for
+the human; a Protoss AI that lost its pylons near the town can find no gateway spot and stays
+stuck (melee AI behaviour, not the handoff); a save and load changes `state_hash` (every peer
+reloads at a join, so no desync, but the save leaves something out).
+
 ### Later (not now)
 Area bonuses (start extras per owned areas), spectating with faction vision, several armies
 per side, `scbw://` URL handler.

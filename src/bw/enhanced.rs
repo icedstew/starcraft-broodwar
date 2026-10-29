@@ -215,28 +215,56 @@ impl State {
         self.player_types[p] = 1;
         self.ai_taken |= 1 << n;
         self.notices.push((NOTICE_AI, n));
-        self.ai.players[p].flags &= !0x20;
+        // A fresh computer as at the game's start (0x447680 / 0x437a70 for this player): what
+        // an earlier AI of the army asked for or knew of its regions is gone.
+        let ai = &mut self.ai;
+        ai.players[p] = super::ai::PlayerAi { minerals_available: self.players.minerals[p] as u32, gas_available: self.players.gas[p] as u32, difficulty: 1, default_min_strength_for_regions: 100, ..Default::default() };
+        let regions = ai.regions[p].len();
+        ai.regions[p] = (0..regions).map(|i| super::ai::AiRegion::new(i as u16, n)).collect();
         self.start_melee_ai_for(d, p);
-        // Units made while a human had the army belong to no AI list (0x463040 runs when a
-        // computer's unit is created): the AI takes them now, workers into its town, so they
-        // are not left idle for good.
+        // The human's units belong to no AI list (0x463040 runs when a computer's unit is
+        // created; `ai_release` took them out): the AI takes them now, workers into its town.
+        // An idle one gets the computer's idle order, as a computer's unit gets when it is
+        // finished (0x49fa40, units.dat): with the human's a building never trains what the
+        // AI asks (only order 0x9c serves the requests).
         for u in 0..self.units.len() as u32 {
             let un = &self.units[u as usize];
             if un.player == n && un.sprite != super::NIL && un.ai == super::NIL && un.status & 1 != 0 && un.unit_type < 0xe4 {
                 self.ai_take_unit(d, u);
+                let un = &self.units[u as usize];
+                let t = un.unit_type as usize;
+                if un.order_queue_head == super::NIL && (un.order == d.dat.units.ai_human_idle[t] || un.order == d.dat.units.ai_return_to_idle[t]) {
+                    self.order_now(d, u, d.dat.units.ai_computer_idle[t]);
+                }
             }
         }
     }
 
-    /// A human took army `n` back from the AI: it is a human's again and its AI scripts end
-    /// (flag 4: the script pool takes them back, 0x45cbd0).
-    fn ai_release(&mut self, _d: &Data, n: u8) {
+    /// A human took army `n` back from the AI: it is a human's again, its AI scripts end and
+    /// its units leave the AI (0x4a1e50 each, as when a unit changes owner: towns, guard
+    /// posts, regions), so no town or guard post orders them about for the human. The scripts
+    /// go back to the pool at once with their flags cleared: 0x45aef0 keeps a reused entry's
+    /// flags & 7, so one flagged 4 (killed) would end the next script started in it, the melee
+    /// script of a later take-over.
+    fn ai_release(&mut self, d: &Data, n: u8) {
         self.player_types[n as usize] = 2;
         self.ai_taken &= !(1 << n);
-        for s in self.ai.scripts.items.iter_mut() {
-            if s.player == n as u32 {
-                s.flags |= 4;
+        for u in 0..self.units.len() as u32 {
+            let un = &self.units[u as usize];
+            if un.player == n && un.sprite != super::NIL && un.ai != super::NIL {
+                self.ai_release_unit(d, u, false);
             }
+        }
+        let mut s = self.ai.active_scripts;
+        while s != super::NIL {
+            let next = self.ai.scripts.items[s as usize].link.next;
+            if self.ai.scripts.items[s as usize].player == n as u32 {
+                let mut head = self.ai.active_scripts;
+                self.ai.scripts.release(&mut head, s);
+                self.ai.active_scripts = head;
+                self.ai.scripts.items[s as usize].flags = 0;
+            }
+            s = next;
         }
     }
 
