@@ -269,6 +269,7 @@ impl Host {
                 self.next_game.wrapping_sub(1)
             }
         };
+        println!("campaign: border {b}: {map}{}", if resume.is_some() { " (resumed)" } else { "" });
         let spec = Spec { border: b, game, map, sides, seed: self.rand(), resume };
         let (otx, orx) = mpsc::channel();
         let (rtx, rrx) = mpsc::channel();
@@ -313,11 +314,14 @@ impl Host {
         match end {
             End::Stopped => {}
             End::Failed => {
-                let f = self.fails.entry(b).or_insert((0, None));
-                f.0 += 1;
-                if l.spec.resume.is_none() && self.shared.lock().unwrap().world.borders[b as usize].map.is_none() {
+                // A pool map that failed is not drawn again, and the border tries another one
+                // (a border's own map, or a saved match, gets MAX_FAILS tries).
+                let pool = l.spec.resume.is_none() && self.shared.lock().unwrap().world.borders[b as usize].map.is_none();
+                if pool {
                     self.bad_maps.push(l.spec.map.clone());
                 }
+                let f = self.fails.entry(b).or_insert((0, None));
+                f.0 += if pool { 0 } else { 1 };
                 if f.0 < MAX_FAILS {
                     f.1 = Some(Instant::now() + Duration::from_secs(5));
                 } else {
@@ -541,6 +545,7 @@ impl Host {
 /// own `/play/index.html` (so https when the page came over https), which a browser only runs
 /// from localhost or https.
 pub fn main(world: &str, dir: &str, port: u16, web_port: u16, https_port: u16) -> Result<(), String> {
+    crate::view::forbid_windows();
     let mut h = Host::new(world, Path::new(dir), port)?;
     let (atx, arx) = mpsc::channel::<super::web::Admin>();
     let token = h.token.clone();

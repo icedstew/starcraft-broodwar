@@ -276,6 +276,46 @@ Check: `agent/tools/campaign_host.sh` "resume checks": frames advance after the 
 host started from /tmp serves /play (200) and /favicon.ico (204); seed-7 map screenshot looked
 at (Umoja, Korhal, Braxis clear).
 
+### F8. Headless and silent (DONE 2026-10-29)
+User saw scbw windows flash on their desktop: campaign_refuse.sh's joiners ran `scbw campaign
+join <code>` (the glue with a window) on the user's display. Now: `view::forbid_windows()`
+(set by `campaign host` / `campaign match`) makes every window open fail and Audio::open
+return None; SCBW_MUTE=1 opens no sound device anywhere (game unchanged); every
+agent/tools script exports SCBW_MUTE=1, the campaign scripts unset DISPLAY / WAYLAND_DISPLAY
+and the refused joiners use the glue's screenshot mode.
+
+### F9. Browser campaign play (DONE 2026-10-29)
+User reports from a real browser join; one page now:
+- **Late joiner's view** (native and browser): the save's local view was the host seat's:
+  `local_vision_mask` (0x57f0b0, not in a save) stayed State::new's 1 = player 0's vision
+  (the enemy's, for army 1) and the circle rows 0x581d6a made own units red. `late_game`
+  sets the mask to 1 << the army as a new game does and runs 0x49b870 (nothing selected yet).
+- **Keys as a file name**: in the browser the glue's keydown listener kept filling its buffer
+  during the game; after it the score screen's save-replay box got them. The glue clears
+  it when a game returns.
+- **Leave**: in a campaign match the end-mission dialog's quit button is "Leave" (text
+  "LLeave": first character = hotkey) and leaves at once (`menu::Action::Leave`: the loop
+  ends, the net driver's drop announces the leave, the army goes to the AI); no surrender
+  question, no score screen, no replay. Other games keep 1.16.1's.
+- **One page**: the campaign map page loads the player's own files once (install folder, or
+  their Google Drive folder with their API key + folder id, or `#drive=key/folder`; kept in
+  IndexedDB, web/files.js; key and id never kept or logged), loads the browser build
+  (web/stage.js, then pkg/scbw.js: `campaign_load`), then shows the map. Join hides the map
+  and plays in the page's stage (`campaign_play`: link, late start, the game; no glue); when
+  the game ends (Leave, won, lost, the match over) the stage is emptied and the map is back,
+  same name and faction; join again without a reload. index.html shares web/stage.js.
+- **No game files from the host**: /play/auto/ answers 404 unless SCBW_CAMPAIGN_AUTO=1
+  (tests); players load their own install.
+- Repeat joins: a game's parked window, taken again by the next game, took no keys (F10 dead
+  in the second game); `campaign_play` now drops it at the end and the page removes its
+  canvas, so every game makes a fresh one. The host's "name in use" check read stats up to
+  1 s old, refusing a quick rejoin after Leave: the runner now reports at once when a side's
+  humans change.
+Check: `agent/tools/campaign_page.sh` (headless chromium, CDP steps): files loaded once, join
+match 1, box select (own units green), F10 opens the game menu, End Mission shows Leave,
+Leave -> the map, join match 2, F10 menu, Leave -> the map; screenshots looked at. Native late joiner on army 1
+(scripted box select): own units green-circled, the minimap fogged but for its own base.
+
 ### Later (not now)
 Area bonuses (start extras per owned areas), spectating with faction vision, several armies
 per side, `scbw://` URL handler.

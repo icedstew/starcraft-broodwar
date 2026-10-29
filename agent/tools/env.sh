@@ -1,3 +1,4 @@
+export SCBW_MUTE=1   # tests are silent (no sound device opened)
 # Source me: paths shared by the agent tools. Everything Blizzard-derived or large lives
 # in agent/local (gitignored); see agent/tools.md.
 AGENT=$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/.." && pwd)

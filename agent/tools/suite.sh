@@ -1,4 +1,5 @@
 #!/bin/bash
+export SCBW_MUTE=1   # tests are silent (no sound device opened)
 # suite.sh: rerun the movement scenarios through cmp.sh
 . "$(dirname "$0")/env.sh"; S=$W
 B="$INSTALL/maps/(2)Boxer.scm"

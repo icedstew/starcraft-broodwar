@@ -1,4 +1,5 @@
 #!/bin/bash
+export SCBW_MUTE=1   # tests are silent (no sound device opened)
 # Phase 3d checks (agent/areas/net.md): headless live games on localhost.
 #   netlive_leave.sh [a|b|c|d|e|f|all]      SCBW=<binary> (default target/release/scbw)
 #   a  2 players, 3000 frames, delay 1: equal hashes; each peer's replay (SCBW_NET_REPLAY,

@@ -1,10 +1,13 @@
 #!/bin/bash
+export SCBW_MUTE=1   # tests are silent (no sound device opened)
 # campaign_refuse.sh: a refused campaign joiner gets the reason (C_REFUSED, or the hub's
 # refusal before the Start) and prints it. Host with SCBW_CAMPAIGN_SLOTS=1 (one joiner per
 # match) on a 3-area world (borders 0: F0-F1, 1: F1-F2, 2: F2-F0). ann (faction 0) plays
 # border 0 (after: zed (banned) -> banned; cat (faction 2) on border 0 -> another faction);
 # a second ann on border 2 -> name in use; bob on border 0 -> full; after `end 1 draw` the
 # old code of border 1 -> the match ended. O=<dir> for logs.
+# Headless: never a window on the user's display (a campaign host refuses one anyway).
+unset DISPLAY WAYLAND_DISPLAY
 T=$(cd "$(dirname "$0")" && pwd); cd "$T/../.."
 export SCBW_INSTALL=${SCBW_INSTALL:-$HOME/Downloads/StarCraft-BroodWar_1.16.1}
 B=${SCBW:-$PWD/target/release/scbw}; O=${O:-/tmp/scbw-campaign-refuse}; WP=${WP:-18785}
@@ -20,7 +23,7 @@ echo "ban zed" >&3; echo status >&3; sleep 1
 code() { grep "^border $1: game" $O/host.log | tail -1 | grep -o '127[^ ]*'; }
 c0=$(code 0); c1=$(code 1); c2=$(code 2)
 join() { # $1 log, $2 code, $3 name, [$4 frames]
-  (cd $O; SCBW_NET_HEADLESS=${4:-100} SCBW_INSTALL=$O/inst SCBW_CHARACTERS=$O timeout ${5:-40} $B campaign join "$2" $3 > $O/$1.log 2>&1)
+  (cd $O; SCBW_NET_HEADLESS=${4:-100} SCBW_INSTALL=$O/inst SCBW_CHARACTERS=$O SCBW_JOIN="$2" SCBW_NAME=$3 timeout ${5:-40} $B glue $O/$1.png > $O/$1.log 2>&1)
 }
 join banned $c0 zed; sleep 3; join faction $c0 cat
 sleep 3   # their links close 2 s after the refusal

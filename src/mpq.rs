@@ -175,8 +175,12 @@ impl Mpq {
         let rd = |o: usize| u32::from_le_bytes(hdr[o..o + 4].try_into().unwrap());
         let sector_size = 512usize << (rd(0x0E) & 0xFFFF);
         let (ht_pos, bt_pos, ht_n, bt_n) = (rd(0x10) as usize, rd(0x14) as usize, rd(0x18) as usize, rd(0x1C) as usize);
-        // ponytail: trusts table sizes; map "protectors" that lie about them are not handled.
+        // Map "protectors" lie about the table sizes: Storm 1.x sizes a table as count * 16 in
+        // 32 bits (a count with its top bits set wraps to a smaller table), and a table the
+        // file's end cuts off is read as far as it goes.
         let table = |pos: usize, n: usize, key: &str| -> io::Result<Vec<u32>> {
+            let n = ((n as u32).wrapping_mul(16) / 16) as usize;
+            let n = n.min((data.len() as usize).saturating_sub(base + pos) / 16);
             let bytes = data.get(base + pos, n * 16)?;
             let mut w: Vec<u32> = bytes.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect();
             decrypt(&mut w, hash(key, 3));
@@ -198,6 +202,9 @@ impl Mpq {
 
     pub fn read(&self, name: &str) -> io::Result<Vec<u8>> {
         let n = self.hashes.len();
+        if n == 0 {
+            return Err(io::Error::new(io::ErrorKind::NotFound, name.to_string()));
+        }
         let start = hash(name, 0) as usize % n;
         let (a, b) = (hash(name, 1), hash(name, 2));
         let mut bi = None;
@@ -207,7 +214,9 @@ impl Mpq {
                 break;
             }
             if h[0] == a && h[1] == b {
-                bi = Some(h[3] as usize);
+                // A block index with top bits set (map protectors) wraps as Storm's
+                // index * 16 does.
+                bi = Some((h[3].wrapping_mul(16) / 16) as usize);
                 break;
             }
         }

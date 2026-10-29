@@ -74,10 +74,9 @@ Delegate per agents.md: Haiku triage, Sonnet porting, Opus review / hard RE / co
 ## In flight
 
 - **Campaign mode** (ours: Risk-style world, every border a live enhanced game; branch
-  `campaign`, plan agent/plans/campaign.md): tasks 1-8 and follow-ups F1-F7 done
-  (`scbw campaign gen / check / host / join`; checks agent/tools/campaign_*.sh). Next:
-  browser UI fixes (hotkeys after a browser late join, Leave, back to the map, selection
-  circles), then WebRTC for plain-http pages. Open: ~70 MB per match.
+  `campaign`, plan agent/plans/campaign.md): tasks 1-8 and follow-ups F1-F9 done
+  (`scbw campaign gen / check / host / join`; the map page plays matches itself; checks
+  agent/tools/campaign_*.sh). Next: WebRTC for plain-http pages. Open: ~70 MB per match.
 
 - **Enhanced games** (ours: join a running game, shared armies, AI takes armies left by
   everyone, fast drops): committed 2026-10-27 (LAN list, AI-takeover line too); list border, browser late join, edge cases, window check done; Task 5 (join line with army and player colour) done; open: joiners may not get the host's dealt player colours
@@ -268,7 +267,7 @@ Delegate per agents.md: Haiku triage, Sonnet porting, Opus review / hard RE / co
   0x4b4a30), game creation 0x4d3fc0 -> game start, mission list 0x4b7820, 0x4a8590, error popup 0x4bb300,
   OK/Cancel 0x4b5b20 (taken as OK), the glue -> game start (glue.rs `Top::Game`), list
   scroll bars (0x414c90), combo boxes (type 13), Tab focus (0x418a60).
-- Don't commit README.md, .gitignore, web/*, cov.html (user's own work).
+- Commit web/* (not web/pkg, web/auto: gitignored). Don't commit README.md, .gitignore, cov.html (user's own work).
 
 ## User reports to handle (2026-10-18)
 

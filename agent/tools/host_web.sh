@@ -1,4 +1,5 @@
 #!/bin/bash
+export SCBW_MUTE=1   # tests are silent (no sound device opened)
 # host_web.sh [map] [players] [delay]: host a networked game in a scbw window, serve the
 # browser page, print the join link. LAN=1 listens on every interface (the link gets this
 # machine's LAN IP); PORT (4433) / WEBPORT (8000) override the ports. Ctrl+C or closing the

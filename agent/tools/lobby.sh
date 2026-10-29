@@ -1,4 +1,5 @@
 #!/bin/bash
+export SCBW_MUTE=1   # tests are silent (no sound device opened)
 # lobby.sh [web]: the network lobby end to end. A scripted `scbw glue` creates a game (real
 # time, SCBW_GLUE_REALTIME) and starts it once a player joined; the joiner is a second glue
 # whose install has no maps folder (it joins by the printed LOBBY code and downloads the map),

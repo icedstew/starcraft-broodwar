@@ -4,7 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Campaign Map</title>
-<!-- Ours (src/campaign/web.rs serves it; PLAY_URL is filled in there). -->
+<!-- Ours (src/campaign/web.rs serves it; PLAY_URL is filled in there). One page: the
+     player's own game files load first (once; kept in IndexedDB), then the map; a match is
+     played in this page's stage and the map comes back when it ends. -->
 <style>
 :root { --bg: #07090c; --panel: #10161d; --line: #2a3a48; --text: #d6e2ea; --dim: #7f93a3; --accent: #39d0c0; --warn: #f0b040; }
 * { box-sizing: border-box; }
@@ -30,17 +32,38 @@ button:hover { border-color: var(--accent); }
 code { font-size: 11px; word-break: break-all; color: var(--dim); }
 .area-label { fill: var(--text); font-size: 13px; pointer-events: none; }
 .sq { cursor: pointer; }
+#load { max-width: 560px; margin: 40px auto; }
+#load label { display: block; margin: 6px 0; }
+#loadstatus { color: var(--warn); white-space: pre-wrap; min-height: 1.4em; }
+[hidden] { display: none !important; }
+#game { height: calc(100vh - 50px); display: flex; align-items: center; justify-content: center; }
+#stage { position: relative; background: #000; outline: 1px solid var(--line); contain: strict; }
+#scbw, #scbw canvas { width: 100%; height: 100%; display: block; }
+#scbw canvas { image-rendering: pixelated; outline: none; cursor: none; }
 </style>
 </head>
 <body>
 <header><h1>Campaign</h1><span id="status">connecting…</span></header>
-<main>
+<div id="load" hidden>
+  <section>
+    <h2>Your StarCraft 1.16.1 files</h2>
+    <p class="dim">Loaded once, kept in this browser. Nothing is uploaded; the host does not send game files.</p>
+    <label>Install folder <input id="install" type="file" webkitdirectory></label>
+    <div class="row"><button id="loadfolder">Load from folder</button></div>
+    <label>Or a Google Drive folder of yours: API key <input id="dkey" type="password" autocomplete="off" size="24"> folder id <input id="dfolder" size="24"></label>
+    <div class="row"><button id="loaddrive">Load from Drive</button><button id="maponly">Map only</button></div>
+    <div id="loadstatus"></div>
+  </section>
+</div>
+<div id="game" hidden><div id="stage"><div id="scbw"></div></div></div>
+<main hidden>
   <svg id="map" viewBox="0 0 800 520" role="img" aria-label="Campaign map"></svg>
   <div>
     <section id="who">
       <h2>You</h2>
       <div class="row"><input id="name" placeholder="name" maxlength="23" size="14"><select id="faction"></select><button id="joinf">Play</button></div>
       <div id="whoami" class="dim"></div>
+      <div class="row"><span id="filesnote" class="dim"></span><button id="forget" hidden>Forget game files</button></div>
     </section>
     <section><h2>Factions</h2><div id="factions"></div></section>
     <section id="match"><h2>Match</h2><div id="detail" class="dim">Pick a square on a border.</div><img id="minimap" alt="Minimap of the match as your side sees it"></section>
@@ -48,7 +71,7 @@ code { font-size: 11px; word-break: break-all; color: var(--dim); }
     <section id="admin" hidden><h2>Admin</h2><div class="row"><input id="cmd" placeholder="status, pause, kick NAME…" style="flex:1"><button id="run">Run</button></div><pre id="out" class="dim" style="white-space:pre-wrap;font-size:12px"></pre></section>
   </div>
 </main>
-<script>
+<script type="module">
 const PLAY = PLAY_URL;
 // tunit.pcx rows 0..11, roughly (the faction's colour in the game).
 const COLOURS = ["#f40404", "#0c48cc", "#2cb494", "#88409c", "#f88c14", "#703014", "#cce0d0", "#fcfc38", "#088008", "#fcfc7c", "#ecc4b0", "#4068d4"];
@@ -131,13 +154,18 @@ function detail() {
   let h = `<div>${esc(st.areas[b.a].name)} – ${esc(st.areas[b.b].name)} <span class="dim">· ${esc(b.map)} · ${clock(b.frame)}</span></div>`;
   if (b.idle >= 5 * 1428) h += `<div class="warn">No kills and no minerals mined: draw in ${Math.max(0, 10 - Math.floor(b.idle / 1428))} min</div>`;
   h += `<div class="sides" style="margin-top:6px">${b.sides.map(side).join("")}</div>`;
+  let code = "";
   if (b.code) {
     // A host bound to every address (0.0.0.0) is reached at the one this page came from.
-    const code = b.code.replace(/^0\.0\.0\.0:/, `${location.hostname}:`);
+    code = b.code.replace(/^0\.0\.0\.0:/, `${location.hostname}:`);
+    // In this page with the loaded files; an external build (SCBW_CAMPAIGN_WEB) in its own tab.
     const url = `${PLAY}${PLAY.includes("?") ? "&" : "?"}join=${encodeURIComponent(code)}&name=${encodeURIComponent(me)}`;
-    h += `<div class="row" style="margin-top:8px"><a href="${esc(url)}" target="_blank"><button>Join in browser</button></a><button id="copy">Copy for scbw</button></div><code id="cmdline">scbw campaign join '${esc(code)}' ${esc(me)}</code>`;
+    const join = PLAY === "/play/index.html" ? `<button id="joinhere" ${game ? "" : "disabled title=\"load the game files first\""}>Join</button>` : `<a href="${esc(url)}" target="_blank"><button>Join in browser</button></a>`;
+    h += `<div class="row" style="margin-top:8px">${join}<button id="copy">Copy for scbw</button></div><code id="cmdline">scbw campaign join '${esc(code)}' ${esc(me)}</code>`;
   }
   $("detail").innerHTML = h;
+  const jh = $("joinhere");
+  if (jh) jh.onclick = () => play(code);
   const c = $("copy");
   if (c) c.onclick = () => navigator.clipboard && navigator.clipboard.writeText($("cmdline").textContent);
 }
@@ -177,9 +205,81 @@ const run = async () => {
 };
 $("run").onclick = run;
 $("cmd").onkeydown = e => { if (e.key === "Enter") run(); };
+// ---- The game in this page.
+// The browser build (stage.js, then pkg/scbw.js: it reads AudioContext when imported) and
+// the player's files: once, before the map. `game` = the build's exports once loaded.
+let game = null;
+const showOnly = id => { for (const x of ["load", "game"]) $(x).hidden = x !== id; document.querySelector("main").hidden = id !== "main"; };
+async function loadGame(get) {
+  $("loadstatus").textContent = "loading…";
+  try {
+    const files = await get();
+    await import("/play/stage.js").then(m => m.setupStage($("scbw"), $("stage")));
+    const wasm = await import("/play/pkg/scbw.js");
+    await wasm.default();
+    wasm.campaign_load(files.storm, files.archives);
+    game = wasm;
+    await filesMod.keep(files);
+    $("forget").hidden = false;
+    $("filesnote").textContent = "Game files loaded.";
+    showOnly("main");
+    poll();
+  } catch (e) {
+    $("loadstatus").textContent = String((e && e.message) || e);
+  }
+}
+let filesMod = null;
+async function start() {
+  try {
+    filesMod = await import("/play/files.js");
+  } catch (e) {
+    // No browser build on this host: the map only.
+    $("filesnote").textContent = "This host has no browser build: join with scbw.";
+    showOnly("main");
+    return;
+  }
+  const kept = await filesMod.cached();
+  if (kept) return loadGame(async () => kept);
+  // ?files=auto: the host's own copy (tests; served only on the host's opt-in).
+  if (params.get("files") === "auto") return loadGame(() => filesMod.fromUrl("/play/auto/"));
+  // #drive=<API key>/<folder id> (the web build's link form): the player's Drive folder.
+  const drive = location.hash.match(/^#drive=([^/]+)\/([^/]+)/);
+  showOnly("load");
+  if (drive) return loadGame(() => filesMod.fromDrive(drive[1], drive[2]));
+}
+$("loadfolder").onclick = () => loadGame(() => filesMod.fromFolder($("install").files));
+$("loaddrive").onclick = () => loadGame(() => filesMod.fromDrive($("dkey").value.trim(), $("dfolder").value.trim()));
+$("maponly").onclick = () => showOnly("main");
+$("forget").onclick = async () => { await filesMod.forget(); location.reload(); };
+
+// Join `code`: the map goes, the game plays in the stage; when it ends (Leave, won, lost,
+// the match over) the map comes back, still as `me`.
+async function play(code) {
+  if (!game) return;
+  if (!window.isSecureContext) {
+    $("status").textContent = "Joining from this page needs https or localhost: open the host's https address.";
+    return;
+  }
+  showOnly("game");
+  let note = "";
+  try {
+    await game.campaign_play(code, me, Number(params.get("frames")) || 0);
+  } catch (e) {
+    note = String((e && e.message) || e);
+  }
+  // The game's window is gone (web.rs campaign_play): its canvas too; the next game makes one.
+  $("scbw").replaceChildren();
+  if (document.pointerLockElement) document.exitPointerLock();
+  showOnly("main");
+  await poll();
+  if (note) $("status").textContent = note;
+}
+window.campaignPlay = play;
+
 poll().then(minimap);
-setInterval(poll, 2000);
-setInterval(() => { if (sel >= 0) minimap(); }, 4000);
+start();
+setInterval(() => { if (!document.querySelector("main").hidden) poll(); }, 2000);
+setInterval(() => { if (sel >= 0 && !document.querySelector("main").hidden) minimap(); }, 4000);
 </script>
 </body>
 </html>

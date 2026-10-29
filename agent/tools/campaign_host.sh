@@ -1,4 +1,5 @@
 #!/bin/bash
+export SCBW_MUTE=1   # tests are silent (no sound device opened)
 # campaign_host.sh: the campaign host end to end, headless (src/campaign/host.rs). A world
 # of 4 areas in a line (A B C D, owners 0 1 2 0) has 3 live borders; the host runs their
 # matches. Commands on stdin: `end 0 0` (faction 0 wins A-B: takes B, so B-C restarts as
@@ -6,6 +7,8 @@
 # `save`, `quit`; then the host starts again on its directory and must resume the same
 # world with the saved matches: their frames must go on, the old join code and admin token
 # still work (a joiner gets in after the restart). O=<dir> for logs.
+# Headless: never a window on the user's display (a campaign host refuses one anyway).
+unset DISPLAY WAYLAND_DISPLAY
 T=$(cd "$(dirname "$0")" && pwd); cd "$T/../.."
 export SCBW_INSTALL=${SCBW_INSTALL:-$HOME/Downloads/StarCraft-BroodWar_1.16.1}
 B=${SCBW:-$PWD/target/release/scbw}; O=${O:-/tmp/scbw-campaign-host}

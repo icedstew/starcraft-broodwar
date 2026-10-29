@@ -1,9 +1,12 @@
 #!/bin/bash
+export SCBW_MUTE=1   # tests are silent (no sound device opened)
 # campaign_web.sh: the campaign's web map, headless (src/campaign/web.rs). Starts a host on
 # a 3-area world, then over HTTP: the page, /state without a name (no stats, no codes), a
 # name registers for faction 0 (/join), /state with it (its faction's stats and code only),
 # another faction refused for that name, /minimap (a PNG), faction chat, admin with and
 # without the token. SHOT=1 also screenshots the page with headless chromium ($O/page.png).
+# Headless: never a window on the user's display (a campaign host refuses one anyway).
+unset DISPLAY WAYLAND_DISPLAY
 T=$(cd "$(dirname "$0")" && pwd); cd "$T/../.."
 export SCBW_INSTALL=${SCBW_INSTALL:-$HOME/Downloads/StarCraft-BroodWar_1.16.1}
 B=${SCBW:-$PWD/target/release/scbw}; O=${O:-/tmp/scbw-campaign-web}; WP=${WP:-18781}

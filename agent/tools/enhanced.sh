@@ -1,4 +1,5 @@
 #!/bin/bash
+export SCBW_MUTE=1   # tests are silent (no sound device opened)
 # enhanced.sh: an enhanced game end to end, headless. A scripted glue creates it
 # (SCBW_ENHANCED), one player joins its lobby by code and the game starts; a third joins by
 # code while it runs (its install has no maps: the state comes from the host). All play to

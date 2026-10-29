@@ -1,4 +1,5 @@
 #!/bin/bash
+export SCBW_MUTE=1   # tests are silent (no sound device opened)
 # Phase 3b check (agent/areas/net.md): host + join a live melee game headless on localhost,
 # each peer with its own scripted commands; both must print the same `frame K hash H`.
 #   netlive.sh [map] [frames] [delay]      SCBW=<binary> (default target/release/scbw)

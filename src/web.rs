@@ -39,6 +39,11 @@ pub fn start(storm: &[u8], archives: js_sys::Array, name: &str, file: &[u8]) -> 
 
 /// Run `frame` from requestAnimationFrame until it returns false or fails.
 fn run_raf(frame: Box<dyn FnMut() -> std::io::Result<bool>>) {
+    run_raf_then(frame, None);
+}
+
+/// `run_raf`, calling `done` once the loop ended (the game's frame returned false or failed).
+fn run_raf_then(frame: Box<dyn FnMut() -> std::io::Result<bool>>, done: Option<js_sys::Function>) {
     // requestAnimationFrame runs at the display rate, as the native window loop: the
     // cursor is redrawn every pass, the frame loop ticks the game every 42 ms.
     let win = web_sys::window().unwrap();
@@ -49,12 +54,18 @@ fn run_raf(frame: Box<dyn FnMut() -> std::io::Result<bool>>) {
     let mut frame = Some(frame);
     *tick.borrow_mut() = Some(Closure::new(move || {
         let Some(f) = frame.as_mut() else { return };
+        let end = |frame: &mut Option<_>| {
+            *frame = None;
+            if let Some(d) = done.as_ref() {
+                let _ = d.call0(&JsValue::NULL);
+            }
+        };
         match f() {
             Ok(true) => {}
-            Ok(false) => return frame = None,
+            Ok(false) => return end(&mut frame),
             Err(e) => {
-                frame = None;
-                return web_sys::console::error_1(&e.to_string().into());
+                web_sys::console::error_1(&e.to_string().into());
+                return end(&mut frame);
             }
         }
         let w = web_sys::window().unwrap();
@@ -198,3 +209,84 @@ async fn glue_lobby(a: &'static mut view::Assets, tr: crate::net::transport::Tra
     run_raf(Box::new(frame));
     Ok(())
 }
+
+thread_local! {
+    /// The campaign map page's game files (`campaign_load`), for every match it joins.
+    static CAMPAIGN_ASSETS: RefCell<Option<&'static view::Assets>> = const { RefCell::new(None) };
+}
+
+/// Ours (the campaign map page, src/campaign/campaign.html): the player's install, loaded once
+/// for the page (storm.dll and the archives, as `start`).
+#[wasm_bindgen]
+pub fn campaign_load(storm: Vec<u8>, archives: js_sys::Array) -> Result<(), JsError> {
+    console_error_panic_hook::set_once();
+    let archives = archives.iter().map(|a| js_sys::Uint8Array::new(&a).to_vec()).collect();
+    let files = storage::Storage::from_mem(&storm, archives).map_err(js)?;
+    let a: &'static view::Assets = Box::leak(Box::new(view::Assets::load(files).map_err(js)?));
+    CAMPAIGN_ASSETS.with(|c| *c.borrow_mut() = Some(a));
+    Ok(())
+}
+
+/// Ours: join the campaign match `code` as `name` with the files `campaign_load` took and play
+/// it in the page's #scbw; resolves when the game ends (left with the menu's Leave, won,
+/// lost, drawn, or the match ended): the page shows its map again. No glue screens (no score,
+/// no replay to save). Fails with the host's reason when refused. `frames` > 0 logs
+/// `frame K hash H` there (tests).
+#[wasm_bindgen]
+pub async fn campaign_play(code: String, name: String, frames: u32) -> Result<(), JsError> {
+    use crate::net::{live, snet, transport};
+    let err = |m: String| JsError::new(&m);
+    let a = CAMPAIGN_ASSETS.with(|c| *c.borrow()).ok_or_else(|| err("load the game files first".into()))?;
+    let mut tr = transport::Transport::join_web(&code, transport::ANY, 0).map_err(err)?;
+    let slot = 'lobby: loop {
+        for e in tr.poll() {
+            match e {
+                transport::Event::Start { slot, .. } => break 'lobby slot,
+                transport::Event::Error(m) => return Err(err(m)),
+                _ => {}
+            }
+        }
+        sleep(5).await;
+    };
+    let log = |m: &str| web_sys::console::log_1(&format!("campaign: {m}").into());
+    log(&format!("linked as {slot}"));
+    snet::initialize_provider(snet::UDPN);
+    snet::adopt(tr, slot, code, name.as_bytes());
+    let t0 = web_time::Instant::now();
+    let late = loop {
+        snet::pump();
+        if let Some(why) = snet::refused() {
+            snet::leave_game();
+            return Err(err(format!("{}{why}", transport::REFUSED)));
+        }
+        if let Some(l) = snet::late() {
+            break l;
+        }
+        if t0.elapsed().as_secs() > 60 {
+            snet::leave_game();
+            return Err(err("no answer from the game".into()));
+        }
+        sleep(5).await;
+    };
+    log(&format!("the game's state came ({} bytes)", late.len()));
+    if frames > 0 {
+        live::NetGame::report_next(frames);
+    }
+    let (scene, net) = live::late_game(a, &late).map_err(js)?;
+    view::set_net_driver(Box::new(net));
+    let frame: Box<dyn FnMut() -> std::io::Result<bool>> = Box::new(view::frame_loop_end(a, scene, None, Default::default()).map_err(js)?);
+    let mut frame = Some(frame);
+    let ended = js_sys::Promise::new(&mut |done, _| {
+        if let Some(f) = frame.take() {
+            run_raf_then(f, Some(done));
+        }
+    });
+    let _ = wasm_bindgen_futures::JsFuture::from(ended).await;
+    log("the game ended");
+    // The window the game parked is not used again (a reused one took no keys): the page
+    // removes its canvas, the next game makes a new one.
+    drop(view::take_window());
+    snet::leave_game();
+    Ok(())
+}
+

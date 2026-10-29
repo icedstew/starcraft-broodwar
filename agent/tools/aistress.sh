@@ -1,4 +1,5 @@
 #!/bin/bash
+export SCBW_MUTE=1   # tests are silent (no sound device opened)
 # aistress.sh [frames] [seed base] [binary]: every (8) melee map, the local player plus 7
 # computers (races cycle), played headless through `scbw shot` (the view path) in
 # parallel. Prints each run's exit and any panic; with a debug binary, also counts the

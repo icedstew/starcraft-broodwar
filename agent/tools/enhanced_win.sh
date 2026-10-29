@@ -1,4 +1,5 @@
 #!/bin/bash
+export SCBW_MUTE=1   # tests are silent (no sound device opened)
 # enhanced_win.sh <out dir>: an enhanced game in real windows (two Xvfb displays :91 host,
 # :92 joiner, :93 late joiner; 1280x960: the window is 2x), driven by xdotool; screenshots of both screens into <out dir>. The host
 # creates an enhanced game and starts it alone with the joiner (SCBW_JOIN, lobby), a third

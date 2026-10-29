@@ -124,6 +124,12 @@ pub fn game_start_track(race: usize) -> u32 {
 impl Audio {
     /// None when no audio device is available; the game runs silently.
     pub fn open(files: &Storage) -> Option<Audio> {
+        // Ours: no sound device in a headless server process (view::forbid_windows), nor with
+        // SCBW_MUTE set (tests): sound is simply off, the game is unchanged.
+        crate::view::window_allowed().ok()?;
+        if std::env::var_os("SCBW_MUTE").is_some() {
+            return None;
+        }
         let mut sink = rodio::DeviceSinkBuilder::open_default_sink().ok()?;
         sink.log_on_drop(false);
         let names = dat::parse_tbl(&files.read("arr/sfxdata.tbl").ok()?);

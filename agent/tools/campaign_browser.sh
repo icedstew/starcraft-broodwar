@@ -1,4 +1,5 @@
 #!/bin/bash
+export SCBW_MUTE=1   # tests are silent (no sound device opened)
 # campaign_browser.sh: a browser joins a campaign match, headless (as enhanced.sh WEB=1).
 # `scbw campaign match` runs one match (paced PACE_US, default 70000 us a frame, so the
 # headless browser keeps up); headless chromium opens the web build (web/build.sh, served
@@ -6,6 +7,8 @@
 # army: its console's `frame K hash H` must equal the host's. Then a second page joins a
 # match id that does not exist: its status line must show "refused: the match ended".
 # NOBUILD=1 skips web/build.sh. O=<dir> for logs.
+# Headless: never a window on the user's display (a campaign host refuses one anyway).
+unset DISPLAY WAYLAND_DISPLAY
 T=$(cd "$(dirname "$0")" && pwd); cd "$T/../.."
 export SCBW_INSTALL=${SCBW_INSTALL:-$HOME/Downloads/StarCraft-BroodWar_1.16.1}
 B=${SCBW:-$PWD/target/release/scbw}; O=${O:-/tmp/scbw-campaign-browser}; K=${K:-1500}

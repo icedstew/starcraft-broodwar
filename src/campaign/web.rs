@@ -195,6 +195,11 @@ impl Web {
         if rel.split('/').any(|c| c == ".." || c.is_empty()) || rel.contains('\\') {
             return ("404 Not Found", "text/plain", b"not found".to_vec());
         }
+        // The host's own game files (web/auto/) are Blizzard's: never handed out, but for
+        // tests on their opt-in (SCBW_CAMPAIGN_AUTO=1). Players load their own install.
+        if rel.starts_with("auto/") && std::env::var_os("SCBW_CAMPAIGN_AUTO").is_none() {
+            return ("404 Not Found", "text/plain", b"not found".to_vec());
+        }
         let ty = match rel.rsplit('.').next() {
             Some("html") => "text/html; charset=utf-8",
             Some("js") => "text/javascript",

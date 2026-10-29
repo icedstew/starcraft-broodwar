@@ -1,4 +1,5 @@
 #!/bin/bash
+export SCBW_MUTE=1   # tests are silent (no sound device opened)
 # cmp.sh <map> <units> <moves> <frames>: one differential scenario, emulator (1.16.1 code)
 # vs `scbw bwsim`. Prints "MATCH n lines" or the first diff (full diff in $W/diff.txt).
 . "$(dirname "$0")/env.sh"

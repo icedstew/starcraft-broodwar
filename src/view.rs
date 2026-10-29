@@ -3086,6 +3086,22 @@ thread_local! {
 /// Exit Program (quit.bin -2) was chosen: the whole program ends, not only the game.
 pub static EXIT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// Ours: a server process (`scbw campaign host` / `match`) must never open a window or a
+/// sound device: set once at its start, every open path refuses.
+static HEADLESS_ONLY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn forbid_windows() {
+    HEADLESS_ONLY.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// An error when this process may not open a window (`forbid_windows`).
+pub fn window_allowed() -> io::Result<()> {
+    match HEADLESS_ONLY.load(std::sync::atomic::Ordering::Relaxed) {
+        true => Err(io::Error::other("this process is headless (a campaign host): no window")),
+        false => Ok(()),
+    }
+}
+
 /// The game ended with result 5 (Restart Mission, command 0x08): the glue's next state is 5.
 static RESTART: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -3290,7 +3306,7 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
     let lent = match (parked, scripted) {
         (_, true) => None,
         (Some(w), _) => Some(w),
-        (None, _) => Some(Window::new("scbw", vw as usize, vh as usize, opts).map_err(|e| io::Error::other(e.to_string()))?),
+        (None, _) => Some(window_allowed().and_then(|_| Window::new("scbw", vw as usize, vh as usize, opts).map_err(|e| io::Error::other(e.to_string())))?),
     };
     let mut win = crate::script::Io::new(lent.map(|w| Lent(Some(w), park_window)));
     // The window loop runs at the display rate: the software cursor is redrawn on every
@@ -3493,6 +3509,7 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
         // single player and replays pause under it (0x4f57a0 -> 0x488790).
         ctx.replay_speed = scene.st.replay_speed as i16;
         ctx.multiplayer = scene.st.multiplayer;
+        ctx.campaign = scene.st.campaign;
         ctx.team = bw::players::is_team_game(scene.st.multiplayer, &scene.st.template);
         ctx.paused = scene.st.trig.paused;
         ctx.player_type = scene.st.player_types.get(scene.st.local_player as usize).copied().unwrap_or(0);
@@ -3644,6 +3661,8 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
                         EXIT.store(true, std::sync::atomic::Ordering::Relaxed);
                         return Ok(false);
                     }
+                    // Ours: the game ends here; dropping its net driver announces the leave.
+                    crate::menu::Action::Leave => return Ok(false),
                     // 0x4e0710: the game's result 0x51ce90 (7 after the defeat dialog, else 6)
                     // is the glue's next state; 0x4de200 then opens the score screen.
                     // 0x4c9280 (multiplayer quit): 6 or 7 by the local result, then the score screen

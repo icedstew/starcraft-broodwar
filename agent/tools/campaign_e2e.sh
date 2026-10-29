@@ -1,9 +1,12 @@
 #!/bin/bash
+export SCBW_MUTE=1   # tests are silent (no sound device opened)
 # campaign_e2e.sh: a whole campaign, AI only, unpaced (SCBW_NET_PACE_US=1): 4 areas in a ring
 # (North Zerg, East Terran, South Protoss, West Zerg; West-North starts quiet), a map per
 # border ((2)Astral Balance, Baby Steps, Crystallis, Full Circle). Waits (TIMEOUT s, default
 # 1200) for "wins the campaign"; prints the campaign: lines and PASS / FAIL (on FAIL also
 # `status`). Own ports (WP, default 18830). O=<dir> for logs.
+# Headless: never a window on the user's display (a campaign host refuses one anyway).
+unset DISPLAY WAYLAND_DISPLAY
 T=$(cd "$(dirname "$0")" && pwd); cd "$T/../.."
 trap "" PIPE   # the host exits by itself once a faction wins
 export SCBW_INSTALL=${SCBW_INSTALL:-$HOME/Downloads/StarCraft-BroodWar_1.16.1}

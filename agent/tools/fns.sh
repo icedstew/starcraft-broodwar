@@ -1,4 +1,5 @@
 #!/bin/bash
+export SCBW_MUTE=1   # tests are silent (no sound device opened)
 # fns.sh <hex addr without 0x>...: print the Ghidra decompile of 1.16.1 functions.
 . "$(dirname "$0")/env.sh"
 for a in "$@"; do

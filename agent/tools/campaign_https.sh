@@ -1,4 +1,5 @@
 #!/bin/bash
+export SCBW_MUTE=1   # tests are silent (no sound device opened)
 # campaign_https.sh: a browser joins a campaign match from the host's HTTPS web map on a
 # non-localhost address (src/campaign/web.rs serve_tls). The host binds 0.0.0.0
 # (SCBW_NET_BIND), paces its matches (PACE_US, default 70000 us a frame) and prints each
@@ -9,6 +10,8 @@
 # pref network.http.http3.enable). CLICK=1: chromium without the flag, its warning page passed
 # by typing "thisisunsafe". Also: a restarted host keeps the same certificate.
 # Needs web/build.sh done (web/pkg) and web/auto. O=<dir> for logs.
+# Headless: never a window on the user's display (a campaign host refuses one anyway).
+unset DISPLAY WAYLAND_DISPLAY
 T=$(cd "$(dirname "$0")" && pwd); cd "$T/../.."
 export SCBW_INSTALL=${SCBW_INSTALL:-$HOME/Downloads/StarCraft-BroodWar_1.16.1}
 B=${SCBW:-$PWD/target/release/scbw}; O=${O:-/tmp/scbw-campaign-https}; K=${K:-1500}; WP=${WP:-18812}; SP=$((WP + 1))
@@ -16,7 +19,7 @@ ADDR=${ADDR:-$(ip -4 -o addr show scope global | awk '{print $4}' | cut -d/ -f1 
 MAP=${MAP:-$SCBW_INSTALL/maps/BroodWar/(2)Astral Balance.scm}
 rm -rf $O; mkdir -p $O
 printf 'faction Z 1 Zerg\nfaction T 0 Terran\narea 0 0 0 A\narea 1 0 1 B\nborder 0 1\npool %s\n' "$MAP" > $O/world.txt
-start() { mkfifo $O/in.$1; (SCBW_NET_BIND=0.0.0.0 SCBW_NET_PACE_US=${PACE_US:-70000} SCBW_CAMPAIGN_HASH_AT=$K timeout 500 $B campaign host $O/world.txt $O/dir 0 $WP < $O/in.$1 > $O/$1.log 2>&1) & HP=$!; exec 3> $O/in.$1
+start() { mkfifo $O/in.$1; (SCBW_CAMPAIGN_AUTO=1 SCBW_NET_BIND=0.0.0.0 SCBW_NET_PACE_US=${PACE_US:-70000} SCBW_CAMPAIGN_HASH_AT=$K timeout 500 $B campaign host $O/world.txt $O/dir 0 $WP < $O/in.$1 > $O/$1.log 2>&1) & HP=$!; exec 3> $O/in.$1
   for i in $(seq 40); do grep -q "web map" $O/$1.log 2>/dev/null && break; sleep 0.25; done; sleep 2; }
 fp() { echo | openssl s_client -connect $ADDR:$SP 2>/dev/null | openssl x509 -noout -fingerprint -sha256 2>/dev/null; }
 start host

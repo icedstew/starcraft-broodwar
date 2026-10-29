@@ -390,6 +390,9 @@ pub struct Ctx {
     pub no_sound: bool,
     /// 0x6509c4: the game is paused (the game menu's Pause / Resume, 0x4c9890).
     pub paused: bool,
+    /// Ours: a campaign match (bw::State::campaign): the end-mission dialog's quit button
+    /// reads "Leave" and leaves at once (the army goes to the AI), no score screen.
+    pub campaign: bool,
     /// 0x57eee8 (stride 0x24) of the local slot 0x512688 (2: a human player).
     pub player_type: u8,
     /// 0x66fbfa (the game menu shows Pause in multiplayer above 8).
@@ -535,6 +538,8 @@ pub enum Action {
     QuitMission,
     /// 0x4c9280 in a multiplayer game: quit to the score screen (0x51ce90 = 6 won / 7 else).
     QuitScore(u8),
+    /// Ours: leave a campaign match (no score screen, no replay saved).
+    Leave,
     ExitProgram,
     /// OK in the defeat / victory dialog (0x460f30 / 0x460fa0): the game ends and the
     /// score screen follows (0x51ce90 = 7 / 6).
@@ -735,6 +740,12 @@ impl Menu {
             Kind::EndMission if ctx.multiplayer || ctx.replay => {
                 show(&mut dlg, 1, false);
                 end_mission_label(&mut dlg, &ctx, ctx.elapsed_secs);
+                if ctx.campaign {
+                    // The first character is the button's hotkey (as gluAll's texts).
+                    if let Some(c) = find(&mut dlg, 2) {
+                        c.text = b"LLeave".to_vec();
+                    }
+                }
                 if ctx.bnet {
                     show(&mut dlg, 3, false);
                     timers.set(0, 0, 1, 200, None);
@@ -1738,6 +1749,8 @@ impl Menu {
             }
             // 0x4ca370
             (Kind::EndMission, 1) => (Some((Kind::Restart, self.depth)), Action::None),
+            // Ours: a campaign match leaves without the surrender question.
+            (Kind::EndMission, 2) if ctx.campaign => (None, Action::Leave),
             (Kind::EndMission, 2) => (Some((Kind::QuitMission, self.depth)), Action::None),
             (Kind::EndMission, 3) => (Some((Kind::Quit, self.depth)), Action::None),
             (Kind::Restart, -2) => (None, Action::Restart),

@@ -1121,6 +1121,13 @@ pub fn late_game<'a>(a: &'a view::Assets, b: &[u8]) -> std::io::Result<(Scene<'a
     // 0x4ee180 is skipped for a game from a save: the chat's recipients and the lines shown
     // would stay empty (a joiner never saw a chat line).
     scene.chat.game_start(&scene.st);
+    // The view of the joiner's own army, as a new game sets it (0x57f0b0 = 1 << the local
+    // player; the save does not hold it, a loaded State had player 0's), and the selection
+    // circle rows 0x581d6a for it (0x49b870; the save's were the host's: own units red). The
+    // joiner has nothing selected yet, so no sprite changes.
+    scene.st.local_vision_mask = 1 << n;
+    let st = &mut scene.st;
+    view::with_data(a, |d| st.selection_circle_colors(d));
     let (mut tr, _, _, early) = super::snet::take_transport(false).ok_or_else(|| std::io::Error::other("no link to the game"))?;
     tr.set_first(f);
     let table: Vec<(u8, u8)> = players.iter().map(|q| (q.0, q.1)).collect();

@@ -162,6 +162,7 @@ pub fn join_ids() -> Vec<u8> {
 /// this process, each its own thread and lobby transport; prints `MATCH <border> <code>`
 /// per match, `border B frame K hash H` at `frames` and how each ended.
 pub fn test_matches(map: &str, k: Option<u32>, count: u16) -> Result<(), String> {
+    crate::view::forbid_windows();
     let (tx, rx) = std::sync::mpsc::channel();
     let hub = Hub::new(0, None)?.0;
     let mut stops = Vec::new();
@@ -212,10 +213,17 @@ const STATS_EVERY: Duration = Duration::from_secs(1);
 /// code goes to `report` first); `report` gets its stats every second and the end. `hash_at`: print `border B frame K
 /// hash H` at that frame (tests).
 pub fn run(spec: Spec, hub: Hub, report: Sender<Report>, orders: Receiver<Order>, allow: Option<Allow>, hash_at: Option<u32>) -> End {
-    let end = match play(&spec, &hub, &report, &orders, allow, hash_at) {
-        Ok(e) => e,
-        Err(e) => {
-            eprintln!("campaign: border {}: {e}", spec.border);
+    // A panic in the game (a map our port mishandles) is a failed start, not a stuck border.
+    let played = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| play(&spec, &hub, &report, &orders, allow, hash_at)));
+    let end = match played {
+        Ok(Ok(e)) => e,
+        Ok(Err(e)) => {
+            eprintln!("campaign: border {}: {}: {e}", spec.border, spec.map);
+            End::Failed
+        }
+        Err(p) => {
+            let why = p.downcast_ref::<String>().cloned().or_else(|| p.downcast_ref::<&str>().map(|s| s.to_string())).unwrap_or_default();
+            eprintln!("campaign: border {}: {}: the game panicked: {why}", spec.border, spec.map);
             End::Failed
         }
     };
@@ -268,6 +276,7 @@ fn play(spec: &Spec, hub: &Hub, report: &Sender<Report>, orders: &Receiver<Order
     let frame_len = frame_time();
     let mut next = Instant::now();
     let mut last_stats = Instant::now() - STATS_EVERY;
+    let mut last_humans: [Vec<String>; 2] = Default::default();
     let mut hashed = false;
     loop {
         match orders.try_recv() {
@@ -316,10 +325,19 @@ fn play(spec: &Spec, hub: &Hub, report: &Sender<Report>, orders: &Receiver<Order
         if let Some(k) = hash_at.filter(|&k| !hashed && frame >= k && confirmed >= k) {
             hashed = true;
             println!("border {} frame {k} hash {:016x}", spec.border, scene.st.state_hash());
+            // SCBW_CAMPAIGN_STOP_AT_HASH (the pool sweep): the match is done there.
+            if std::env::var_os("SCBW_CAMPAIGN_STOP_AT_HASH").is_some() {
+                return Ok(End::Stopped);
+            }
         }
-        if last_stats.elapsed() >= STATS_EVERY {
+        // Every second, and at once when a side's humans change (a leave frees the name for
+        // another match: the host's "in use" check reads these).
+        let s = stats(&scene.st, &seats);
+        let humans = [s.sides[0].humans.clone(), s.sides[1].humans.clone()];
+        if last_stats.elapsed() >= STATS_EVERY || humans != last_humans {
             last_stats = Instant::now();
-            let _ = report.send(Report::Stats(stats(&scene.st, &seats)));
+            last_humans = humans;
+            let _ = report.send(Report::Stats(s));
         }
         if let Some(e) = result(&scene.st, &seats) {
             eprintln!("campaign: border {} ends at frame {frame}: {e:?}", spec.border);

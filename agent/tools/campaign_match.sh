@@ -1,4 +1,5 @@
 #!/bin/bash
+export SCBW_MUTE=1   # tests are silent (no sound device opened)
 # campaign_match.sh: campaign matches end to end, headless (src/campaign/runner.rs). One
 # process runs COUNT (default 2) matches on MAP at Fastest, both armies computers; a joiner
 # (its install has no maps) joins match 0 by code JOIN_AFTER (default 3) s in and takes an
@@ -6,6 +7,8 @@
 # CHAT=1: a second joiner takes the other army; the first says "!secret plan" (a faction
 # line) and "hello all": the second must get only "hello all", the host the faction line.
 # O=<dir> for logs; ARMY=<slot> asks for that army.
+# Headless: never a window on the user's display (a campaign host refuses one anyway).
+unset DISPLAY WAYLAND_DISPLAY
 T=$(cd "$(dirname "$0")" && pwd); cd "$T/../.."
 export SCBW_INSTALL=${SCBW_INSTALL:-$HOME/Downloads/StarCraft-BroodWar_1.16.1}
 B=${SCBW:-$PWD/target/release/scbw}; O=${O:-/tmp/scbw-campaign}; K=${K:-900}

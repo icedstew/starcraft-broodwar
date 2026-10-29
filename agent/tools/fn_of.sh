@@ -1,4 +1,5 @@
 #!/bin/bash
+export SCBW_MUTE=1   # tests are silent (no sound device opened)
 # fn_of.sh <pattern>: list the decompiled functions whose body matches <pattern> (grep -E),
 # e.g. fn_of.sh 'DAT_0051ca14 = ' to find who writes a global.
 . "$(dirname "$0")/env.sh"

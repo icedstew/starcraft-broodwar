@@ -1,4 +1,5 @@
 #!/bin/bash
+export SCBW_MUTE=1   # tests are silent (no sound device opened)
 # webjoin.sh [frames] [delay]: net phase 5 check on Linux. A native `scbw nethost` and a headless
 # Chromium joining it (web/pkg built with web/build.sh, the install in web/auto/), each with
 # scripted commands; prints both peers' `frame K hash H` (must be equal). O=<dir> for the logs.

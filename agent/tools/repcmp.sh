@@ -1,4 +1,5 @@
 #!/bin/bash
+export SCBW_MUTE=1   # tests are silent (no sound device opened)
 # repcmp.sh <replay.rep> <frames>: play a replay in the emulator (real 1.16.1 game code via
 # re/emu_game.py SCBW_REPLAY) and in scbw (`scbw reptrace`), diff the per-frame traces.
 # Prints "MATCH n" or the first differing lines; full diff in $O/repdiff.txt, traces in
