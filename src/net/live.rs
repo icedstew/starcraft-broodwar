@@ -151,7 +151,7 @@ pub fn decode_setup(b: &[u8], local: u8) -> Option<(GameSetup, Vec<(u8, u8)>)> {
 
 #[cfg(not(target_arch = "wasm32"))]
 /// The scenario.chk of a map argument (.scm / .scx archive, bare .chk, or a replay's).
-fn load_chk(path: &str) -> std::io::Result<Vec<u8>> {
+pub(crate) fn load_chk(path: &str) -> std::io::Result<Vec<u8>> {
     let l = path.to_ascii_lowercase();
     if l.ends_with(".rep") {
         return Ok(crate::replay::Replay::parse(&std::fs::read(path)?)?.chk);
@@ -416,6 +416,10 @@ pub struct NetGame {
     drops_fast: bool,
     /// Joiners sent their start: when (they load it before their turns come).
     joined_at: Vec<(u8, Instant)>,
+    /// Ours (campaign matches): the army a joiner of this name may take (None: refused).
+    pub(crate) join_filter: Option<Box<dyn FnMut(&[u8]) -> Option<u8>>>,
+    /// Links refused or kicked since the last look (the campaign host closes them).
+    pub(crate) refused: Vec<u8>,
 }
 
 /// A joiner's time to take the game's state in and load it before a stall drops it.
@@ -496,6 +500,25 @@ impl NetGame {
         Ok(n)
     }
 
+    /// Host: remove link `p` from the game (a kick), as a dropped player.
+    pub(crate) fn kick(&mut self, p: u8) {
+        self.join_queue.retain(|q| q.0 != p);
+        if self.se.live_players().iter().any(|q| q.0 == p) {
+            self.decide_leave(p, 6);
+        }
+        self.refused.push(p);
+    }
+
+    /// The players in the game: (link id, human).
+    pub(crate) fn links(&self) -> Vec<(u8, u8)> {
+        self.se.live_players().into_iter().map(|q| (q.0, q.2)).collect()
+    }
+
+    /// The session's next frame and its first frame with a turn missing.
+    pub(crate) fn frames(&self) -> (u32, u32) {
+        (self.se.frame, self.se.confirmed)
+    }
+
     /// Host: `player` is gone (quit, or its connection died). Fence at `Session::fence_for`
     /// of the turns the host holds, tell everybody (reliable), apply it here.
     fn decide_leave(&mut self, player: u8, reason: u8) {
@@ -530,14 +553,27 @@ impl NetGame {
             }
         }
         if self.joining.is_none() && !self.join_queue.is_empty() {
-            let (p, want, name) = self.join_queue.remove(0);
-            match scene.st.enhanced_pick(want) {
+            let (p, mut want, name) = self.join_queue.remove(0);
+            if let Some(f) = self.join_filter.as_mut() {
+                match f(&name) {
+                    Some(a) => want = a,
+                    None => {
+                        eprintln!("net: player {p} ({}) may not join this game", String::from_utf8_lossy(&name));
+                        self.refused.push(p);
+                        return;
+                    }
+                }
+            }
+            match scene.st.enhanced_pick(want).filter(|&(_, n)| self.join_filter.is_none() || n == want) {
                 Some((h, n)) => {
                     eprintln!("net: player {p} joins as human {h}, army {n}");
                     scene.st.send_command(&crate::bw::enhanced::join_command(h, n, p, &name));
                     self.joining = Some((p, h, n, None));
                 }
-                None => eprintln!("net: player {p} cannot join: no army"),
+                None => {
+                    eprintln!("net: player {p} cannot join: no army");
+                    self.refused.push(p);
+                }
             }
         }
         let Some((p, h, n, Some(f))) = self.joining else { return };
@@ -702,7 +738,7 @@ impl NetGame {
     }
 
     fn make(se: Session, tr: Transport, next_send: u32, script: Vec<(u32, Cmd)>, headless: Option<u32>, host: bool) -> NetGame {
-        NetGame { se, tr, next_send, script, headless, finished: None, host, verbose: std::env::var_os("NETREP_DEBUG").is_some(), last_report: Instant::now(), report: None, reported: false, hashes: HashMap::new(), desync: None, over: None, quitting: Vec::new(), replay_path: std::env::var("SCBW_NET_REPLAY").ok(), quit_at: std::env::var("SCBW_NET_QUIT_AT").ok().and_then(|v| v.parse().ok()), stall_since: None, join_queue: Vec::new(), joining: None, drops_fast: false, joined_at: Vec::new() }
+        NetGame { se, tr, next_send, script, headless, finished: None, host, verbose: std::env::var_os("NETREP_DEBUG").is_some(), last_report: Instant::now(), report: None, reported: false, hashes: HashMap::new(), desync: None, over: None, quitting: Vec::new(), replay_path: std::env::var("SCBW_NET_REPLAY").ok(), quit_at: std::env::var("SCBW_NET_QUIT_AT").ok().and_then(|v| v.parse().ok()), stall_since: None, join_queue: Vec::new(), joining: None, drops_fast: false, joined_at: Vec::new(), join_filter: None, refused: Vec::new() }
     }
 }
 

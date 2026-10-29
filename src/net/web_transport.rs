@@ -7,7 +7,7 @@
 //! frame. (Raw JS rather than web-sys' WebTransport bindings: those need
 //! `--cfg=web_sys_unstable_apis` and the stream readers are simpler to write in JS.)
 
-use super::transport::{HOST, Inbound, Transport, hello_msg, parse_start, unhex};
+use super::transport::{HOST, Inbound, Transport, hello_msg, parse_start, split_code};
 use js_sys::Uint8Array;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, mpsc};
@@ -83,8 +83,7 @@ impl Transport {
     /// Browser `Transport::join`: connect to `target` (`ip:port#certhash`) and say hello as
     /// `me`; the connection completes in the background and Start arrives through `poll`.
     pub fn join_web(target: &str, me: u8, first: u32) -> Result<Transport, String> {
-        let (addr, hash) = target.split_once('#').ok_or("expected addr#hash")?;
-        let hash = unhex(hash)?;
+        let (addr, hash, game) = split_code(target)?;
         let (itx, rx) = mpsc::channel();
         let max_dgram = Arc::new(AtomicUsize::new(1000));
         let (tx1, md) = (itx.clone(), max_dgram.clone());
@@ -106,7 +105,7 @@ impl Transport {
         let on_err = Closure::<dyn FnMut(String)>::new(move |e: String| {
             let _ = itx.send(Inbound::Error(e));
         });
-        let link = wt_connect(&format!("https://{addr}/"), &hash, &hello_msg(me), &on_start, &on_dgram, &on_err);
+        let link = wt_connect(&format!("https://{addr}/"), &hash, &hello_msg(me, game), &on_start, &on_dgram, &on_err);
         // The callbacks live as long as the page.
         on_start.forget();
         on_dgram.forget();

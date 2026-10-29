@@ -363,3 +363,15 @@ through a 1.16.1 save at the join frame so the state equals the joiner's load. S
 as C_LATE control parts. Drops wait 3 s (no dialog). Test: `agent/tools/enhanced.sh`
 (`QUIT_AT`, `ARMY`). Host leaving ends the game. Open: LAN list advert for running games,
 browser late-join test, visible "AI took army" line, window check.
+
+## Campaign host pieces (2026-10-28, branch campaign)
+
+- `transport.rs Hub`: one QUIC endpoint for many lobbies (campaign matches). Code
+  `addr#hash#game`; the hello is `[1, me, game u16]` (`hello_msg(me, Some(game))`, also the
+  browser's). `Hub::lobby(game, me, ids)` gives that game's host `Transport`; `close` /
+  `drop_link` end links. A link the host closed itself sends no `Lost`.
+- Control messages stream: `flush` sends up to `CTL_WINDOW` (16) datagrams of <= 600
+  control bytes per peer per flush (the later ones carry acks + control only). A joiner's
+  ~160 KB start went from 13.7 s to 1.1 s at real-time pace.
+- A save of an enhanced game with no human slot (all armies AI) lists its computers in the
+  header text (`view.rs save_file`); 0x4d02d0 would refuse it.

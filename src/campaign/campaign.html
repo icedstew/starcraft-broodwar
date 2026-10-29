@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Campaign Map</title>
+<!-- Ours (src/campaign/web.rs serves it; PLAY_URL is filled in there). -->
+<style>
+:root { --bg: #07090c; --panel: #10161d; --line: #2a3a48; --text: #d6e2ea; --dim: #7f93a3; --accent: #39d0c0; --warn: #f0b040; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.4 system-ui, sans-serif; }
+header { padding: 10px 16px; border-bottom: 1px solid var(--line); display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+header h1 { font-size: 17px; margin: 0; letter-spacing: .04em; }
+#status { color: var(--dim); }
+main { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 12px; padding: 12px 16px; }
+@media (max-width: 800px) { main { grid-template-columns: 1fr; } }
+#map { width: 100%; height: auto; background: #0b1016; border: 1px solid var(--line); border-radius: 6px; }
+section { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; margin-bottom: 12px; }
+section h2 { font-size: 13px; margin: 0 0 8px; color: var(--dim); text-transform: uppercase; letter-spacing: .06em; }
+input, select, button { font: inherit; color: var(--text); background: #0b1016; border: 1px solid var(--line); border-radius: 4px; padding: 5px 8px; }
+button { cursor: pointer; background: #163038; border-color: #2d5a62; }
+button:hover { border-color: var(--accent); }
+.row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin: 4px 0; }
+.sides { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.side { border-left: 3px solid; padding-left: 8px; }
+.dim { color: var(--dim); }
+.warn { color: var(--warn); }
+#chatlog { height: 140px; overflow-y: auto; font-size: 13px; margin-bottom: 6px; }
+#minimap { width: 100%; image-rendering: pixelated; border: 1px solid var(--line); margin-top: 8px; display: none; }
+code { font-size: 11px; word-break: break-all; color: var(--dim); }
+.area-label { fill: var(--text); font-size: 13px; text-anchor: middle; pointer-events: none; }
+.sq { cursor: pointer; }
+</style>
+</head>
+<body>
+<header><h1>Campaign</h1><span id="status">connecting…</span></header>
+<main>
+  <svg id="map" viewBox="0 0 800 520" role="img" aria-label="Campaign map"></svg>
+  <div>
+    <section id="who">
+      <h2>You</h2>
+      <div class="row"><input id="name" placeholder="name" maxlength="23" size="14"><select id="faction"></select><button id="joinf">Play</button></div>
+      <div id="whoami" class="dim"></div>
+    </section>
+    <section><h2>Factions</h2><div id="factions"></div></section>
+    <section id="match"><h2>Match</h2><div id="detail" class="dim">Pick a square on a border.</div><img id="minimap" alt="Minimap of the match as your side sees it"></section>
+    <section><h2>Faction chat</h2><div id="chatlog"></div><div class="row"><input id="say" placeholder="message" maxlength="120" style="flex:1"><button id="send">Send</button></div></section>
+    <section id="admin" hidden><h2>Admin</h2><div class="row"><input id="cmd" placeholder="status, pause, kick NAME…" style="flex:1"><button id="run">Run</button></div><pre id="out" class="dim" style="white-space:pre-wrap;font-size:12px"></pre></section>
+  </div>
+</main>
+<script>
+const PLAY = PLAY_URL;
+// tunit.pcx rows 0..11, roughly (the faction's colour in the game).
+const COLOURS = ["#f40404", "#0c48cc", "#2cb494", "#88409c", "#f88c14", "#703014", "#cce0d0", "#fcfc38", "#088008", "#fcfc7c", "#ecc4b0", "#4068d4"];
+const RACES = { 0: "Zerg", 1: "Terran", 2: "Protoss", 6: "Random" };
+const params = new URLSearchParams(location.search);
+const token = params.get("token");
+let me = "";
+try { me = localStorage.getItem("campaign-name") || ""; } catch (e) {}
+if (params.get("name")) me = params.get("name");
+let st = null, sel = params.has("border") ? +params.get("border") : -1;
+const $ = id => document.getElementById(id);
+$("name").value = me;
+if (token) $("admin").hidden = false;
+
+const colour = f => f < 0 ? "#444" : COLOURS[st.factions[f].colour % 12] || "#999";
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const clock = frames => { const s = Math.floor(frames * 0.042); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
+
+async function poll() {
+  try {
+    const r = await fetch(`/state?name=${encodeURIComponent(me)}`);
+    st = await r.json();
+    draw();
+    $("status").textContent = st.winner >= 0 ? `${st.factions[st.winner].name} won the campaign` : st.paused ? "paused" : `${st.borders.filter(b => b.live).length} matches live`;
+  } catch (e) { $("status").textContent = "host unreachable"; }
+}
+
+function draw() {
+  const xs = st.areas.map(a => a.x), ys = st.areas.map(a => a.y);
+  const [x0, x1, y0, y1] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
+  const P = (a) => [60 + (x1 > x0 ? (a.x - x0) / (x1 - x0) : .5) * 680, 50 + (y1 > y0 ? (a.y - y0) / (y1 - y0) : .5) * 420];
+  let svg = "";
+  for (const b of st.borders) {
+    const [p, q] = [P(st.areas[b.a]), P(st.areas[b.b])];
+    svg += `<line x1="${p[0]}" y1="${p[1]}" x2="${q[0]}" y2="${q[1]}" stroke="${b.live ? "#5a7a8a" : "#26323c"}" stroke-width="${b.live ? 3 : 2}"/>`;
+  }
+  for (const a of st.areas) {
+    const [x, y] = P(a);
+    svg += `<circle cx="${x}" cy="${y}" r="22" fill="${colour(a.owner)}" stroke="#000" stroke-width="2"/><text class="area-label" x="${x}" y="${y + 38}">${esc(a.name)}</text>`;
+  }
+  st.borders.forEach((b, i) => {
+    if (!b.live) return;
+    const [p, q] = [P(st.areas[b.a]), P(st.areas[b.b])];
+    const [x, y] = [(p[0] + q[0]) / 2, (p[1] + q[1]) / 2];
+    const mine = b.sides.some(s => s.faction === st.faction);
+    const idle = b.idle >= 5 * 1428;
+    svg += `<rect class="sq" data-b="${i}" x="${x - 9}" y="${y - 9}" width="18" height="18" fill="${mine ? "#39d0c0" : "#c8d4dc"}" stroke="${i === sel ? "#fff" : idle ? "#f0b040" : "#000"}" stroke-width="${i === sel ? 3 : 2}" tabindex="0" role="button" aria-label="Match ${esc(st.areas[b.a].name)} - ${esc(st.areas[b.b].name)}"/>`;
+  });
+  $("map").innerHTML = svg;
+  $("map").querySelectorAll(".sq").forEach(r => { r.onclick = r.onkeydown = e => { if (e.type === "keydown" && e.key !== "Enter") return; sel = +r.dataset.b; draw(); minimap(); }; });
+  $("factions").innerHTML = st.factions.map((f, i) => `<div><span style="color:${COLOURS[f.colour % 12]}">■</span> ${esc(f.name)} <span class="dim">${RACES[f.race] || ""} · ${f.areas} areas${f.areas ? "" : " · eliminated"}</span></div>`).join("");
+  const fsel = $("faction");
+  if (fsel.options.length !== st.factions.length) fsel.innerHTML = st.factions.map((f, i) => `<option value="${i}">${esc(f.name)}</option>`).join("");
+  $("whoami").innerHTML = st.faction >= 0 ? `Playing for <b style="color:${colour(st.faction)}">${esc(st.factions[st.faction].name)}</b>${st.factions[st.faction].areas ? "" : st.pick ? " (eliminated: pick a faction to go on)" : " (eliminated)"}` : me ? "Pick a faction and press Play." : "Choose a name (unique in this campaign) and a faction.";
+  detail();
+  $("chatlog").innerHTML = st.chat.map(c => `<div><b>${esc(c[0])}</b>: ${esc(c[1])}</div>`).join("");
+}
+
+function detail() {
+  const b = st.borders[sel];
+  if (!b || !b.live) { $("detail").textContent = "Pick a square on a border."; $("minimap").style.display = "none"; return; }
+  const side = (s) => {
+    const f = st.factions[s.faction];
+    if (s.humans === undefined) return `<div class="side" style="border-color:${COLOURS[f.colour % 12]}"><b>${esc(f.name)}</b><div class="dim">hidden</div></div>`;
+    return `<div class="side" style="border-color:${COLOURS[f.colour % 12]}"><b>${esc(f.name)}</b>
+      <div>${s.humans.length ? s.humans.map(esc).join(", ") : "<span class=dim>computer</span>"}</div>
+      <div>Supply ${s.supply[0]}/${s.supply[1]} · ${s.workers} workers</div>
+      <div>${s.minerals} min · ${s.gas} gas</div><div class="dim">mined ${s.mined[0]} / ${s.mined[1]}</div></div>`;
+  };
+  let h = `<div>${esc(st.areas[b.a].name)} – ${esc(st.areas[b.b].name)} <span class="dim">· ${esc(b.map)} · ${clock(b.frame)}</span></div>`;
+  if (b.idle >= 5 * 1428) h += `<div class="warn">No fighting or mining: draw in ${Math.max(0, 10 - Math.floor(b.idle / 1428))} min</div>`;
+  h += `<div class="sides" style="margin-top:6px">${b.sides.map(side).join("")}</div>`;
+  if (b.code) {
+    const url = `${PLAY}${PLAY.includes("?") ? "&" : "?"}join=${encodeURIComponent(b.code)}&name=${encodeURIComponent(me)}`;
+    h += `<div class="row" style="margin-top:8px"><a href="${esc(url)}" target="_blank"><button>Join in browser</button></a><button id="copy">Copy for scbw</button></div><code id="cmdline">scbw campaign join '${esc(b.code)}' ${esc(me)}</code>`;
+  }
+  $("detail").innerHTML = h;
+  const c = $("copy");
+  if (c) c.onclick = () => navigator.clipboard && navigator.clipboard.writeText($("cmdline").textContent);
+}
+
+async function minimap() {
+  const b = st && st.borders[sel], img = $("minimap");
+  if (!b || !b.code) { img.style.display = "none"; return; }
+  const r = await fetch(`/minimap?border=${sel}&name=${encodeURIComponent(me)}`);
+  if (!r.ok) { img.style.display = "none"; return; }
+  const u = URL.createObjectURL(await r.blob());
+  img.onload = () => URL.revokeObjectURL(u);
+  img.src = u;
+  img.style.display = "block";
+}
+
+$("joinf").onclick = async () => {
+  me = $("name").value.trim();
+  try { localStorage.setItem("campaign-name", me); } catch (e) {}
+  const r = await fetch(`/join?name=${encodeURIComponent(me)}&faction=${$("faction").value}`, { method: "POST" });
+  if (!r.ok) alert(await r.text());
+  poll();
+};
+$("name").onchange = () => { me = $("name").value.trim(); try { localStorage.setItem("campaign-name", me); } catch (e) {} poll(); };
+const send = async () => {
+  const t = $("say").value.trim();
+  if (!t) return;
+  const r = await fetch(`/chat?name=${encodeURIComponent(me)}`, { method: "POST", body: t });
+  if (!r.ok) alert(await r.text()); else $("say").value = "";
+  poll();
+};
+$("send").onclick = send;
+$("say").onkeydown = e => { if (e.key === "Enter") send(); };
+const run = async () => {
+  const r = await fetch(`/admin?token=${encodeURIComponent(token)}&cmd=${encodeURIComponent($("cmd").value)}`, { method: "POST" });
+  $("out").textContent = await r.text();
+  poll();
+};
+$("run").onclick = run;
+$("cmd").onkeydown = e => { if (e.key === "Enter") run(); };
+poll().then(minimap);
+setInterval(poll, 2000);
+setInterval(() => { if (sel >= 0) minimap(); }, 4000);
+</script>
+</body>
+</html>

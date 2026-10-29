@@ -480,7 +480,16 @@ impl<'a> Scene<'a> {
         // not kept: the map's title (0x596845) and path (0x57fd3c), the game type name
         // (0x4aad40) and the game info 0x5967f8 (zeros but the template and what 0x4cf160
         // sets).
-        let mut f = crate::saveload::save_text(name, multi, &slots, None, b"", b"")?;
+        // Ours: an enhanced game whose armies are all the AI's (a campaign match) saves too;
+        // 0x4d02d0 refuses a game with no human slot, but that check only feeds the
+        // header's "Players:" text, so the computers are listed there instead.
+        let mut text_slots = slots.clone();
+        if self.st.enhanced && !slots.iter().take(8).any(|s| s[8] == 2) {
+            for s in text_slots.iter_mut().take(8).filter(|s| s[8] == 1) {
+                s[8] = 2;
+            }
+        }
+        let mut f = crate::saveload::save_text(name, multi, &text_slots, None, b"", b"")?;
         let mut o = bw::save::Out::default();
         let mut info = [0u8; 0x8d];
         // 0x596865: the game template, +0x6d of the game info.

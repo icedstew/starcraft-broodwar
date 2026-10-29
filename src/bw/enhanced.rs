@@ -220,6 +220,23 @@ impl State {
         }
     }
 
+    /// A campaign match loaded from its save (the host restarted): nobody is connected, so
+    /// every army is the AI's (a human one taken over as when its last human leaves).
+    pub fn campaign_resume(&mut self, d: &Data, armies: [u8; 2], idle_frames: u32) {
+        self.multiplayer = true;
+        self.enhanced = true;
+        self.campaign = true;
+        self.idle_frames = idle_frames;
+        self.activity = self.activity_count();
+        for n in armies {
+            if self.player_types[n as usize] == 2 {
+                self.ai_take_over(d, n);
+            } else {
+                self.ai_taken |= 1 << n;
+            }
+        }
+    }
+
     /// Deaths (men and buildings lost, 0x581e74 / 0x581fc4) and minerals and gas gathered
     /// (0x57f180 / 0x57f150), every player: the campaign draw timer's activity.
     pub fn activity_count(&self) -> i64 {
@@ -232,7 +249,7 @@ impl State {
     /// player still in the game gets a draw (0x58d700 = 5, the end screen as a trigger's
     /// draw 0x4c5070 then 0x48a200 settle it).
     pub fn campaign_tick(&mut self) {
-        if !self.campaign {
+        if !self.campaign || self.trig.paused {
             return;
         }
         let a = self.activity_count();

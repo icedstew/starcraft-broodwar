@@ -455,7 +455,7 @@ fn sprintf_s(fmt: &[u8], arg: &[u8]) -> Vec<u8> {
 
 /// The packet 0x4c2420 / 0x47f7a0 send: type, an unset byte, the text (at most 0x4f
 /// characters, 0x41008e) and its NUL.
-fn packet(ty: u8, text: &[u8]) -> Vec<u8> {
+pub(crate) fn packet(ty: u8, text: &[u8]) -> Vec<u8> {
     let mut p = vec![ty, 0];
     p.extend_from_slice(&text[..text.len().min(0x4f)]);
     p.push(0);

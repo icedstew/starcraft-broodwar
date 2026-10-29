@@ -88,38 +88,76 @@ idle_frames). Checked: unit test `bw::enhanced::tests::draw_timer` (warnings 5..
 mining and by a death, draw at 10 min, nothing when off); full regression set passed (flag
 off: replays / normal games unchanged).
 
-### 3. Headless match runner — `src/campaign/match.rs`
-One thread per match: load map, enhanced + campaign setup, two armies both AI from frame 0,
-host seat with no army, Fastest pacing, accepts late joins on its endpoint. Every ~1 s sends
-`MatchStats` to the campaign thread (per side: humans, supply, workers, army value, mined,
-game time, draw timer; minimap bitmap per side from that side's vision). Ends with
-`Result {winner side | draw | cancelled}`. Check: two runners side by side in one process,
-hashes match a joiner's.
+### 3. Headless match runner — `src/campaign/runner.rs` (DONE 2026-10-28)
+Done: `runner::run` (a thread per match): melee setup on the map's first two start slots
+(both computers, faction name / race / colour, own force each, template +0xf = 0: 0x4c3ed0
+would otherwise ally two computers and the match ended at frame 2 in a draw), the host plays
+the first empty slot (named "Faction") and sends only join / pause commands; `ai_taken` holds
+both armies so `enhanced_pick` gives joiners one. Paced at 42 ms a frame. Reports: code,
+`Stats` every second (humans, supply, workers, minerals / gas, mined, frame, idle), end
+(`Won(side)` / `Draw` / `Stopped` / `Failed`, from 0x58d700).
+Found and fixed on the way:
+- A multiplayer save refuses a game with no human slot (0x4d02d0's header text); an
+  all-computer enhanced game lists its computers there instead (view.rs `save_file`), or no
+  join could ever happen.
+- A joiner's start state (~160 KB) took 13.7 s at real-time pace (one 500-byte control part
+  a frame): `transport.rs flush` now sends up to `CTL_WINDOW` = 16 control datagrams per
+  flush; 1.1 s now. Applies to every game (regression set passed).
+Check: `agent/tools/campaign_match.sh` (two matches in one process, a joiner without maps
+takes an army: host and joiner hash equal at frame 900).
 
-### 4. Campaign host — `scbw campaign host <world> [--resume <dir>]`
-Owns the world; starts/kills runners per `live_borders`, applies results, restarts draws.
-Persistence: every ~2 min write campaign file (ownership, names -> faction, settings) + each
-live match's 1.16.1 save (the late-join save path); `--resume` loads them. Pause/resume:
-pause every match (1.16.1 pause command from the host seat).
+### 4. Campaign host — `scbw campaign host <world> [dir] [port] [web port]` (DONE 2026-10-28)
+Done: `src/campaign/host.rs`. Starts a runner per live border (map from the border or a
+random pool map; pool directories are walked recursively; a map that fails goes on a bad
+list, a border retries 3 times), applies results (`World::apply`: capture, cancel, start;
+elimination and campaign win printed), restarts draws. `dir` (default `campaign/`):
+`world.txt`, `players.txt`, `border-N.sav` + `.txt` every 2 min and at quit; a host started
+on a dir that has `world.txt` resumes: saved matches load (`Scene::from_save_steps`,
+`State::campaign_resume`: every army to the AI), the rest start fresh. Saving a match saves a
+copy of its state (saving changes a game, 0x4e3410). Stdin commands: status, pause, resume,
+kick, ban, unban, rename, end <border> <faction|draw>, save, quit. Pause = command 0x10 from
+the host seat in every match (also new ones); the draw timer stops while paused.
+Check: `agent/tools/campaign_host.sh` (`end 0 0` captures and restarts B-C as 0 v 2, a joiner
+registers, ban kicks it, save, quit, restart resumes the same world and matches).
+Measured: a generated 30-area world (14 live matches) keeps real time in one process, ~1 GB
+RSS (~70 MB a match: each thread loads its own assets), ~50% of one core.
 
-### 5. Join routing and identity
-Launch code = host address + cert hash + match id + name. One QUIC endpoint for all
-matches: the match id in the hello routes the link to that match's thread. Name registry:
-unique names; first join picks faction; `enhanced_pick` restricted to the faction's army.
-Kick (drop the link; may rejoin), ban (drop + name refused until the campaign ends; ban
-list saved with the campaign), rename. Faction colour forced into the match setup (not
-dealt).
+### 5. Join routing and identity (DONE 2026-10-28)
+Done: one endpoint for every match (`transport.rs Hub`): code `addr#hash#game`, the hello
+carries the game id (`hello_msg(me, Some(m))`, native and browser), each match a lobby
+`Transport` of its own; a game id is new per match so a border's next match never meets old
+links. Names (`host.rs Players`): unique (case-insensitive); a new name joining by code is
+registered to the side whose faction has fewer players (the web map registers explicitly);
+`NetGame.join_filter` gives a joiner only its faction's army or refuses it; kick = leave
+(reason 6) + link closed; ban = kick + name refused, saved in `players.txt`; rename (the old
+name is kicked from matches). Faction colours forced into the setup (`GameSetup.colors`).
+Not done: a refused joiner gets no reason (its link closes; the glue join loop times out).
+Check: covered by campaign_host.sh (joiner registered to faction 0, ban) and campaign_web.sh.
 
-### 6. Web map — host serves `campaign.html` + `/state.json?name=...`
-Areas and borders drawn in SVG, squares on live borders, panel with the match stats filtered
-to the viewer's faction (filtered on the host, not in the page). Join: browser -> the wasm
-build with `?join=<code>`; .exe -> copy code (`scbw join <code>`); `scbw://` handler later.
-Admin view behind a host token: pause, kick/rename, force-end.
+### 6. Web map — `src/campaign/web.rs`, `campaign.html` (DONE 2026-10-28)
+Done: std `TcpListener` server (default port 8780): `/` the page, `/state?name=` JSON (stats
+and join codes only for the viewer's faction's sides, filtered on the host), `/minimap`
+(a PNG of a copy of the state seen with that side's vision mask), `/join` (register / re-pick
+after elimination when `eliminated pick`), `/chat`, `/matches` (text, for the .exe),
+`/admin?token=&cmd=` (the token is printed at start), `/play/...` serves `web/` (or
+SCBW_CAMPAIGN_PLAY); Join in browser opens SCBW_CAMPAIGN_WEB (default `/play/index.html`)
+with `?join=<code>&name=`. Page: SVG map, squares on live borders (yellow outline from 5
+idle minutes), side panel (you / factions / match / faction chat / admin with `?token=`).
+Check: `agent/tools/campaign_web.sh` (curl of every endpoint incl. hidden enemy stats,
+refused second faction, PNG, 404 without token; SHOT=1 screenshot looked at: map, panel,
+hidden enemy side, join buttons, minimap).
+Not verified: the browser Join (the wasm build from `/play/`; a non-localhost http page
+cannot use WebTransport, so SCBW_CAMPAIGN_WEB must be https for remote players).
 
-### 7. In-game pieces (.exe)
-After a match: list of the faction's live matches (our dialog), pick -> join. Faction chat:
-web chat relayed by the host into every match of that faction as chat lines, and in-game
-chat to "faction" sent back out.
+### 7. In-game pieces (.exe) (DONE 2026-10-28, chooser in the terminal)
+Done: `scbw campaign join <web map url> <name> [faction]` registers, lists the faction's live
+matches, plays the one picked (a child process `scbw campaign join <code> <name>`) and lists
+again after it ends. Faction chat: web lines go to the faction's humans in each of its
+matches (Storm messages from the host seat "Faction"); in-game lines starting with `!` go to
+the faction's chat on the map and its other matches.
+Not done (decision): the match list is a terminal prompt, not an in-game glue dialog.
+Check: campaign_web.sh with CHOOSER=1 (lists 2 matches, plays one headless to frame 700,
+"!hi from the game" said at 400 shows in the faction chat, lists again).
 
 ### 8. World generator — `scbw campaign gen <areas> <factions> <map dir> > world.txt`
 Planar graph (points + Delaunay-ish neighbours, or a grid with jitter), maps from a pool
@@ -131,9 +169,9 @@ per side, `scbw://` URL handler.
 
 ## Open questions
 
-- Stats bandwidth: minimap per side per match every ~2 s to every web viewer; fine at 20
-  matches, measure.
+- Memory: ~70 MB per match (assets loaded per thread); share them if worlds get bigger.
+- The AI's play after a human leaves or on resume is not checked beyond its script starting.
 - Name-only identity lets anyone claim an enemy name and see their faction's stats; OK for
   friends, kick / ban / rename cover abuse.
-- Map pool contents: maps must load in 1.16.1 (910map SC:R-era maps may not); check each
-  pool map loads when the campaign starts and skip the rest.
+- Map pool contents: maps must load in 1.16.1 (910map SC:R-era maps may not); a map that
+  fails to start goes on the host's bad list (not checked up front).

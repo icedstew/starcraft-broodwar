@@ -48,6 +48,10 @@ pub const ANY: u8 = 255;
 const DGRAM: u8 = 1;
 /// Most frames of one player in one datagram.
 const MAX_RUN: usize = 64;
+/// Control bytes per datagram, and datagrams of control messages per flush (the later ones
+/// carry only control: a joiner's start state streams instead of 600 bytes a frame).
+const CTL_BYTES: usize = 600;
+const CTL_WINDOW: usize = 16;
 
 pub enum Event {
     /// The host sent Start: play as `slot` (the host's own Start carries its slot and setup).
@@ -126,9 +130,21 @@ impl<'a> Reader<'a> {
     }
 }
 
-/// The client's Hello lobby message (length-prefixed), shared by the native and browser clients.
-pub(super) fn hello_msg(me: u8) -> [u8; 6] {
-    [2, 0, 0, 0, 1, me]
+/// The client's Hello lobby message (length-prefixed), shared by the native and browser
+/// clients. Ours: a campaign host (`Hub`) takes the match after `me` (u16).
+pub(super) fn hello_msg(me: u8, game: Option<u16>) -> Vec<u8> {
+    match game {
+        None => vec![2, 0, 0, 0, 1, me],
+        Some(m) => vec![4, 0, 0, 0, 1, me, m as u8, (m >> 8) as u8],
+    }
+}
+
+/// A join code: `ip:port#certhash`, then `#match` for one match of a campaign host.
+pub(super) fn split_code(target: &str) -> Result<(&str, [u8; 32], Option<u16>), String> {
+    let mut it = target.split('#');
+    let (Some(addr), Some(hash)) = (it.next(), it.next()) else { return Err("expected addr#hash".into()) };
+    let game = it.next().map(|m| m.parse().map_err(|_| format!("bad match {m:?}"))).transpose()?;
+    Ok((addr, unhex(hash)?, game))
 }
 
 /// A client's reading of the host's Start (`ty` + `body` of one lobby message).
@@ -239,8 +255,8 @@ impl Transport {
     /// Connect to a host (`target` = `ip:port#certhash`) and say hello as `me` (`ANY`: the
     /// Start event says which slot the host gave).
     pub fn join(target: &str, me: u8, first: u32) -> Result<Transport, String> {
-        let (addr, hash) = target.split_once('#').ok_or("expected addr#hash")?;
-        let hash = Sha256Digest::new(unhex(hash)?);
+        let (addr, hash, game) = split_code(target)?;
+        let hash = Sha256Digest::new(hash);
         let config = ClientConfig::builder()
             .with_bind_default()
             .with_server_certificate_hashes([hash])
@@ -250,7 +266,7 @@ impl Transport {
         let (itx, rx) = mpsc::channel();
         let (tx, orx) = tmpsc::unbounded_channel();
         let max_dgram = Arc::new(AtomicUsize::new(1000));
-        spawn_runtime(itx.clone(), new_runtime()?, client_run(config, format!("https://{addr}"), me, itx, orx, max_dgram.clone()))?;
+        spawn_runtime(itx.clone(), new_runtime()?, client_run(config, format!("https://{addr}"), hello_msg(me, game), itx, orx, max_dgram.clone()))?;
         Ok(Transport::new(me, false, vec![HOST], first, rx, Box::new(move |to, d| drop(tx.send((to, d)))), max_dgram))
     }
 
@@ -433,17 +449,22 @@ impl Transport {
         players.sort();
         for &peer in &self.peers.clone() {
             // Control section first (small), so it is never starved by the turn runs.
-            let mut ctl = Vec::new();
-            let mut nctl = 0u8;
+            let mut groups: Vec<(u8, Vec<u8>)> = vec![(0, Vec::new())];
             for (seq, m) in self.ctl_unacked.get(&peer).into_iter().flatten() {
-                if ctl.len() + 6 + m.len() > 600 || nctl == 255 {
-                    break;
+                let g = groups.last_mut().unwrap();
+                if g.1.len() + 6 + m.len() > CTL_BYTES || g.0 == 255 {
+                    if groups.len() == CTL_WINDOW {
+                        break;
+                    }
+                    groups.push((0, Vec::new()));
                 }
-                ctl.extend_from_slice(&seq.to_le_bytes());
-                ctl.extend_from_slice(&(m.len() as u16).to_le_bytes());
-                ctl.extend_from_slice(m);
-                nctl += 1;
+                let g = groups.last_mut().unwrap();
+                g.1.extend_from_slice(&seq.to_le_bytes());
+                g.1.extend_from_slice(&(m.len() as u16).to_le_bytes());
+                g.1.extend_from_slice(m);
+                g.0 += 1;
             }
+            let (nctl, ctl) = groups.remove(0);
             let cap = cap_full.saturating_sub(ctl.len() + 5);
             let acks: Vec<(u8, u32)> = players.iter().map(|&p| (p, *self.next.get(&p).unwrap_or(&self.first))).collect();
             let mut out = vec![DGRAM, acks.len() as u8];
@@ -491,6 +512,15 @@ impl Transport {
             self.sent_acks.insert(peer, acks);
             self.stats.0 += 1;
             (self.tx)(peer, out);
+            let ack = self.ctl_in.get(&peer).copied().unwrap_or(0).to_le_bytes();
+            for (n, c) in groups {
+                let mut out = vec![DGRAM, 0, 0];
+                out.extend_from_slice(&ack);
+                out.push(n);
+                out.extend_from_slice(&c);
+                self.stats.0 += 1;
+                (self.tx)(peer, out);
+            }
         }
     }
 
@@ -640,11 +670,158 @@ async fn host_conn(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-async fn client_run(config: ClientConfig, url: String, me: u8, itx: mpsc::Sender<Inbound>, mut orx: tmpsc::UnboundedReceiver<(u8, Vec<u8>)>, md: Arc<AtomicUsize>) -> Result<(), String> {
+type Routes = Arc<Mutex<HashMap<u16, Route>>>;
+
+#[cfg(not(target_arch = "wasm32"))]
+/// One match's lobby on a `Hub`: its link ids, its game thread's inbox, its connections.
+struct Route {
+    ids: Vec<u8>,
+    itx: mpsc::Sender<Inbound>,
+    conns: Conns,
+    md: Arc<AtomicUsize>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+/// Ours (campaign host): one endpoint for many lobbies. A client's hello names its match
+/// (`hello_msg(me, Some(m))`, the code's `#m`); each match is a lobby transport of its own
+/// (`lobby`, as `host_lobby` with an empty setup), on its own thread.
+#[derive(Clone)]
+pub struct Hub {
+    routes: Routes,
+    code: String,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Hub {
+    /// Listen on `port` (bound as `Transport::host`: SCBW_NET_BIND, default 127.0.0.1).
+    pub fn new(port: u16) -> Result<Hub, String> {
+        let bind: std::net::IpAddr = match std::env::var("SCBW_NET_BIND") {
+            Ok(b) => b.parse().map_err(|_| format!("bad SCBW_NET_BIND {b:?}"))?,
+            Err(_) => [127, 0, 0, 1].into(),
+        };
+        let identity = Identity::self_signed(["localhost", "127.0.0.1"]).map_err(|e| e.to_string())?;
+        let hash = identity.certificate_chain().as_slice()[0].hash();
+        let config = ServerConfig::builder()
+            .with_bind_address(SocketAddr::new(bind, port))
+            .with_identity(identity)
+            .keep_alive_interval(Some(timeout() / 3))
+            .max_idle_timeout(Some(timeout())).map_err(|e| e.to_string())?
+            .build();
+        let rt = new_runtime()?;
+        let ep = {
+            let _g = rt.enter();
+            Endpoint::server(config).map_err(|e| e.to_string())?
+        };
+        let addr = ep.local_addr().map_err(|e| e.to_string())?;
+        let routes: Routes = Default::default();
+        let r = routes.clone();
+        std::thread::Builder::new()
+            .name("hub".into())
+            .spawn(move || {
+                rt.block_on(async move {
+                    loop {
+                        let inc = ep.accept().await;
+                        let r = r.clone();
+                        tokio::spawn(async move {
+                            if let Err(e) = hub_conn(inc, r).await {
+                                eprintln!("net: hub: {e}");
+                            }
+                        });
+                    }
+                })
+            })
+            .map_err(|e| e.to_string())?;
+        Ok(Hub { routes, code: format!("{addr}#{}", hex(&hash)) })
+    }
+
+    /// The join code of match `m`.
+    pub fn code(&self, m: u16) -> String {
+        format!("{}#{m}", self.code)
+    }
+
+    /// Match `m`'s lobby: this side is `me`, joiners get the next free id of `ids`.
+    pub fn lobby(&self, m: u16, me: u8, ids: &[u8]) -> Transport {
+        let (itx, rx) = mpsc::channel();
+        let conns: Conns = Default::default();
+        let md = Arc::new(AtomicUsize::new(1000));
+        self.routes.lock().unwrap().insert(m, Route { ids: ids.to_vec(), itx, conns: conns.clone(), md: md.clone() });
+        let send = move |to: u8, d: Vec<u8>| {
+            if let Some(c) = conns.lock().unwrap().get(&to) {
+                let _ = c.send_datagram(d);
+            }
+        };
+        Transport::new(me, true, Vec::new(), 0, rx, Box::new(send), md)
+    }
+
+    /// Match `m` is over: its lobby goes and its links close.
+    pub fn close(&self, m: u16) {
+        if let Some(r) = self.routes.lock().unwrap().remove(&m) {
+            for c in r.conns.lock().unwrap().values() {
+                c.close(0u32.into(), b"the match ended");
+            }
+        }
+    }
+
+    /// Close link `p` of match `m` (a kick).
+    pub fn drop_link(&self, m: u16, p: u8) {
+        if let Some(r) = self.routes.lock().unwrap().get(&m) {
+            if let Some(c) = r.conns.lock().unwrap().remove(&p) {
+                c.close(0u32.into(), b"removed by the host");
+            }
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+/// A `Hub` connection: the hello's match picks the lobby, then as `host_conn` for a lobby.
+async fn hub_conn(inc: IncomingSession, routes: Routes) -> Result<(), String> {
+    let conn = inc.await.map_err(|e| e.to_string())?.accept().await.map_err(|e| e.to_string())?;
+    let (mut send, mut recv) = conn.accept_bi().await.map_err(|e| e.to_string())?;
+    let (ty, body) = read_msg(&mut recv).await?;
+    let (1, &[me, lo, hi]) = (ty, body.as_slice()) else { return Err("bad hello (no match)".into()) };
+    let m = u16::from_le_bytes([lo, hi]);
+    let (player, itx, conns, md) = {
+        let r = routes.lock().unwrap();
+        let route = r.get(&m).ok_or_else(|| format!("no match {m}"))?;
+        let mut c = route.conns.lock().unwrap();
+        let player = match me {
+            ANY => route.ids.iter().copied().find(|p| !c.contains_key(p)).ok_or("match full")?,
+            p if route.ids.contains(&p) && !c.contains_key(&p) => p,
+            _ => return Err("bad hello".into()),
+        };
+        c.insert(player, conn.clone());
+        (player, route.itx.clone(), route.conns.clone(), route.md.clone())
+    };
+    if let Some(n) = conn.max_datagram_size() {
+        md.fetch_min(n, Ordering::Relaxed);
+    }
+    let _ = itx.send(Inbound::Joined { player });
+    let mut start = 6u32.to_le_bytes().to_vec();
+    start.extend_from_slice(&[2, player]);
+    start.extend_from_slice(&0u32.to_le_bytes());
+    send.write_all(&start).await.map_err(|e| e.to_string())?;
+    loop {
+        match conn.receive_datagram().await {
+            Ok(d) => drop(itx.send(Inbound::Dgram { from: player, data: d.payload().to_vec() })),
+            Err(e) => {
+                // A kicked link was taken out already (its id may belong to a new link).
+                let mut c = conns.lock().unwrap();
+                if c.get(&player).is_some_and(|x| x.stable_id() == conn.stable_id()) {
+                    c.remove(&player);
+                    let _ = itx.send(Inbound::Lost { player, why: e.to_string() });
+                }
+                return Ok(());
+            }
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+async fn client_run(config: ClientConfig, url: String, hello: Vec<u8>, itx: mpsc::Sender<Inbound>, mut orx: tmpsc::UnboundedReceiver<(u8, Vec<u8>)>, md: Arc<AtomicUsize>) -> Result<(), String> {
     let ep = Endpoint::client(config).map_err(|e| e.to_string())?;
     let conn = ep.connect(url).await.map_err(|e| e.to_string())?;
     let (mut send, mut recv) = conn.open_bi().await.map_err(|e| e.to_string())?.await.map_err(|e| e.to_string())?;
-    send.write_all(&hello_msg(me)).await.map_err(|e| e.to_string())?;
+    send.write_all(&hello).await.map_err(|e| e.to_string())?;
     let (ty, body) = read_msg(&mut recv).await?;
     let start = parse_start(ty, &body)?;
     if let Some(n) = conn.max_datagram_size() {

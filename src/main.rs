@@ -672,6 +672,34 @@ fn main() -> std::io::Result<()> {
             w.deal().map_err(std::io::Error::other)?;
             print!("{}", w.summary());
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        Some("campaign") if args.get(1).map(String::as_str) == Some("host") => {
+            // campaign host <world> [dir] [port] [web port]: run a campaign (src/campaign/host.rs).
+            let world = args.get(2).ok_or_else(|| std::io::Error::other("campaign host <world> [dir] [port] [web port]"))?;
+            let n = |i: usize, d: u16| args.get(i).and_then(|v| v.parse().ok()).unwrap_or(d);
+            campaign::host::main(world, args.get(3).map_or("campaign", String::as_str), n(4, 0), n(5, 8780)).map_err(std::io::Error::other)?;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        Some("campaign") if args.get(1).map(String::as_str) == Some("join") && args.len() >= 4 && args[2].starts_with("http") => {
+            // campaign join <web map url> <name> [faction]: pick and play the faction's matches.
+            campaign::host::join_loop(&args[2], &args[3], args.get(4).and_then(|f| f.parse().ok())).map_err(std::io::Error::other)?;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        Some("campaign") if args.get(1).map(String::as_str) == Some("join") && args.len() >= 4 => {
+            // campaign join <code> <name>: join a campaign match (the web map's code) as `name`.
+            // SAFETY: set before any other thread starts.
+            unsafe {
+                std::env::set_var("SCBW_JOIN", &args[2]);
+                std::env::set_var("SCBW_NAME", &args[3]);
+            }
+            glue::run(&files, None)?;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        Some("campaign") if args.get(1).map(String::as_str) == Some("match") => {
+            // campaign match <map> [frames] [count]: campaign matches in this process (tests).
+            let n = |i: usize| args.get(i).and_then(|v| v.parse().ok());
+            campaign::runner::test_matches(args.get(2).ok_or_else(|| std::io::Error::other("campaign match <map>"))?, n(3), n(4).unwrap_or(2) as u16).map_err(std::io::Error::other)?;
+        }
         Some("rephash") => {
             // rephash <rep> [frames]: play the replay straight (default: to its end) and print
             // `frame K hash H`, the line a SCBW_NET_HEADLESS game prints (net.md phase 3d).
