@@ -682,7 +682,15 @@ impl NetGame {
 
     /// Host: a message of `from` for the players in `to`.
     fn route_chat(&mut self, from: u8, to: u32, pkt: &[u8], scene: &mut Scene<'_>) {
-        let to = to & self.active();
+        let mut to = to & self.active();
+        // Ours (campaign matches): a faction line goes only to the sender's army (and the
+        // host, which passes it on to the faction).
+        if scene.st.campaign && pkt.first() == Some(&0) && pkt.get(2) == Some(&crate::bw::enhanced::FACTION_CHAT) {
+            let players = self.se.live_players();
+            let army = |p: u8| players.iter().find(|q| q.0 == p).map(|q| scene.st.nation_of(q.2));
+            let mine = army(from);
+            to &= players.iter().filter(|q| q.0 == self.se.me || (mine.is_some() && army(q.0) == mine)).fold(0, |m, q| m | 1 << q.0);
+        }
         for p in (0..32u8).filter(|&p| to & 1 << p != 0) {
             if p == self.se.me {
                 self.chat_in(from, pkt, scene);
@@ -703,6 +711,9 @@ impl NetGame {
             return;
         }
         if let Some(cmd) = crate::chat::receive(&mut scene.chat, from, pkt, pkt[0] == 1) {
+            if self.verbose {
+                eprintln!("net: chat from {from}: {}", String::from_utf8_lossy(cmd[2..].split(|&c| c == 0).next().unwrap_or(&[])));
+            }
             scene.st.chat.push((from, cmd[2..].to_vec()));
             self.se.record_chat(cmd);
         }
@@ -1080,6 +1091,9 @@ pub fn late_game<'a>(a: &'a view::Assets, b: &[u8]) -> std::io::Result<(Scene<'a
     st.local_player = n;
     st.local_human = h;
     scene.local = n;
+    // 0x4ee180 is skipped for a game from a save: the chat's recipients and the lines shown
+    // would stay empty (a joiner never saw a chat line).
+    scene.chat.game_start(&scene.st);
     let (mut tr, _, _, early) = super::snet::take_transport(false).ok_or_else(|| std::io::Error::other("no link to the game"))?;
     tr.set_first(f);
     let table: Vec<(u8, u8)> = players.iter().map(|q| (q.0, q.1)).collect();

@@ -166,6 +166,19 @@ colours 0.., owners dealt (`deal`), `eliminated pick`. 30 areas: ~52 borders, 14
 owners 11 / 10 / 9. Check: unit test `generated_worlds` (4 sizes: counts, connected, every
 faction owns land, live borders exist, write / parse round trip).
 
+## Follow-ups (user, 2026-10-28)
+
+### F1. Faction chat must not reach the enemy (DONE 2026-10-28)
+Done: the host (`live.rs route_chat`) sends a campaign match's `!` line (`bw::enhanced::
+FACTION_CHAT`) only to the links whose human is on the sender's army, and to itself (which
+passes it to the web chat and the faction's other matches).
+Found: a late joiner never saw any chat line: its `Chat.accept` stayed 0 because 0x4ee180
+(`Chat::game_start`) is skipped for a game from a save; `late_game` now calls it (all
+enhanced games).
+Check: `CHAT=1 agent/tools/campaign_match.sh`: joiners on both sides; the enemy (NETREP_DEBUG
+prints received lines) gets "hello all" (1) and not "!secret plan" (0); the host reports the
+faction line; all three hashes equal.
+
 ### Later (not now)
 Area bonuses (start extras per owned areas), spectating with faction vision, several armies
 per side, `scbw://` URL handler.

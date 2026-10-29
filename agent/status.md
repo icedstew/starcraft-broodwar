@@ -75,8 +75,8 @@ Delegate per agents.md: Haiku triage, Sonnet porting, Opus review / hard RE / co
 
 - **Campaign mode** (ours: Risk-style world, every border a live enhanced game; branch
   `campaign`, plan agent/plans/campaign.md): all 8 tasks done 2026-10-28 (`scbw campaign gen / check / host / join`;
-  checks agent/tools/campaign_{match,host,web}.sh). Open: in-game match list dialog, browser
-  join unverified, ~70 MB per match.
+  checks agent/tools/campaign_{match,host,web}.sh). Follow-ups F1-F4 (plan): F1 done.
+  Open: ~70 MB per match.
 
 - **Enhanced games** (ours: join a running game, shared armies, AI takes armies left by
   everyone, fast drops): committed 2026-10-27 (LAN list, AI-takeover line too); list border, browser late join, edge cases, window check done; Task 5 (join line with army and player colour) done; open: joiners may not get the host's dealt player colours

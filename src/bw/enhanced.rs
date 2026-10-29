@@ -17,6 +17,11 @@ pub const NOTICE_JOIN: u16 = 0x1001;
 /// Notice id (campaign matches): a draw in `p` minutes if nothing dies and nobody mines.
 pub const NOTICE_DRAW: u16 = 0x1002;
 
+/// Campaign matches: a chat line starting with this is for the sender's faction only (the
+/// host passes it to the humans of the sender's army, the web map and the faction's other
+/// matches; never to the other side).
+pub const FACTION_CHAT: u8 = b'!';
+
 /// Campaign matches: a minute at Fastest (42 ms frames), the warnings from 5 idle minutes
 /// and the draw at 10.
 pub const MINUTE: u32 = 60_000 / 42;

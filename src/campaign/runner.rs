@@ -110,8 +110,8 @@ pub enum Order {
 }
 
 /// In-game chat lines starting with this go to the whole faction (the web map and its
-/// other matches); the rest stay in the match.
-pub const FACTION_CHAT: char = '!';
+/// other matches, never the other side: net/live.rs `route_chat`); the rest stay in the match.
+pub const FACTION_CHAT: char = crate::bw::enhanced::FACTION_CHAT as char;
 
 /// Which faction a joiner of this name plays, given the match's two factions (None:
 /// refused). The campaign host's name registry.
@@ -179,6 +179,7 @@ pub fn test_matches(map: &str, k: Option<u32>, count: u16) -> Result<(), String>
                 match r {
                     Report::Started(code) => println!("MATCH {b} {code}"),
                     Report::Stats(s) if std::env::var_os("CAMPAIGN_STATS").is_some() => println!("border {b} {s:?}"),
+                    Report::Chat(f, name, text) => println!("border {b} faction {f} chat {name}: {text}"),
                     _ => {}
                 }
                 use std::io::Write;
