@@ -145,8 +145,7 @@ idle minutes), side panel (you / factions / match / faction chat / admin with `?
 Check: `agent/tools/campaign_web.sh` (curl of every endpoint incl. hidden enemy stats,
 refused second faction, PNG, 404 without token; SHOT=1 screenshot looked at: map, panel,
 hidden enemy side, join buttons, minimap).
-Not verified: the browser Join (the wasm build from `/play/`; a non-localhost http page
-cannot use WebTransport, so SCBW_CAMPAIGN_WEB must be https for remote players).
+Browser join: verified in F4 (https needed for remote players, see there).
 
 ### 7. In-game pieces (.exe) (DONE 2026-10-28, chooser in the terminal)
 Done: `scbw campaign join <web map url> <name> [faction]` (now the glue's Join Game screen,
@@ -200,6 +199,23 @@ the glue's Join Game screen and lobby show it in a popup and go back to the list
 browser's `net_join` fails with it (the page's status line). Test knob SCBW_CAMPAIGN_SLOTS.
 Check: `agent/tools/campaign_refuse.sh`: each of banned / another faction / in use / full /
 ended prints its reason; the glue popup (refused.png, back.png looked at).
+
+### F4. Browser join (DONE 2026-10-28)
+Done: nothing broke. `agent/tools/campaign_browser.sh`: `web/build.sh`, one campaign match
+(`SCBW_NET_PACE_US=70000`: the runner now takes the same pacing knob as headless peers, so a
+headless browser at ~18 fps keeps up), headless chromium on the web build with
+`?join=<code>&frames=1500&name=web` (game files from web/auto/): it took army 0 from the AI
+(the hub routed `#0`, 160 KB start), and its `frame 1500 hash` equals the host's. A second
+page with a match id nobody hosts shows "refused: the match ended" in its status line.
+
+**Remote players need https.** A browser only runs WebTransport from a secure context: the
+campaign host's own `/play/` works for http://localhost, not for http://<lan or internet
+address>. For anyone else, host the browser build (web/ after `web/build.sh`) on an https
+origin (e.g. GitHub Pages) and start the host with SCBW_CAMPAIGN_WEB=<that https URL of
+index.html>; the map's "Join in browser" then opens it with `?join=<code>&name=`. The
+connection itself needs no certificate setup (the code pins the host's self-signed cert,
+`serverCertificateHashes`); the host's UDP port must be reachable (port forward / UPnP /
+LAN). The players' browsers still load the game files their own way (web/index.html).
 
 ### Later (not now)
 Area bonuses (start extras per owned areas), spectating with faction vision, several armies

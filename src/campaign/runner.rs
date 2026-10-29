@@ -200,7 +200,10 @@ pub fn test_matches(map: &str, k: Option<u32>, count: u16) -> Result<(), String>
     Ok(())
 }
 const DELAY: u32 = 2;
-const FRAME: Duration = Duration::from_millis(42);
+/// A frame at Fastest; SCBW_NET_PACE_US paces slower (tests: a headless browser keeps up).
+fn frame_time() -> Duration {
+    std::env::var("SCBW_NET_PACE_US").ok().and_then(|v| v.parse().ok()).map_or(Duration::from_millis(42), Duration::from_micros)
+}
 const STATS_EVERY: Duration = Duration::from_secs(1);
 
 /// Play `spec` until it ends or is stopped, its joiners coming through `hub` (the match's
@@ -257,6 +260,7 @@ fn play(spec: &Spec, hub: &Hub, report: &Sender<Report>, orders: &Receiver<Order
             factions.iter().position(|&x| x == f).map(|i| armies[i]).ok_or_else(|| "your faction is not in this match".to_string())
         }));
     }
+    let frame_len = frame_time();
     let mut next = Instant::now();
     let mut last_stats = Instant::now() - STATS_EVERY;
     let mut hashed = false;
@@ -316,11 +320,11 @@ fn play(spec: &Spec, hub: &Hub, report: &Sender<Report>, orders: &Receiver<Order
             eprintln!("campaign: border {} ends at frame {frame}: {e:?}", spec.border);
             return Ok(e);
         }
-        next += FRAME;
+        next += frame_len;
         let now = Instant::now();
         if next > now {
             std::thread::sleep(next - now);
-        } else if now - next > FRAME * 25 {
+        } else if now - next > frame_len * 25 {
             next = now; // fell behind (a stall): no catching up in a burst
         }
     }
