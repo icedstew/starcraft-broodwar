@@ -51,7 +51,7 @@ export function setupStage(box, stage, fs) {
       vy = Math.min(Math.max(vy + e.movementY, 0), r.height - 1);
     } else {
       vx = e.clientX - r.left; vy = e.clientY - r.top;
-      if (type === "mousedown") canvas.requestPointerLock();
+      if (type === "mousedown") canvas.requestPointerLock()?.catch?.(() => {});   // rejects when the document is not focused
     }
     const ev = new MouseEvent(type, {
       clientX: r.left + vx, clientY: r.top + vy, button: e.button, buttons: e.buttons,
