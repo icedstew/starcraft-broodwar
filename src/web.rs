@@ -185,6 +185,9 @@ async fn glue_lobby(a: &'static mut view::Assets, tr: crate::net::transport::Tra
             glue.state = crate::glue::state::START;
             break;
         }
+        if let Some(why) = snet::refused() {
+            return Err(err(why));
+        }
         if t0.elapsed().as_secs() > 60 {
             return Err(err("no answer from the game".into()));
         }

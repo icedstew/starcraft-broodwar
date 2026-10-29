@@ -45,6 +45,8 @@ use wtransport::{ClientConfig, Connection, Endpoint, Identity, RecvStream, Serve
 pub const HOST: u8 = 255;
 /// Hello's player for "any free slot".
 pub const ANY: u8 = 255;
+/// How a refused join's error text starts (the reason follows).
+pub const REFUSED: &str = "refused: ";
 const DGRAM: u8 = 1;
 /// Most frames of one player in one datagram.
 const MAX_RUN: usize = 64;
@@ -149,6 +151,10 @@ pub(super) fn split_code(target: &str) -> Result<(&str, [u8; 32], Option<u16>), 
 
 /// A client's reading of the host's Start (`ty` + `body` of one lobby message).
 pub(super) fn parse_start(ty: u8, body: &[u8]) -> Result<Inbound, String> {
+    // Ours (`Hub`): type 3 = refused, with the reason.
+    if ty == 3 {
+        return Err(format!("{REFUSED}{}", String::from_utf8_lossy(body)));
+    }
     if ty != 2 || body.len() < 5 {
         return Err("expected Start".into());
     }
@@ -780,17 +786,30 @@ async fn hub_conn(inc: IncomingSession, routes: Routes) -> Result<(), String> {
     let (ty, body) = read_msg(&mut recv).await?;
     let (1, &[me, lo, hi]) = (ty, body.as_slice()) else { return Err("bad hello (no match)".into()) };
     let m = u16::from_le_bytes([lo, hi]);
-    let (player, itx, conns, md) = {
+    let picked: Result<_, &str> = (|| {
         let r = routes.lock().unwrap();
-        let route = r.get(&m).ok_or_else(|| format!("no match {m}"))?;
+        let route = r.get(&m).ok_or("the match ended")?;
         let mut c = route.conns.lock().unwrap();
         let player = match me {
-            ANY => route.ids.iter().copied().find(|p| !c.contains_key(p)).ok_or("match full")?,
+            ANY => route.ids.iter().copied().find(|p| !c.contains_key(p)).ok_or("the match is full")?,
             p if route.ids.contains(&p) && !c.contains_key(&p) => p,
-            _ => return Err("bad hello".into()),
+            _ => return Err("bad hello"),
         };
         c.insert(player, conn.clone());
-        (player, route.itx.clone(), route.conns.clone(), route.md.clone())
+        Ok((player, route.itx.clone(), route.conns.clone(), route.md.clone()))
+    })();
+    let (player, itx, conns, md) = match picked {
+        Ok(x) => x,
+        Err(why) => {
+            // Refused (type 3 + the reason); the joiner reads it before the link closes.
+            let mut m = ((why.len() + 1) as u32).to_le_bytes().to_vec();
+            m.push(3);
+            m.extend_from_slice(why.as_bytes());
+            send.write_all(&m).await.map_err(|e| e.to_string())?;
+            let _ = send.finish().await;
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            return Err(format!("match {m:?}: {why}", m = u16::from_le_bytes([lo, hi])));
+        }
     };
     if let Some(n) = conn.max_datagram_size() {
         md.fetch_min(n, Ordering::Relaxed);

@@ -101,8 +101,8 @@ pub enum Order {
     Save(std::path::PathBuf),
     /// Pause (true) or resume the game (commands 0x10 / 0x11 in the host's turn).
     Pause(bool),
-    /// Remove the humans of this name.
-    Kick(String),
+    /// Remove the humans of this name, telling them why.
+    Kick(String, String),
     /// The minimap of side 0 / 1 as that side sees it (its vision), as a PNG.
     Minimap(usize, Sender<Vec<u8>>),
     /// A faction chat line for that faction's humans in this match.
@@ -113,9 +113,9 @@ pub enum Order {
 /// other matches, never the other side: net/live.rs `route_chat`); the rest stay in the match.
 pub const FACTION_CHAT: char = crate::bw::enhanced::FACTION_CHAT as char;
 
-/// Which faction a joiner of this name plays, given the match's two factions (None:
-/// refused). The campaign host's name registry.
-pub type Allow = Box<dyn FnMut(&str, [u8; 2]) -> Option<u8> + Send>;
+/// Which faction a joiner of this name plays, given the match's two factions, or why it may
+/// not. The campaign host's name registry.
+pub type Allow = Box<dyn FnMut(&str, [u8; 2]) -> Result<u8, String> + Send>;
 
 /// The two armies' slots and the host's own (an empty slot).
 pub struct Seats {
@@ -150,9 +150,10 @@ pub fn setup(a: &view::Assets, spec: &Spec) -> Result<(view::GameSetup, Seats), 
     Ok((g, Seats { armies: [slots[0], slots[1]], host }))
 }
 
-/// Link ids the joiners get (the host is 0).
+/// Link ids the joiners get (the host is 0): 30, or SCBW_CAMPAIGN_SLOTS (tests).
 pub fn join_ids() -> Vec<u8> {
-    (1..=30).collect()
+    let n = std::env::var("SCBW_CAMPAIGN_SLOTS").ok().and_then(|v| v.parse().ok()).unwrap_or(30u8).clamp(1, 30);
+    (1..=n).collect()
 }
 
 /// `scbw campaign match <map> [frames] [count]`: `count` matches (default 2) on `map` in
@@ -253,7 +254,7 @@ fn play(spec: &Spec, hub: &Hub, report: &Sender<Report>, orders: &Receiver<Order
         let (factions, armies) = (spec.sides.clone().map(|s| s.faction), seats.armies);
         net.join_filter = Some(Box::new(move |name: &[u8]| {
             let f = allow(&String::from_utf8_lossy(name), factions)?;
-            factions.iter().position(|&x| x == f).map(|i| armies[i])
+            factions.iter().position(|&x| x == f).map(|i| armies[i]).ok_or_else(|| "your faction is not in this match".to_string())
         }));
     }
     let mut next = Instant::now();
@@ -276,11 +277,11 @@ fn play(spec: &Spec, hub: &Hub, report: &Sender<Report>, orders: &Receiver<Order
                     }
                 }
             }
-            Ok(Order::Kick(name)) => {
+            Ok(Order::Kick(name, why)) => {
                 for (p, h) in net.links() {
-                    if scene.st.human_name(h) == name {
+                    if scene.st.human_name(h).eq_ignore_ascii_case(&name) {
                         eprintln!("campaign: border {}: {name} (link {p}) removed", spec.border);
-                        net.kick(p);
+                        net.kick(p, &why);
                     }
                 }
             }
@@ -299,7 +300,7 @@ fn play(spec: &Spec, hub: &Hub, report: &Sender<Report>, orders: &Receiver<Order
                 let _ = report.send(Report::Chat(spec.sides[i].faction, scene.st.human_name(h).to_string(), t.trim().to_string()));
             }
         }
-        for p in std::mem::take(&mut net.refused) {
+        for p in net.take_refused() {
             hub.drop_link(spec.game, p);
         }
         let (frame, confirmed) = net.frames();

@@ -40,10 +40,13 @@ impl Players {
     }
 
     /// The faction `name` plays in a match of `sides` (registering a new name with the side
-    /// that has fewer players); None when banned or of another faction.
-    pub fn allow(&mut self, name: &str, sides: [u8; 2]) -> Option<u8> {
-        if name.is_empty() || self.is_banned(name) {
-            return None;
+    /// that has fewer players), or why it may not join.
+    pub fn allow(&mut self, name: &str, sides: [u8; 2]) -> Result<u8, String> {
+        if !super::web::valid_name(name) {
+            return Err("a name is 1 to 23 letters, digits or signs, no spaces".into());
+        }
+        if self.is_banned(name) {
+            return Err(format!("{name} is banned from this campaign"));
         }
         let f = match self.of(name) {
             Some(f) => f,
@@ -54,7 +57,7 @@ impl Players {
                 f
             }
         };
-        sides.contains(&f).then_some(f)
+        if sides.contains(&f) { Ok(f) } else { Err(format!("{name} plays for another faction")) }
     }
 
     fn parse(text: &str) -> Players {
@@ -222,7 +225,14 @@ impl Host {
             }
         });
         let shared = self.shared.clone();
-        let allow: runner::Allow = Box::new(move |name, sides| shared.lock().unwrap().players.allow(name, sides));
+        let allow: runner::Allow = Box::new(move |name, sides| {
+            let mut sh = shared.lock().unwrap();
+            // One player per name: someone of this name is in a match already.
+            if sh.live.values().any(|l| l.stats.sides.iter().any(|s| s.humans.iter().any(|h| h.eq_ignore_ascii_case(name)))) {
+                return Err(format!("the name {name} is in use in a match"));
+            }
+            sh.players.allow(name, sides)
+        });
         let (s, hub) = (spec.clone(), self.hub.clone());
         std::thread::Builder::new().name(format!("border {b}")).spawn(move || runner::run(s, hub, rtx, orx, Some(allow), None)).ok();
         if self.shared.lock().unwrap().paused {
@@ -359,7 +369,8 @@ impl Host {
                 if cmd == "ban" && !sh.players.is_banned(arg) {
                     sh.players.banned.push(arg.to_string());
                 }
-                send_all(&sh, &|| Order::Kick(arg.to_string()));
+                let why = if cmd == "ban" { "you are banned from this campaign" } else { "you were removed by the host" };
+                send_all(&sh, &|| Order::Kick(arg.to_string(), why.to_string()));
                 format!("{arg} {}", if cmd == "ban" { "banned" } else { "kicked" })
             }
             "unban" => {
@@ -376,7 +387,7 @@ impl Host {
                     Some(n) => {
                         n.0 = new.to_string();
                         // In a match the old name stays until the player joins again.
-                        send_all(&sh, &|| Order::Kick(arg.to_string()));
+                        send_all(&sh, &|| Order::Kick(arg.to_string(), format!("you were renamed {new}: join again as {new}")));
                         format!("{arg} is now {new}")
                     }
                     None => format!("no player {arg}"),

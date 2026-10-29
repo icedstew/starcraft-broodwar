@@ -94,6 +94,23 @@ struct Game {
 
 /// live.rs's C_LATE control message: `idx u16`, `count u16`, a part of the joiner's start.
 pub const LATE: u8 = 8;
+/// live.rs's C_REFUSED (ours, campaign matches): the join is refused; the reason follows.
+pub const REFUSED: u8 = 9;
+
+thread_local! {
+    /// Why the host refused this side's join (C_REFUSED, or a refusal before the Start).
+    static REFUSAL: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
+/// The reason a join was refused, once (the front end shows it).
+pub fn refused() -> Option<String> {
+    REFUSAL.with(|r| r.borrow_mut().take())
+}
+
+fn set_refused(why: &str) {
+    eprintln!("net: {}{why}", transport::REFUSED);
+    REFUSAL.with(|r| *r.borrow_mut() = Some(why.to_string()));
+}
 
 /// One turn of every player (Ordinal 122): flags (0x10000 in the game, 0x20000 with a turn)
 /// and the bytes.
@@ -520,7 +537,10 @@ pub fn join_game(id: u32, code: Option<&str>, player: &[u8]) -> Option<u8> {
                         return Some(slot);
                     }
                     Event::Error(m) => {
-                        eprintln!("net: join: {m}");
+                        match m.strip_prefix(transport::REFUSED) {
+                            Some(why) => set_refused(why),
+                            None => eprintln!("net: join: {m}"),
+                        }
                         return None;
                     }
                     _ => {}
@@ -693,6 +713,7 @@ pub fn pump() {
                             }
                             g.names = names;
                         }
+                        REFUSED => set_refused(&String::from_utf8_lossy(body)),
                         LATE if body.len() >= 4 => {
                             let (i, n) = (u16::from_le_bytes([body[0], body[1]]) as usize, u16::from_le_bytes([body[2], body[3]]) as usize);
                             if g.late.len() != n {

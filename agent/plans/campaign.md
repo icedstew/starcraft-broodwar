@@ -131,7 +131,6 @@ registered to the side whose faction has fewer players (the web map registers ex
 `NetGame.join_filter` gives a joiner only its faction's army or refuses it; kick = leave
 (reason 6) + link closed; ban = kick + name refused, saved in `players.txt`; rename (the old
 name is kicked from matches). Faction colours forced into the setup (`GameSetup.colors`).
-Not done: a refused joiner gets no reason (its link closes; the glue join loop times out).
 Check: covered by campaign_host.sh (joiner registered to faction 0, ban) and campaign_web.sh.
 
 ### 6. Web map — `src/campaign/web.rs`, `campaign.html` (DONE 2026-10-28)
@@ -188,6 +187,19 @@ Check: `CHOOSER=1 agent/tools/campaign_web.sh` (SCBW_GLUE_INPUT: list shot, Ok, 
 headless to frame 500 with a faction line said, the list again, Cancel = exit 0; the line
 reached the map's chat). Looked at list.png / after.png: both matches listed, the stat line,
 Create Game greyed, the list back after the match with the time moved on.
+
+### F3. A refused joiner gets the reason (DONE 2026-10-28)
+Done: before the Start the hub answers a lobby message type 3 + the reason ("the match is
+full", "the match ended": no lobby for that game id) and closes; after it the match's host
+sends control C_REFUSED (9) + the reason ("<name> is banned from this campaign", "<name>
+plays for another faction", "the name <name> is in use in a match", "no army to join") and
+closes the link 2 s later (`NetGame::refuse`, `take_refused`); a kick / ban / rename of a
+player in the game sends it too and ends that player's game with it. The joiner keeps it
+(`snet::refused`): the .exe prints it (`SCBW_JOIN` / `campaign join <code>` exit with it),
+the glue's Join Game screen and lobby show it in a popup and go back to the list, the
+browser's `net_join` fails with it (the page's status line). Test knob SCBW_CAMPAIGN_SLOTS.
+Check: `agent/tools/campaign_refuse.sh`: each of banned / another faction / in use / full /
+ended prints its reason; the glue popup (refused.png, back.png looked at).
 
 ### Later (not now)
 Area bonuses (start extras per owned areas), spectating with faction vision, several armies

@@ -416,10 +416,10 @@ pub struct NetGame {
     drops_fast: bool,
     /// Joiners sent their start: when (they load it before their turns come).
     joined_at: Vec<(u8, Instant)>,
-    /// Ours (campaign matches): the army a joiner of this name may take (None: refused).
-    pub(crate) join_filter: Option<Box<dyn FnMut(&[u8]) -> Option<u8>>>,
-    /// Links refused or kicked since the last look (the campaign host closes them).
-    pub(crate) refused: Vec<u8>,
+    /// Ours (campaign matches): the army a joiner of this name may take, or why not.
+    pub(crate) join_filter: Option<Box<dyn FnMut(&[u8]) -> Result<u8, String>>>,
+    /// Links refused or kicked, and since when (`take_refused` hands them over to close).
+    refused: Vec<(u8, Instant)>,
 }
 
 /// A joiner's time to take the game's state in and load it before a stall drops it.
@@ -450,6 +450,11 @@ const C_DROP: u8 = 7;
 /// Host -> an enhanced game's joiner: a part of its start (`late_game`): `idx u16`,
 /// `count u16`, bytes (snet::LATE).
 const C_LATE: u8 = super::snet::LATE;
+/// Ours (campaign matches), host -> a joiner or player: you are refused or removed; the
+/// reason follows (snet.rs keeps it for the front end; a player's game ends with it).
+const C_REFUSED: u8 = super::snet::REFUSED;
+/// How long a refused link stays open for its reason to arrive.
+const REFUSE_LINGER: Duration = Duration::from_secs(2);
 
 /// How long the session must be held before the waiting dialog shows. Ours: 1.16.1 opens it
 /// at the first missing turn, but its turns are buffered ahead (0x57f090) where a rollback
@@ -500,13 +505,30 @@ impl NetGame {
         Ok(n)
     }
 
-    /// Host: remove link `p` from the game (a kick), as a dropped player.
-    pub(crate) fn kick(&mut self, p: u8) {
+    /// Host: remove link `p` from the game (a kick), as a dropped player, telling it `why`.
+    pub(crate) fn kick(&mut self, p: u8, why: &str) {
         self.join_queue.retain(|q| q.0 != p);
         if self.se.live_players().iter().any(|q| q.0 == p) {
             self.decide_leave(p, 6);
         }
-        self.refused.push(p);
+        self.refuse(p, why);
+    }
+
+    /// Host: tell link `p` it is refused (C_REFUSED); its link is closed a little later.
+    fn refuse(&mut self, p: u8, why: &str) {
+        let mut m = vec![C_REFUSED];
+        m.extend_from_slice(why.as_bytes());
+        self.tr.send_ctl(p, m);
+        if !self.refused.iter().any(|r| r.0 == p) {
+            self.refused.push((p, Instant::now()));
+        }
+    }
+
+    /// Refused links whose reason had time to arrive: the caller closes them.
+    pub(crate) fn take_refused(&mut self) -> Vec<u8> {
+        let (old, keep): (Vec<_>, Vec<_>) = self.refused.iter().partition(|r| r.1.elapsed() >= REFUSE_LINGER);
+        self.refused = keep;
+        old.into_iter().map(|r| r.0).collect()
     }
 
     /// The players in the game: (link id, human).
@@ -556,10 +578,10 @@ impl NetGame {
             let (p, mut want, name) = self.join_queue.remove(0);
             if let Some(f) = self.join_filter.as_mut() {
                 match f(&name) {
-                    Some(a) => want = a,
-                    None => {
-                        eprintln!("net: player {p} ({}) may not join this game", String::from_utf8_lossy(&name));
-                        self.refused.push(p);
+                    Ok(a) => want = a,
+                    Err(why) => {
+                        eprintln!("net: player {p} ({}) refused: {why}", String::from_utf8_lossy(&name));
+                        self.refuse(p, &why);
                         return;
                     }
                 }
@@ -572,7 +594,7 @@ impl NetGame {
                 }
                 None => {
                     eprintln!("net: player {p} cannot join: no army");
-                    self.refused.push(p);
+                    self.refuse(p, "no army to join (the match is over for that side)");
                 }
             }
         }
@@ -626,6 +648,11 @@ impl NetGame {
                 }
             }
             (Some(C_HOST_LEFT), false) if from == HOST => self.over = Some("the host left".into()),
+            (Some(C_REFUSED), false) if from == HOST => {
+                let why = String::from_utf8_lossy(&msg[1..]).into_owned();
+                eprintln!("net: {}{why}", super::transport::REFUSED);
+                self.over = Some(why);
+            }
             // snet's NAME (a link that joined after the start): an enhanced game lets it in.
             (Some(0x83), true) if scene.st.enhanced && self.se.live_players().iter().all(|p| p.0 != from) => {
                 let body = &msg[1..];

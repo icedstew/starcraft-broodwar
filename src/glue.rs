@@ -3486,7 +3486,8 @@ pub fn run(files: &Storage, shot: Option<&str>) -> std::io::Result<()> {
         }
         crate::net::snet::initialize_provider(crate::net::snet::UDPN);
         if crate::net::snet::join_game(0, Some(&code), name.as_bytes()).is_none() {
-            return Err(std::io::Error::other(format!("cannot join {code}")));
+            let why = crate::net::snet::refused().unwrap_or_else(|| format!("cannot join {code}"));
+            return Err(std::io::Error::other(why));
         }
         let t0 = web_time::Instant::now();
         while !glue.join_by_code(files, name.as_bytes()) {
@@ -3498,6 +3499,9 @@ pub fn run(files: &Storage, shot: Option<&str>) -> std::io::Result<()> {
                 eprintln!("net: loaded ({} ms)", t0.elapsed().as_millis());
                 crate::view::set_net_driver(Box::new(net));
                 return crate::view::run_scene(&a, scene);
+            }
+            if let Some(why) = crate::net::snet::refused() {
+                return Err(std::io::Error::other(why));
             }
             if t0.elapsed().as_secs() > 60 {
                 return Err(std::io::Error::other("no answer from the game"));

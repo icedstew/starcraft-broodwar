@@ -263,7 +263,11 @@ impl Glue {
             todo_port!("0x4d3b50", "the spawn version check (0x4d9cd0 vs the description +0x2c)");
         }
         let Some(me) = snet::join_game(g.id, None, cstr(&self.setup.local_name)) else {
-            self.error_popup(files, 0x59);
+            // Ours: a campaign host's reason, else network.tbl 0x59.
+            match snet::refused() {
+                Some(why) => self.open_error(files, &why),
+                None => self.error_popup(files, 0x59),
+            }
             return false;
         };
         self.setup.local_storm_id = me as u32;

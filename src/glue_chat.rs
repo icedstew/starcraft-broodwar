@@ -192,8 +192,16 @@ impl Glue {
         if !self.chat.idle || !matches!(self.dlg, Some((_, Open::Chat))) || self.popup.is_some() {
             return;
         }
-        // Ours: a running enhanced game answered with its state: the game starts from it.
+        // Ours: a running enhanced game answered with its state: the game starts from it; or
+        // it refused us (a campaign match): its reason, back to the list.
         if !self.lobby_host {
+            if let Some(why) = crate::net::snet::refused() {
+                self.lobby_4d3860();
+                self.chat.idle = false;
+                self.open_popup(files, &why);
+                self.end_dialog(0x22d);
+                return;
+            }
             if let Some(l) = crate::net::snet::late() {
                 self.late = Some(l);
                 self.lobby.start_game = true;
