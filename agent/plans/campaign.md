@@ -26,7 +26,7 @@ wins.
 | Factions | Default: 3 factions = the 3 races. Supported: 2..8 factions, race fixed per faction at campaign creation. |
 | Side size | One army per side (1v1 start on any 2+ player map), any number of humans share it. Later: more. |
 | Carryover | None: fresh melee every match. Leave room for area bonuses (start extras) later; do not build it now. |
-| Draw | Draw timer (game time): reset by any unit/building death or any mineral/gas mined. Warnings to both sides each minute from 5 to 9 min idle; draw at 10 min (14400 frames at Fastest). Draw -> fresh match on the same border at once. |
+| Draw | Draw timer (game time): reset by any unit/building death or any minerals mined (never gas: user, 2026-10-28). Warnings to both sides each minute from 5 to 9 min idle; draw at 10 min (14280 frames at Fastest). Draw -> fresh match on the same border at once. |
 | Identity | Name only, unique per campaign. First join with a new name picks a faction; the host keeps name -> faction; that name joins only that faction's side. Reset each campaign. |
 | World | Hand-written world file (areas, positions, borders, map per border, optional start owners) and a generator that writes one. No start owners -> generator-style contiguous blocks. Default world ~30 areas (~40 borders, ~20 live matches). |
 | Map UI | Web page served by the host. Join from it in the browser (wasm build) or with the .exe via a launch code. |
@@ -48,7 +48,7 @@ wins.
   read-only tables before relying on it.
 - Match end: 1.16.1's per-player result 0x58d700 (2 defeated, 3 victorious; triggers 0x650974
   has 5 = draw). Melee victory already ends an enhanced game; the runner just reads it.
-- Mining: 1.16.1's score counters (minerals / gas gathered per player) feed the draw timer
+- Mining: 1.16.1's score counters (minerals gathered per player; not gas) feed the draw timer
   and the stats; deaths: the kill / death score counters. No new sim hooks if the counters
   are enough (compare per frame, deterministic).
 - Today's enhanced host is a playing peer with a window or a replay player. A campaign match
@@ -74,14 +74,15 @@ borders; small odd graphs can deal unevenly (3x3: 4/3/2).
 All campaign work goes on branch `campaign` (user, 2026-10-28).
 
 ### 2. Draw timer in the sim — `src/bw/enhanced.rs` (DONE 2026-10-28)
-`State.campaign: bool` from `GameSetup`. Each frame: if any death / gather counter changed,
-reset `idle_frames`; at 5..9 min push a notice to all players ("No fighting or mining: draw
-in N minutes"); at 10 min set every player's result to draw (5) and end the game. Checks:
+`State.campaign: bool` from `GameSetup`. Each frame: if any death / minerals-gathered counter
+changed, reset `idle_frames`; at 5..9 min push a notice to all players; at 10 min set every player's result to draw (5) and end the game. Checks:
 replays and the suite unaffected (flag off); a headless AI-vs-AI run that idles hits it.
 Done: `State.campaign / idle_frames / activity`, `State::campaign_tick` after each trigger pass
-(view.rs `Scene::step`); activity = men + buildings lost + minerals + gas gathered, every
-player. A minute = 60000 / 42 = 1428 frames (Fastest). Warnings `NOTICE_DRAW` (0x1002, our
-text "No fighting or mining: the game is a draw in N minutes.") at 5..9 idle minutes; at 10,
+(view.rs `Scene::step`); activity = men + buildings lost + minerals gathered, every player
+(not gas: 2026-10-28 an AI-only run had two matches past frame 3,000,000, minerals mined out
+but depleted geysers still giving gas, so the timer never ran; the user's rule is "no minerals
+mined"). A minute = 60000 / 42 = 1428 frames (Fastest). Warnings `NOTICE_DRAW` (0x1002, our
+text "No kills and no minerals mined: the game is a draw in N minutes.") at 5..9 idle minutes; at 10,
 every in-game human / computer gets `player_left` 5 and the end-screen timer 0x2d (as a
 trigger draw 0x4c5070 settled by 0x48a200). Carried to joiners in `Extras` (campaign,
 idle_frames). Checked: unit test `bw::enhanced::tests::draw_timer` (warnings 5..1, reset by
@@ -240,6 +241,15 @@ play/index.html?join=..., host paced 70 ms a frame): equal frame 1500 hashes wit
 The restarted host serves the same certificate (SHA-256 fingerprint equal).
 Not verified: a person clicking through in a windowed browser; another machine on the LAN
 (all runs were on this machine's LAN address); Safari.
+
+### F6. Gas does not count for the draw timer; whole-campaign check (DONE 2026-10-28)
+An AI-only run had two matches past frame 3,000,000 (Protoss 77 supply v Zerg 8, minerals
+mined out, gas still coming from depleted geysers): `activity_count` is now deaths + minerals
+gathered only (user: gas never counts); the draw_timer test feeds gas through the 10 minutes
+and still gets the draw; the notice reads "No kills and no minerals mined: ...".
+Check: `agent/tools/campaign_e2e.sh` (4-area ring, 4 maps, 3 factions, AI only, unpaced):
+PASS in 75 s: captures, Terran then Zerg eliminated, three draws on West-North restarted,
+"Protoss wins the campaign".
 
 ### Later (not now)
 Area bonuses (start extras per owned areas), spectating with faction vision, several armies

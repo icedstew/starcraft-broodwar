@@ -782,7 +782,7 @@ impl<'a> Scene<'a> {
                 continue;
             }
             if fmt == crate::bw::enhanced::NOTICE_DRAW {
-                let t = format!("No fighting or mining: the game is a draw in {p} minute{}.", if p == 1 { "" } else { "s" });
+                let t = format!("No kills and no minerals mined: the game is a draw in {p} minute{}.", if p == 1 { "" } else { "s" });
                 self.msgs.print(&ui.font, t.as_bytes(), now, 0, 0x17, &mut self.st.ui_sounds);
                 continue;
             }

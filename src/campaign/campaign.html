@@ -119,7 +119,7 @@ function detail() {
       <div>${s.minerals} min · ${s.gas} gas</div><div class="dim">mined ${s.mined[0]} / ${s.mined[1]}</div></div>`;
   };
   let h = `<div>${esc(st.areas[b.a].name)} – ${esc(st.areas[b.b].name)} <span class="dim">· ${esc(b.map)} · ${clock(b.frame)}</span></div>`;
-  if (b.idle >= 5 * 1428) h += `<div class="warn">No fighting or mining: draw in ${Math.max(0, 10 - Math.floor(b.idle / 1428))} min</div>`;
+  if (b.idle >= 5 * 1428) h += `<div class="warn">No kills and no minerals mined: draw in ${Math.max(0, 10 - Math.floor(b.idle / 1428))} min</div>`;
   h += `<div class="sides" style="margin-top:6px">${b.sides.map(side).join("")}</div>`;
   if (b.code) {
     // A host bound to every address (0.0.0.0) is reached at the one this page came from.

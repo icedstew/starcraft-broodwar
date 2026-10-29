@@ -242,14 +242,15 @@ impl State {
         }
     }
 
-    /// Deaths (men and buildings lost, 0x581e74 / 0x581fc4) and minerals and gas gathered
-    /// (0x57f180 / 0x57f150), every player: the campaign draw timer's activity.
+    /// Deaths (men and buildings lost, 0x581e74 / 0x581fc4) and minerals gathered (0x57f180),
+    /// every player: the campaign draw timer's activity. Not gas: a depleted geyser still
+    /// gives some forever, and the user's rule is "no minerals mined".
     pub fn activity_count(&self) -> i64 {
         let p = &self.players;
-        (0..12).map(|i| p.men_lost[i] as i64 + p.buildings_lost[i] as i64 + p.minerals_gathered[i] as i64 + p.gas_gathered[i] as i64).sum()
+        (0..12).map(|i| p.men_lost[i] as i64 + p.buildings_lost[i] as i64 + p.minerals_gathered[i] as i64).sum()
     }
 
-    /// Campaign matches, after each frame's trigger pass: a death or anything mined restarts
+    /// Campaign matches, after each frame's trigger pass: a death or minerals mined restart
     /// the idle count; from 5 idle minutes every player is warned each minute; at 10 every
     /// player still in the game gets a draw (0x58d700 = 5, the end screen as a trigger's
     /// draw 0x4c5070 then 0x48a200 settle it).
@@ -300,9 +301,11 @@ mod tests {
         let warn: Vec<u8> = st.notices.iter().filter(|n| n.0 == NOTICE_DRAW).map(|n| n.1).collect();
         assert_eq!(warn, vec![5, 4, 3, 2, 1]);
         assert_eq!(st.player_left[..3], [0, 0, 0]);
-        // A death restarts it again; then 10 idle minutes end the game in a draw.
+        // A death restarts it again; then 10 minutes with only gas coming in (a depleted
+        // geyser) end the game in a draw.
         st.players.men_lost[1] += 1;
         for _ in 0..=DRAW_AT {
+            st.players.gas_gathered[0] += 2;
             st.campaign_tick();
         }
         assert_eq!(st.player_left[..3], [5, 5, 0]);
