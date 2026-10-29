@@ -173,6 +173,7 @@ impl Web {
                 self.text(rx.recv_timeout(Duration::from_secs(5)).map_err(|_| "no answer".to_string()))
             }
             p if p.starts_with("/play/") => self.file(&p["/play/".len()..]),
+            "/favicon.ico" => ("204 No Content", "image/x-icon", Vec::new()),
             _ => ("404 Not Found", "text/plain", b"not found".to_vec()),
         };
         let mut s = r.into_inner();

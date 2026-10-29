@@ -36,23 +36,25 @@ pub struct Spec {
     pub resume: Option<Resume>,
 }
 
-/// A match saved by `Order::Save`: the 1.16.1 saved game, its seats, its draw timer.
+/// A match saved by `Order::Save`: the 1.16.1 saved game, its seats, its draw timer, its
+/// match id (join links stay valid after a restart).
 #[derive(Clone)]
 pub struct Resume {
     pub save: Vec<u8>,
     pub armies: [u8; 2],
     pub host: u8,
     pub idle_frames: u32,
+    pub game: Option<u16>,
 }
 
 impl Resume {
-    /// `<path>` (the save) and `<path>.txt` (`armies A B host H idle N`).
+    /// `<path>` (the save) and `<path>.txt` (`armies A B host H idle N [game G]`).
     pub fn read(path: &std::path::Path) -> Option<Resume> {
         let save = std::fs::read(path).ok()?;
         let t = std::fs::read_to_string(path.with_extension("txt")).ok()?;
         let v: Vec<u32> = t.split_whitespace().filter_map(|w| w.parse().ok()).collect();
-        let &[a, b, host, idle_frames] = &v[..] else { return None };
-        Some(Resume { save, armies: [a as u8, b as u8], host: host as u8, idle_frames })
+        let (&[a, b, host, idle_frames], game) = (&v[..v.len().min(4)], v.get(4).map(|&g| g as u16)) else { return None };
+        Some(Resume { save, armies: [a as u8, b as u8], host: host as u8, idle_frames, game })
     }
 }
 
@@ -161,7 +163,7 @@ pub fn join_ids() -> Vec<u8> {
 /// per match, `border B frame K hash H` at `frames` and how each ended.
 pub fn test_matches(map: &str, k: Option<u32>, count: u16) -> Result<(), String> {
     let (tx, rx) = std::sync::mpsc::channel();
-    let hub = Hub::new(0)?;
+    let hub = Hub::new(0, None)?.0;
     let mut stops = Vec::new();
     for b in 0..count {
         let side = |f: u8| Side { faction: f, race: 6, colour: f, name: format!("Faction {f}") };
@@ -250,8 +252,11 @@ fn play(spec: &Spec, hub: &Hub, report: &Sender<Report>, orders: &Receiver<Order
     let _ = report.send(Report::Started(hub.code(spec.game)));
     let start = scene.st.frame;
     tr.set_first(start.max(DELAY));
-    let mut se = Session::new_at(0, &[(0, 0)], DELAY, start);
-    se.map_humans(&[(0, seats.host)]);
+    // The host plays from `start` (a resumed match: past 0); its own turns below the first it
+    // sends (start + delay) are known empty, as a joiner's (`add_player`); else it waits on
+    // itself forever.
+    let mut se = Session::new_at(0, &[], DELAY, start);
+    se.add_player(0, 0, seats.host, start + DELAY);
     let mut net = NetGame::new(se, tr, true, Vec::new())?;
     if let Some(mut allow) = allow {
         let (factions, armies) = (spec.sides.clone().map(|s| s.faction), seats.armies);
@@ -267,7 +272,7 @@ fn play(spec: &Spec, hub: &Hub, report: &Sender<Report>, orders: &Receiver<Order
     loop {
         match orders.try_recv() {
             Ok(Order::Stop) | Err(std::sync::mpsc::TryRecvError::Disconnected) => return Ok(End::Stopped),
-            Ok(Order::Save(path)) => save(&mut scene, &seats, &path),
+            Ok(Order::Save(path)) => save(&mut scene, &seats, spec.game, &path),
             Ok(Order::Pause(on)) => scene.st.send_command(&[if on { 0x10 } else { 0x11 }]),
             Ok(Order::Minimap(side, back)) => {
                 let _ = back.send(minimap_png(&mut scene, seats.armies[side.min(1)]));
@@ -355,13 +360,13 @@ fn minimap_png(scene: &mut Scene<'_>, army: u8) -> Vec<u8> {
 
 /// `Order::Save`: a saved game of a copy of the state (saving changes a game, 0x4e3410: the
 /// live one must stay as the joiners have it).
-fn save(scene: &mut Scene<'_>, seats: &Seats, path: &std::path::Path) {
+fn save(scene: &mut Scene<'_>, seats: &Seats, game: u16, path: &std::path::Path) {
     let live = scene.st.clone();
     let f = scene.save_file(b"campaign", true);
     let idle = live.idle_frames;
     scene.st = live;
     let ok = f.is_some_and(|f| std::fs::write(path, f).is_ok())
-        && std::fs::write(path.with_extension("txt"), format!("armies {} {} host {} idle {idle}\n", seats.armies[0], seats.armies[1], seats.host)).is_ok();
+        && std::fs::write(path.with_extension("txt"), format!("armies {} {} host {} idle {idle} game {game}\n", seats.armies[0], seats.armies[1], seats.host)).is_ok();
     if !ok {
         eprintln!("campaign: could not save {}", path.display());
     }

@@ -28,7 +28,7 @@ button:hover { border-color: var(--accent); }
 #chatlog { height: 140px; overflow-y: auto; font-size: 13px; margin-bottom: 6px; }
 #minimap { width: 100%; image-rendering: pixelated; border: 1px solid var(--line); margin-top: 8px; display: none; }
 code { font-size: 11px; word-break: break-all; color: var(--dim); }
-.area-label { fill: var(--text); font-size: 13px; text-anchor: middle; pointer-events: none; }
+.area-label { fill: var(--text); font-size: 13px; pointer-events: none; }
 .sq { cursor: pointer; }
 </style>
 </head>
@@ -85,9 +85,18 @@ function draw() {
     const [p, q] = [P(st.areas[b.a]), P(st.areas[b.b])];
     svg += `<line x1="${p[0]}" y1="${p[1]}" x2="${q[0]}" y2="${q[1]}" stroke="${b.live ? "#5a7a8a" : "#26323c"}" stroke-width="${b.live ? 3 : 2}"/>`;
   }
+  // Labels go below an area, else above, right or left: the first spot no border square
+  // or other area covers (text ~7 px a character, 14 high).
+  const squares = st.borders.filter(b => b.live).map(b => { const [p, q] = [P(st.areas[b.a]), P(st.areas[b.b])]; return [(p[0] + q[0]) / 2, (p[1] + q[1]) / 2]; });
+  const centers = st.areas.map(P);
   for (const a of st.areas) {
-    const [x, y] = P(a);
-    svg += `<circle cx="${x}" cy="${y}" r="22" fill="${colour(a.owner)}" stroke="#000" stroke-width="2"/><text class="area-label" x="${x}" y="${y + 38}">${esc(a.name)}</text>`;
+    const [x, y] = P(a), w = a.name.length * 7;
+    const spots = [[x, y + 38, "middle"], [x, y - 30, "middle"], [x + 28, y + 5, "start"], [x - 28, y + 5, "end"]];
+    const box = ([tx, ty, an]) => { const l = an === "middle" ? tx - w / 2 : an === "start" ? tx : tx - w; return [l, ty - 12, l + w, ty + 3]; };
+    const hits = ([l, t, r, b]) => squares.some(([sx, sy]) => sx + 11 > l && sx - 11 < r && sy + 11 > t && sy - 11 < b)
+      || centers.some(([cx, cy]) => (cx !== x || cy !== y) && cx + 24 > l && cx - 24 < r && cy + 24 > t && cy - 24 < b);
+    const [tx, ty, an] = spots.find(s => !hits(box(s))) || spots[0];
+    svg += `<circle cx="${x}" cy="${y}" r="22" fill="${colour(a.owner)}" stroke="#000" stroke-width="2"/><text class="area-label" x="${tx}" y="${ty}" text-anchor="${an}">${esc(a.name)}</text>`;
   }
   st.borders.forEach((b, i) => {
     if (!b.live) return;
@@ -99,7 +108,8 @@ function draw() {
   });
   $("map").innerHTML = svg;
   $("map").querySelectorAll(".sq").forEach(r => { r.onclick = r.onkeydown = e => { if (e.type === "keydown" && e.key !== "Enter") return; sel = +r.dataset.b; draw(); minimap(); }; });
-  $("factions").innerHTML = st.factions.map((f, i) => `<div><span style="color:${COLOURS[f.colour % 12]}">■</span> ${esc(f.name)} <span class="dim">${RACES[f.race] || ""} · ${f.areas} areas${f.areas ? "" : " · eliminated"}</span></div>`).join("");
+  // The race only when the name is not already it.
+  $("factions").innerHTML = st.factions.map(f => `<div><span style="color:${COLOURS[f.colour % 12]}">■</span> ${esc(f.name)} <span class="dim">${RACES[f.race] && RACES[f.race] !== f.name ? RACES[f.race] + " · " : ""}${f.areas} areas${f.areas ? "" : " · eliminated"}</span></div>`).join("");
   const fsel = $("faction");
   if (fsel.options.length !== st.factions.length) fsel.innerHTML = st.factions.map((f, i) => `<option value="${i}">${esc(f.name)}</option>`).join("");
   $("whoami").innerHTML = st.faction >= 0 ? `Playing for <b style="color:${colour(st.faction)}">${esc(st.factions[st.faction].name)}</b>${st.factions[st.faction].areas ? "" : st.pick ? " (eliminated: pick a faction to go on)" : " (eliminated)"}` : me ? "Pick a faction and press Play." : "Choose a name (unique in this campaign) and a faction.";

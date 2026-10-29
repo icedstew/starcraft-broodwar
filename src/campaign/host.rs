@@ -120,6 +120,42 @@ pub struct Host {
     /// Pool maps that did not load.
     bad_maps: Vec<String>,
     last_save: Instant,
+    /// The web map's admin token.
+    pub token: String,
+}
+
+/// A QUIC certificate older than this is made again (browsers take a pinned certificate
+/// only when it is valid for at most 14 days: codes change then).
+const QUIC_CERT_DAYS: u64 = 13;
+
+/// What a campaign keeps of its host across restarts (`dir/host.txt`): the game port, the
+/// admin token, the next match id, when the QUIC certificate (`quic.der` / `quic.key`) was made.
+#[derive(Default)]
+struct Kept {
+    port: u16,
+    token: String,
+    next_game: u16,
+    quic_made: u64,
+}
+
+impl Kept {
+    fn read(dir: &Path) -> Kept {
+        let mut k = Kept::default();
+        for l in std::fs::read_to_string(dir.join("host.txt")).unwrap_or_default().lines() {
+            match l.split_once(' ') {
+                Some(("port", v)) => k.port = v.parse().unwrap_or(0),
+                Some(("token", v)) => k.token = v.to_string(),
+                Some(("next", v)) => k.next_game = v.parse().unwrap_or(0),
+                Some(("quic", v)) => k.quic_made = v.parse().unwrap_or(0),
+                _ => {}
+            }
+        }
+        k
+    }
+}
+
+fn now_secs() -> u64 {
+    web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map_or(0, |t| t.as_secs())
 }
 
 impl Host {
@@ -132,10 +168,25 @@ impl Host {
         world.deal()?;
         let players = Players::parse(&std::fs::read_to_string(dir.join("players.txt")).unwrap_or_default());
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-        let hub = Hub::new(port)?;
-        let seed = web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map_or(1, |t| t.as_secs() as u32) | 1;
+        // A resumed campaign keeps its port, certificate, token and match ids (join links).
+        let kept = if resume { Kept::read(dir) } else { Kept::default() };
+        let (qc, qk) = (dir.join("quic.der"), dir.join("quic.key"));
+        let fresh = now_secs().saturating_sub(kept.quic_made) < QUIC_CERT_DAYS * 86400;
+        let saved = match (fresh, std::fs::read(&qc), std::fs::read(&qk)) {
+            (true, Ok(c), Ok(k)) => Some((c, k)),
+            _ => None,
+        };
+        let reused = saved.is_some();
+        let (hub, (c, k)) = Hub::new(if port != 0 { port } else { kept.port }, saved)?;
+        let quic_made = if reused { kept.quic_made } else { now_secs() };
+        std::fs::write(&qc, c).and_then(|_| std::fs::write(&qk, k)).map_err(|e| format!("{}: {e}", qc.display()))?;
+        let seed = now_secs() as u32 | 1;
         let shared = Shared { world, live: HashMap::new(), players, paused: false, winner: None, chat: Vec::new() };
-        let mut h = Host { shared: Arc::new(Mutex::new(shared)), hub, dir: dir.to_path_buf(), reports: mpsc::channel(), next_game: 0, seed, fails: HashMap::new(), bad_maps: Vec::new(), last_save: Instant::now() };
+        let mut h = Host { shared: Arc::new(Mutex::new(shared)), hub, dir: dir.to_path_buf(), reports: mpsc::channel(), next_game: kept.next_game, seed, fails: HashMap::new(), bad_maps: Vec::new(), last_save: Instant::now(), token: kept.token };
+        if h.token.is_empty() {
+            h.token = format!("{:08x}{:08x}", h.rand(), h.rand());
+        }
+        let _ = std::fs::write(dir.join("host.txt"), format!("port {}\ntoken {}\nnext {}\nquic {quic_made}\n", h.hub.port(), h.token, h.next_game));
         let live = h.shared.lock().unwrap().world.live_borders();
         for b in live {
             let r = if resume { Resume::read(&h.save_path(b)) } else { None };
@@ -210,8 +261,14 @@ impl Host {
                 maps[i].clone()
             }
         };
-        let game = self.next_game;
-        self.next_game = self.next_game.wrapping_add(1);
+        // A resumed match keeps its id (its join links); new ones count on from the kept next.
+        let game = match resume.as_ref().and_then(|r| r.game) {
+            Some(g) => g,
+            None => {
+                self.next_game = self.next_game.wrapping_add(1);
+                self.next_game.wrapping_sub(1)
+            }
+        };
         let spec = Spec { border: b, game, map, sides, seed: self.rand(), resume };
         let (otx, orx) = mpsc::channel();
         let (rtx, rrx) = mpsc::channel();
@@ -324,6 +381,9 @@ impl Host {
         let sh = self.shared.lock().unwrap();
         let _ = std::fs::write(self.dir.join("world.txt"), sh.world.write());
         let _ = std::fs::write(self.dir.join("players.txt"), sh.players.write());
+        let mut kept = Kept::read(&self.dir);
+        kept.next_game = self.next_game;
+        let _ = std::fs::write(self.dir.join("host.txt"), format!("port {}\ntoken {}\nnext {}\nquic {}\n", self.hub.port(), self.token, kept.next_game, kept.quic_made));
         // Saves of matches that are no longer live must not come back on a resume.
         for e in std::fs::read_dir(&self.dir).into_iter().flatten().flatten() {
             let n = e.file_name().to_string_lossy().into_owned();
@@ -483,12 +543,12 @@ impl Host {
 pub fn main(world: &str, dir: &str, port: u16, web_port: u16, https_port: u16) -> Result<(), String> {
     let mut h = Host::new(world, Path::new(dir), port)?;
     let (atx, arx) = mpsc::channel::<super::web::Admin>();
-    let token = format!("{:08x}{:08x}", h.rand(), h.rand());
+    let token = h.token.clone();
     let web = super::web::Web {
         shared: h.shared.clone(),
         admin: atx,
         token: token.clone(),
-        play_dir: std::env::var("SCBW_CAMPAIGN_PLAY").unwrap_or_else(|_| "web".into()).into(),
+        play_dir: play_dir(),
         play_url: std::env::var("SCBW_CAMPAIGN_WEB").unwrap_or_else(|_| "/play/index.html".into()),
     };
     let wp = super::web::serve(web.clone(), web_port, None)?;
@@ -520,6 +580,28 @@ pub fn main(world: &str, dir: &str, port: u16, web_port: u16, https_port: u16) -
     // The matches write their saves on their own threads.
     std::thread::sleep(Duration::from_millis(500));
     Ok(())
+}
+
+/// The browser build's directory: SCBW_CAMPAIGN_PLAY, else `web` in the working directory,
+/// beside the executable or in the repo it was built in (`<repo>/target/release/scbw`); one
+/// with `index.html` and `pkg/`. None found: an error line says so.
+fn play_dir() -> PathBuf {
+    if let Ok(d) = std::env::var("SCBW_CAMPAIGN_PLAY") {
+        return d.into();
+    }
+    let exe = std::env::current_exe().ok().and_then(|e| e.parent().map(Path::to_path_buf));
+    let mut c = vec![PathBuf::from("web")];
+    if let Some(e) = exe {
+        c.push(e.join("web"));
+        c.extend(e.ancestors().skip(1).take(3).map(|a| a.join("web")));
+    }
+    match c.iter().find(|d| d.join("index.html").is_file() && d.join("pkg").is_dir()) {
+        Some(d) => d.canonicalize().unwrap_or_else(|_| d.clone()),
+        None => {
+            println!("campaign: error: no browser build found (web/index.html and web/pkg/, from web/build.sh); set SCBW_CAMPAIGN_PLAY to its directory: Join in browser will not work");
+            "web".into()
+        }
+    }
 }
 
 /// A plain HTTP GET of `url` (`http://host:port/path?query`): the body.

@@ -695,17 +695,25 @@ struct Route {
 pub struct Hub {
     routes: Routes,
     code: String,
+    port: u16,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 impl Hub {
-    /// Listen on `port` (bound as `Transport::host`: SCBW_NET_BIND, default 127.0.0.1).
-    pub fn new(port: u16) -> Result<Hub, String> {
+    /// Listen on `port` (bound as `Transport::host`: SCBW_NET_BIND, default 127.0.0.1) with
+    /// the certificate `saved` (DER certificate and PKCS#8 key; a campaign keeps its own so
+    /// codes stay valid), else a new one; also returns the certificate used.
+    pub fn new(port: u16, saved: Option<(Vec<u8>, Vec<u8>)>) -> Result<(Hub, (Vec<u8>, Vec<u8>)), String> {
         let bind: std::net::IpAddr = match std::env::var("SCBW_NET_BIND") {
             Ok(b) => b.parse().map_err(|_| format!("bad SCBW_NET_BIND {b:?}"))?,
             Err(_) => [127, 0, 0, 1].into(),
         };
-        let identity = Identity::self_signed(["localhost", "127.0.0.1"]).map_err(|e| e.to_string())?;
+        let from_saved = saved.and_then(|(c, k)| Some(Identity::new(wtransport::tls::CertificateChain::new(vec![wtransport::tls::Certificate::from_der(c).ok()?]), wtransport::tls::PrivateKey::from_der_pkcs8(k))));
+        let identity = match from_saved {
+            Some(i) => i,
+            None => Identity::self_signed(["localhost", "127.0.0.1"]).map_err(|e| e.to_string())?,
+        };
+        let der = (identity.certificate_chain().as_slice()[0].der().to_vec(), identity.private_key().secret_der().to_vec());
         let hash = identity.certificate_chain().as_slice()[0].hash();
         let config = ServerConfig::builder()
             .with_bind_address(SocketAddr::new(bind, port))
@@ -737,7 +745,11 @@ impl Hub {
                 })
             })
             .map_err(|e| e.to_string())?;
-        Ok(Hub { routes, code: format!("{addr}#{}", hex(&hash)) })
+        Ok((Hub { routes, code: format!("{addr}#{}", hex(&hash)), port: addr.port() }, der))
+    }
+
+    pub fn port(&self) -> u16 {
+        self.port
     }
 
     /// The join code of match `m`.

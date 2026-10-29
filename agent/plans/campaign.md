@@ -251,6 +251,31 @@ Check: `agent/tools/campaign_e2e.sh` (4-area ring, 4 maps, 3 factions, AI only, 
 PASS in 75 s: captures, Terran then Zerg eliminated, three draws on West-North restarted,
 "Protoss wins the campaign".
 
+### F7. Fixes from a live 30-area campaign (DONE 2026-10-28)
+User's run (`campaign gen 30 3 <BroodWar maps> --seed 7`, normal pace):
+- **Resume spun**: after `save` / `quit` / restart every match stayed at its saved frame,
+  ~1160% CPU, joins unanswered. The resumed host's session (`Session::new_at(.., start)`)
+  knew only frames below `start`; its own turns for start..start+delay never came, so it
+  waited on (and dropped) itself in a loop. The host now joins its own session as a joiner
+  does (`add_player(0, 0, host, start + delay)`).
+- **Kept across a restart** (`dir/host.txt`): the game port, the admin token, the next match
+  id; each match's id is saved with it (`border-N.txt` `game G`), so join links and the admin
+  URL survive; the QUIC certificate (`quic.der` / `quic.key`) is reused while younger than 13
+  days (browsers pin only certificates valid <= 14 days; after that it is made again and the
+  codes change).
+- `/play`: the browser build is looked for in SCBW_CAMPAIGN_PLAY, `web` in the working
+  directory, beside the executable and in its repo (`<repo>/target/release/scbw`); none:
+  an error line at start naming SCBW_CAMPAIGN_PLAY. `/favicon.ico` answers 204.
+- Web map: area labels go below, above, right or left, wherever no border square or area
+  covers them; the faction list shows the race only when the name is not the race.
+- A headless-browser joiner on a normal-pace host is dropped after ~24 s: a headless
+  chromium runs ~18 fps and cannot keep up with 24 (expected; the checks pace the host at 70 ms).
+  A real windowed browser keeping up is not confirmed yet.
+Check: `agent/tools/campaign_host.sh` "resume checks": frames advance after the restart
+(650 -> 794 in ~6 s), same join code, same admin token, a joiner with the old code gets in;
+host started from /tmp serves /play (200) and /favicon.ico (204); seed-7 map screenshot looked
+at (Umoja, Korhal, Braxis clear).
+
 ### Later (not now)
 Area bonuses (start extras per owned areas), spectating with faction vision, several armies
 per side, `scbw://` URL handler.
