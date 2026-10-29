@@ -507,7 +507,7 @@ pub fn main(world: &str, dir: &str, port: u16, web_port: u16) -> Result<(), Stri
 }
 
 /// A plain HTTP GET of `url` (`http://host:port/path?query`): the body.
-fn http_get(url: &str) -> Result<String, String> {
+pub(crate) fn http_get(url: &str) -> Result<String, String> {
     use std::io::{Read, Write};
     let rest = url.strip_prefix("http://").ok_or("only http:// web maps")?;
     let (host, path) = rest.split_once('/').map_or((rest, String::from("/")), |(h, p)| (h, format!("/{p}")));
@@ -522,43 +522,15 @@ fn http_get(url: &str) -> Result<String, String> {
     Ok(body.to_string())
 }
 
-/// `scbw campaign join <web map url> <name> [faction]`: the .exe's way into a campaign. The
-/// name registers (with `faction` when new), then, until the player quits: the faction's
-/// live matches are listed, the one picked is played (`scbw campaign join <code> <name>`, a
-/// process of its own), and the list comes back when it ends.
-pub fn join_loop(url: &str, name: &str, faction: Option<u8>) -> Result<(), String> {
-    use std::io::BufRead;
+/// `scbw campaign join <web map url> <name> [faction]`: register the name (with `faction`
+/// when new); the glue then opens on the Join Game screen listing the faction's matches
+/// (net/snet.rs `set_campaign`).
+pub fn register(url: &str, name: &str, faction: Option<u8>) -> Result<(), String> {
     let base = url.trim_end_matches('/');
     let enc: String = name.bytes().map(|c| if c.is_ascii_alphanumeric() { (c as char).to_string() } else { format!("%{c:02x}") }).collect();
     if let Some(f) = faction {
-        // A POST in the server's eyes is the same request (it reads the query either way).
-        match http_get(&format!("{base}/join?name={enc}&faction={f}")) {
-            Ok(_) => {}
-            Err(e) => println!("campaign: {e}"),
-        }
+        http_get(&format!("{base}/join?name={enc}&faction={f}"))?;
     }
-    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let mut stdin = std::io::stdin().lock().lines();
-    loop {
-        let list = http_get(&format!("{base}/matches?name={enc}"))?;
-        let rows: Vec<Vec<&str>> = list.lines().map(|l| l.splitn(4, ' ').collect()).filter(|r: &Vec<&str>| r.len() == 4).collect();
-        if rows.is_empty() {
-            println!("campaign: no match for {name} (register a faction on the web map, or pass one: join <url> <name> <faction>)");
-            return Ok(());
-        }
-        println!("Your faction's matches:");
-        for (i, r) in rows.iter().enumerate() {
-            println!("  {}) {}  ({} players)", i + 1, r[3], r[2]);
-        }
-        println!("Pick a number (Enter: 1, q: quit):");
-        let Some(Ok(l)) = stdin.next() else { return Ok(()) };
-        let l = l.trim();
-        if l == "q" {
-            return Ok(());
-        }
-        let i = if l.is_empty() { 0 } else { l.parse::<usize>().unwrap_or(1).saturating_sub(1) };
-        let Some(r) = rows.get(i) else { continue };
-        let st = std::process::Command::new(&exe).args(["campaign", "join", r[1], name]).status().map_err(|e| e.to_string())?;
-        println!("campaign: the match ended ({st})");
-    }
+    crate::net::snet::set_campaign(base, name);
+    Ok(())
 }

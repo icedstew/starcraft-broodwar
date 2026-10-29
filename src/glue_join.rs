@@ -71,6 +71,10 @@ impl Glue {
     fn join_init(&mut self) {
         self.join.rows.clear();
         self.disable(ids::OK, true);
+        // Ours: a campaign player only joins the faction's matches.
+        if snet::campaign_name().is_some() {
+            self.disable(ids::CREATE, true);
+        }
     }
 
     /// 0x4b8460: the list made (0x4b8340), laid out, the 1000 ms timer 0x2d started (its event
@@ -208,6 +212,11 @@ impl Glue {
         if let Some(s) = speed {
             set(ids::SPEED, s);
         }
+        // Ours (campaign mode): the match's time, supply and workers under the type.
+        if let Some(l) = snet::campaign_line(g.id) {
+            set(ids::SUB_LABEL, b"Match:".to_vec());
+            set(ids::SUB, l.into_bytes());
+        }
         // 0x5999f0 = the description shown (0x4d3b50 joins it; here the selected game).
     }
 
@@ -312,6 +321,26 @@ impl Glue {
         true
     }
 
+    /// Ours (campaign mode): straight to the Join Game screen as `name` on the UDP provider
+    /// (as `join_by_code` sets up a joiner), the list being the faction's matches.
+    pub fn campaign_join_screen(&mut self, files: &Storage, name: &[u8]) {
+        snet::initialize_provider(snet::UDPN);
+        self.setup.net_provider = snet::UDPN;
+        self.setup.turns_in_flight = snet::provider_caps().map_or(1, |c| c.turns_in_flight.clamp(2, 8));
+        self.load_templates(files);
+        let n = name.len().min(0x18);
+        self.setup.local_name = [0; 0x20];
+        self.setup.local_name[..n].copy_from_slice(&name[..n]);
+        self.player_name = String::from_utf8_lossy(&name[..n]).into_owned();
+        self.multiplayer = true;
+        self.setup.multiplayer = true;
+        self.expansion = true;
+        self.setup.expansion = true;
+        self.state = super::state::GLUE;
+        self.first = false;
+        self.screen = screen::GAMESEL;
+    }
+
     /// The 1000 ms timer 0x2d (event 8 to the list: 0x4b8340).
     pub(super) fn join_tick(&mut self, ms: u32) {
         if !matches!(self.dlg, Some((_, Open::Join))) {
@@ -330,6 +359,8 @@ impl Glue {
     pub(super) fn done_join(&mut self, result: i32) {
         self.screen = match result {
             13 => screen::CHAT,
+            // Ours: Cancel in campaign mode quits.
+            14 if snet::campaign_name().is_some() => screen::EXIT,
             14 if self.setup.net_provider == 0x5343_424c => screen::SELCONN,
             14 => screen::LOGIN,
             15 => screen::CREATE,

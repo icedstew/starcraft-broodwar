@@ -211,8 +211,8 @@ impl Web {
         Ok("ok".into())
     }
 
-    /// The viewer's faction's live matches, a line each: `border code humans area - area`
-    /// (`scbw campaign join <web map> <name>` lists them).
+    /// The viewer's faction's live matches, a line each: `border code humans frame supply
+    /// most workers map<TAB>area - area` (the .exe's join list, net/snet.rs `campaign_games`).
     fn matches(&self, name: &str) -> String {
         let sh = self.shared.lock().unwrap();
         let Some(v) = Self::viewer(&sh, name) else { return String::new() };
@@ -222,8 +222,10 @@ impl Web {
         for (&b, l) in live {
             let (Some(i), Some(code)) = (l.spec.sides.iter().position(|s| s.faction == v), &l.code) else { continue };
             let br = &sh.world.borders[b as usize];
-            let n = l.stats.sides[i].humans.len();
-            out += &format!("{b} {code} {n} {} - {}\n", sh.world.areas[br.a as usize].name, sh.world.areas[br.b as usize].name);
+            let x = &l.stats.sides[i];
+            let map = l.spec.map.rsplit(['/', '\\']).next().unwrap_or("").replace(['\t', '\n'], " ");
+            let (a, z) = (&sh.world.areas[br.a as usize].name, &sh.world.areas[br.b as usize].name);
+            out += &format!("{b} {code} {} {} {} {} {} {map}\t{a} - {z}\n", x.humans.len(), l.stats.frame, x.supply.0, x.supply.1, x.workers);
         }
         out
     }

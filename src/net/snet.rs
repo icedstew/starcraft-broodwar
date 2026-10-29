@@ -367,11 +367,83 @@ pub fn create_game(name: &[u8], stat: &[u8], max: u8, player: &[u8]) -> Option<u
     Some(0)
 }
 
+/// Ours (campaign mode, `scbw campaign join <web map> <name>`): the join list shows the
+/// faction's live matches from the campaign host instead of the LAN.
+struct Campaign {
+    url: String,
+    name: String,
+    asked: Option<Instant>,
+    games: Vec<GameEntry>,
+    /// Per game id: the stat line the join screen shows.
+    lines: Vec<(u32, String)>,
+}
+
+thread_local! {
+    static CAMPAIGN: RefCell<Option<Campaign>> = const { RefCell::new(None) };
+}
+
+/// Campaign mode: the web map at `url`, playing as `name`.
+pub fn set_campaign(url: &str, name: &str) {
+    CAMPAIGN.with(|c| *c.borrow_mut() = Some(Campaign { url: url.into(), name: name.into(), asked: None, games: Vec::new(), lines: Vec::new() }));
+}
+
+/// The campaign player's name, in campaign mode.
+pub fn campaign_name() -> Option<String> {
+    CAMPAIGN.with(|c| c.borrow().as_ref().map(|c| c.name.clone()))
+}
+
+/// The stat line of a listed campaign match.
+pub fn campaign_line(id: u32) -> Option<String> {
+    CAMPAIGN.with(|c| c.borrow().as_ref()?.lines.iter().find(|l| l.0 == id).map(|l| l.1.clone()))
+}
+
+/// The campaign's matches for the join list (asked again at most once a second); None
+/// outside campaign mode.
+#[cfg(not(target_arch = "wasm32"))]
+fn campaign_games(n: &mut Net) -> Option<Vec<GameEntry>> {
+    CAMPAIGN.with(|c| {
+        let mut c = c.borrow_mut();
+        let c = c.as_mut()?;
+        if c.asked.is_none_or(|t| t.elapsed().as_millis() >= 1000) {
+            c.asked = Some(Instant::now());
+            let enc: String = c.name.bytes().map(|b| if b.is_ascii_alphanumeric() { (b as char).to_string() } else { format!("%{b:02x}") }).collect();
+            let text = crate::campaign::host::http_get(&format!("{}/matches?name={enc}", c.url)).unwrap_or_default();
+            (c.games, c.lines) = (Vec::new(), Vec::new());
+            for l in text.lines() {
+                let Some((head, title)) = l.split_once('\t') else { continue };
+                let f: Vec<&str> = head.splitn(8, ' ').collect();
+                let [b, code, humans, frame, used, most, _workers, map] = f[..] else { continue };
+                let num = |s: &str| s.parse::<u32>().unwrap_or(0);
+                let id = num(b) + 1;
+                // A melee description (statstr.rs) for the list to parse: 128x128, Fastest,
+                // game type 2 / subtype 1, enhanced (+0x2f bit 7), host "Campaign", the map's name.
+                let mut d = vec![0u8; 0x8d];
+                d[0x20..0x24].copy_from_slice(&[128, 0, 128, 0]);
+                (d[0x24], d[0x25], d[0x26], d[0x28], d[0x2a], d[0x2f]) = (num(humans).min(255) as u8, 8, 6, 2, 1, 0x80);
+                d[0x34..0x3c].copy_from_slice(b"Campaign");
+                let m = map.as_bytes();
+                d[0x4d..0x4d + m.len().min(0x1f)].copy_from_slice(&m[..m.len().min(0x1f)]);
+                let secs = num(frame) * 42 / 1000;
+                c.lines.push((id, format!("{}:{:02}  supply {used}/{most}", secs / 60, secs % 60)));
+                let e = GameEntry { id, name: title.as_bytes().to_vec(), stat: super::statstr::build(&d, 0x80), players: d[0x24], max: 8, code: code.to_string(), seen: Instant::now() };
+                c.games.push(e);
+            }
+        }
+        // Ordinal 118 finds the game by its id.
+        n.games = c.games.clone();
+        Some(c.games.clone())
+    })
+}
+
 /// Ordinal 133 (0x4d37c0, the join screen every second): the LAN games heard of. Each call
 /// asks again; answers arrive for the next call (as a LAN list fills). Games not heard of
 /// for 3 s drop out.
 pub fn enum_games() -> Vec<GameEntry> {
     NET.with(|n| {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(g) = campaign_games(&mut n.borrow_mut()) {
+            return g;
+        }
         let mut n = n.borrow_mut();
         #[cfg(not(target_arch = "wasm32"))]
         n.lan_poll();

@@ -45,16 +45,18 @@ if [ -n "$SHOT" ]; then
 fi
 echo quit >&3; exec 3>&-; wait $HP
 grep -E "^campaign:" $O/host.log | cut -c1-120
-# The .exe chooser (scbw campaign join <web map> <name> <faction>): lists bob's faction's
-# matches, plays the first headless to frame 700 (saying "!hi from the game" at 400: a
-# faction line), lists again, quits. The line must reach the faction chat on the map.
+# The .exe's join list (CHOOSER=1; scbw campaign join <web map> <name> <faction> <shot>):
+# the glue opens on the Join Game screen listing bob's faction's matches (list.png), Ok
+# plays the first headless to frame 500 (saying "!hi from the game" at 400: a faction
+# line), the list comes back (after.png), Cancel quits. The line must reach the map's chat.
 if [ -n "$CHOOSER" ]; then
   mkfifo $O/in2; (timeout 150 $B campaign host $O/world.txt $O/dir2 0 $WP < $O/in2 > $O/host2.log 2>&1) & HP=$!; exec 3> $O/in2
   for i in $(seq 40); do grep -q "web map" $O/host2.log 2>/dev/null && break; sleep 0.25; done
   sleep 4; mkdir -p $O/inst $O/k
   for f in "$SCBW_INSTALL"/*; do n=$(basename "$f"); [ "$n" = maps ] || ln -sf "$f" "$O/inst/$n"; done
-  printf '1\nq\n' | (cd $O; SCBW_NET_HEADLESS=700 SCBW_NET_SCRIPT="400:say !hi from the game" SCBW_INSTALL=$O/inst SCBW_CHARACTERS=$O/k timeout 120 $B campaign join $U bob 1 > $O/chooser.log 2>&1)
+  (cd $O; SCBW_GLUE_REALTIME=1 SCBW_GLUE_INPUT="w 2500;c 200 100;w 500;s $O/list.png;t o;w 30000;s $O/after.png;t c;w 1000" SCBW_NET_HEADLESS=500 SCBW_NET_SCRIPT="400:say !hi from the game" SCBW_INSTALL=$O/inst SCBW_CHARACTERS=$O/k timeout 120 $B campaign join $U bob 1 $O/end.png > $O/chooser.log 2>&1; echo "exit $?" >> $O/chooser.log)
   c "$U/state?name=bob" > /dev/null; echo "bob chat: $(grep -o '"chat":\[[^]]*\]\]*' $O/out)"
-  grep -E "matches|\) |frame 700|ended" $O/chooser.log | head -8
+  grep -aE "frame 500|net: joined|exit" $O/chooser.log | head -5
+  ls $O/list.png $O/after.png 2>&1 | sed 's/^/  /'
   echo quit >&3; exec 3>&-; wait $HP
 fi

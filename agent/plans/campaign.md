@@ -150,14 +150,11 @@ Not verified: the browser Join (the wasm build from `/play/`; a non-localhost ht
 cannot use WebTransport, so SCBW_CAMPAIGN_WEB must be https for remote players).
 
 ### 7. In-game pieces (.exe) (DONE 2026-10-28, chooser in the terminal)
-Done: `scbw campaign join <web map url> <name> [faction]` registers, lists the faction's live
-matches, plays the one picked (a child process `scbw campaign join <code> <name>`) and lists
-again after it ends. Faction chat: web lines go to the faction's humans in each of its
+Done: `scbw campaign join <web map url> <name> [faction]` (now the glue's Join Game screen,
+F2). Faction chat: web lines go to the faction's humans in each of its
 matches (Storm messages from the host seat "Faction"); in-game lines starting with `!` go to
 the faction's chat on the map and its other matches.
-Not done (decision): the match list is a terminal prompt, not an in-game glue dialog.
-Check: campaign_web.sh with CHOOSER=1 (lists 2 matches, plays one headless to frame 700,
-"!hi from the game" said at 400 shows in the faction chat, lists again).
+The terminal prompt was replaced by the Join Game screen (F2).
 
 ### 8. World generator — `scbw campaign gen <areas> <factions> <maps>... [--seed N]` (DONE 2026-10-28)
 Done: `World::generate`: areas on a jittered grid, borders = Gabriel graph (planar,
@@ -178,6 +175,19 @@ enhanced games).
 Check: `CHAT=1 agent/tools/campaign_match.sh`: joiners on both sides; the enemy (NETREP_DEBUG
 prints received lines) gets "hello all" (1) and not "!secret plan" (0); the host reports the
 faction line; all three hashes equal.
+
+### F2. In-game next-match list (DONE 2026-10-28)
+Done: `scbw campaign join <web map> <name> [faction] [shot]` registers, then the glue opens
+straight on the real Join Game screen (gluJoin.bin, `Glue::campaign_join_screen`) whose list
+is the faction's live matches (`snet::set_campaign`: `enum_games` reads the host's
+`/matches` once a second and makes melee descriptions of them); the description panel's
+subtype line shows "Match: m:ss  supply u/m"; Create Game is disabled; Ok joins (the usual
+lobby -> late start); after the match the glue comes back to this screen; Cancel quits. The
+terminal prompt is gone.
+Check: `CHOOSER=1 agent/tools/campaign_web.sh` (SCBW_GLUE_INPUT: list shot, Ok, the match
+headless to frame 500 with a faction line said, the list again, Cancel = exit 0; the line
+reached the map's chat). Looked at list.png / after.png: both matches listed, the stat line,
+Create Game greyed, the list back after the match with the time moved on.
 
 ### Later (not now)
 Area bonuses (start extras per owned areas), spectating with faction vision, several armies

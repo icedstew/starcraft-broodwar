@@ -701,8 +701,10 @@ fn main() -> std::io::Result<()> {
         }
         #[cfg(not(target_arch = "wasm32"))]
         Some("campaign") if args.get(1).map(String::as_str) == Some("join") && args.len() >= 4 && args[2].starts_with("http") => {
-            // campaign join <web map url> <name> [faction]: pick and play the faction's matches.
-            campaign::host::join_loop(&args[2], &args[3], args.get(4).and_then(|f| f.parse().ok())).map_err(std::io::Error::other)?;
+            // campaign join <web map url> <name> [faction] [shot.png]: the Join Game screen lists
+            // the faction's matches; after each match it comes back (Cancel quits).
+            campaign::host::register(&args[2], &args[3], args.get(4).and_then(|f| f.parse().ok())).map_err(std::io::Error::other)?;
+            glue::run(&files, args.get(5).map(String::as_str))?;
         }
         #[cfg(not(target_arch = "wasm32"))]
         Some("campaign") if args.get(1).map(String::as_str) == Some("join") && args.len() >= 4 => {

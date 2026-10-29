@@ -3506,6 +3506,11 @@ pub fn run(files: &Storage, shot: Option<&str>) -> std::io::Result<()> {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
     }
+    // Campaign mode (`scbw campaign join <web map> <name>`): the Join Game screen first.
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(name) = crate::net::snet::campaign_name() {
+        glue.campaign_join_screen(files, name.as_bytes());
+    }
     // SCBW_CINE=<number>: plays that cinematic first (screenshot mode: its frame
     // SCBW_CINE_FRAME to the PNG).
     if let Some(i) = std::env::var("SCBW_CINE").ok().and_then(|s| s.parse::<u32>().ok()) {
@@ -3566,7 +3571,8 @@ pub fn run(files: &Storage, shot: Option<&str>) -> std::io::Result<()> {
                         None => crate::view::run_scene(&a, scene)?,
                     }
                     glue.state = state::GLUE;
-                    glue.screen = screen::MAIN;
+                    // Ours: a campaign player goes back to the faction's matches.
+                    glue.screen = if crate::net::snet::campaign_name().is_some() { screen::GAMESEL } else { screen::MAIN };
                     continue;
                 }
                 // 0x4d9950 (the game wrapper) starts with 0x4be060.
