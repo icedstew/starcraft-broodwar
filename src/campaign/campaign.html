@@ -122,8 +122,10 @@ function detail() {
   if (b.idle >= 5 * 1428) h += `<div class="warn">No fighting or mining: draw in ${Math.max(0, 10 - Math.floor(b.idle / 1428))} min</div>`;
   h += `<div class="sides" style="margin-top:6px">${b.sides.map(side).join("")}</div>`;
   if (b.code) {
-    const url = `${PLAY}${PLAY.includes("?") ? "&" : "?"}join=${encodeURIComponent(b.code)}&name=${encodeURIComponent(me)}`;
-    h += `<div class="row" style="margin-top:8px"><a href="${esc(url)}" target="_blank"><button>Join in browser</button></a><button id="copy">Copy for scbw</button></div><code id="cmdline">scbw campaign join '${esc(b.code)}' ${esc(me)}</code>`;
+    // A host bound to every address (0.0.0.0) is reached at the one this page came from.
+    const code = b.code.replace(/^0\.0\.0\.0:/, `${location.hostname}:`);
+    const url = `${PLAY}${PLAY.includes("?") ? "&" : "?"}join=${encodeURIComponent(code)}&name=${encodeURIComponent(me)}`;
+    h += `<div class="row" style="margin-top:8px"><a href="${esc(url)}" target="_blank"><button>Join in browser</button></a><button id="copy">Copy for scbw</button></div><code id="cmdline">scbw campaign join '${esc(code)}' ${esc(me)}</code>`;
   }
   $("detail").innerHTML = h;
   const c = $("copy");

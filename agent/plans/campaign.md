@@ -217,6 +217,30 @@ connection itself needs no certificate setup (the code pins the host's self-sign
 `serverCertificateHashes`); the host's UDP port must be reachable (port forward / UPnP /
 LAN). The players' browsers still load the game files their own way (web/index.html).
 
+### F5. HTTPS web map (DONE 2026-10-28)
+Done: the host serves the same handlers over plain HTTP (web port, default 8780) and HTTPS
+(`scbw campaign host <world> [dir] [port] [web port] [https port]`, default web port + 1):
+rustls through wtransport's re-export (`wtransport::tls::rustls`, ring provider; no new
+crate), a self-signed certificate from wtransport's builder (400 days; localhost, 127.0.0.1,
+SCBW_NET_BIND, SCBW_CAMPAIGN_NAMES) saved as `dir/https.der` + `https.key` and reused on
+resume. Both URLs are printed. The page's Join default stays its own relative
+`/play/index.html`, so it is https when the page came over https (SCBW_CAMPAIGN_WEB still
+overrides). A hub bound to 0.0.0.0 puts 0.0.0.0 in its codes: the page swaps in the address
+it was loaded from, and the .exe's list the web map's address.
+WebTransport after an accepted certificate warning: **works** in both browsers tried, the
+page is a secure context (`isSecureContext` true) once the warning is passed; the game's
+QUIC link does not depend on that certificate (it pins the hub's own by hash).
+Check: `agent/tools/campaign_https.sh` (host on 0.0.0.0, page https://192.168.4.20:<port>/
+play/index.html?join=..., host paced 70 ms a frame): equal frame 1500 hashes with
+- Chromium `--ignore-certificate-errors`;
+- Chromium without it, the warning page passed by typing "thisisunsafe" (CLICK=1); without
+  that the page stays on the warning (`isSecureContext` false);
+- Firefox 154 headless over WebDriver BiDi with `acceptInsecureCerts` (FIREFOX=1;
+  agent/tools/bidi_console.mjs).
+The restarted host serves the same certificate (SHA-256 fingerprint equal).
+Not verified: a person clicking through in a windowed browser; another machine on the LAN
+(all runs were on this machine's LAN address); Safari.
+
 ### Later (not now)
 Area bonuses (start extras per owned areas), spectating with faction vision, several armies
 per side, `scbw://` URL handler.

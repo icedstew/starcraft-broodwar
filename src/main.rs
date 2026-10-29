@@ -694,10 +694,12 @@ fn main() -> std::io::Result<()> {
         }
         #[cfg(not(target_arch = "wasm32"))]
         Some("campaign") if args.get(1).map(String::as_str) == Some("host") => {
-            // campaign host <world> [dir] [port] [web port]: run a campaign (src/campaign/host.rs).
-            let world = args.get(2).ok_or_else(|| std::io::Error::other("campaign host <world> [dir] [port] [web port]"))?;
+            // campaign host <world> [dir] [port] [web port] [https port]: run a campaign
+            // (src/campaign/host.rs).
+            let world = args.get(2).ok_or_else(|| std::io::Error::other("campaign host <world> [dir] [port] [web port] [https port]"))?;
             let n = |i: usize, d: u16| args.get(i).and_then(|v| v.parse().ok()).unwrap_or(d);
-            campaign::host::main(world, args.get(3).map_or("campaign", String::as_str), n(4, 0), n(5, 8780)).map_err(std::io::Error::other)?;
+            let wp = n(5, 8780);
+            campaign::host::main(world, args.get(3).map_or("campaign", String::as_str), n(4, 0), wp, n(6, wp.wrapping_add(1))).map_err(std::io::Error::other)?;
         }
         #[cfg(not(target_arch = "wasm32"))]
         Some("campaign") if args.get(1).map(String::as_str) == Some("join") && args.len() >= 4 && args[2].starts_with("http") => {

@@ -6,11 +6,17 @@
 //! faction chat with `/chat?name=` (the text as the body). `/admin?token=&cmd=` runs a host
 //! command (host.rs) with the token the host printed. `/play/...` serves the browser build
 //! (`web/`, or SCBW_CAMPAIGN_PLAY) so the page's Join can open it.
+//!
+//! The same handlers answer plain HTTP and HTTPS (`serve_tls`, rustls through wtransport's
+//! re-export, a self-signed certificate the host keeps with the campaign): a browser only
+//! runs the game's WebTransport from a secure page, and a remote player's page is not
+//! localhost.
 
 use super::host::Shared;
 use super::runner::Order;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::TcpListener;
+use wtransport::tls::rustls;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
@@ -32,8 +38,9 @@ pub struct Web {
     pub play_url: String,
 }
 
-/// Serve on `port` (bound to SCBW_NET_BIND as the hub, default 127.0.0.1); returns the port.
-pub fn serve(web: Web, port: u16) -> Result<u16, String> {
+/// Serve on `port` (bound to SCBW_NET_BIND as the hub, default 127.0.0.1), over TLS with
+/// `tls` when given; returns the port.
+pub fn serve(web: Web, port: u16, tls: Option<Arc<rustls::ServerConfig>>) -> Result<u16, String> {
     let bind = std::env::var("SCBW_NET_BIND").unwrap_or_else(|_| "127.0.0.1".into());
     let l = TcpListener::bind((bind.as_str(), port)).map_err(|e| format!("web map: {e}"))?;
     let port = l.local_addr().map_err(|e| e.to_string())?.port();
@@ -41,14 +48,49 @@ pub fn serve(web: Web, port: u16) -> Result<u16, String> {
         .name("web map".into())
         .spawn(move || {
             for s in l.incoming().flatten() {
-                let w = web.clone();
+                let (w, tls) = (web.clone(), tls.clone());
                 std::thread::spawn(move || {
-                    let _ = w.handle(s);
+                    let _ = s.set_read_timeout(Some(Duration::from_secs(10)));
+                    let _ = match tls.map(rustls::ServerConnection::new) {
+                        Some(Ok(c)) => w.handle(rustls::StreamOwned::new(c, s)),
+                        Some(Err(_)) => Ok(()),
+                        None => w.handle(s),
+                    };
                 });
             }
         })
         .map_err(|e| e.to_string())?;
     Ok(port)
+}
+
+/// The HTTPS certificate: `dir/https.der` + `dir/https.key` when there (a resumed campaign:
+/// players accepted it already), else a new self-signed one for 400 days (localhost,
+/// 127.0.0.1, SCBW_NET_BIND and the names in SCBW_CAMPAIGN_NAMES), saved there.
+pub fn tls_config(dir: &std::path::Path) -> Result<Arc<rustls::ServerConfig>, String> {
+    use wtransport::tls::Certificate;
+    let (crt, key) = (dir.join("https.der"), dir.join("https.key"));
+    let (cert, key_der) = match (std::fs::read(&crt), std::fs::read(&key)) {
+        (Ok(c), Ok(k)) => (c, k),
+        _ => {
+            let mut names = vec!["localhost".to_string(), "127.0.0.1".to_string()];
+            names.extend(std::env::var("SCBW_NET_BIND").ok().filter(|b| b != "0.0.0.0"));
+            names.extend(std::env::var("SCBW_CAMPAIGN_NAMES").unwrap_or_default().split(',').filter(|n| !n.is_empty()).map(String::from));
+            let id = wtransport::Identity::self_signed_builder().subject_alt_names(names).from_now_utc().validity_days(400).build().map_err(|e| e.to_string())?;
+            let (c, k) = (id.certificate_chain().as_slice()[0].der().to_vec(), id.private_key().secret_der().to_vec());
+            std::fs::write(&crt, &c).and_then(|_| std::fs::write(&key, &k)).map_err(|e| format!("{}: {e}", crt.display()))?;
+            (c, k)
+        }
+    };
+    // A bad file is an error, not a new certificate (players accepted the saved one).
+    Certificate::from_der(cert.clone()).map_err(|e| format!("{}: {e}", crt.display()))?;
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let c = rustls::ServerConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .map_err(|e| e.to_string())?
+        .with_no_client_auth()
+        .with_single_cert(vec![cert.into()], rustls::pki_types::PrivateKeyDer::Pkcs8(key_der.into()))
+        .map_err(|e| e.to_string())?;
+    Ok(Arc::new(c))
 }
 
 /// `%xx` and `+` decoded.
@@ -96,9 +138,8 @@ pub fn valid_name(n: &str) -> bool {
 }
 
 impl Web {
-    fn handle(&self, s: TcpStream) -> std::io::Result<()> {
-        s.set_read_timeout(Some(Duration::from_secs(10)))?;
-        let mut r = BufReader::new(s.try_clone()?);
+    fn handle<S: Read + Write>(&self, s: S) -> std::io::Result<()> {
+        let mut r = BufReader::new(s);
         let mut line = String::new();
         r.read_line(&mut line)?;
         let mut len = 0usize;
@@ -134,9 +175,10 @@ impl Web {
             p if p.starts_with("/play/") => self.file(&p["/play/".len()..]),
             _ => ("404 Not Found", "text/plain", b"not found".to_vec()),
         };
-        let mut s = s;
+        let mut s = r.into_inner();
         write!(s, "HTTP/1.1 {status}\r\nContent-Type: {ty}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n", out.len())?;
-        s.write_all(&out)
+        s.write_all(&out)?;
+        s.flush()
     }
 
     fn text(&self, r: Result<String, String>) -> (&'static str, &'static str, Vec<u8>) {

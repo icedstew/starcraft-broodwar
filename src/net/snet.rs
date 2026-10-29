@@ -442,7 +442,10 @@ fn campaign_games(n: &mut Net) -> Option<Vec<GameEntry>> {
                 d[0x4d..0x4d + m.len().min(0x1f)].copy_from_slice(&m[..m.len().min(0x1f)]);
                 let secs = num(frame) * 42 / 1000;
                 c.lines.push((id, format!("{}:{:02}  supply {used}/{most}", secs / 60, secs % 60)));
-                let e = GameEntry { id, name: title.as_bytes().to_vec(), stat: super::statstr::build(&d, 0x80), players: d[0x24], max: 8, code: code.to_string(), seen: Instant::now() };
+                // A host bound to every address is reached where the web map was.
+                let host = c.url.trim_start_matches("http://").split([':', '/']).next().unwrap_or("127.0.0.1");
+                let code = code.strip_prefix("0.0.0.0:").map_or(code.to_string(), |r| format!("{host}:{r}"));
+                let e = GameEntry { id, name: title.as_bytes().to_vec(), stat: super::statstr::build(&d, 0x80), players: d[0x24], max: 8, code, seen: Instant::now() };
                 c.games.push(e);
             }
         }

@@ -234,7 +234,9 @@ impl Host {
             sh.players.allow(name, sides)
         });
         let (s, hub) = (spec.clone(), self.hub.clone());
-        std::thread::Builder::new().name(format!("border {b}")).spawn(move || runner::run(s, hub, rtx, orx, Some(allow), None)).ok();
+        // SCBW_CAMPAIGN_HASH_AT=<frame> (tests): each match prints its state hash there.
+        let hash_at = std::env::var("SCBW_CAMPAIGN_HASH_AT").ok().and_then(|v| v.parse().ok());
+        std::thread::Builder::new().name(format!("border {b}")).spawn(move || runner::run(s, hub, rtx, orx, Some(allow), hash_at)).ok();
         if self.shared.lock().unwrap().paused {
             let _ = otx.send(Order::Pause(true));
         }
@@ -472,11 +474,13 @@ impl Host {
     }
 }
 
-/// `scbw campaign host <world> [dir] [port] [web port]`: the matches behind `port`, the web
-/// map on `web port` (default 8780; SCBW_CAMPAIGN_PLAY = the browser build's directory,
-/// default `web`; SCBW_CAMPAIGN_WEB = the URL the page's Join opens, default its own
-/// `/play/index.html`, which a browser only runs from localhost or https).
-pub fn main(world: &str, dir: &str, port: u16, web_port: u16) -> Result<(), String> {
+/// `scbw campaign host <world> [dir] [port] [web port] [https port]`: the matches behind
+/// `port`, the web map on `web port` (default 8780) and over HTTPS on `https port` (default
+/// web port + 1; the certificate is kept in `dir`). SCBW_CAMPAIGN_PLAY = the browser build's
+/// directory, default `web`; SCBW_CAMPAIGN_WEB = the URL the page's Join opens, default its
+/// own `/play/index.html` (so https when the page came over https), which a browser only runs
+/// from localhost or https.
+pub fn main(world: &str, dir: &str, port: u16, web_port: u16, https_port: u16) -> Result<(), String> {
     let mut h = Host::new(world, Path::new(dir), port)?;
     let (atx, arx) = mpsc::channel::<super::web::Admin>();
     let token = format!("{:08x}{:08x}", h.rand(), h.rand());
@@ -487,8 +491,9 @@ pub fn main(world: &str, dir: &str, port: u16, web_port: u16) -> Result<(), Stri
         play_dir: std::env::var("SCBW_CAMPAIGN_PLAY").unwrap_or_else(|_| "web".into()).into(),
         play_url: std::env::var("SCBW_CAMPAIGN_WEB").unwrap_or_else(|_| "/play/index.html".into()),
     };
-    let wp = super::web::serve(web, web_port)?;
-    println!("campaign: web map http://127.0.0.1:{wp}/ (admin: http://127.0.0.1:{wp}/?token={token})");
+    let wp = super::web::serve(web.clone(), web_port, None)?;
+    let sp = super::web::serve(web, https_port, Some(super::web::tls_config(Path::new(dir))?))?;
+    println!("campaign: web map http://127.0.0.1:{wp}/ and https://127.0.0.1:{sp}/ (admin: add ?token={token})");
     let (ltx, lrx) = mpsc::channel::<String>();
     std::thread::spawn(move || {
         for l in std::io::stdin().lines().map_while(Result::ok) {

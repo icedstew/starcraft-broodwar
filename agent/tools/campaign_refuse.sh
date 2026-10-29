@@ -7,7 +7,7 @@
 # old code of border 1 -> the match ended. O=<dir> for logs.
 T=$(cd "$(dirname "$0")" && pwd); cd "$T/../.."
 export SCBW_INSTALL=${SCBW_INSTALL:-$HOME/Downloads/StarCraft-BroodWar_1.16.1}
-B=${SCBW:-$PWD/target/release/scbw}; O=${O:-/tmp/scbw-campaign-refuse}; WP=${WP:-18782}
+B=${SCBW:-$PWD/target/release/scbw}; O=${O:-/tmp/scbw-campaign-refuse}; WP=${WP:-18785}
 MAP=${MAP:-$SCBW_INSTALL/maps/BroodWar/(2)Astral Balance.scm}
 rm -rf $O; mkdir -p $O/inst
 for f in "$SCBW_INSTALL"/*; do n=$(basename "$f"); [ "$n" = maps ] || ln -sf "$f" "$O/inst/$n"; done
