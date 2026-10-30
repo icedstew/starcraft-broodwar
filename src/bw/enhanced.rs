@@ -104,6 +104,9 @@ impl Extras {
     pub fn apply(&self, st: &mut State) {
         st.multiplayer = true;
         st.enhanced = true;
+        // A saved game has no speed (0x6cdfd4): a joiner's game loaded from one runs at
+        // Fastest, as every network game (view.rs `new_game`), not at the default Fast.
+        st.game_speed = 6;
         st.set_humans(&self.nation);
         st.humans_gone = self.gone;
         st.ai_taken = self.ai_taken;
