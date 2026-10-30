@@ -3329,8 +3329,6 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
     if let Some(w) = win.win.as_mut() {
         w.set_input_callback(Box::new(Typed(typed.clone())));
     }
-    #[cfg(target_arch = "wasm32")]
-    crate::web::typed_chars(typed.clone());
     let (mw, mh) = (scene.terrain.0 as i32, scene.terrain.1 as i32);
     // 0x4cb190 (the local player's start location unit while the map loads): the screen
     // tile 0x57f1d0/2 = the location's tile - (10, 6), at least 0.

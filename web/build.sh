@@ -1,5 +1,7 @@
 #!/bin/sh
-# Build scbw for the browser into web/pkg (wasm-bindgen glue + scbw_bg.wasm).
+# Build scbw for the browser into web/pkg (wasm-bindgen glue + scbw_bg.wasm). The pages load
+# it through web/game.js, which runs it in a Web Worker (web/worker.js) drawing into the page's
+# canvas as an OffscreenCanvas (vendor/minifb's wasm backend); stage.js passes the mouse.
 # Needs: rustup target add wasm32-unknown-unknown
 #        cargo install wasm-bindgen-cli --version <wasm-bindgen version in Cargo.lock>
 # Serve: python3 -m http.server -d web 8000, open http://localhost:8000

@@ -1,5 +1,6 @@
 //! Browser entry (web/build.sh, web/index.html): the page hands over storm.dll, the
-//! archives and a map or replay; the frame loop runs from requestAnimationFrame.
+//! archives and a map or replay. It all runs in a Web Worker (web/worker.js, started by
+//! web/game.js): the page forwards input to vendor/minifb's worker backend and plays the sound.
 
 use crate::{map, mpq, replay, storage, view};
 use std::cell::RefCell;
@@ -37,20 +38,27 @@ pub fn start(storm: &[u8], archives: js_sys::Array, name: &str, file: &[u8]) -> 
     Ok(())
 }
 
-/// Run `frame` from requestAnimationFrame until it returns false or fails.
+/// `setTimeout` of the global scope (the page's window, or the Web Worker the game runs in).
+#[wasm_bindgen(inline_js = "export function after(ms, f) { setTimeout(f, ms); }")]
+extern "C" {
+    fn after(ms: i32, f: &js_sys::Function);
+}
+
+/// Run `frame` until it returns false or fails.
 fn run_raf(frame: Box<dyn FnMut() -> std::io::Result<bool>>) {
     run_raf_then(frame, None);
 }
 
 /// `run_raf`, calling `done` once the loop ended (the game's frame returned false or failed).
+/// The game runs in a Web Worker (web/worker.js): its timers keep running in a background
+/// tab, where the page's requestAnimationFrame stops (a stopped network game is dropped).
+/// Every 16 ms, about the display rate the native window loop has: the cursor is redrawn
+/// every pass, the frame loop ticks the game every 42 ms.
 fn run_raf_then(frame: Box<dyn FnMut() -> std::io::Result<bool>>, done: Option<js_sys::Function>) {
-    // requestAnimationFrame runs at the display rate, as the native window loop: the
-    // cursor is redrawn every pass, the frame loop ticks the game every 42 ms.
-    let win = web_sys::window().unwrap();
     let tick: Rc<RefCell<Option<Closure<dyn FnMut()>>>> = Rc::new(RefCell::new(None));
     let again = tick.clone();
     // The loop's state (a network game's `NetGame` among it) is dropped when it ends, so a
-    // leave is announced and the link closes (the rAF closure itself lives on).
+    // leave is announced and the link closes (the closure itself lives on).
     let mut frame = Some(frame);
     *tick.borrow_mut() = Some(Closure::new(move || {
         let Some(f) = frame.as_mut() else { return };
@@ -60,6 +68,7 @@ fn run_raf_then(frame: Box<dyn FnMut() -> std::io::Result<bool>>, done: Option<j
                 let _ = d.call0(&JsValue::NULL);
             }
         };
+        let t0 = web_time::Instant::now();
         match f() {
             Ok(true) => {}
             Ok(false) => return end(&mut frame),
@@ -68,10 +77,10 @@ fn run_raf_then(frame: Box<dyn FnMut() -> std::io::Result<bool>>, done: Option<j
                 return end(&mut frame);
             }
         }
-        let w = web_sys::window().unwrap();
-        w.request_animation_frame(again.borrow().as_ref().unwrap().as_ref().unchecked_ref()).unwrap();
+        let spent = t0.elapsed().as_millis() as i32;
+        after((16 - spent).max(0), again.borrow().as_ref().unwrap().as_ref().unchecked_ref());
     }));
-    win.request_animation_frame(tick.borrow().as_ref().unwrap().as_ref().unchecked_ref()).unwrap();
+    after(0, tick.borrow().as_ref().unwrap().as_ref().unchecked_ref());
 }
 
 /// The rollback oracle (src/rbtest.rs) on a replay, for its timing in the browser
@@ -87,41 +96,11 @@ pub fn rbtest(storm: &[u8], archives: js_sys::Array, file: &[u8], delay: u32, fr
     crate::rbtest::run(&a, &rep, delay, frames).map_err(js)
 }
 
-/// minifb's wasm backend never calls `InputCallback::add_char`, so the game's typed
-/// characters (WM_CHAR: command card hotkeys, chat) come from the canvas's keydown
-/// events here, as Windows would translate them.
-pub fn typed_chars(typed: Rc<RefCell<Vec<u32>>>) {
-    let doc = web_sys::window().unwrap().document().unwrap();
-    let Some(canvas) = doc.query_selector("canvas").ok().flatten() else { return };
-    let cb = Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |e: web_sys::KeyboardEvent| {
-        if e.alt_key() || e.meta_key() {
-            return; // WM_SYSCHAR, not WM_CHAR
-        }
-        let key = e.key();
-        let mut it = key.chars();
-        let c = match (it.next(), it.next()) {
-            (Some(c), None) if e.ctrl_key() && c.is_ascii_alphabetic() => c.to_ascii_lowercase() as u32 & 0x1f,
-            (Some(c), None) if !e.ctrl_key() => c as u32,
-            _ => match key.as_str() {
-                "Enter" => 13,
-                "Backspace" => 8,
-                "Escape" => 27,
-                "Tab" => 9,
-                _ => return,
-            },
-        };
-        typed.borrow_mut().push(c);
-    });
-    canvas.add_event_listener_with_callback("keydown", cb.as_ref().unchecked_ref()).unwrap();
-    // The game window lives for the page's lifetime.
-    cb.forget();
-}
-
 /// Resolves after `ms` milliseconds (the lobby wait polls the transport between turns of the
 /// browser's event loop).
 async fn sleep(ms: i32) {
     let p = js_sys::Promise::new(&mut |res, _| {
-        web_sys::window().unwrap().set_timeout_with_callback_and_timeout_and_arguments_0(&res, ms).unwrap();
+        after(ms, &res);
     });
     let _ = wasm_bindgen_futures::JsFuture::from(p).await;
 }

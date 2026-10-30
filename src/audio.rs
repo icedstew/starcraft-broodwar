@@ -9,7 +9,12 @@ use std::io::Cursor;
 use std::sync::Arc;
 
 pub struct Audio {
+    #[cfg(not(target_arch = "wasm32"))]
     sink: rodio::MixerDeviceSink,
+    /// The browser (the game runs in a Web Worker, which has no audio device): a mixer whose
+    /// samples the page pulls (`audio_take`) and plays.
+    #[cfg(target_arch = "wasm32")]
+    mixer: rodio::mixer::Mixer,
     names: Vec<String>,
     cache: RefCell<HashMap<u16, Option<Arc<[u8]>>>>,
     music: Option<rodio::Player>,
@@ -121,7 +126,51 @@ pub fn game_start_track(race: usize) -> u32 {
     [1, 4, 7][race] + MUSIC_VARIANT.load(std::sync::atomic::Ordering::Relaxed).max(0) as u32
 }
 
+/// The browser's output rate and channels (the page's AudioContext resamples).
+#[cfg(target_arch = "wasm32")]
+pub const WEB_RATE: u32 = 44100;
+
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    /// The mixer's output (one per worker: every `Audio` shares the mixer, as the native
+    /// build's windows share the device).
+    static WEB_OUT: RefCell<Option<(rodio::mixer::Mixer, rodio::mixer::MixerSource)>> = const { RefCell::new(None) };
+}
+
+#[cfg(target_arch = "wasm32")]
+fn web_mixer() -> rodio::mixer::Mixer {
+    WEB_OUT.with(|o| {
+        o.borrow_mut()
+            .get_or_insert_with(|| {
+                let (m, src) = rodio::mixer::mixer(std::num::NonZero::new(2).unwrap(), std::num::NonZero::new(WEB_RATE).unwrap());
+                // A silent source keeps the mixer producing samples between sounds.
+                m.add(rodio::source::Zero::new(std::num::NonZero::new(2).unwrap(), std::num::NonZero::new(WEB_RATE).unwrap()));
+                (m, src)
+            })
+            .0
+            .clone()
+    })
+}
+
+/// The next `frames` stereo frames of the mixer (interleaved f32; silence before any sound),
+/// for the page to play (web/game.js).
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn audio_take(frames: u32) -> Vec<f32> {
+    WEB_OUT.with(|o| match o.borrow_mut().as_mut() {
+        Some((_, src)) => (0..frames * 2).map(|_| src.next().unwrap_or(0.0)).collect(),
+        None => vec![0.0; frames as usize * 2],
+    })
+}
+
 impl Audio {
+    fn mixer(&self) -> &rodio::mixer::Mixer {
+        #[cfg(not(target_arch = "wasm32"))]
+        return self.sink.mixer();
+        #[cfg(target_arch = "wasm32")]
+        return &self.mixer;
+    }
+
     /// None when no audio device is available; the game runs silently.
     pub fn open(files: &Storage) -> Option<Audio> {
         // Ours: no sound device in a headless server process (view::forbid_windows), nor with
@@ -130,10 +179,19 @@ impl Audio {
         if std::env::var_os("SCBW_MUTE").is_some() {
             return None;
         }
+        #[cfg(not(target_arch = "wasm32"))]
         let mut sink = rodio::DeviceSinkBuilder::open_default_sink().ok()?;
+        #[cfg(not(target_arch = "wasm32"))]
         sink.log_on_drop(false);
+        #[cfg(target_arch = "wasm32")]
+        let mixer = web_mixer();
         let names = dat::parse_tbl(&files.read("arr/sfxdata.tbl").ok()?);
-        Some(Audio { sink, names, cache: RefCell::new(HashMap::new()), music: None, music_track: 0, music_checked: 0, volumes: (25, 50), credits_volume: None, fade_in: None, music_started: true, speech_muted: false, music_duck: false,
+        Some(Audio {
+            #[cfg(not(target_arch = "wasm32"))]
+            sink,
+            #[cfg(target_arch = "wasm32")]
+            mixer,
+            names, cache: RefCell::new(HashMap::new()), music: None, music_track: 0, music_checked: 0, volumes: (25, 50), credits_volume: None, fade_in: None, music_started: true, speech_muted: false, music_duck: false,
             table: volume_table(), slots: RefCell::new(Default::default()), last: RefCell::new(HashMap::new()), files: RefCell::new(Vec::new()) })
     }
 
@@ -262,7 +320,7 @@ impl Audio {
         let g = if atten <= -10000 { 0.0 } else { 10f32.powf(atten as f32 / 2000.0) };
         let far = 10f32.powf(-(pan.abs() as f32) / 2000.0);
         let (ch, rate) = (src.channels(), src.sample_rate());
-        let player = rodio::Player::connect_new(self.sink.mixer());
+        let player = rodio::Player::connect_new(self.mixer());
         if pan == 0 || ch.get() > 2 {
             player.append(src.amplify(g));
         } else {
@@ -291,7 +349,7 @@ impl Audio {
     /// A player at the digital volume for a cinematic's sound (Storm's SVid plays it through
     /// DirectSound); the caller appends the decoded chunks and drops it to stop.
     pub fn video_player(&self) -> rodio::Player {
-        let player = rodio::Player::connect_new(self.sink.mixer());
+        let player = rodio::Player::connect_new(self.mixer());
         player.set_volume(self.digital_gain());
         player
     }
@@ -302,7 +360,7 @@ impl Audio {
     pub fn play_file(&self, data: Vec<u8>) {
         let Ok(src) = rodio::Decoder::new(Cursor::new(Arc::<[u8]>::from(data))) else { return };
         let g = self.digital_gain();
-        let player = rodio::Player::connect_new(self.sink.mixer());
+        let player = rodio::Player::connect_new(self.mixer());
         player.append(src.amplify(g));
         let mut files = self.files.borrow_mut();
         files.retain(|p| !p.empty());
@@ -430,7 +488,7 @@ impl Audio {
     pub fn play_music(&mut self, files: &Storage, path: &str) {
         let Ok(data) = files.read(path) else { return };
         let Ok(src) = rodio::Decoder::new_looped(Cursor::new(Arc::<[u8]>::from(data))) else { return };
-        let player = rodio::Player::connect_new(self.sink.mixer());
+        let player = rodio::Player::connect_new(self.mixer());
         player.set_volume(self.volumes.0 as f32 / 50.0);
         player.append(src);
         self.music = Some(player);
@@ -448,7 +506,7 @@ impl Audio {
         let Some((path, _)) = game_track(i) else { return };
         let Ok(data) = files.read(path) else { return };
         let Ok(src) = rodio::Decoder::new(Cursor::new(Arc::<[u8]>::from(data))) else { return };
-        let player = rodio::Player::connect_new(self.sink.mixer());
+        let player = rodio::Player::connect_new(self.mixer());
         player.set_volume(self.volumes.0 as f32 / 50.0);
         player.append(src);
         self.music = Some(player);

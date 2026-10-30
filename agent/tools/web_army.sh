@@ -30,10 +30,11 @@ mv() { printf '14%02x%02x%02x%02x0000e40000' $(($1 & 255)) $(($1 >> 8)) $(($2 & 
   SCBW_NET_SCRIPT="300:selw;320:$(mv 1500 1500)" SCBW_INSTALL=$O/inst SCBW_CHARACTERS=$O/k \
   timeout 500 $B glue $O/k.png > $O/nat.log 2>&1) & NP=$!
 python3 -m http.server -d web $WP -b 127.0.0.1 > $O/http.log 2>&1 & SP=$!
-# One browser per player: a background tab gets no animation frames, stalls the game and is
-# dropped (3 s, enhanced games).
+# One browser per player; ONE_BROWSER=1: all three are tabs of one browser, two of them in
+# the background (the game runs in a Web Worker, whose timers keep going there).
 br() { timeout 560 chromium --headless=new --no-sandbox --remote-debugging-port=$1 --user-data-dir=$O/prof$1 --autoplay-policy=no-user-gesture-required about:blank > /dev/null 2>&1 & CP="$CP $!"; }
-CP=; br $DP; br $((DP + 1)); br $((DP + 2))
+CP=; br $DP
+if [ -n "$ONE_BROWSER" ]; then D1=$DP; D2=$DP; else D1=$((DP + 1)); D2=$((DP + 2)); br $D1; br $D2; fi
 sleep 2
 enc() { printf %s "$1" | sed 's/#/%23/g;s/;/%3B/g;s/:/%3A/g'; }
 page() { echo "http://127.0.0.1:$WP/?join=$(enc "$code")&name=$1&army=$2&frames=$K${3:+&script=$(enc "$3")}${4:+&quit=$4}"; }
@@ -41,9 +42,9 @@ timeout 540 node "$T/cdp_console.mjs" $DP "$(page web2 1)" > $O/web2.log 2>&1 & 
 # Wait for the host's frame (its stats line, once a second).
 at() { until [ "$(sed -n 's/^border 0 Stats { frame: \([0-9]*\).*/\1/p' $O/host.log | tail -1)" -ge $1 ] 2>/dev/null; do sleep 0.5; grep -q "^border 0 ended" $O/host.log && break; done; }
 at ${W1_AT:-400}
-timeout 520 node "$T/cdp_console.mjs" $((DP + 1)) "$(page web1 0 "900:selw;920:$(mv 600 600)" ${W1_QUIT:-1500})" > $O/web1.log 2>&1 & W1=$!
+timeout 520 node "$T/cdp_console.mjs" $D1 "$(page web1 0 "900:selw;920:$(mv 600 600)" ${W1_QUIT:-1500})" > $O/web1.log 2>&1 & W1=$!
 at ${W3_AT:-2200}
-timeout 480 node "$T/cdp_console.mjs" $((DP + 2)) "$(page web3 0)" > $O/web3.log 2>&1 & W3=$!
+timeout 480 node "$T/cdp_console.mjs" $D2 "$(page web3 0)" > $O/web3.log 2>&1 & W3=$!
 for i in $(seq 500); do grep -q "frame $K hash" $O/web3.log 2>/dev/null && grep -q "frame $K hash" $O/web2.log && break; grep -q "^border 0 ended" $O/host.log && break; sleep 1; done
 sleep 2; kill $HP $CP $SP $W1 $W2 $W3 $NP 2>/dev/null; wait 2>/dev/null
 h=$(grep -o "border 0 frame $K hash [0-9a-f]*" $O/host.log | sed 's/border 0 //')

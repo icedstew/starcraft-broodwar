@@ -96,7 +96,8 @@ player and a browser share army 0 and give commands (`selw`, a move), the browse
 (the army stays the native's), the native at 2000 (the AI's), a third browser takes it at 2200;
 a browser plays army 1. Host, army-1 browser and late browser hashes at K must be equal, and the
 host's humans per side are printed. One headless Chromium per player: a background tab gets no
-animation frames and stalls the game. The page takes `script=` (as SCBW_NET_SCRIPT) and `quit=`
+animation frames (the page's), but the game runs in a Web Worker: `ONE_BROWSER=1` runs all three as
+tabs of one browser, two in the background, and must pass too. The page takes `script=` (as SCBW_NET_SCRIPT) and `quit=`
 (as SCBW_NET_QUIT_AT) for a running game it joins too (`NetGame::script_next`). Also
 `campaign_browser.sh` and `WEB=1 K=2500 enhanced.sh`. A campaign host's `frame K hash` for K a
 multiple of 8 is the confirmed frame's (the desync check's), not the state it has run to.

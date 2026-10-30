@@ -1,20 +1,12 @@
-// The game's stage in a page (index.html, the campaign map): import this before
-// pkg/scbw.js. It sizes the stage, passes the mouse to minifb's canvas (pointer lock, Esc)
-// and keeps the sound running after a user gesture.
+// The game's stage in a page (index.html, the campaign map): it sizes the stage and passes
+// the mouse to the game (game.js `loadGame`, set with `setGame`; pointer lock, Esc).
 
-// scbw.js reads AudioContext when it is imported (hence this module first). cpal resumes
-// its AudioContext only once, when the stream starts; made before any user gesture the
-// browser keeps it suspended. Resume every context on each gesture.
-const audioContexts = [];
-window.AudioContext = class extends AudioContext {
-  constructor(...a) { super(...a); audioContexts.push(this); }
-};
-for (const type of ["pointerdown", "keydown"]) addEventListener(type, () => {
-  for (const c of audioContexts) if (c.state === "suspended") c.resume();
-}, true);
-
-// minifb's window: 640x480 at Scale::X2. It reads offsetX/offsetY in this space.
+// minifb's window: 640x480 at Scale::X2. It reads mouse positions in this space.
 const WIN_W = 1280, WIN_H = 960;
+
+// The game the mouse goes to (game.js `loadGame`'s object).
+let game = null;
+export function setGame(g) { game = g; }
 
 // `box` holds minifb's canvas (the window's container, id "scbw"); `stage` around it is
 // sized to the largest whole scale of 640x480 that fits; `fs` (optional) a fullscreen button.
@@ -35,15 +27,15 @@ export function setupStage(box, stage, fs) {
   document.addEventListener("fullscreenchange", fit);
   if (fs) fs.onclick = () => stage.requestFullscreen().then(() => box.querySelector("canvas")?.focus());
 
-  // Every mouse event goes to minifb as an untrusted copy whose offsetX/offsetY are in
-  // its 1280x960 space, whatever size the canvas is drawn at.
+  // Every mouse event goes to the game's worker in minifb's 1280x960 space, whatever size
+  // the canvas is drawn at.
   // Pointer lock: a click captures the mouse (Esc frees it), so the cursor stops at the
   // canvas edges for edge scrolling and Firefox's shift+right-click menu stays away. The
   // game draws its own cursor; locked moves become a virtual position.
   let vx = 0, vy = 0;
   for (const type of ["mousedown", "mousemove", "mouseup"]) box.addEventListener(type, e => {
     const canvas = box.querySelector("canvas");
-    if (!e.isTrusted || !canvas) return;
+    if (!e.isTrusted || !canvas || !game) return;
     e.stopPropagation();
     const r = canvas.getBoundingClientRect();
     if (document.pointerLockElement === canvas) {
@@ -53,17 +45,7 @@ export function setupStage(box, stage, fs) {
       vx = e.clientX - r.left; vy = e.clientY - r.top;
       if (type === "mousedown") canvas.requestPointerLock()?.catch?.(() => {});   // rejects when the document is not focused
     }
-    const ev = new MouseEvent(type, {
-      clientX: r.left + vx, clientY: r.top + vy, button: e.button, buttons: e.buttons,
-      shiftKey: e.shiftKey, ctrlKey: e.ctrlKey, altKey: e.altKey, metaKey: e.metaKey,
-    });
-    // Firefox answers every event's client/offset coordinates with the point the lock
-    // started at while the pointer is locked, so set offsetX/offsetY on the event itself.
-    Object.defineProperties(ev, {
-      offsetX: { value: Math.floor(vx * WIN_W / r.width) },
-      offsetY: { value: Math.floor(vy * WIN_H / r.height) },
-    });
-    canvas.dispatchEvent(ev);
+    game.mouse(type, Math.floor(vx * WIN_W / r.width), Math.floor(vy * WIN_H / r.height), e.button);
   }, true);
 
   // Esc also frees the lock, and the browser may keep that keypress from the page. Pass it
@@ -73,13 +55,13 @@ export function setupStage(box, stage, fs) {
   box.addEventListener("keydown", e => { if (e.code === "Escape") lastEsc = performance.now(); }, true);
   document.addEventListener("pointerlockchange", () => {
     const canvas = box.querySelector("canvas");
-    if (!canvas || document.pointerLockElement || !document.hasFocus()) return;
+    if (!canvas || !game || document.pointerLockElement || !document.hasFocus()) return;
     setTimeout(() => {
       if (performance.now() - lastEsc < 200) return;
-      const key = type => canvas.dispatchEvent(new KeyboardEvent(type, { code: "Escape", key: "Escape" }));
-      key("keydown");
+      const esc = { code: "Escape", key: "Escape", ctrlKey: false, altKey: false, metaKey: false };
+      game.key(true, esc);
       // Held past a 24 fps frame so the game's per-frame key poll sees it.
-      setTimeout(() => key("keyup"), 100);
+      setTimeout(() => game.key(false, esc), 100);
     }, 50);
   });
   return fit;

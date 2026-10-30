@@ -89,8 +89,8 @@
 </footer>
 
 <script type="module">
-import { setupStage } from "./stage.js";
-import init, { start, rbtest, net_join } from "./pkg/scbw.js";
+import { setupStage, setGame } from "./stage.js";
+import { loadGame } from "./game.js";
 
 // storage.rs ARCHIVES order; the CD archives (BroodWar.mpq, Starcraft.mpq: music,
 // ~600 MB each) are left out to keep memory down.
@@ -104,12 +104,14 @@ async function run(load) {
   try {
     status.textContent = "loading...";
     const [storm, archives, name, map] = await load();
-    await init();
+    // The game runs in a Web Worker (game.js): these calls go there; the files move to it.
+    const game = await loadGame(box);
+    setGame(game);
     // ?rbtest=<delay>[,<frames>]: time the rollback oracle on the replay instead of playing it.
     const rb = new URLSearchParams(location.search).get("rbtest");
     if (rb) {
       const [delay, frames] = rb.split(",").map(Number);
-      const out = rbtest(storm, archives, map, delay, frames || 0xffffffff);
+      const out = await game.rbtest(storm, archives, map, delay, frames || 0xffffffff);
       console.log("rbtest " + out);
       status.textContent = out;
       return;
@@ -119,8 +121,8 @@ async function run(load) {
       // ?frames=K: log "frame K hash H" to the console at frame K (headless-net check).
       // ?name=: the player's name in a lobby (a game made in the glue's create screen);
       // ?army=<slot>: in an enhanced game already running, the army to join.
-      await net_join(storm, archives, joinCode, Number(new URLSearchParams(location.search).get("frames")) || 0, new URLSearchParams(location.search).get("script") || "", new URLSearchParams(location.search).get("name") || "Web", Number(new URLSearchParams(location.search).get("army") ?? 255), Number(new URLSearchParams(location.search).get("quit")) || 0);
-    } else start(storm, archives, name, map);
+      await game.net_join(storm, archives, joinCode, Number(new URLSearchParams(location.search).get("frames")) || 0, new URLSearchParams(location.search).get("script") || "", new URLSearchParams(location.search).get("name") || "Web", Number(new URLSearchParams(location.search).get("army") ?? 255), Number(new URLSearchParams(location.search).get("quit")) || 0);
+    } else await game.start(storm, archives, name, map);
     document.getElementById("setup").remove();
     box.querySelector("canvas").focus({ preventScroll: true });
   } catch (e) {

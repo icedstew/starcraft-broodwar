@@ -392,9 +392,8 @@ with a native player, leaving, and taking it back from the AI. Fixed:
 - live.rs logs go through `elog` (the browser console shows them; eprintln is lost in wasm).
 - Test hooks: `?quit=` / `?script=` for a running game joined from the page; `selw` selects the
   local army's worker (it used the link id as a human id).
-Open: a background tab gets no animation frames, so a browser player who switches tabs stalls the
-game and is dropped after 3 s (no turns). Fix ideas: keep stepping on a timer when hidden (Chrome
-throttles timers to 1/s there), or a Web Worker for the simulation.
+Fixed after (same day): the browser build runs in a Web Worker, so a background tab keeps playing
+(see agent/testing.md 4c, `ONE_BROWSER=1 web_army.sh`).
 
 ### Later (not now)
 Area bonuses (start extras per owned areas), spectating with faction vision, several armies

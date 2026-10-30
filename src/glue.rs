@@ -3218,8 +3218,6 @@ impl WinInput {
         if let Some(w) = win {
             w.set_input_callback(Box::new(Typed(typed.clone())));
         }
-        #[cfg(target_arch = "wasm32")]
-        crate::web::typed_chars(typed.clone());
         WinInput { pressed: None, btn_down: false, was_down: false, was_rdown: false, keys_held: Default::default(), typed }
     }
 
@@ -3337,8 +3335,7 @@ pub fn web_frame(a: *mut crate::view::Assets, mut glue: Glue) -> std::io::Result
             game = None;
             win = crate::view::take_window();
             audio = crate::view::take_audio();
-            // The page's keydown listener filled the glue's characters too while the game ran:
-            // they are the game's, not a name for the next screen.
+            // Characters typed while the game ran are the game's, not a name for the next screen.
             input.typed.borrow_mut().clear();
             if let Some(w) = win.as_mut() {
                 w.set_input_callback(Box::new(Typed(input.typed.clone())));

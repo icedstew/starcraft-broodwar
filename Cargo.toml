@@ -27,3 +27,8 @@ console_error_panic_hook = "0.1"
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 wtransport = { version = "=0.7.2", default-features = false, features = ["ring", "self-signed", "dangerous-configuration"] }
 tokio = { version = "=1.48.0", features = ["rt", "net", "time", "sync", "macros"] }
+
+# minifb with a wasm backend that runs in a Web Worker (vendor/minifb/src/os/wasm: the page's
+# canvas as an OffscreenCanvas, input forwarded from the page); native backends unchanged.
+[patch.crates-io]
+minifb = { path = "vendor/minifb" }

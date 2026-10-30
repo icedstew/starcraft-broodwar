@@ -209,8 +209,8 @@ const run = async () => {
 $("run").onclick = run;
 $("cmd").onkeydown = e => { if (e.key === "Enter") run(); };
 // ---- The game in this page.
-// The browser build (stage.js, then pkg/scbw.js: it reads AudioContext when imported) and
-// the player's files: once, before the map. `game` = the build's exports once loaded.
+// The browser build (game.js: the game runs in a Web Worker; stage.js passes it the mouse)
+// and the player's files: once, before the map. `game` = game.js's calls once loaded.
 let game = null;
 let fitStage = () => {};
 const showOnly = id => { for (const x of ["load", "game"]) $(x).hidden = x !== id; document.querySelector("main").hidden = id !== "main"; if (id === "game") fitStage(); };
@@ -218,12 +218,14 @@ async function loadGame(get) {
   $("loadstatus").textContent = "loading…";
   try {
     const files = await get();
-    fitStage = await import("/play/stage.js").then(m => m.setupStage($("scbw"), $("stage"), $("fs")));
-    const wasm = await import("/play/pkg/scbw.js");
-    await wasm.default();
-    wasm.campaign_load(files.storm, files.archives);
-    game = wasm;
+    const stage = await import("/play/stage.js");
+    fitStage = stage.setupStage($("scbw"), $("stage"), $("fs"));
+    // Kept first: the files then move to the game's worker (no copy).
     await filesMod.keep(files);
+    const g = await (await import("/play/game.js")).loadGame($("scbw"));
+    stage.setGame(g);
+    await g.campaign_load(files.storm, files.archives);
+    game = g;
     $("forget").hidden = false;
     $("filesnote").textContent = "Game files loaded.";
     showOnly("main");
@@ -277,9 +279,9 @@ async function play(code) {
     await game.campaign_play(code, me, Number(params.get("frames")) || 0);
   } catch (e) {
     note = String((e && e.message) || e);
+    console.warn("game: " + note);
   }
-  // The game's window is gone (web.rs campaign_play): its canvas too; the next game makes one.
-  $("scbw").replaceChildren();
+  // The canvas stays (the worker draws the next game into it).
   if (document.pointerLockElement) document.exitPointerLock();
   showOnly("main");
   await poll();
