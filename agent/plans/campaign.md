@@ -364,9 +364,22 @@ Sweep (4 maps x 9 seeds x 3 cycles): clean apart from one run (below).
   into its town, re-picks a town's main building when it moved, and claims unfinished units into
   the nearest town (start_town takes finished ones only; an expansion hall still warping in at a
   take-over never got AI before). Idle orders are fixed for every unit, not only unclaimed ones.
-- Left: Bottleneck SEED=8 and Boxer SEED=5 recover but bank 1600-2500 minerals; SEED=8's top
-  request is an assimilator for the expansion town that no worker places (melee AI logic, not
-  traced further).
+- **Retaken AI never progressed** (long runs: one town, the main mined out, stuck at 32 minerals):
+  each take-over restarted the melee script from its start, and its timed waits never let it reach
+  `expand` (f13825 untouched) between handoffs. The release now parks the army's script threads
+  (`State::ai_parked`, ours, in `Extras`: position, flags, area, and each town's place, resource
+  area, worker limit and build list `town_units`); the take-over remakes the towns (the one nearest
+  the start first: its start_town takes the finished units; the others take the units within 0x200)
+  and resumes the threads. PlayerAi stays (only its requests start over). The start town goes first
+  in the town list: equal-priority requests are pushed in town order, and the release had stopped
+  the worker placing the Forge, so an expansion's cannon request (needs the Forge) blocked it.
+- A dying unit (order 0) is never claimed (its AI cleanup has run; a town kept a dead worker and
+  panicked in the merge 0x434330); a unit a building trains joins when it finishes (0x4a2830), but
+  a unit still hatching from an egg is claimed. Stopped workers (PlayerGuard 3) get the computer's
+  idle order.
+- Tests: `agent/tools/campaign_switch.sh` (agent/testing.md 4c); `extras_round_trip` unit test.
+  2026-10-29: 478 / 480 runs clean (6 maps x 16 seeds x 5 modes); the two left bank 1500-1900
+  minerals in busy mode. `enhanced.sh` with QUIT_AT: host and late joiner hashes equal.
 
 ### Later (not now)
 Area bonuses (start extras per owned areas), spectating with faction vision, several armies

@@ -548,8 +548,16 @@ pub fn morph_test(map: &str) -> Result<(), String> {
 /// commands, the leave 0x57). The human stops two workers and sends two other units away; a line
 /// per 240 frames, and a `BUG:` line for each check that fails at the end of a phase: a human's
 /// army runs no AI script, builds nothing by itself and keeps its stopped workers idle; an AI
-/// army runs its scripts, re-tasks the stopped workers, keeps building and spends; a save
-/// and load that changes the state hash is noted.
+/// army runs its scripts, re-tasks the stopped workers, keeps building and spends, and has
+/// taken every unit of the army (one frame after the take-over); a save and load that changes
+/// the state hash is noted. Options (env):
+/// - SWITCH_HUMAN / SWITCH_AI: phase lengths (default 1200 / 1800); the build and spend checks
+///   need an AI phase of 1200 or more.
+/// - SWITCH_SHARED=1: two humans join; the first leaves halfway (the army stays human), the
+///   second at the end.
+/// - SWITCH_BUSY=1: the human also trains a worker every 200 frames (a larva morphs for Zerg).
+/// - SWITCH_RB=1: every join and leave is also replayed from a copy of the state taken before
+///   it (as a rollback does); 60 frames later both must have the same state hash.
 pub fn switch_test(map: &str, cycles: u32) -> Result<(), String> {
     use crate::bw::list::NIL;
     crate::view::forbid_windows();
@@ -565,7 +573,9 @@ pub fn switch_test(map: &str, cycles: u32) -> Result<(), String> {
     s.st.ai_taken = 1 << seats.armies[0] | 1 << seats.armies[1];
     let n = seats.armies[0];
     let start = std::env::var("SWITCH_AT").ok().and_then(|v| v.parse().ok()).unwrap_or(3000u32);
-    let (ai_len, human_len) = (1800u32, 1200u32);
+    let env = |k: &str, v: u32| std::env::var(k).ok().and_then(|x| x.parse().ok()).unwrap_or(v);
+    let (ai_len, human_len) = (env("SWITCH_AI", 1800), env("SWITCH_HUMAN", 1200));
+    let (shared, busy, rb) = (env("SWITCH_SHARED", 0) != 0, env("SWITCH_BUSY", 0) != 0, env("SWITCH_RB", 0) != 0);
     let alive = |st: &State, u: usize| st.units[u].sprite != NIL && st.units[u].unit_type < 0xe4;
     let worker = |t: u16| matches!(t, 0x07 | 0x29 | 0x40);
     let harvesting = |o: u8| (0x4f..=0x5b).contains(&o);
@@ -637,9 +647,15 @@ pub fn switch_test(map: &str, cycles: u32) -> Result<(), String> {
     let mut stopped: Vec<u32> = Vec::new();
     let mut sent: Vec<u32> = Vec::new();
     let (mut phase_end, mut human, mut cycle, mut b0) = (start, None::<u8>, 0u32, 0usize);
-    let (mut u0, mut u_join) = (0usize, 0usize);
+    let mut u0 = 0usize;
+    let mut taken_at = None::<u32>;
+    let mut m0 = 0i32;
     let mut f = 0u32;
     loop {
+        if s.st.player_left[n as usize] != 0 {
+            println!("  f{f}: army {n} is out of the game ({})", s.st.player_left[n as usize]);
+            break;
+        }
         if f == phase_end {
             let st = &s.st;
             match human {
@@ -654,11 +670,13 @@ pub fn switch_test(map: &str, cycles: u32) -> Result<(), String> {
                             bug(f, format!("worker {u} the human stopped is not re-tasked (order {:#x}, ai {:x})", st.units[u as usize].order, st.units[u as usize].ai));
                         }
                     }
-                    // An army that lost more than it made while the human idled may only fight.
-                    if buildings(st) <= b0 && units(st) <= u0 && units(st) * 2 > u_join {
+                    // An army losing units may only fight; one near the supply cap may only bank.
+                    let r = st.player_races[n as usize].min(2) as usize;
+                    let capped = st.players.supply_used[r][n as usize] >= 360;
+                    if ai_len >= 1200 && !capped && buildings(st) == b0 && units(st) == u0 {
                         bug(f, format!("AI made nothing ({b0} -> {} buildings, {u0} -> {} units)", buildings(st), units(st)));
                     }
-                    if st.players.minerals[n as usize] > 1500 {
+                    if ai_len >= 1200 && !capped && st.players.minerals[n as usize] > 1500 && st.players.minerals[n as usize] > m0 + 300 {
                         bug(f, format!("AI hoards {} minerals", st.players.minerals[n as usize]));
                     }
                 }
@@ -666,7 +684,7 @@ pub fn switch_test(map: &str, cycles: u32) -> Result<(), String> {
                     if scripts(st) != 0 {
                         bug(f, format!("human army still runs {} AI scripts", scripts(st)));
                     }
-                    if buildings(st) > b0 {
+                    if buildings(st) > b0 && !busy {
                         let new: Vec<_> = bldg_ids(st).into_iter().filter(|u| !ids0.contains(u)).map(|u| (u, st.units[u].unit_type, st.units[u].status & 1)).collect();
                         bug(f, format!("human army built by itself ({b0} -> {} buildings: new (unit, type, done) {new:x?})", buildings(st)));
                     }
@@ -690,9 +708,7 @@ pub fn switch_test(map: &str, cycles: u32) -> Result<(), String> {
             }
             b0 = buildings(&s.st);
             u0 = units(&s.st);
-            if human.is_none() {
-                u_join = u0;
-            }
+            m0 = s.st.players.minerals[n as usize];
             ids0 = bldg_ids(&s.st);
             if std::env::var_os("SWITCH_DEBUG").is_some() {
                 for u in 0..s.st.units.len() {
@@ -708,21 +724,101 @@ pub fn switch_test(map: &str, cycles: u32) -> Result<(), String> {
                     }
                 }
             }
-            if human.is_none() {
-                // A human joins (every peer saves and loads first).
+            // The join or leave; with SWITCH_RB run twice from the same copy (a rollback).
+            let joining = human.is_none();
+            if joining {
                 cycle += 1;
-                let h = 8 + cycle as u8;
-                reload(&mut s, f, &mut bug);
-                s.human_command(h, &crate::bw::enhanced::join_command(h, n, h, b"joiner"));
-                println!("== f{f}: human {h} joins army {n} (types {:?}, taken {:#x})", &s.st.player_types[..8], s.st.ai_taken);
+            }
+            let h = if joining { 8 + cycle as u8 } else { human.unwrap() };
+            let transition = |s: &mut Scene, bug: &mut dyn FnMut(u32, String)| {
+                if joining {
+                    // A human joins (every peer saves and loads first).
+                    reload(s, f, bug);
+                    s.human_command(h, &crate::bw::enhanced::join_command(h, n, h, b"joiner"));
+                    if shared {
+                        s.human_command(h + 16, &crate::bw::enhanced::join_command(h + 16, n, h + 16, b"second"));
+                    }
+                } else {
+                    s.human_command(h, &[0x57, 1]);
+                }
+            };
+            if rb {
+                let copy = s.st.clone();
+                let mut quiet = |_: u32, _: String| {};
+                transition(&mut s, &mut quiet);
+                for _ in 0..60 {
+                    s.step();
+                }
+                let first = s.st.state_hash();
+                s.st = copy;
+                transition(&mut s, &mut bug);
+                for _ in 0..60 {
+                    s.step();
+                }
+                if s.st.state_hash() != first {
+                    bug(f, format!("{} replayed from a copy differs 60 frames on", if joining { "the join" } else { "the leave" }));
+                }
+                // The 60 frames are part of the next phase.
+                f += 60;
+            } else {
+                transition(&mut s, &mut bug);
+            }
+            println!("== f{f}: human {h} {} army {n} (types {:?}, taken {:#x})", if joining { "joins" } else { "leaves" }, &s.st.player_types[..8], s.st.ai_taken);
+            if joining {
                 human = Some(h);
                 phase_end = f + human_len;
             } else {
-                let h = human.unwrap();
-                s.human_command(h, &[0x57, 1]);
-                println!("== f{f}: human {h} leaves (types {:?}, taken {:#x})", &s.st.player_types[..8], s.st.ai_taken);
                 human = None;
                 phase_end = f + ai_len;
+                taken_at = Some(f + 1);
+            }
+        }
+        if taken_at == Some(f) {
+            // One frame after a take-over every unit of the army is the AI's, but for units in
+            // training (they join when finished, 0x4a2830), dying, in a transport, and subunits.
+            let st = &s.st;
+            let flag = |u: usize, f: u32| view::with_data(a, |d| d.dat.units.flags[st.units[u].unit_type as usize] & f != 0);
+            let free: Vec<_> = (0..st.units.len()).filter(|&u| alive(st, u) && st.units[u].player == n && st.units[u].ai == NIL && st.units[u].order != 0 && st.units[u].status & 0x40 == 0 && !flag(u, 0x10) && (st.units[u].status & 1 != 0 || flag(u, 1))).map(|u| (u, st.units[u].unit_type, st.units[u].status & 1)).collect();
+            if !free.is_empty() {
+                bug(f, format!("units without AI after the take-over (unit, type, done): {free:x?}"));
+            }
+            if std::env::var_os("SWITCH_DEBUG").is_some() {
+                view::with_data(a, |d| {
+                    for u in 0..st.units.len() {
+                        let un = &st.units[u];
+                        if alive(st, u) && un.player == n && worker(un.unit_type) && !harvesting(un.order) {
+                            let t = un.unit_type as usize;
+                            println!("  f{f}: worker {u} order {:#x} queue {:x} idle human {:#x} return {:#x} computer {:#x} ai {:x}", un.order, un.order_queue_head, d.dat.units.ai_human_idle[t], d.dat.units.ai_return_to_idle[t], d.dat.units.ai_computer_idle[t], un.ai);
+                        }
+                    }
+                });
+            }
+            taken_at = None;
+        }
+        if shared && human.is_some() && phase_end - f == human_len / 2 {
+            // The first human leaves: the army keeps its second human.
+            let h = human.unwrap();
+            s.human_command(h, &[0x57, 1]);
+            println!("== f{f}: human {h} leaves, human {} stays (types {:?}, taken {:#x})", h + 16, &s.st.player_types[..8], s.st.ai_taken);
+            human = Some(h + 16);
+            if s.st.player_types[n as usize] != 2 || s.st.ai_taken & 1 << n != 0 {
+                bug(f, "the AI took an army that still has a human".into());
+            }
+        }
+        if busy && human.is_some() && (phase_end - f) % 200 == 100 {
+            // The human trains a worker: a town hall trains one, a Zerg larva morphs.
+            let h = human.unwrap();
+            let st = &s.st;
+            let race = st.player_races[n as usize];
+            let pick = (0..st.units.len() as u32).find(|&u| alive(st, u as usize) && st.units[u as usize].player == n && st.units[u as usize].status & 1 != 0 && if race == 0 { st.units[u as usize].unit_type == 0x23 } else { matches!(st.units[u as usize].unit_type, 0x6a | 0x9a) });
+            if let Some(u) = pick {
+                let mut c = vec![0x09, 1];
+                c.extend_from_slice(&(st.unit_handle(u) as u16).to_le_bytes());
+                s.human_command(h, &c);
+                let t: u16 = [0x29, 7, 0x40][race.min(2) as usize];
+                let mut c = vec![if race == 0 { 0x23 } else { 0x1f }];
+                c.extend_from_slice(&t.to_le_bytes());
+                s.human_command(h, &c);
             }
         }
         if let Some(h) = human {
@@ -763,6 +859,10 @@ pub fn switch_test(map: &str, cycles: u32) -> Result<(), String> {
         for l in [&mut stopped, &mut sent] {
             l.retain(|&u| alive(&s.st, u as usize) && s.st.units[u as usize].order != 0);
         }
+        if let Some(w) = std::env::var("SWITCH_WATCH").ok().and_then(|v| v.parse::<usize>().ok()) {
+            let un = &s.st.units[w];
+            println!("  f{f}: watch {w} type {:x} player {} order {:x}/{} status {:x} ai {:x} sprite {:x}", un.unit_type, un.player, un.order, un.order_state, un.status, un.ai, un.sprite);
+        }
         if human.is_some() && std::env::var_os("SWITCH_TRACE").is_some() {
             for &u in &stopped {
                 let un = &s.st.units[u as usize];
@@ -795,7 +895,9 @@ pub fn switch_test(map: &str, cycles: u32) -> Result<(), String> {
                 let mut t = st.ai.town_lists[n as usize];
                 while t != NIL {
                     let tw = &st.ai.towns.items[t as usize];
-                    println!("  town {t}: inited {} workers {} limit {} main {:x} builder {:x} pos {:?} area {}", tw.inited, tw.worker_count, tw.worker_limit, tw.main_building, tw.building_scv, tw.position, tw.resource_area);
+                    println!("  town {t}: inited {} workers {} limit {} main {:x} builder {:x} pos {:?} area {} (pos {:?} geysers {}) gas {:x?}", tw.inited, tw.worker_count, tw.worker_limit, tw.main_building, tw.building_scv, tw.position, tw.resource_area, st.areas[tw.resource_area as usize].pos, st.areas[tw.resource_area as usize].geysers, tw.gas_buildings);
+                    let used: Vec<_> = tw.town_units.iter().take_while(|e| e.0 & 0xf8 != 0).map(|e| (e.0 >> 3, e.1, e.2)).collect();
+                    println!("    town units (count, priority, id): {used:x?}");
                     t = tw.link.next;
                 }
                 for u in 0..st.units.len() {

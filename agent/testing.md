@@ -68,6 +68,25 @@ thingies, fog, tiles, rng, selections, hotkeys; slot numbers ignored) must MATCH
 Resave: SAME, except with pylons alive (DIFF in the images, ~0x17b00: the load re-makes
 the psi field sprites in other slots). 2026-10-19: 16 replays x f3000 / f9000 all MATCH.
 
+## 4c. AI <-> human army handoff (campaign_switch.sh)
+
+Ours (enhanced games, campaign matches): `agent/tools/campaign_switch.sh` runs `scbw campaign
+switch <map> [cycles]` (src/campaign/runner.rs) over maps x seeds x modes in parallel (~1 min for
+480 runs on 16 cores) and prints each run with a `BUG:` line; exit 1 if any. Army 0 goes AI ->
+human -> AI through the live commands (join with its save and load, Stop / move / train, leave
+0x57). Checks: a human's army runs no AI script, builds nothing by itself, its stopped workers
+stay idle; one frame after a take-over every unit (but ones a building trains, dying units,
+subunits, units in transports) has AI state; the AI's phase builds or trains something and
+does not bank while under the supply cap. Modes: plain, rb (each join / leave replayed from a
+copy 60 frames, hashes equal), shared (two humans, one leaves: the army stays human), busy (the
+human trains workers), quick (24 / 48 frame phases, 20 cycles). Debug: SWITCH_DEBUG=1 (scripts,
+towns and their build lists, requests, buildings, what a save and load changed),
+SWITCH_TRACE=1 (stopped workers), SWITCH_WATCH=<unit> (one unit every frame). The save and load
+at a join changes `state_hash` natively (0x4e2e20 overlap status, 0x493f70 pylon order).
+Live check of a takeover over the network: `K=6000 QUIT_AT=3000 PACE_US=4000
+agent/tools/enhanced.sh` (host and late joiner hashes equal; unpaced, the host ends before the
+late joiner connects).
+
 ## 5. Visual checks
 
 `scbw shot <map|rep> out.png x y [frames] [n]` renders a frame with the HUD for eyeballing

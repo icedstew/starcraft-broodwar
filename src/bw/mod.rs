@@ -296,6 +296,8 @@ pub struct State {
     /// Ours: per player, the expansion script its AI's last `expand` started (0 none); a
     /// take-over starts it again at the army's other town halls (enhanced.rs).
     pub ai_expand_script: [u16; 8],
+    /// Ours: per player, its AI's script threads while a human has the army (enhanced.rs).
+    pub ai_parked: [Vec<enhanced::Parked>; 8],
     /// Ours (enhanced.rs, campaign matches): the draw timer runs.
     pub campaign: bool,
     /// Ours: frames since anything died or was mined, and the count those last changed from.
@@ -593,6 +595,7 @@ impl State {
             enhanced: false,
             ai_taken: 0,
             ai_expand_script: [0; 8],
+            ai_parked: Default::default(),
             campaign: false,
             idle_frames: 0,
             activity: 0,
