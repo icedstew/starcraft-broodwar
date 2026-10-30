@@ -249,10 +249,26 @@ impl State {
     fn ai_release(&mut self, d: &Data, n: u8) {
         self.player_types[n as usize] = 2;
         self.ai_taken &= !(1 << n);
+        // A worker the AI sent to place a building (orders 0x19 / 0x1a / 0x1e / 0x1f, now or
+        // queued) is stopped as the human's Stop command does: the human did not ask for it.
+        let builds = |o: u8| matches!(o, 0x19 | 0x1a | 0x1e | 0x1f);
         for u in 0..self.units.len() as u32 {
             let un = &self.units[u as usize];
-            if un.player == n && un.sprite != super::NIL && un.ai != super::NIL {
+            if un.player != n || un.sprite == super::NIL {
+                continue;
+            }
+            if un.ai != super::NIL {
                 self.ai_release_unit(d, u, false);
+            }
+            let un = &self.units[u as usize];
+            let mut building = builds(un.order);
+            let mut q = un.order_queue_head;
+            while q != super::NIL && !building {
+                building = builds(self.orders[q as usize].order);
+                q = self.orders[q as usize].link.next;
+            }
+            if building && d.dat.units.flags[un.unit_type as usize] & 8 != 0 {
+                self.command_order(d, u, 1, false, 1, super::NIL, 0xe4, (0, 0));
             }
         }
         let mut s = self.ai.active_scripts;

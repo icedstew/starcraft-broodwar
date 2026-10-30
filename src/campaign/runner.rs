@@ -598,6 +598,7 @@ pub fn switch_test(map: &str, cycles: u32) -> Result<(), String> {
     };
     let reload = |s: &mut Scene, f: u32, bug: &mut dyn FnMut(u32, String)| {
         let h0 = s.st.state_hash();
+        let before = if std::env::var_os("SWITCH_DEBUG").is_some() { Some(s.st.clone()) } else { None };
         if !s.reload_through_save() {
             bug(f, "save and load failed".into());
         }
@@ -606,12 +607,36 @@ pub fn switch_test(map: &str, cycles: u32) -> Result<(), String> {
         // something out.
         if h0 != h1 {
             println!("  f{f}: note: save and load changed the state hash {h0:x} -> {h1:x}");
+            if let Some(old) = &before {
+                let list = |st: &State, mask: u32| {
+                    let mut v = Vec::new();
+                    for first in [st.visible_units.head, st.hidden_units.head] {
+                        let mut u = first;
+                        while u != NIL {
+                            let un = &st.units[u as usize];
+                            v.push(format!("{u} t{:x} p{} hp{} sh{} en{} st{:x} o{:x}/{}/{} so{:x}/{} cd{}/{}/{} bt{} q{:x?} tp{:?} tu{:x} sub{:x} pos{:?} uid{}", un.unit_type, un.player, un.hp, un.shields, un.energy, un.status & mask, un.order, un.order_state, un.main_order_timer, un.secondary_order, un.secondary_order_state, un.ground_cooldown, un.air_cooldown, un.spell_cooldown, un.remaining_build_time, un.build_queue, un.order_target_pos, un.order_target_unit, un.subunit, (un.fl.exact, un.fl.heading, un.fl.speed, un.fl.velocity, un.fl.move_target, un.fl.next_waypoint, un.fl.flags, un.move_target_unit), un.unique_id));
+                            u = un.link.next;
+                        }
+                        v.push("--".into());
+                    }
+                    v
+                };
+                // 0x4e2e20 (the load) refreshes the overlap status 0x40000 (0x42d9a0) of every
+                // unit it puts back in the finder: expected, so left out of the comparison.
+                let mask = !0x40000u32;
+                let (x, y) = (list(old, mask), list(&s.st, mask));
+                let diffs = x.iter().zip(&y).filter(|(p, q)| p != q).count();
+                println!("    units {} -> {}; rng {} -> {}; {diffs} differ other than status 0x40000", x.len(), y.len(), old.rng.seed, s.st.rng.seed);
+                for (i, (p, q)) in x.iter().zip(&y).enumerate().filter(|(_, (p, q))| p != q).take(6) {
+                    println!("    #{i}\n      {p}\n      {q}");
+                }
+            }
         }
     };
     // (frame, human) of each phase start; human = None for an AI phase.
     let mut stopped: Vec<u32> = Vec::new();
     let mut sent: Vec<u32> = Vec::new();
-    let (mut phase_end, mut human, mut cycle, mut b0, mut placing) = (start, None::<u8>, 0u32, 0usize, 0usize);
+    let (mut phase_end, mut human, mut cycle, mut b0) = (start, None::<u8>, 0u32, 0usize);
     let (mut u0, mut u_join) = (0usize, 0usize);
     let mut f = 0u32;
     loop {
@@ -641,7 +666,7 @@ pub fn switch_test(map: &str, cycles: u32) -> Result<(), String> {
                     if scripts(st) != 0 {
                         bug(f, format!("human army still runs {} AI scripts", scripts(st)));
                     }
-                    if buildings(st) > b0 + placing {
+                    if buildings(st) > b0 {
                         let new: Vec<_> = bldg_ids(st).into_iter().filter(|u| !ids0.contains(u)).map(|u| (u, st.units[u].unit_type, st.units[u].status & 1)).collect();
                         bug(f, format!("human army built by itself ({b0} -> {} buildings: new (unit, type, done) {new:x?})", buildings(st)));
                     }
@@ -673,13 +698,16 @@ pub fn switch_test(map: &str, cycles: u32) -> Result<(), String> {
                 for u in 0..s.st.units.len() {
                     let un = &s.st.units[u];
                     if alive(&s.st, u) && un.player == n && worker(un.unit_type) && !harvesting(un.order) {
-                        println!("  f{f}: worker {u:x} order {:#x} queue head {:x} target {:?}", un.order, un.order_queue_head, un.order_target_pos);
+                        let mut q = Vec::new();
+                        let mut o = un.order_queue_head;
+                        while o != NIL {
+                            q.push(s.st.orders[o as usize].order);
+                            o = s.st.orders[o as usize].link.next;
+                        }
+                        println!("  f{f}: worker {u:x} order {:#x} queue {q:x?} target {:?} status {:x}", un.order, un.order_target_pos, un.status);
                     }
                 }
             }
-            // Workers on their way to place a building (orders 0x1e / 0x1f, or queued) at a join
-            // still place it.
-            placing = (0..s.st.units.len()).filter(|&u| alive(&s.st, u) && s.st.units[u].player == n && worker(s.st.units[u].unit_type) && (matches!(s.st.units[u].order, 0x1e | 0x1f | 0x19) || s.st.units[u].order_queue_head != NIL)).count();
             if human.is_none() {
                 // A human joins (every peer saves and loads first).
                 cycle += 1;
@@ -731,6 +759,20 @@ pub fn switch_test(map: &str, cycles: u32) -> Result<(), String> {
         }
         s.step();
         f += 1;
+        // A unit that dies (order 0) leaves the lists: its slot may hold a new unit later.
+        for l in [&mut stopped, &mut sent] {
+            l.retain(|&u| alive(&s.st, u as usize) && s.st.units[u as usize].order != 0);
+        }
+        if human.is_some() && std::env::var_os("SWITCH_TRACE").is_some() {
+            for &u in &stopped {
+                let un = &s.st.units[u as usize];
+                if f % 8 == 0 || un.order != 3 {
+                    if un.order != 3 {
+                        println!("  f{f}: stopped worker {u} order {:#x}/{} queue {:x} ai {:x} status {:x}", un.order, un.order_state, un.order_queue_head, un.ai, un.status);
+                    }
+                }
+            }
+        }
         if f % 240 == 0 && f >= start - 240 {
             let st = &s.st;
             let mut orders = std::collections::BTreeMap::<u8, u32>::new();
@@ -759,7 +801,7 @@ pub fn switch_test(map: &str, cycles: u32) -> Result<(), String> {
                 for u in 0..st.units.len() {
                     let un = &st.units[u];
                     if alive(st, u) && un.player == n && un.status & 2 != 0 {
-                        println!("  bldg {u} type {:#x} order {:#x} sec {:#x} ai {:x} queue {:x?} timer {}", un.unit_type, un.order, un.secondary_order, un.ai, un.build_queue, un.main_order_timer);
+                        println!("  bldg {u} type {:#x} order {:#x} sec {:#x} ai {:x} queue {:x?} timer {} pos {:?} status {:x}", un.unit_type, un.order, un.secondary_order, un.ai, un.build_queue, un.main_order_timer, un.fl.pos, un.status);
                     }
                 }
                 let pa = &st.ai.players[n as usize];

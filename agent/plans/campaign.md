@@ -349,11 +349,18 @@ SWITCH_DEBUG=1 prints scripts, towns, buildings, requests): army 0 goes AI -> hu
 - **Retaken AI never trained**: idle units kept the human's idle order, and only 0x9c serves the
   AI's requests. Take-over gives idle units units.dat's computer idle order (as 0x49fa40 does for
   a computer's new unit), and starts the player's AI data fresh (0x447680 / 0x437a70 for it).
-Sweep (4 maps x 9 seeds x 3 cycles): clean apart from armies wiped out while the human idled.
-Left: orders a worker already had at the join (walking to place, queued build) still run for
-the human; a Protoss AI that lost its pylons near the town can find no gateway spot and stays
-stuck (melee AI behaviour, not the handoff); a save and load changes `state_hash` (every peer
-reloads at a join, so no desync, but the save leaves something out).
+- **Workers built for the human**: a worker the AI had sent to place a building (orders 0x19 /
+  0x1a / 0x1e / 0x1f, current or queued) is stopped at the release, as the Stop command does.
+Sweep (4 maps x 9 seeds x 3 cycles): clean apart from one run (below).
+- The save and load at a join changes `state_hash`: native load behaviour, not a loss. 0x4e2e20
+  refreshes the overlap status 0x40000 (0x42d9a0) of every unit it puts back in the finder, and
+  0x493f70 / 0x475420 give a pylon with AI state order 0x9c. Every peer loads, so no desync.
+  SWITCH_DEBUG lists the unit fields that differ other than 0x40000.
+- Left (Bottleneck SEED=8): the retaken AI gets one town only, at its start location (the release
+  frees the towns; the melee script's start_town claims every unit). Before the handoff it also had
+  an expansion town with its own script. Here the main's pylons were gone, so it found no powered
+  gateway spot near that town and stalled with minerals piling up. Fix idea: on take-over, start the
+  expansion script (the melee script's `expand` target) over each other own town hall's area.
 
 ### Later (not now)
 Area bonuses (start extras per owned areas), spectating with faction vision, several armies
