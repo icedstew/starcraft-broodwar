@@ -1171,20 +1171,20 @@ impl State {
         }
     }
 
-    /// 0x4ab230's body for one computer `p`.
-    pub(super) fn start_melee_ai_for(&mut self, d: &Data, p: usize) {
+    /// 0x4ab230's body for one computer `p`. Ours: the script's file (true: bwscript.bin)
+    /// when it started.
+    pub(super) fn start_melee_ai_for(&mut self, d: &Data, p: usize) -> Option<bool> {
         let r = match self.player_races[p] {
             0 => b'Z',
             1 => b'T',
             2 => b'P',
-            _ => return,
+            _ => return None,
         };
         let id = u32::from_le_bytes([r, b'M', b'C', if self.is_expansion { b'x' } else { b'u' }]);
         let (x, y) = self.start_locations[p];
         let (x, y) = (x as i32, y as i32);
-        if let Some((pos, bw)) = find_ai_script(d, id) {
-            self.start_ai_script(p as u32, pos, bw, Some([x - 1, y - 1, x + 1, y + 1]));
-        }
+        let (pos, bw) = find_ai_script(d, id)?;
+        self.start_ai_script(p as u32, pos, bw, Some([x - 1, y - 1, x + 1, y + 1])).map(|_| bw)
     }
 }
 

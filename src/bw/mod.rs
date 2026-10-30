@@ -293,6 +293,9 @@ pub struct State {
     pub enhanced: bool,
     /// Ours: the armies the AI took over from humans who left (bit per slot).
     pub ai_taken: u8,
+    /// Ours: per player, the expansion script its AI's last `expand` started (0 none); a
+    /// take-over starts it again at the army's other town halls (enhanced.rs).
+    pub ai_expand_script: [u16; 8],
     /// Ours (enhanced.rs, campaign matches): the draw timer runs.
     pub campaign: bool,
     /// Ours: frames since anything died or was mined, and the count those last changed from.
@@ -589,6 +592,7 @@ impl State {
             multiplayer: false,
             enhanced: false,
             ai_taken: 0,
+            ai_expand_script: [0; 8],
             campaign: false,
             idle_frames: 0,
             activity: 0,

@@ -997,6 +997,8 @@ impl State {
         let a = self.best_expansion_area(d, player, base, n);
         if a != 0 {
             self.start_area_script(d, player, bw, a, v);
+            // Ours: remembered for a take-over (enhanced.rs `ai_take_over`).
+            self.ai_expand_script[pi] = v;
         }
     }
 
@@ -1010,7 +1012,7 @@ impl State {
     /// 0x45b440: start the script at `v` over a box around `area`'s spot (the thread's
     /// flags carry the area), mark the region there as taken (state 4, flag 1) and let
     /// 0x43a8f0 mark the regions nearby.
-    fn start_area_script(&mut self, d: &Data, player: u8, bw: bool, area: u32, v: u16) {
+    pub(super) fn start_area_script(&mut self, d: &Data, player: u8, bw: bool, area: u32, v: u16) {
         let (x, y) = self.areas[area as usize].pos;
         let (xi, yi) = (x as i32, y as i32);
         let Some(n) = self.start_ai_script(player as u32, v as u32, bw, Some([xi - 1, yi - 1, xi + 1, yi + 1])) else { return };

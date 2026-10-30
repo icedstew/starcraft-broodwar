@@ -356,11 +356,17 @@ Sweep (4 maps x 9 seeds x 3 cycles): clean apart from one run (below).
   refreshes the overlap status 0x40000 (0x42d9a0) of every unit it puts back in the finder, and
   0x493f70 / 0x475420 give a pylon with AI state order 0x9c. Every peer loads, so no desync.
   SWITCH_DEBUG lists the unit fields that differ other than 0x40000.
-- Left (Bottleneck SEED=8): the retaken AI gets one town only, at its start location (the release
-  frees the towns; the melee script's start_town claims every unit). Before the handoff it also had
-  an expansion town with its own script. Here the main's pylons were gone, so it found no powered
-  gateway spot near that town and stalled with minerals piling up. Fix idea: on take-over, start the
-  expansion script (the melee script's `expand` target) over each other own town hall's area.
+- **Retaken AI lost its expansions** (Bottleneck SEED=8: stalled with no powered gateway spot at
+  the start town): the release frees the towns and the melee script's start_town takes everything
+  into one town at the start location. Take-over now runs the melee script's first step at once,
+  starts the expansion script (`State::ai_expand_script`, ours: the last `expand` target, kept in
+  `Extras`) over each other town hall's resource area, moves the units within 0x200 of that hall
+  into its town, re-picks a town's main building when it moved, and claims unfinished units into
+  the nearest town (start_town takes finished ones only; an expansion hall still warping in at a
+  take-over never got AI before). Idle orders are fixed for every unit, not only unclaimed ones.
+- Left: Bottleneck SEED=8 and Boxer SEED=5 recover but bank 1600-2500 minerals; SEED=8's top
+  request is an assimilator for the expansion town that no worker places (melee AI logic, not
+  traced further).
 
 ### Later (not now)
 Area bonuses (start extras per owned areas), spectating with faction vision, several armies

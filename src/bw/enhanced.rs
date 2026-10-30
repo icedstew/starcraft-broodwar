@@ -50,6 +50,7 @@ pub struct Extras {
     pub nation: Vec<u8>,
     pub gone: u32,
     pub ai_taken: u8,
+    pub expand: [u16; 8],
     pub human_names: Vec<String>,
     pub names: Vec<String>,
     /// Campaign matches: the draw timer (`State::campaign_tick`).
@@ -75,7 +76,7 @@ impl<'a> Rd<'a> {
 
 impl Extras {
     pub fn of(st: &State) -> Extras {
-        Extras { nation: st.human_nation.clone(), gone: st.humans_gone, ai_taken: st.ai_taken, human_names: st.human_names.clone(), names: st.player_names.iter().take(8).cloned().collect(), campaign: st.campaign, idle_frames: st.idle_frames }
+        Extras { nation: st.human_nation.clone(), gone: st.humans_gone, ai_taken: st.ai_taken, expand: st.ai_expand_script, human_names: st.human_names.clone(), names: st.player_names.iter().take(8).cloned().collect(), campaign: st.campaign, idle_frames: st.idle_frames }
     }
 
     pub fn apply(&self, st: &mut State) {
@@ -84,6 +85,7 @@ impl Extras {
         st.set_humans(&self.nation);
         st.humans_gone = self.gone;
         st.ai_taken = self.ai_taken;
+        st.ai_expand_script = self.expand;
         st.human_names = self.human_names.clone();
         for (k, t) in self.names.iter().enumerate() {
             st.player_names[k] = t.clone();
@@ -103,6 +105,9 @@ impl Extras {
         b.extend_from_slice(&self.nation);
         b.extend_from_slice(&self.gone.to_le_bytes());
         b.push(self.ai_taken);
+        for v in self.expand {
+            b.extend_from_slice(&v.to_le_bytes());
+        }
         b.push(self.human_names.len() as u8);
         for t in &self.human_names {
             s(b, t);
@@ -121,13 +126,17 @@ impl Extras {
         let nation = r.take(nn)?.to_vec();
         let gone = u32::from_le_bytes(r.take(4)?.try_into().ok()?);
         let ai_taken = r.take(1)?[0];
+        let mut expand = [0u16; 8];
+        for v in expand.iter_mut() {
+            *v = u16::from_le_bytes(r.take(2)?.try_into().ok()?);
+        }
         let nh = r.take(1)?[0];
         let human_names = (0..nh).map(|_| r.text()).collect::<Option<Vec<_>>>()?;
         let names = (0..8).map(|_| r.text()).collect::<Option<Vec<_>>>()?;
         let campaign = r.take(1)?[0] != 0;
         let idle_frames = u32::from_le_bytes(r.take(4)?.try_into().ok()?);
         *at = r.1;
-        Some(Extras { nation, gone, ai_taken, human_names, names, campaign, idle_frames })
+        Some(Extras { nation, gone, ai_taken, expand, human_names, names, campaign, idle_frames })
     }
 }
 
@@ -216,26 +225,109 @@ impl State {
         self.ai_taken |= 1 << n;
         self.notices.push((NOTICE_AI, n));
         // A fresh computer as at the game's start (0x447680 / 0x437a70 for this player): what
-        // an earlier AI of the army asked for or knew of its regions is gone.
+        // an earlier AI of the army asked for or knew of its regions is gone, but for its
+        // expansion script (the melee script's `panic` block, 0x690102).
         let ai = &mut self.ai;
-        ai.players[p] = super::ai::PlayerAi { minerals_available: self.players.minerals[p] as u32, gas_available: self.players.gas[p] as u32, difficulty: 1, default_min_strength_for_regions: 100, ..Default::default() };
+        let panic = ai.players[p].panic_script_pos;
+        ai.players[p] = super::ai::PlayerAi { minerals_available: self.players.minerals[p] as u32, gas_available: self.players.gas[p] as u32, difficulty: 1, default_min_strength_for_regions: 100, panic_script_pos: panic, ..Default::default() };
         let regions = ai.regions[p].len();
         ai.regions[p] = (0..regions).map(|i| super::ai::AiRegion::new(i as u16, n)).collect();
-        self.start_melee_ai_for(d, p);
+        let head = self.ai.active_scripts;
+        let bw = self.start_melee_ai_for(d, p);
+        let main = Some(self.ai.active_scripts).filter(|&s| s != head);
+        // The release freed the army's towns. The melee script's first step (start_town) takes
+        // every finished unit into a town at the start location. Each other town hall (finished
+        // or not) gets its expansion script again over its resource area (0x45b440, as the
+        // script's `expand` starts it); its start_town finds nothing left, so the units within
+        // 0x200 of that hall move to its town, as if it had made them. Without it a far base is
+        // the start town's, which places buildings around the start location only. The threads
+        // take their first steps now, not at the next 0x45cbd0: the towns must exist below.
+        if let Some(s) = main {
+            self.run_script(d, s);
+        }
+        let expand = self.ai_expand_script[p];
+        if let (Some(bw), true) = (bw, expand != 0) {
+            let (sx, sy) = self.start_locations[p];
+            let halls: Vec<(i16, i16)> = (0..self.units.len())
+                .filter(|&u| {
+                    let un = &self.units[u];
+                    un.player == n && un.sprite != super::NIL && matches!(un.unit_type, 0x6a | 0x83 | 0x84 | 0x85 | 0x9a)
+                })
+                .map(|u| self.unit_sprite_pos(u as u32))
+                .filter(|&(x, y)| super::path::approx_distance(x as i32, sx as i32, y as i32, sy as i32) > 0x100)
+                .collect();
+            for (x, y) in halls {
+                let near = (1..=self.area_count as usize)
+                    .filter(|&a| self.areas[a].flags & 2 == 0)
+                    .map(|a| (super::path::approx_distance(self.areas[a].pos.0 as i32, x as i32, self.areas[a].pos.1 as i32, y as i32), a))
+                    .min();
+                let Some((_, a)) = near.filter(|&(dist, _)| dist < 0x180) else { continue };
+                self.areas[a].flags |= 2;
+                let head = self.ai.active_scripts;
+                self.start_area_script(d, n, bw, a as u32, expand);
+                let s = self.ai.active_scripts;
+                if s == head {
+                    continue;
+                }
+                self.run_script(d, s);
+                let town = self.ai.scripts.items[s as usize].town;
+                if town == super::NIL {
+                    continue;
+                }
+                for u in 0..self.units.len() as u32 {
+                    let un = &self.units[u as usize];
+                    if un.player != n || un.sprite == super::NIL || un.ai == super::NIL || d.dat.units.ai_internal[un.unit_type as usize] & 2 == 0 {
+                        continue;
+                    }
+                    let (ux, uy) = self.unit_sprite_pos(u);
+                    if super::path::approx_distance(ux as i32, x as i32, uy as i32, y as i32) < 0x200 && self.town_remove_unit(d, u) {
+                        self.town_add_unit(d, u, town);
+                    }
+                }
+            }
+        }
+        // A town whose main building moved away (start_town made the first town hall it took
+        // its main) takes the next of its own town halls (0x433dd0 does so for the first).
+        for u in 0..self.units.len() as u32 {
+            let r = self.units[u as usize].ai;
+            if self.units[u as usize].player != n || r == super::NIL || super::ai_town::ai_kind(r) != super::ai_town::AI_BUILDING || !self.is_drop_off(d, u) {
+                continue;
+            }
+            let town = self.ai.buildings.items[super::ai_town::ai_index(r) as usize].town;
+            if town != super::NIL && self.ai.towns.items[town as usize].main_building == super::NIL {
+                self.ai.towns.items[town as usize].main_building = u;
+            }
+        }
         // The human's units belong to no AI list (0x463040 runs when a computer's unit is
-        // created; `ai_release` took them out): the AI takes them now, workers into its town.
-        // An idle one gets the computer's idle order, as a computer's unit gets when it is
+        // created; `ai_release` took them out): the AI takes them now (start_town takes
+        // finished units only), workers and unfinished buildings into the nearest town. An
+        // idle one gets the computer's idle order, as a computer's unit gets when it is
         // finished (0x49fa40, units.dat): with the human's a building never trains what the
         // AI asks (only order 0x9c serves the requests).
         for u in 0..self.units.len() as u32 {
             let un = &self.units[u as usize];
-            if un.player == n && un.sprite != super::NIL && un.ai == super::NIL && un.status & 1 != 0 && un.unit_type < 0xe4 {
-                self.ai_take_unit(d, u);
-                let un = &self.units[u as usize];
-                let t = un.unit_type as usize;
-                if un.order_queue_head == super::NIL && (un.order == d.dat.units.ai_human_idle[t] || un.order == d.dat.units.ai_return_to_idle[t]) {
-                    self.order_now(d, u, d.dat.units.ai_computer_idle[t]);
+            if un.player == n && un.sprite != super::NIL && un.ai == super::NIL && un.unit_type < 0xe4 {
+                let (ux, uy) = self.unit_sprite_pos(u);
+                let mut town = (super::NIL, u32::MAX);
+                let mut t = self.ai.town_lists[p];
+                while t != super::NIL {
+                    let (tx, ty) = self.ai.towns.items[t as usize].position;
+                    let dist = super::path::approx_distance(ux as i32, tx as i32, uy as i32, ty as i32);
+                    if dist < town.1 {
+                        town = (t, dist);
+                    }
+                    t = self.ai.towns.items[t as usize].link.next;
                 }
+                if town.0 != super::NIL && d.dat.units.ai_internal[un.unit_type as usize] & 2 != 0 {
+                    self.town_add_unit(d, u, town.0);
+                } else {
+                    self.ai_take_unit(d, u);
+                }
+            }
+            let un = &self.units[u as usize];
+            let t = un.unit_type as usize;
+            if un.player == n && un.sprite != super::NIL && t < 0xe4 && un.status & 1 != 0 && un.order_queue_head == super::NIL && (un.order == d.dat.units.ai_human_idle[t] || un.order == d.dat.units.ai_return_to_idle[t]) {
+                self.order_now(d, u, d.dat.units.ai_computer_idle[t]);
             }
         }
     }
