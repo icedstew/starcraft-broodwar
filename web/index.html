@@ -119,7 +119,7 @@ async function run(load) {
       // ?frames=K: log "frame K hash H" to the console at frame K (headless-net check).
       // ?name=: the player's name in a lobby (a game made in the glue's create screen);
       // ?army=<slot>: in an enhanced game already running, the army to join.
-      await net_join(storm, archives, joinCode, Number(new URLSearchParams(location.search).get("frames")) || 0, new URLSearchParams(location.search).get("script") || "", new URLSearchParams(location.search).get("name") || "Web", Number(new URLSearchParams(location.search).get("army") ?? 255));
+      await net_join(storm, archives, joinCode, Number(new URLSearchParams(location.search).get("frames")) || 0, new URLSearchParams(location.search).get("script") || "", new URLSearchParams(location.search).get("name") || "Web", Number(new URLSearchParams(location.search).get("army") ?? 255), Number(new URLSearchParams(location.search).get("quit")) || 0);
     } else start(storm, archives, name, map);
     document.getElementById("setup").remove();
     box.querySelector("canvas").focus({ preventScroll: true });

@@ -232,6 +232,10 @@ pub trait NetDriver {
     }
     /// 0x4a3010 (Drop Players): drop the players waited for.
     fn drop_waiting(&mut self) {}
+    /// Tests: leave the game now (the frame the peer was told to quit at came).
+    fn quit_now(&self) -> bool {
+        false
+    }
 }
 
 thread_local! {
@@ -3415,6 +3419,10 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
         if let Some(why) = net.as_ref().and_then(|n| n.over()) {
             eprintln!("net: game over: {why}");
             scene.write_last_replay();
+            return Ok(false);
+        }
+        // Tests (a browser's ?quit=): the game ends as the menu's Leave ends it.
+        if net.as_ref().is_some_and(|n| n.quit_now()) {
             return Ok(false);
         }
         if !win.step(scene.st.frame, &typed) {

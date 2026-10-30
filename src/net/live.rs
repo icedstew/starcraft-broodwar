@@ -430,6 +430,8 @@ pub struct NetGame {
     refused: Vec<(u8, Instant)>,
     /// Network diagnostics: a line per second that had a stall or a gap (`NetLog`).
     nl: NetLog,
+    /// Host of an enhanced game: per player waited for, its contiguous turns and since when.
+    progress: HashMap<u8, (u32, Instant)>,
 }
 
 /// What `NetGame::frame` saw in the current second: the longest time between two calls (the
@@ -477,6 +479,8 @@ const LATE_PART: usize = 500;
 
 thread_local! {
     static REPORT_NEXT: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+    /// Browser tests: the next game's script and quit frame (`script_next`).
+    static SCRIPT_NEXT: std::cell::RefCell<Option<(String, Option<u32>)>> = const { std::cell::RefCell::new(None) };
 }
 
 /// Control messages (first byte; see the module doc).
@@ -547,10 +551,21 @@ impl NetGame {
         Ok(())
     }
 
+    /// Leave the game at frame `q` (browser tests' ?quit=, as SCBW_NET_QUIT_AT).
+    pub(crate) fn set_quit(&mut self, q: u32) {
+        self.quit_at = Some(q);
+    }
+
     /// Stop at frame `k` and report the state hash there (see `report`).
     pub(crate) fn report_at(&mut self, k: u32) {
         self.report = Some(k);
         self.se.end = k;
+    }
+
+    /// Browser tests: the next game (one a lobby starts, or a running game joined) runs
+    /// `script` (as SCBW_NET_SCRIPT) and quits at frame `quit` (as SCBW_NET_QUIT_AT).
+    pub(crate) fn script_next(script: &str, quit: Option<u32>) {
+        SCRIPT_NEXT.with(|s| *s.borrow_mut() = Some((script.to_string(), quit)));
     }
 
     /// The next game reports at frame `k` (`report_at`; the browser's ?frames= for a game the
@@ -628,7 +643,7 @@ impl NetGame {
         msg.extend_from_slice(&last.to_le_bytes());
         msg.extend_from_slice(&fence.to_le_bytes());
         msg.push(reason);
-        eprintln!("net: LEAVE player {player} (reason {reason}): turns below {last} kept, fence frame {fence}, host at frame {}", self.se.frame);
+        elog(&format!("net: LEAVE player {player} (reason {reason}): turns below {last} kept, fence frame {fence}, host at frame {}", self.se.frame));
         self.se.apply_leave(player, last, fence, reason);
         self.tr.broadcast_ctl(&msg);
     }
@@ -641,12 +656,20 @@ impl NetGame {
     fn enhanced_host(&mut self, scene: &mut Scene<'_>) {
         self.drops_fast = true;
         self.joined_at.retain(|j| j.1.elapsed() < JOIN_GRACE);
-        if self.stall_since.is_some_and(|t| t.elapsed() >= ENH_DROP) {
-            for p in self.se.waiting_on() {
-                if !self.joined_at.iter().any(|j| j.0 == p) {
-                    eprintln!("net: player {p} held the game {} ms: dropped", self.stall_since.map_or(0, |t| t.elapsed().as_millis()));
-                    self.decide_leave(p, 6);
-                }
+        // A player we wait for is dropped once its turns made no progress for ENH_DROP: a slow
+        // one (a browser behind the host's pace) holds the game in short stalls, but keeps up.
+        let waiting = self.se.waiting_on();
+        self.progress.retain(|p, _| waiting.contains(p));
+        for p in waiting {
+            let c = self.se.contiguous(p);
+            let e = self.progress.entry(p).or_insert((c, Instant::now()));
+            if e.0 != c {
+                *e = (c, Instant::now());
+            }
+            if e.1.elapsed() >= ENH_DROP && !self.joined_at.iter().any(|j| j.0 == p) {
+                elog(&format!("net: player {p} sent nothing for {} ms: dropped", e.1.elapsed().as_millis()));
+                self.progress.remove(&p);
+                self.decide_leave(p, 6);
             }
         }
         if self.joining.is_none() && !self.join_queue.is_empty() {
@@ -655,7 +678,7 @@ impl NetGame {
                 match f(&name) {
                     Ok(a) => want = a,
                     Err(why) => {
-                        eprintln!("net: player {p} ({}) refused: {why}", String::from_utf8_lossy(&name));
+                        elog(&format!("net: player {p} ({}) refused: {why}", String::from_utf8_lossy(&name)));
                         self.refuse(p, &why);
                         return;
                     }
@@ -663,12 +686,12 @@ impl NetGame {
             }
             match scene.st.enhanced_pick(want).filter(|&(_, n)| self.join_filter.is_none() || n == want) {
                 Some((h, n)) => {
-                    eprintln!("net: player {p} joins as human {h}, army {n}");
+                    elog(&format!("net: player {p} joins as human {h}, army {n}"));
                     scene.st.send_command(&crate::bw::enhanced::join_command(h, n, p, &name));
                     self.joining = Some((p, h, n, None));
                 }
                 None => {
-                    eprintln!("net: player {p} cannot join: no army");
+                    elog(&format!("net: player {p} cannot join: no army"));
                     self.refuse(p, "no army to join (the match is over for that side)");
                 }
             }
@@ -677,7 +700,7 @@ impl NetGame {
         let Some(snap) = self.se.kept(f).cloned() else { return };
         let players: Vec<(u8, u8, u8)> = self.se.live_players().into_iter().filter(|q| q.0 != p).collect();
         let Some(start) = late_bytes(scene, &snap, f, p, h, n, self.se.delay, &players) else {
-            eprintln!("net: the game state for player {p} could not be saved");
+            elog(&format!("net: the game state for player {p} could not be saved"));
             self.joining = None;
             return;
         };
@@ -689,7 +712,7 @@ impl NetGame {
             m.extend_from_slice(c);
             self.tr.send_ctl(p, m);
         }
-        eprintln!("net: player {p} gets the game at frame {f} ({} bytes)", start.len());
+        elog(&format!("net: player {p} gets the game at frame {f} ({} bytes)", start.len()));
         self.tr.start_peer(p, f);
         self.joined_at.push((p, Instant::now()));
         self.se.keep = None;
@@ -701,7 +724,7 @@ impl NetGame {
         match (msg.first().copied(), self.host) {
             (Some(C_LEAVE), false) if from == HOST => {
                 if let (Some(&p), Some(last), Some(fence), Some(&reason)) = (msg.get(1), rd32(msg, 2), rd32(msg, 6), msg.get(10)) {
-                    eprintln!("net: leave of player {p}: fence frame {fence} (at frame {})", self.se.frame);
+                    elog(&format!("net: leave of player {p}: fence frame {fence} (at frame {})", self.se.frame));
                     self.se.apply_leave(p, last, fence, reason);
                 }
             }
@@ -725,7 +748,7 @@ impl NetGame {
             (Some(C_HOST_LEFT), false) if from == HOST => self.over = Some("the host left".into()),
             (Some(C_REFUSED), false) if from == HOST => {
                 let why = String::from_utf8_lossy(&msg[1..]).into_owned();
-                eprintln!("net: {}{why}", super::transport::REFUSED);
+                elog(&format!("net: {}{why}", super::transport::REFUSED));
                 self.over = Some(why);
             }
             // snet's NAME (a link that joined after the start): an enhanced game lets it in.
@@ -734,12 +757,12 @@ impl NetGame {
                 let end = body.iter().position(|&c| c == 0).unwrap_or(body.len());
                 let want = body.get(end + 1).copied().unwrap_or(0xff);
                 if !self.join_queue.iter().any(|q| q.0 == from) && self.joining.is_none_or(|j| j.0 != from) {
-                    eprintln!("net: player {from} asks to join the running game");
+                    elog(&format!("net: player {from} asks to join the running game"));
                     self.join_queue.push((from, want, body[..end.min(0x17)].to_vec()));
                 }
             }
             (Some(C_DROP), true) => {
-                eprintln!("net: player {from} asks to drop the players the game waits for");
+                elog(&format!("net: player {from} asks to drop the players the game waits for"));
                 self.drop_waiting();
             }
             (Some(C_CHAT), true) => {
@@ -814,7 +837,7 @@ impl NetGame {
         }
         if let Some(cmd) = crate::chat::receive(&mut scene.chat, from, pkt, pkt[0] == 1) {
             if self.verbose {
-                eprintln!("net: chat from {from}: {}", String::from_utf8_lossy(cmd[2..].split(|&c| c == 0).next().unwrap_or(&[])));
+                elog(&format!("net: chat from {from}: {}", String::from_utf8_lossy(cmd[2..].split(|&c| c == 0).next().unwrap_or(&[]))));
             }
             scene.st.chat.push((from, cmd[2..].to_vec()));
             self.se.record_chat(cmd);
@@ -822,6 +845,12 @@ impl NetGame {
     }
 
     /// Host: compare a peer's hash of frame `m` with the first one seen for it.
+    /// Host: the state hash of confirmed frame `m` (a multiple of 8) once known, as the desync
+    /// check has it.
+    pub(crate) fn confirmed_hash(&self, m: u32) -> Option<u64> {
+        self.hashes.get(&m).map(|q| q.1)
+    }
+
     fn on_hash(&mut self, player: u8, m: u32, h: u64, scene: &mut Scene<'_>) {
         match self.hashes.get(&m) {
             None => {
@@ -829,7 +858,7 @@ impl NetGame {
                 self.hashes.retain(|&f, _| f + 4096 > m);
             }
             Some(&(p0, h0)) if h0 != h && self.desync.is_none() => {
-                eprintln!("net: hash mismatch at frame {m}: player {p0} {h0:016x}, player {player} {h:016x}");
+                elog(&format!("net: hash mismatch at frame {m}: player {p0} {h0:016x}, player {player} {h:016x}"));
                 let mut msg = vec![C_DESYNC];
                 msg.extend_from_slice(&m.to_le_bytes());
                 self.tr.broadcast_ctl(&msg);
@@ -846,12 +875,20 @@ impl NetGame {
         self.desync = Some(m);
         let text = format!("DESYNC detected at frame {m}");
         say(&text);
-        eprintln!("net: {text}");
+        elog(&format!("net: {text}"));
         scene.msgs.error(text.as_bytes(), scene.clock_ms);
     }
 
     fn make(se: Session, tr: Transport, next_send: u32, script: Vec<(u32, Cmd)>, headless: Option<u32>, host: bool) -> NetGame {
-        NetGame { se, tr, next_send, script, headless, finished: None, host, verbose: std::env::var_os("NETREP_DEBUG").is_some(), last_report: Instant::now(), report: None, reported: false, hashes: HashMap::new(), desync: None, over: None, quitting: Vec::new(), replay_path: std::env::var("SCBW_NET_REPLAY").ok(), quit_at: std::env::var("SCBW_NET_QUIT_AT").ok().and_then(|v| v.parse().ok()), stall_since: None, join_queue: Vec::new(), joining: None, drops_fast: false, joined_at: Vec::new(), join_filter: None, refused: Vec::new(), nl: NetLog::new() }
+        let mut n = NetGame { se, tr, next_send, script, headless, finished: None, host, verbose: std::env::var_os("NETREP_DEBUG").is_some(), last_report: Instant::now(), report: None, reported: false, hashes: HashMap::new(), desync: None, over: None, quitting: Vec::new(), replay_path: std::env::var("SCBW_NET_REPLAY").ok(), quit_at: std::env::var("SCBW_NET_QUIT_AT").ok().and_then(|v| v.parse().ok()), stall_since: None, join_queue: Vec::new(), joining: None, drops_fast: false, joined_at: Vec::new(), join_filter: None, refused: Vec::new(), nl: NetLog::new(), progress: HashMap::new() };
+        if let Some((s, q)) = SCRIPT_NEXT.with(|s| s.borrow_mut().take()) {
+            match parse_script(&s) {
+                Ok(v) => n.script = v,
+                Err(e) => elog(&format!("net: {e}")),
+            }
+            n.quit_at = q.or(n.quit_at);
+        }
+        n
     }
 }
 
@@ -877,7 +914,7 @@ impl NetDriver for NetGame {
             for (_, c) in self.script.iter().filter(|(sf, _)| *sf == f) {
                 let b = match c {
                     Cmd::Raw(b) => b.clone(),
-                    Cmd::SelectWorker => select_worker(&scene.st, scene.st.nation_of(self.se.me)),
+                    Cmd::SelectWorker => select_worker(&scene.st, scene.st.local_player),
                     Cmd::Say(t) => {
                         scene.chat.mode = 2;
                         scene.chat.send(&scene.st, t);
@@ -909,7 +946,7 @@ impl NetDriver for NetGame {
                 }
                 Event::Ctl { from, msg } => self.ctl(from, &msg, scene),
                 Event::Lost { player, why } => {
-                    eprintln!("net: player {player} lost: {why}");
+                    elog(&format!("net: player {player} lost: {why}"));
                     self.decide_leave(player, 6);
                 }
                 Event::Error(m) => {
@@ -984,6 +1021,14 @@ impl NetDriver for NetGame {
 
     fn over(&self) -> Option<String> {
         self.over.clone()
+    }
+
+    fn quit_now(&self) -> bool {
+        let q = self.quit_at.is_some_and(|q| self.se.frame >= q);
+        if q {
+            say(&format!("quit at frame {}", self.se.frame));
+        }
+        q
     }
 
     fn waiting(&self) -> Vec<u8> {
@@ -1231,6 +1276,6 @@ pub fn late_game<'a>(a: &'a view::Assets, b: &[u8]) -> std::io::Result<(Scene<'a
     for fr in f..f + delay {
         net.tr.send_turns(fr, Vec::new());
     }
-    eprintln!("net: joined the running game at frame {f} as human {h}, army {n}");
+    elog(&format!("net: joined the running game at frame {f} as human {h}, army {n}"));
     Ok((scene, net))
 }

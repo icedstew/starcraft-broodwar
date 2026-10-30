@@ -322,9 +322,12 @@ fn play(spec: &Spec, hub: &Hub, report: &Sender<Report>, orders: &Receiver<Order
             hub.drop_link(spec.game, p);
         }
         let (frame, confirmed) = net.frames();
-        if let Some(k) = hash_at.filter(|&k| !hashed && frame >= k && confirmed >= k) {
+        // The host runs past frame k: a multiple of 8 takes the confirmed frame's hash (the
+        // desync check's); another the state's when confirmed reaches it (frame may be later).
+        let known = hash_at.and_then(|k| if k % 8 == 0 { net.confirmed_hash(k) } else { (frame >= k && confirmed >= k).then(|| scene.st.state_hash()) });
+        if let (Some(k), Some(h), false) = (hash_at, known, hashed) {
             hashed = true;
-            println!("border {} frame {k} hash {:016x}", spec.border, scene.st.state_hash());
+            println!("border {} frame {k} hash {h:016x}", spec.border);
             // SCBW_CAMPAIGN_STOP_AT_HASH (the pool sweep): the match is done there.
             if std::env::var_os("SCBW_CAMPAIGN_STOP_AT_HASH").is_some() {
                 return Ok(End::Stopped);
@@ -650,6 +653,10 @@ pub fn switch_test(map: &str, cycles: u32) -> Result<(), String> {
     let mut u0 = 0usize;
     let mut taken_at = None::<u32>;
     let mut m0 = 0i32;
+    // Shared mode: (frame to check, A's two workers then B's two, where B sent them).
+    let mut pair_check = None::<(u32, [u32; 4])>;
+    // Over the window: which of the four took the Move order (6).
+    let mut pair_moved = [false; 4];
     let mut f = 0u32;
     loop {
         if s.st.player_left[n as usize] != 0 {
@@ -819,6 +826,61 @@ pub fn switch_test(map: &str, cycles: u32) -> Result<(), String> {
                 let mut c = vec![if race == 0 { 0x23 } else { 0x1f }];
                 c.extend_from_slice(&t.to_le_bytes());
                 s.human_command(h, &c);
+            }
+        }
+        if let Some((_, w)) = pair_check {
+            for (k, &u) in w.iter().enumerate() {
+                pair_moved[k] |= s.st.units[u as usize].order == 6;
+            }
+        }
+        if let Some((at, w)) = pair_check.filter(|q| q.0 == f) {
+            pair_check = None;
+            let st = &s.st;
+            let live = |u: u32| alive(st, u as usize) && st.units[u as usize].order != 0;
+            let o = |u: u32| st.units[u as usize].order;
+            // A's: stopped (PlayerGuard), never moved; B's: took the move, not mining after.
+            for (k, &u) in w[..2].iter().enumerate() {
+                if live(u) && (o(u) != 3 || pair_moved[k]) {
+                    bug(at, format!("worker {u} human A stopped has order {:#x} (moved: {})", o(u), pair_moved[k]));
+                }
+            }
+            for (k, &u) in w.iter().enumerate().skip(2) {
+                if live(u) && (harvesting(o(u)) || !pair_moved[k]) {
+                    bug(at, format!("worker {u} human B moved has order {:#x} (moved: {})", o(u), pair_moved[k]));
+                }
+            }
+        }
+        if let (true, Some(h)) = (shared, human.filter(|_| phase_end - f == human_len - 60)) {
+            // Two humans, one army, each with its own selection: A selects two mining workers
+            // and B two others; A's Stop stops A's only, then B's move moves B's only.
+            let (ha, hb) = (h, h + 16);
+            let st = &s.st;
+            let w: Vec<u32> = (0..st.units.len() as u32).filter(|&u| alive(st, u as usize) && st.units[u as usize].player == n && worker(st.units[u as usize].unit_type) && matches!(st.units[u as usize].order, 0x55..=0x57) && !stopped.contains(&u)).take(4).collect();
+            if w.len() == 4 {
+                let sel = |l: &[u32]| {
+                    let mut c = vec![0x09, l.len() as u8];
+                    for &u in l {
+                        c.extend_from_slice(&(st.unit_handle(u) as u16).to_le_bytes());
+                    }
+                    c
+                };
+                let (ca, cb) = (sel(&w[..2]), sel(&w[2..]));
+                // B sends its pair to the army's start location (always reachable from its base).
+                let (mx, my) = st.start_locations[n as usize];
+                s.human_command(ha, &ca);
+                s.human_command(hb, &cb);
+                s.human_command(ha, &[0x1a, 0]);
+                let mut c = vec![0x14];
+                for v in [mx, my, 0, 0xe4] {
+                    c.extend_from_slice(&v.to_le_bytes());
+                }
+                c.push(0);
+                s.human_command(hb, &c);
+                // Mining steps finish first (not interruptible): checked 150 frames on.
+                pair_check = Some((f + 150, [w[0], w[1], w[2], w[3]]));
+                pair_moved = [false; 4];
+                println!("  f{f}: human {ha} stopped {:?}, human {hb} moved {:?}", &w[..2], &w[2..]);
+                stopped.extend_from_slice(&w[..2]);
             }
         }
         if let Some(h) = human {

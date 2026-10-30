@@ -132,7 +132,7 @@ async fn sleep(ms: i32) {
 /// game is running; `frames` > 0 logs `frame K hash H` to the console at that frame (the
 /// headless-net check) and stops the game there.
 #[wasm_bindgen]
-pub async fn net_join(storm: Vec<u8>, archives: js_sys::Array, code: String, frames: u32, script: String, name: String, army: u8) -> Result<(), JsError> {
+pub async fn net_join(storm: Vec<u8>, archives: js_sys::Array, code: String, frames: u32, script: String, name: String, army: u8, quit: u32) -> Result<(), JsError> {
     use crate::net::{Session, live, transport};
     console_error_panic_hook::set_once();
     let archives = archives.iter().map(|a| js_sys::Uint8Array::new(&a).to_vec()).collect();
@@ -162,11 +162,17 @@ pub async fn net_join(storm: Vec<u8>, archives: js_sys::Array, code: String, fra
         if frames > 0 {
             live::NetGame::report_next(frames);
         }
+        if !script.is_empty() || quit > 0 {
+            live::NetGame::script_next(&script, (quit > 0).then_some(quit));
+        }
         return glue_lobby(a, tr, slot, code, name).await;
     }
     let (mut g, table) = live::decode_setup(&setup, slot).ok_or_else(|| err("bad game setup".into()))?;
     let mut net = live::NetGame::new(Session::new(slot, &table, delay), tr, false, early).map_err(err)?;
     net.set_script(&script).map_err(err)?;
+    if quit > 0 {
+        net.set_quit(quit);
+    }
     if frames > 0 {
         net.report_at(frames);
     }

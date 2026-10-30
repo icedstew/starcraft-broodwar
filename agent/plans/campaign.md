@@ -381,6 +381,21 @@ Sweep (4 maps x 9 seeds x 3 cycles): clean apart from one run (below).
   2026-10-29: 478 / 480 runs clean (6 maps x 16 seeds x 5 modes); the two left bank 1500-1900
   minerals in busy mode. `enhanced.sh` with QUIT_AT: host and late joiner hashes equal.
 
+### F12. Web joins and shared armies (2026-10-29)
+`agent/tools/web_army.sh` (agent/testing.md 4c): browsers joining a running match, sharing an army
+with a native player, leaving, and taking it back from the AI. Fixed:
+- An enhanced host dropped a slow but live player: the 3 s drop ran from the start of a stall
+  run, so a browser a little behind the host's pace (short stalls back to back) was dropped. Now a
+  player is dropped when its own turns made no progress for 3 s (`NetGame::progress`).
+- A campaign host printed `frame K hash` for the state it had run to (past K with a slow peer);
+  for K a multiple of 8 it now prints confirmed frame K's (`NetGame::confirmed_hash`).
+- live.rs logs go through `elog` (the browser console shows them; eprintln is lost in wasm).
+- Test hooks: `?quit=` / `?script=` for a running game joined from the page; `selw` selects the
+  local army's worker (it used the link id as a human id).
+Open: a background tab gets no animation frames, so a browser player who switches tabs stalls the
+game and is dropped after 3 s (no turns). Fix ideas: keep stepping on a timer when hidden (Chrome
+throttles timers to 1/s there), or a Web Worker for the simulation.
+
 ### Later (not now)
 Area bonuses (start extras per owned areas), spectating with faction vision, several armies
 per side, `scbw://` URL handler.

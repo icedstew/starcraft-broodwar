@@ -87,6 +87,20 @@ Live check of a takeover over the network: `K=6000 QUIT_AT=3000 PACE_US=4000
 agent/tools/enhanced.sh` (host and late joiner hashes equal; unpaced, the host ends before the
 late joiner connects).
 
+Shared mode also checks that two humans on one army each have their own selection: A selects
+two mining workers, B two others, A's Stop and B's Move (to the start location) reach only
+their own pair (tracked over 150 frames: mining steps finish before an order takes).
+
+Browsers: `agent/tools/web_army.sh` (one paced campaign match, PACE_US 30000, K 3000): a native
+player and a browser share army 0 and give commands (`selw`, a move), the browser leaves at 1500
+(the army stays the native's), the native at 2000 (the AI's), a third browser takes it at 2200;
+a browser plays army 1. Host, army-1 browser and late browser hashes at K must be equal, and the
+host's humans per side are printed. One headless Chromium per player: a background tab gets no
+animation frames and stalls the game. The page takes `script=` (as SCBW_NET_SCRIPT) and `quit=`
+(as SCBW_NET_QUIT_AT) for a running game it joins too (`NetGame::script_next`). Also
+`campaign_browser.sh` and `WEB=1 K=2500 enhanced.sh`. A campaign host's `frame K hash` for K a
+multiple of 8 is the confirmed frame's (the desync check's), not the state it has run to.
+
 ## 5. Visual checks
 
 `scbw shot <map|rep> out.png x y [frames] [n]` renders a frame with the HUD for eyeballing
