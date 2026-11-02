@@ -135,6 +135,10 @@ pub fn building_panel(st: &State, d: &Data, strings: &[String], u: u32) -> Optio
     if un.build_queue[un.build_queue_slot as usize % 5] < 0x6a {
         return Some((Panel::Training, training_panel(st, d, strings, u)));
     }
+    // 0x425f30: a building making something incomplete (an addon, a morphing building).
+    if is_training(st, u) || is_building_unit(st, u) {
+        return Some((Panel::Unit, producing_panel(st, d, strings, u)));
+    }
     if un.u8_at(0xc8) != 0x2c {
         return Some((Panel::Research, research_panel(st, d, strings, u)));
     }
@@ -193,6 +197,33 @@ fn silo_panel(st: &State, d: &Data, strings: &[String], u: u32) -> Option<Vec<(i
     let mut out = vec![(2, Show::Slot { bg: 2, icon, cmdicon: true, num: 1 }), (7, Show::Progress(progress)), (-15, Show::Text(stat(strings, 0x303 + race_index(d, un.unit_type))))];
     out.extend(unit_panel(st, d, strings, u).into_iter().filter(|(id, _)| matches!(id, 1 | -7 | -8 | -20 | -5)));
     Some(out)
+}
+
+/// 0x425f30 (status panel id 9): the unit under construction a building produces: its
+/// progress (16), its button (17; 0x47b270: the morph target while it morphs) and the
+/// race label (-40, stat_txt 0x313 + race of that unit), with the wireframe, hit points,
+/// status line and name as 0x427a50 draws them.
+fn producing_panel(st: &State, d: &Data, strings: &[String], u: u32) -> Vec<(i16, Show)> {
+    let un = &st.units[u as usize];
+    let nil = crate::bw::list::NIL;
+    let target = if matches!(un.order, 0x1e | 0x22 | 0x21) || is_building_unit(st, u) {
+        un.order_target_unit
+    } else if matches!(un.secondary_order, 0x26 | 0x3f) || is_training(st, u) {
+        un.current_build_unit
+    } else {
+        nil
+    };
+    let mut out = Vec::new();
+    if target != nil {
+        let tu = &st.units[target as usize];
+        let q = tu.build_queue[tu.build_queue_slot as usize % 5];
+        let icon = if tu.status & 1 != 0 || !matches!(q, 0x85 | 0x84 | 0x89 | 0x90 | 0x92) { tu.unit_type } else { q };
+        out.push((16, Show::Progress(build_progress(st, d, target))));
+        out.push((17, Show::Button { bg: 2, icon, cmdicon: true }));
+        out.push((-40, Show::Text(stat(strings, 0x313 + race_index(d, tu.unit_type)))));
+    }
+    out.extend(unit_panel(st, d, strings, u).into_iter().filter(|(id, _)| matches!(id, 1 | -7 | -8 | -20 | -5)));
+    out
 }
 
 /// 0x4669e0: percent done of unit `b` being built (eggs and morphing buildings count
@@ -268,11 +299,14 @@ fn research_panel(st: &State, d: &Data, strings: &[String], u: u32) -> Vec<(i16,
     let progress = (total.wrapping_sub(left) * 100 / total) as u16;
     let icon = d.dat.techdata.icon.get(tech).copied().unwrap_or(0);
     let s = if disabled(st, u) { 0x33c } else { 0x300 };
-    vec![
+    let mut out = vec![
         (7, Show::Progress(progress)),
         (15, Show::Button { bg: 2, icon, cmdicon: true }),
         (-15, Show::Text(stat(strings, s + race_index(d, un.unit_type)))),
-    ]
+    ];
+    // 0x427890 then draws the wireframe, hit points, energy, status line and name (0x427a50).
+    out.extend(unit_panel(st, d, strings, u).into_iter().filter(|(id, _)| matches!(id, 1 | -7 | -8 | -20 | -5)));
+    out
 }
 
 /// 0x426500: upgrade progress (id 7), the upgrade's icon (id 15) and label (id -15).
@@ -286,11 +320,14 @@ fn upgrade_panel(st: &State, d: &Data, strings: &[String], u: u32) -> Vec<(i16, 
     let progress = (total.max(1).wrapping_sub(left) * 100 / total.max(1)) as u16;
     let icon = d.dat.upgrades.icon[up];
     let s = if disabled(st, u) { 0x33c } else { 0x2fd };
-    vec![
+    let mut out = vec![
         (7, Show::Progress(progress)),
         (15, Show::Button { bg: 2, icon, cmdicon: true }),
         (-15, Show::Text(stat(strings, s + race_index(d, un.unit_type)))),
-    ]
+    ];
+    // 0x427890 then draws the wireframe, hit points, energy, status line and name (0x427a50).
+    out.extend(unit_panel(st, d, strings, u).into_iter().filter(|(id, _)| matches!(id, 1 | -7 | -8 | -20 | -5)));
+    out
 }
 
 /// 0x47b5a0: the name of unit `u`: of the morph it is becoming while incomplete (queue
