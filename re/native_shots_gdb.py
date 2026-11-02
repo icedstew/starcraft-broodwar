@@ -9,7 +9,7 @@
 import gdb, os, struct
 OUT = os.environ["CAP_OUT"]
 EVERY = int(os.environ.get("CAP_EVERY", "120"))
-END = int(os.environ.get("CAP_END", "1000000"))
+END = int(os.environ.get("CAP_END") or "1000000")
 inf = gdb.selected_inferior()
 u32 = lambda a: struct.unpack("<I", bytes(inf.read_memory(a, 4)))[0]
 state = {"next": EVERY, "saved": None, "full": None, "after": None}
@@ -33,6 +33,38 @@ if os.environ.get("CAP_CAMERA"):
     for line in open(os.environ["CAP_CAMERA"]):
         f_, x_, y_ = map(int, line.split())
         CAM[f_] = (x_, y_)
+# CAP_SELECT=<file> (`scbw reppick`: lines "frame idx[,idx...]", unit array indices): instead of
+# every CAP_EVERY frames, capture only at the listed frames, with the local selection set
+# first. At the first draw with the counter >= frame - 24 the selection array (0x6284b8, 12
+# pointers 0x59cca8 + idx * 0x150) is written and the refresh flags 0x4d93f0 and the panels
+# test (as 0x49aef0's tail sets them: 0x59723c b, 0x68c1b0 d, 0x68ac74 b, 0x68c1f8 b = 1;
+# 0x68c1e8 d, 0x68c1ec d = 0); the capture is the first draw at counter >= frame. native/sel.txt
+# gets "inject_frame capture_frame idx,..." per shot for `scbw repshot` (SCBW_REPSHOT_SELECT).
+SEL = None
+if os.environ.get("CAP_SELECT"):
+    SEL = {"list": [], "i": 0, "inj": None}
+    for line in open(os.environ["CAP_SELECT"]):
+        p_ = line.split()
+        if p_:
+            SEL["list"].append((int(p_[0]), [int(x) for x in p_[1].split(",")] if len(p_) > 1 else []))
+    selfile = open(os.path.join(OUT, "sel.txt"), "a")
+
+def sel_inject(f):
+    """Write the next listed selection once the counter is within 24 frames of its shot."""
+    if SEL["inj"] is not None or SEL["i"] >= len(SEL["list"]):
+        return
+    F, idxs = SEL["list"][SEL["i"]]
+    if f < F - 24:
+        return
+    ptrs = [0x59cca8 + i * 0x150 for i in idxs[:12]] + [0] * (12 - len(idxs[:12]))
+    inf.write_memory(0x6284b8, struct.pack("<12I", *ptrs))
+    inf.write_memory(0x59723c, b"\x01")
+    inf.write_memory(0x68c1b0, struct.pack("<I", 1))
+    inf.write_memory(0x68ac74, b"\x01")
+    inf.write_memory(0x68c1f8, b"\x01")
+    inf.write_memory(0x68c1e8, struct.pack("<II", 0, 0))  # 0x68c1ec follows
+    SEL["inj"] = f
+
 REGS = ["eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi", "eip", "eflags"]
 meta = open(os.path.join(OUT, "meta.txt"), "a")
 
@@ -117,6 +149,8 @@ class Draw(gdb.Breakpoint):
             state["saved"] = None
             return False
         f = u32(0x57f23c)  # frame counter
+        if SEL is not None and f <= END:
+            sel_inject(f)
         took = False
         try:
             took = self.capture(f)
@@ -130,6 +164,14 @@ class Draw(gdb.Breakpoint):
         return False
 
     def capture(self, f):
+        if SEL is not None:
+            if SEL["inj"] is None or f < SEL["list"][SEL["i"]][0] or f > END:
+                return False
+            F, idxs = SEL["list"][SEL["i"]]
+            selfile.write("%d %d %s\n" % (SEL["inj"], f, ",".join(map(str, idxs)))); selfile.flush()
+            SEL["i"] += 1
+            SEL["inj"] = None
+            state["next"] = 0
         if f < state["next"] or f > END:
             if f < state["next"] - EVERY:  # new game started: reset
                 state["next"] = EVERY
@@ -145,7 +187,8 @@ class Draw(gdb.Breakpoint):
             events.write("G %d f%06d_full.png %d %d %d %d %d\n" % (f, f, u32(0x597390), u32(0x6cddc4), u32(0x6cddc8), sx, sy))
             events.flush()
             surf["f"], surf["pal"] = f, pal
-        state["next"] = (f // EVERY + 1) * EVERY
+        if SEL is None:
+            state["next"] = (f // EVERY + 1) * EVERY
         return True
 
 class Blitted(gdb.Breakpoint):

@@ -845,6 +845,111 @@ fn main() -> std::io::Result<()> {
                 }
             }
         }
+        Some("reppick") => {
+            // reppick <rep> <out file> <every>: headless. Every <every> frames from frame
+            // 2000 pick a selection (rotating through varied cases: training / researching /
+            // upgrading / unfinished buildings, addons, loaded transports, carriers and
+            // reavers, larvae and eggs, resources, hallucinations, burrowed or cloaked units,
+            // groups of one type, mixed groups, one unit of each type) and write
+            // "frame idx[,idx...]" (unit array indices, as the selection holds them; a bare
+            // "frame" selects nothing). Used by re/native_shots.sh (CAP_SELECT) and
+            // `scbw repshot` (SCBW_REPSHOT_SELECT) for the HUD pixel test.
+            let mut a = view::Assets::load(files)?;
+            let r = replay::Replay::parse(&std::fs::read(&args[1])?)?;
+            let every: u32 = args.get(3).and_then(|v| v.parse().ok()).unwrap_or(500).max(1);
+            view::prepare_replay(&mut a, &r);
+            let mut scene = view::Scene::from_replay(&a, &r)?;
+            let mut ci = 0;
+            let mut out = String::new();
+            let (mut k, mut seed) = (0usize, 12345u32);
+            let mut pending: Option<(u32, Vec<(u32, u16)>)> = None;
+            let mut seen = std::collections::HashSet::new();
+            for frame in 0..r.header.frames {
+                while ci < r.commands.len() && r.commands[ci].frame <= frame {
+                    let c = &r.commands[ci];
+                    scene.replay_command(c.owner, &c.data);
+                    ci += 1;
+                }
+                scene.step();
+                // The shot is at frame F: the selection is picked 24 frames earlier (where the
+                // native run injects it) and kept only for the units still alive and of the
+                // same type at F + 8.
+                if let Some((f, sel)) = pending.take_if(|p| frame >= p.0 + 8) {
+                    let st = &scene.st;
+                    let keep: Vec<String> = sel.iter().filter(|&&(u, t)| st.units[u as usize].sprite != bw::list::NIL && st.unit_alive(u) && st.units[u as usize].unit_type == t).map(|(u, _)| u.to_string()).collect();
+                    if keep.len() == sel.len() || !keep.is_empty() {
+                        out += &format!("{f} {}\n", keep.join(","));
+                    }
+                }
+                if frame + 24 < 2000 || (frame + 24 - 2000) % every != 0 {
+                    continue;
+                }
+                let flags = scene.a.dat().units.flags.clone();
+                let st = &scene.st;
+                let live: Vec<u32> = (0..st.units.len() as u32)
+                    .filter(|&u| {
+                        let un = &st.units[u as usize];
+                        un.sprite != bw::list::NIL && st.unit_alive(u) && un.unit_type < 0xe4 && un.status & 0x40 == 0
+                    })
+                    .collect();
+                // The selection holds a unit with a subunit by the subunit.
+                let sel_of = |u: u32| if flags[st.units[u as usize].unit_type as usize] & 0x10 != 0 { st.units[u as usize].subunit } else { u };
+                let ut = |u: u32| st.units[u as usize].unit_type;
+                let of = |p: &dyn Fn(u32) -> bool| live.iter().copied().filter(|&u| p(u)).collect::<Vec<u32>>();
+                let b = |u: u32| flags[ut(u) as usize] & 1 != 0 && st.units[u as usize].status & 1 != 0;
+                let mut cat: Vec<Vec<Vec<u32>>> = Vec::new(); // case -> candidate selections
+                let singles = |v: Vec<u32>| v.into_iter().map(|u| vec![u]).collect::<Vec<_>>();
+                cat.push(vec![vec![]]);
+                // one unit of each type present, preferring types not shown yet
+                let fresh: Vec<u32> = live.iter().copied().filter(|&u| !seen.contains(&(ut(u), st.units[u as usize].player))).collect();
+                cat.push(singles(if fresh.is_empty() { live.clone() } else { fresh }));
+                cat.push(singles(of(&|u| b(u) && st.units[u as usize].build_queue[st.units[u as usize].build_queue_slot as usize % 5] < 0x6a)));
+                cat.push(singles(of(&|u| b(u) && st.units[u as usize].u8_at(0xc8) != 0x2c)));
+                cat.push(singles(of(&|u| b(u) && st.units[u as usize].u8_at(0xc9) != 0x3d)));
+                cat.push(singles(of(&|u| flags[ut(u) as usize] & 1 != 0 && st.units[u as usize].status & 1 == 0)));
+                cat.push(singles(of(&|u| flags[ut(u) as usize] & 2 != 0)));
+                cat.push(singles(of(&|u| st.units[u as usize].loaded_units[0] != 0)));
+                cat.push(singles(of(&|u| matches!(ut(u), 0x48 | 0x53 | 0x51))));
+                cat.push(singles(of(&|u| matches!(ut(u), 0x23 | 0x24 | 0x32 | 0x61))));
+                cat.push(singles(of(&|u| matches!(ut(u), 0xb0..=0xb2 | 0xbc | 0x6e | 0x95 | 0x9d))));
+                cat.push(singles(of(&|u| st.units[u as usize].status & 0x4000_0000 != 0)));
+                cat.push(singles(of(&|u| st.units[u as usize].status & 0x110 != 0)));
+                // groups of one type of one player (2..12), then mixed groups of one player
+                let mut groups: std::collections::BTreeMap<(u16, u8), Vec<u32>> = Default::default();
+                let mut owners: std::collections::BTreeMap<u8, Vec<u32>> = Default::default();
+                for &u in &live {
+                    let p = st.units[u as usize].player;
+                    if p < 8 && flags[ut(u) as usize] & 1 == 0 {
+                        groups.entry((ut(u), p)).or_default().push(u);
+                        owners.entry(p).or_default().push(u);
+                    }
+                }
+                cat.push(groups.values().filter(|g| g.len() >= 2).map(|g| g[..g.len().min(2 + (seed as usize >> 8) % 11)].to_vec()).collect());
+                cat.push(owners.values().filter(|g| g.len() >= 3).map(|g| g.iter().copied().step_by((g.len() / 12).max(1)).take(3 + (seed as usize >> 12) % 10).collect()).collect());
+                let n = cat.len();
+                for i in 0..n {
+                    let c = &cat[(k + i) % n];
+                    if c.is_empty() {
+                        continue;
+                    }
+                    seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                    let pick = &c[(seed >> 8) as usize % c.len()];
+                    let mut sel: Vec<u32> = Vec::new();
+                    for &u in pick {
+                        if !sel.contains(&sel_of(u)) {
+                            sel.push(sel_of(u));
+                        }
+                    }
+                    for &u in &sel {
+                        seen.insert((ut(u), st.units[u as usize].player));
+                    }
+                    pending = Some((frame + 24, sel.iter().map(|&u| (u, ut(u))).collect::<Vec<(u32, u16)>>()));
+                    break;
+                }
+                k += 1;
+            }
+            std::fs::write(&args[2], out)?;
+        }
         Some("repcam") => {
             // repcam <rep> <out> [frames]: headless. The camera following a player
             // (SCBW_FOLLOW, default the first) as "frame x y" lines: the screen position
@@ -904,6 +1009,26 @@ fn main() -> std::io::Result<()> {
             let mut total = 0.0;
             let events = load_events(&dir.join("native/events.txt"));
             let mut ei = 0;
+            // HUD-only compare (SCBW_REPSHOT_HUD=1) and the selections to set: native/sel.txt
+            // ("inject_frame shot_frame idx,...") else the SCBW_REPSHOT_SELECT file (frame idx,...)
+            // applied 24 frames early, as re/native_shots_gdb.py does.
+            let hud = std::env::var("SCBW_REPSHOT_HUD").is_ok_and(|v| v != "0");
+            let mut sels: Vec<(u32, Vec<u32>)> = Vec::new();
+            let mut nat_sel = false;
+            if let Ok(p) = std::env::var("SCBW_REPSHOT_SELECT") {
+                let nat = dir.join("native/sel.txt");
+                let text = std::fs::read_to_string(&nat).or_else(|_| std::fs::read_to_string(&p))?;
+                let from_native = nat.exists();
+                nat_sel = from_native;
+                for l in text.lines() {
+                    let v: Vec<&str> = l.split_whitespace().collect();
+                    let (at, ids) = if from_native { (v.first(), v.get(2)) } else { (v.first(), v.get(1)) };
+                    let Some(at) = at.and_then(|n| n.parse::<u32>().ok()) else { continue };
+                    let at = if from_native { at } else { at.saturating_sub(24) };
+                    sels.push((at, ids.map(|s| s.split(',').filter_map(|n| n.parse().ok()).collect()).unwrap_or_default()));
+                }
+            }
+            let mut si = 0;
             for frame in 0..last {
                 // 0x4d9670: commands of frame F run while the counter is F, then it advances
                 // and the game steps.
@@ -921,6 +1046,30 @@ fn main() -> std::io::Result<()> {
                     scene.st.screen_tile = ((x >> 5) as u16, (y >> 5) as u16);
                 }
                 let f = scene.st.frame;
+                // SCBW_REPSHOT_SELECT: the selection native/sel.txt (CAP_SELECT) set at that frame.
+                while let Some((_, idx)) = sels.get(si).filter(|e| e.0 <= f) {
+                    // A unit that died since the pick has no sprite: skip it (and drop dead
+                    // units of the old selection, which a real selection would have lost).
+                    let alive = |u: &u32| scene.st.units[*u as usize].sprite != bw::list::NIL;
+                    let new: Vec<u32> = idx.iter().copied().filter(alive).collect();
+                    if new.len() != idx.len() {
+                        report += &format!("select@f{f}: dropped units without a sprite: {:?}\n", idx.iter().filter(|u| !new.contains(u)).collect::<Vec<_>>());
+                    }
+                    let old: Vec<u32> = scene.st.selected.iter().copied().filter(alive).collect();
+                    scene.st.selected = old;
+                    scene.set_selected(new);
+                    // native/sel.txt writes the selection array only (no sprite flag 8), so 0x4ebe10
+                    // never deselects a unit that leaves vision: do the same.
+                    if nat_sel {
+                        for &u in &scene.st.selected {
+                            let sp = scene.st.units[u as usize].sprite as usize;
+                            scene.st.sprites[sp].flags &= !8;
+                        }
+                    }
+                    let desc: Vec<String> = scene.st.selected.iter().map(|&u| format!("{:#x}/p{}", scene.st.units[u as usize].unit_type, scene.st.units[u as usize].player)).collect();
+                    report += &format!("select@f{f} {}\n", desc.join(" "));
+                    si += 1;
+                }
                 if events.is_empty() {
                     scene.run_minimap_timers();
                 }
@@ -939,7 +1088,7 @@ fn main() -> std::io::Result<()> {
                             let shot: Option<u32> = name.get(1..7).and_then(|n| n.parse().ok());
                             // The buffer dump of that frame was taken at the same point: the
                             // timers logged after it run after the map-only compare too.
-                            if let (Some(sf), false) = (shot, map_done) {
+                            if let (Some(sf), false, false) = (shot, map_done, hud) {
                                 if let Some(&(_, sx, sy)) = shots.iter().find(|s| s.0 == sf && sf == f) {
                                     let pct = map_compare(&scene, dir, f, (sx, sy))?;
                                     total += pct;
@@ -948,8 +1097,9 @@ fn main() -> std::io::Result<()> {
                                 }
                             }
                             if let (Some(ui), Some(&(_, sx, sy))) = (ui.as_ref(), shots.iter().find(|s| Some(s.0) == shot)) {
-                                let pct = full_compare(&scene, ui, dir, name, (0, *cursor as usize, mouse.0, mouse.1), (sx, sy))?;
-                                report += &format!("{} {pct:.2}%\n", name.trim_end_matches(".png"));
+                                let pct = full_compare(&scene, ui, dir, name, (0, *cursor as usize, mouse.0, mouse.1), (sx, sy), hud)?;
+                                total += if hud { pct } else { 0.0 };
+                                report += &format!("{} {}{pct:.2}%\n", name.trim_end_matches(".png"), if hud { "HUD " } else { "" });
                             }
                         }
                     }
@@ -979,7 +1129,7 @@ fn main() -> std::io::Result<()> {
                     }
                 }
                 // The map-only shot: here unless the frame's grab came first (below).
-                if !map_done {
+                if !map_done && !hud {
                     if let Some(&(_, sx, sy)) = shots.iter().find(|s| s.0 == f) {
                         let pct = map_compare(&scene, dir, f, (sx, sy))?;
                         total += pct;
@@ -987,7 +1137,7 @@ fn main() -> std::io::Result<()> {
                     }
                 }
             }
-            let n = report.lines().filter(|l| !l.contains("_full")).count().max(1);
+            let n = report.lines().filter(|l| if hud { l.contains("HUD") } else { !l.contains("_full") }).count().max(1);
             report += &format!("mean {:.2}% over {n} shots\n", total / n as f64);
             std::fs::write(dir.join("report.txt"), &report)?;
             println!("mean {:.2}% over {n} shots; ours/, diff/ (native | ours | red = differs), report.txt in {}", total / n as f64, dir.display());
@@ -1867,7 +2017,7 @@ fn load_events(p: &std::path::Path) -> Vec<Event> {
 
 /// Compare native/<name> (a whole-screen grab) with our whole screen now (screen at
 /// `screen`, the cursor drawn): writes diff_full/<name>, returns the share that differs.
-fn full_compare(scene: &view::Scene, ui: &ui::Ui, dir: &std::path::Path, name: &str, cursor: (usize, usize, i32, i32), screen: (i32, i32)) -> std::io::Result<f64> {
+fn full_compare(scene: &view::Scene, ui: &ui::Ui, dir: &std::path::Path, name: &str, cursor: (usize, usize, i32, i32), screen: (i32, i32), hud: bool) -> std::io::Result<f64> {
     let file = std::fs::File::open(dir.join("native").join(name))?;
     let mut dec = png::Decoder::new(std::io::BufReader::new(file));
     // ImageMagick writes paletted / gray PNGs: expand to RGB(A).
@@ -1881,7 +2031,35 @@ fn full_compare(scene: &view::Scene, ui: &ui::Ui, dir: &std::path::Path, name: &
     let mut ours = vec![0u32; fw * fh];
     view::compose_with_cursor(scene, Some(ui), screen.0, screen.1, Some(cursor), None, &mut idx, &mut ours);
     let mut side = vec![0u32; fw * 3 * fh];
-    let mut bad = 0;
+    let (mut bad, mut seen) = (0, 0);
+    // HUD mode (SCBW_REPSHOT_HUD): only the console's opaque pixels, minus the portrait box
+    // (it animates on real time) and the minimap, plus the resource bar at the top right.
+    let mut mask = vec![!hud; fw * fh];
+    if hud {
+        let y0 = fh - ui.console.h;
+        for y in 0..ui.console.h {
+            for x in 0..ui.console.w.min(fw) {
+                mask[(y0 + y) * fw + x] = ui.console.px[y * ui.console.w + x] != 0;
+            }
+        }
+        let (ox, oy, _) = view::minimap_geom(scene);
+        let mut hole = vec![(ox - 3, oy - 3, ox + scene.minimap.w as i32 + 3, oy + scene.minimap.h as i32 + 3)];
+        if let Some((l, t, r, b)) = ui.statport.screen_rect(1) {
+            hole.push((l, t, r + 1, b + 1));
+        }
+        for (l, t, r, b) in hole {
+            for y in t.max(0)..b.min(fh as i32) {
+                for x in l.max(0)..r.min(fw as i32) {
+                    mask[y as usize * fw + x as usize] = false;
+                }
+            }
+        }
+        for y in 0..18 {
+            for x in 340..fw {
+                mask[y * fw + x] = true;
+            }
+        }
+    }
     for y in 0..fh.min(info.height as usize) {
         for x in 0..fw.min(info.width as usize) {
             let o = (y * info.width as usize + x) * ch;
@@ -1889,13 +2067,15 @@ fn full_compare(scene: &view::Scene, ui: &ui::Ui, dir: &std::path::Path, name: &
             let us = ours[y * fw + x] & 0xffffff;
             side[y * fw * 3 + x] = n;
             side[y * fw * 3 + fw + x] = us;
-            side[y * fw * 3 + 2 * fw + x] = if n == us { n >> 2 & 0x3f3f3f } else { 0xff0000 };
-            bad += (n != us) as usize;
+            let m = mask[y * fw + x];
+            side[y * fw * 3 + 2 * fw + x] = if !m { n >> 3 & 0x1f1f1f } else if n == us { n >> 2 & 0x3f3f3f } else { 0xff0000 };
+            bad += (m && n != us) as usize;
+            seen += m as usize;
         }
     }
     std::fs::create_dir_all(dir.join("diff_full"))?;
     write_png_rgb(dir.join("diff_full").join(name).to_str().unwrap(), fw * 3, fh, &side)?;
-    Ok(bad as f64 * 100.0 / (fw * fh) as f64)
+    Ok(bad as f64 * 100.0 / seen.max(1) as f64)
 }
 
 /// Compare native/fNNNNNN.png (1.16.1's game buffer: the map, rows 0..400) with ours at
