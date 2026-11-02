@@ -165,6 +165,11 @@ impl Host {
         let resume = saved.exists();
         let text = std::fs::read_to_string(if resume { saved.as_path() } else { Path::new(world_file) }).map_err(|e| format!("{world_file}: {e}"))?;
         let mut world = World::parse(&text)?;
+        // The board is relative to the world file; kept absolute so the copy saved in `dir` finds it.
+        if let Some(b) = &mut world.board {
+            let from = if resume { saved.as_path() } else { Path::new(world_file) };
+            *b = std::path::absolute(from.parent().unwrap_or(Path::new("")).join(&*b)).map_err(|e| format!("board {b}: {e}"))?.to_string_lossy().into_owned();
+        }
         world.deal()?;
         let players = Players::parse(&std::fs::read_to_string(dir.join("players.txt")).unwrap_or_default());
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
@@ -301,9 +306,10 @@ impl Host {
         self.shared.lock().unwrap().live.insert(b, Live { game, spec, orders: otx, code: None, stats: Stats::default() });
     }
 
-    fn stop(&mut self, b: u16) {
+    /// End border `b`'s match: it tells its humans `why` first and ends a moment later.
+    fn close(&mut self, b: u16, why: &str) {
         if let Some(l) = self.shared.lock().unwrap().live.remove(&b) {
-            let _ = l.orders.send(Order::Stop);
+            let _ = l.orders.send(Order::Close(why.to_string()));
         }
     }
 
@@ -367,7 +373,7 @@ impl Host {
             println!("{news}");
         }
         for c in o.cancel {
-            self.stop(c);
+            self.close(c, "Your base has been overrun: the area was taken from another front.");
         }
         if let Some(f) = winner_all {
             let name = self.shared.lock().unwrap().world.factions[f as usize].name.clone();
@@ -549,7 +555,15 @@ pub fn main(world: &str, dir: &str, port: u16, web_port: u16, https_port: u16) -
     let mut h = Host::new(world, Path::new(dir), port)?;
     let (atx, arx) = mpsc::channel::<super::web::Admin>();
     let token = h.token.clone();
+    let board = h.shared.lock().unwrap().world.board.clone().and_then(|b| match super::web::load_board(&b) {
+        Ok(b) => Some(Arc::new(b)),
+        Err(e) => {
+            println!("campaign: board not used: {e}");
+            None
+        }
+    });
     let web = super::web::Web {
+        board,
         shared: h.shared.clone(),
         admin: atx,
         token: token.clone(),

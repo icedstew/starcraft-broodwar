@@ -665,24 +665,22 @@ fn main() -> std::io::Result<()> {
             }
         }
         Some("campaign") if args.get(1).map(String::as_str) == Some("gen") => {
-            // campaign gen <areas> <factions> <map or map directory>... [--seed N]: print a
-            // world (src/campaign/world.rs `generate`).
+            // campaign gen <config> [--seed N]: print a world (config: src/campaign/world.rs
+            // `GenConfig`; agent/campaign-gen.cfg is an example).
             let mut rest: Vec<String> = args[2..].to_vec();
             let seed = match rest.iter().position(|a| a == "--seed") {
                 Some(i) if i + 1 < rest.len() => {
                     let s = rest.remove(i + 1);
                     rest.remove(i);
-                    s.parse().map_err(|_| std::io::Error::other("bad --seed"))?
+                    Some(s.parse().map_err(|_| std::io::Error::other("bad --seed"))?)
                 }
-                _ => web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map_or(1, |t| t.as_secs() as u32),
+                _ => None,
             };
-            let usage = || std::io::Error::other("campaign gen <areas> <factions> <map or map directory>... [--seed N]");
-            let (n, f) = (rest.first().and_then(|v| v.parse().ok()).ok_or_else(usage)?, rest.get(1).and_then(|v| v.parse().ok()).ok_or_else(usage)?);
-            if rest.len() < 3 {
-                return Err(usage().into());
-            }
-            let w = campaign::world::World::generate(n, f, &rest[2..], seed).map_err(std::io::Error::other)?;
-            print!("{}", w.write());
+            let path = rest.first().ok_or_else(|| std::io::Error::other("campaign gen <config> [--seed N]"))?;
+            let clock = web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map_or(1, |t| t.as_secs() as u32);
+            let mut c = campaign::world::GenConfig::parse(&std::fs::read_to_string(path)?, clock).map_err(std::io::Error::other)?;
+            c.seed = seed.unwrap_or(c.seed);
+            print!("{}", campaign::world::World::generate(&c).map_err(std::io::Error::other)?.write());
         }
         Some("campaign") if args.get(1).map(String::as_str) == Some("check") => {
             // campaign check <world>: parse a campaign world, deal owners if it has none, print

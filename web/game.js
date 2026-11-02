@@ -1,6 +1,6 @@
 // The game in a page (index.html, the campaign map): `loadGame(box)` puts a canvas in `box`,
 // hands it to the game's Web Worker (worker.js) as an OffscreenCanvas and returns the
-// worker's calls (start, net_join, campaign_load, campaign_play, rbtest) as promises. The
+// worker's calls (start, net_prepare, net_join, campaign_load, campaign_play, rbtest) as promises. The
 // page side forwards the keyboard (the canvas's) and the mouse (stage.js `setupStage`) and
 // plays the sound the worker mixes.
 
@@ -86,6 +86,7 @@ export async function loadGame(box) {
     key,
     start: (...a) => call("start", ...a),
     rbtest: (...a) => call("rbtest", ...a),
+    net_prepare: (...a) => call("net_prepare", ...a),
     net_join: (...a) => call("net_join", ...a),
     campaign_load: (...a) => call("campaign_load", ...a),
     campaign_play: (...a) => call("campaign_play", ...a),

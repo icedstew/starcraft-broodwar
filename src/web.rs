@@ -105,18 +105,38 @@ async fn sleep(ms: i32) {
     let _ = wasm_bindgen_futures::JsFuture::from(p).await;
 }
 
+thread_local! {
+    /// The assets `net_prepare` built, for `net_join` to take.
+    static PREPARED: std::cell::RefCell<Option<&'static mut view::Assets>> = const { std::cell::RefCell::new(None) };
+}
+
+/// The slow, join-independent part of `net_join` (parsing the install), run while the page
+/// still waits for a join code.
+#[wasm_bindgen]
+pub fn net_prepare(storm: Vec<u8>, archives: js_sys::Array) -> Result<(), JsError> {
+    console_error_panic_hook::set_once();
+    let t = js_sys::Date::now();
+    let archives = archives.iter().map(|a| js_sys::Uint8Array::new(&a).to_vec()).collect();
+    let files = storage::Storage::from_mem(&storm, archives).map_err(js)?;
+    let a: &'static mut view::Assets = Box::leak(Box::new(view::Assets::load(files).map_err(js)?));
+    web_sys::console::log_1(&format!("T assets {}", js_sys::Date::now() - t).into());
+    PREPARED.with(|p| *p.borrow_mut() = Some(a));
+    Ok(())
+}
+
 /// Join a native `scbw nethost` game (`code` = its `ip:port#certhash` LISTEN line): connect
 /// over WebTransport, wait for the host's Start (slot, delay, game setup), then play it
 /// through the same `NetGame` driver as `scbw netjoin` (src/net/live.rs). Resolves once the
 /// game is running; `frames` > 0 logs `frame K hash H` to the console at that frame (the
-/// headless-net check) and stops the game there.
+/// headless-net check) and stops the game there. Needs `net_prepare` first. Resolves `true`
+/// when it played a running campaign game to its end (then the page goes back where it came
+/// from), `false` once a started game runs on.
 #[wasm_bindgen]
-pub async fn net_join(storm: Vec<u8>, archives: js_sys::Array, code: String, frames: u32, script: String, name: String, army: u8, quit: u32) -> Result<(), JsError> {
+pub async fn net_join(code: String, frames: u32, script: String, name: String, army: u8, quit: u32) -> Result<bool, JsError> {
     use crate::net::{Session, live, transport};
     console_error_panic_hook::set_once();
-    let archives = archives.iter().map(|a| js_sys::Uint8Array::new(&a).to_vec()).collect();
-    let files = storage::Storage::from_mem(&storm, archives).map_err(js)?;
-    let a: &'static mut view::Assets = Box::leak(Box::new(view::Assets::load(files).map_err(js)?));
+    let a = PREPARED.with(|p| p.borrow_mut().take()).ok_or_else(|| JsError::new("net_prepare first"))?;
+    let t = js_sys::Date::now();
     let err = |m: String| JsError::new(&m);
     let mut tr = transport::Transport::join_web(&code, transport::ANY, 0).map_err(err)?;
     // Turns that beat the Start message are not delivered again.
@@ -132,6 +152,7 @@ pub async fn net_join(storm: Vec<u8>, archives: js_sys::Array, code: String, fra
         }
         sleep(5).await;
     };
+    web_sys::console::log_1(&format!("T start-msg {}", js_sys::Date::now() - t).into());
     // A lobby's Start has no setup (the glue made the game): its front end takes over.
     if setup.is_empty() {
         // An enhanced game's army to ask for (255: any).
@@ -144,7 +165,7 @@ pub async fn net_join(storm: Vec<u8>, archives: js_sys::Array, code: String, fra
         if !script.is_empty() || quit > 0 {
             live::NetGame::script_next(&script, (quit > 0).then_some(quit));
         }
-        return glue_lobby(a, tr, slot, code, name).await;
+        return glue_lobby(a, tr, slot, code, name, frames).await;
     }
     let (mut g, table) = live::decode_setup(&setup, slot).ok_or_else(|| err("bad game setup".into()))?;
     let mut net = live::NetGame::new(Session::new(slot, &table, delay), tr, false, early).map_err(err)?;
@@ -160,14 +181,15 @@ pub async fn net_join(storm: Vec<u8>, archives: js_sys::Array, code: String, fra
     view::prepare_setup(a, &mut g);
     let a: &'static view::Assets = a;
     let frame = view::frame_loop_end(a, view::Scene::for_setup(a, &g).map_err(js)?, None, Default::default()).map_err(js)?;
+    web_sys::console::log_1(&format!("T first-frame {}", js_sys::Date::now() - t).into());
     run_raf(Box::new(frame));
-    Ok(())
+    Ok(false)
 }
 
 /// The lobby of a game made in the glue (`net_join` found it): the link becomes the Storm
 /// game (snet.rs) and the front end runs from the lobby (gluChat) as `name`: the map comes
 /// from the creator if needed, the game starts from there.
-async fn glue_lobby(a: &'static mut view::Assets, tr: crate::net::transport::Transport, slot: u8, code: String, name: String) -> Result<(), JsError> {
+async fn glue_lobby(a: &'static mut view::Assets, tr: crate::net::transport::Transport, slot: u8, code: String, name: String, frames: u32) -> Result<bool, JsError> {
     use crate::net::snet;
     let err = |m: String| JsError::new(&m);
     snet::initialize_provider(snet::UDPN);
@@ -176,10 +198,11 @@ async fn glue_lobby(a: &'static mut view::Assets, tr: crate::net::transport::Tra
     let t0 = web_time::Instant::now();
     while !glue.join_by_code(&a.files, name.as_bytes()) {
         // A running enhanced game sends its state instead: the game starts from it.
+        // (No glue: its end would be SC's main menu, not where the player came from.)
         if let Some(late) = snet::late() {
-            glue.late = Some(late);
-            glue.state = crate::glue::state::START;
-            break;
+            // SAFETY: the assets are leaked ('static) and nothing else holds them yet.
+            play_late(unsafe { &*(a as *const view::Assets) }, late, frames).await?;
+            return Ok(true);
         }
         if let Some(why) = snet::refused() {
             return Err(err(why));
@@ -192,7 +215,7 @@ async fn glue_lobby(a: &'static mut view::Assets, tr: crate::net::transport::Tra
     }
     let frame = crate::glue::web_frame(a as *mut view::Assets, glue).map_err(js)?;
     run_raf(Box::new(frame));
-    Ok(())
+    Ok(false)
 }
 
 thread_local! {
@@ -212,6 +235,32 @@ pub fn campaign_load(storm: Vec<u8>, archives: js_sys::Array) -> Result<(), JsEr
     Ok(())
 }
 
+/// Play the running campaign game whose start state (`snet::late`) came over the adopted link,
+/// in the page's #scbw; resolves when it ends (left, won, lost, over).
+async fn play_late(a: &'static view::Assets, late: Vec<u8>, frames: u32) -> Result<(), JsError> {
+    use crate::net::{live, snet};
+    let log = |m: &str| web_sys::console::log_1(&format!("campaign: {m}").into());
+    if frames > 0 {
+        live::NetGame::report_next(frames);
+    }
+    let (scene, net) = live::late_game(a, &late).map_err(js)?;
+    view::set_net_driver(Box::new(net));
+    let frame: Box<dyn FnMut() -> std::io::Result<bool>> = Box::new(view::frame_loop_end(a, scene, None, Default::default()).map_err(js)?);
+    let mut frame = Some(frame);
+    let ended = js_sys::Promise::new(&mut |done, _| {
+        if let Some(f) = frame.take() {
+            run_raf_then(f, Some(done));
+        }
+    });
+    let _ = wasm_bindgen_futures::JsFuture::from(ended).await;
+    log("the game ended");
+    // The window the game parked is not used again (a reused one took no keys): the page
+    // removes its canvas, the next game makes a new one.
+    drop(view::take_window());
+    snet::leave_game();
+    Ok(())
+}
+
 /// Ours: join the campaign match `code` as `name` with the files `campaign_load` took and play
 /// it in the page's #scbw; resolves when the game ends (left with the menu's Leave, won,
 /// lost, drawn, or the match ended): the page shows its map again. No glue screens (no score,
@@ -219,7 +268,7 @@ pub fn campaign_load(storm: Vec<u8>, archives: js_sys::Array) -> Result<(), JsEr
 /// `frame K hash H` there (tests).
 #[wasm_bindgen]
 pub async fn campaign_play(code: String, name: String, frames: u32) -> Result<(), JsError> {
-    use crate::net::{live, snet, transport};
+    use crate::net::{snet, transport};
     let err = |m: String| JsError::new(&m);
     let a = CAMPAIGN_ASSETS.with(|c| *c.borrow()).ok_or_else(|| err("load the game files first".into()))?;
     let mut tr = transport::Transport::join_web(&code, transport::ANY, 0).map_err(err)?;
@@ -254,24 +303,7 @@ pub async fn campaign_play(code: String, name: String, frames: u32) -> Result<()
         sleep(5).await;
     };
     log(&format!("the game's state came ({} bytes)", late.len()));
-    if frames > 0 {
-        live::NetGame::report_next(frames);
-    }
-    let (scene, net) = live::late_game(a, &late).map_err(js)?;
-    view::set_net_driver(Box::new(net));
-    let frame: Box<dyn FnMut() -> std::io::Result<bool>> = Box::new(view::frame_loop_end(a, scene, None, Default::default()).map_err(js)?);
-    let mut frame = Some(frame);
-    let ended = js_sys::Promise::new(&mut |done, _| {
-        if let Some(f) = frame.take() {
-            run_raf_then(f, Some(done));
-        }
-    });
-    let _ = wasm_bindgen_futures::JsFuture::from(ended).await;
-    log("the game ended");
-    // The window the game parked is not used again (a reused one took no keys): the page
-    // removes its canvas, the next game makes a new one.
-    drop(view::take_window());
-    snet::leave_game();
+    play_late(a, late, frames).await?;
     Ok(())
 }
 

@@ -13,7 +13,7 @@ unset DISPLAY WAYLAND_DISPLAY
 T=$(cd "$(dirname "$0")" && pwd); cd "$T/../.." || exit 1
 D=${D:-$HOME/games/Starcraft/campaign-test}; HOST=${HOST:-127.0.0.1}
 export SCBW_INSTALL=${SCBW_INSTALL:-$HOME/Downloads/StarCraft-BroodWar_1.16.1}
-[ -f "$D/world.txt" ] || { echo "no $D/world.txt (scbw campaign gen ... > $D/world.txt)"; exit 1; }
+[ -f "$D/world.txt" ] || { echo "no $D/world.txt (scbw campaign gen agent/campaign-gen.cfg > $D/world.txt)"; exit 1; }
 [ -z "$SCBW_CAMPAIGN_DRIVE" ] && [ -f "$D/drive.txt" ] && export SCBW_CAMPAIGN_DRIVE=$(cat "$D/drive.txt")
 
 # Stop the old host: the recorded pid, and any other host on this world file (not other scbw processes).

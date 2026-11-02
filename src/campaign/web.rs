@@ -17,7 +17,7 @@ use super::runner::Order;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 use wtransport::tls::rustls;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -36,6 +36,30 @@ pub struct Web {
     /// The browser build's directory, and the URL its join links start with.
     pub play_dir: PathBuf,
     pub play_url: String,
+    /// The board (agent/plans/campaign-board.md): its JSON and its PNG.
+    pub board: Option<Arc<(Vec<u8>, Vec<u8>)>>,
+}
+
+/// A board JSON and the PNG its `"image"` names (relative to the JSON). The page checks
+/// the rest (area and border counts against the world).
+pub fn load_board(path: &str) -> Result<(Vec<u8>, Vec<u8>), String> {
+    let json = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
+    let text = String::from_utf8_lossy(&json);
+    // `"image": "<name>"`: the one string the host needs, so no JSON parser.
+    let image = text
+        .split_once("\"image\"")
+        .and_then(|(_, r)| r.trim_start().strip_prefix(':'))
+        .and_then(|r| r.trim_start().strip_prefix('"'))
+        .and_then(|r| r.split_once('"'))
+        .map(|(v, _)| v)
+        .filter(|v| !v.is_empty() && !v.contains('\\'))
+        .ok_or_else(|| format!("{path}: no \"image\""))?;
+    let ip = Path::new(path).parent().unwrap_or(Path::new("")).join(image);
+    let png = std::fs::read(&ip).map_err(|e| format!("{}: {e}", ip.display()))?;
+    if !png.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return Err(format!("{}: not a PNG", ip.display()));
+    }
+    Ok((json, png))
 }
 
 /// Serve on `port` (bound to SCBW_NET_BIND as the hub, default 127.0.0.1), over TLS with
@@ -160,6 +184,11 @@ impl Web {
         let (status, ty, out): (&str, &str, Vec<u8>) = match path {
             "/" => ("200 OK", "text/html; charset=utf-8", include_str!("campaign.html").replace("PLAY_URL", &js(&self.play_url)).into_bytes()),
             "/state" => ("200 OK", "application/json", self.state(&q("name")).into_bytes()),
+            "/board" | "/board/image" => match &self.board {
+                Some(b) if path == "/board" => ("200 OK", "application/json", b.0.clone()),
+                Some(b) => ("200 OK", "image/png", b.1.clone()),
+                None => ("404 Not Found", "text/plain", b"no board".to_vec()),
+            },
             "/matches" => ("200 OK", "text/plain; charset=utf-8", self.matches(&q("name")).into_bytes()),
             "/minimap" => match self.minimap(q("border").parse().unwrap_or(u16::MAX), &q("name")) {
                 Some(p) => ("200 OK", "image/png", p),
@@ -323,12 +352,12 @@ impl Web {
                         .iter()
                         .zip(&st.sides)
                         .map(|(sd, x)| {
-                            let mut o = format!("{{\"faction\":{}", sd.faction);
+                            // Who plays is public; what the side has is the side's own.
+                            let hum: Vec<String> = x.humans.iter().map(|h| js(h)).collect();
+                            let mut o = format!("{{\"faction\":{},\"humans\":[{}]", sd.faction, hum.join(","));
                             if v == Some(sd.faction) {
-                                let hum: Vec<String> = x.humans.iter().map(|h| js(h)).collect();
                                 o += &format!(
-                                    ",\"humans\":[{}],\"supply\":[{},{}],\"workers\":{},\"minerals\":{},\"gas\":{},\"mined\":[{},{}]",
-                                    hum.join(","),
+                                    ",\"supply\":[{},{}],\"workers\":{},\"minerals\":{},\"gas\":{},\"mined\":[{},{}]",
                                     x.supply.0,
                                     x.supply.1,
                                     x.workers,
@@ -353,7 +382,7 @@ impl Web {
             .collect();
         let chat: Vec<String> = sh.chat.iter().filter(|c| Some(c.0) == v).map(|c| format!("[{},{}]", js(&c.1), js(&c.2))).collect();
         format!(
-            "{{\"factions\":[{}],\"areas\":[{}],\"borders\":[{}],\"me\":{},\"faction\":{},\"paused\":{},\"winner\":{},\"pick\":{},\"chat\":[{}]}}",
+            "{{\"factions\":[{}],\"areas\":[{}],\"borders\":[{}],\"me\":{},\"faction\":{},\"paused\":{},\"winner\":{},\"pick\":{},\"board\":{},\"chat\":[{}]}}",
             factions.join(","),
             areas.join(","),
             borders.join(","),
@@ -362,6 +391,7 @@ impl Web {
             sh.paused,
             sh.winner.map_or(-1, |f| f as i32),
             w.eliminated_pick,
+            self.board.is_some(),
             chat.join(",")
         )
     }

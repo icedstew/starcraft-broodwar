@@ -52,8 +52,14 @@ const DGRAM: u8 = 1;
 const MAX_RUN: usize = 64;
 /// Control bytes per datagram, and datagrams of control messages per flush (the later ones
 /// carry only control: a joiner's start state streams instead of 600 bytes a frame).
+/// A round (host tick, joiner poll, ack) moves one window: 64 x 600 B = 38 KB, so a 170 KB
+/// start state takes ~5 rounds, not 17 (16 took 2.6 s on loopback).
 const CTL_BYTES: usize = 600;
-const CTL_WINDOW: usize = 16;
+const CTL_WINDOW: usize = 64;
+/// An unacked control message goes out again after this long. Resending the whole window on
+/// every flush queued ~9 copies of each part ahead of the fresh ones: a 160 KB start state
+/// took 2 s on loopback.
+const CTL_RESEND: std::time::Duration = std::time::Duration::from_millis(120);
 
 pub enum Event {
     /// The host sent Start: play as `slot` (the host's own Start carries its slot and setup).
@@ -101,7 +107,11 @@ pub struct Transport {
     /// acked, and the next one expected from the peer.
     ctl_next: HashMap<u8, u32>,
     ctl_unacked: HashMap<u8, Vec<(u32, Vec<u8>)>>,
+    /// When each unacked control message (peer, seq) was last sent: it is resent only after `CTL_RESEND`.
+    ctl_sent: HashMap<(u8, u32), web_time::Instant>,
     ctl_in: HashMap<u8, u32>,
+    /// Control messages that arrived ahead of `ctl_in` (reordered or after a lost one): kept until the gap fills.
+    ctl_ahead: HashMap<(u8, u32), Vec<u8>>,
     rx: mpsc::Receiver<Inbound>,
     /// Hands a datagram to the link (native: the runtime thread; browser: the WebTransport writer).
     tx: Box<dyn FnMut(u8, Vec<u8>)>,
@@ -205,7 +215,7 @@ impl Transport {
     pub(super) fn new(me: u8, host: bool, peers: Vec<u8>, first: u32, rx: mpsc::Receiver<Inbound>, tx: Box<dyn FnMut(u8, Vec<u8>)>, max_dgram: Arc<AtomicUsize>) -> Transport {
         let mut got = HashMap::new();
         got.insert(me, Vec::new());
-        Transport { me, host, setup: Vec::new(), peers, first, got, next: HashMap::new(), acked: HashMap::new(), dirty: HashMap::new(), sent_acks: HashMap::new(), ctl_next: HashMap::new(), ctl_unacked: HashMap::new(), ctl_in: HashMap::new(), rx, tx, max_dgram, stats: (0, 0, 0) }
+        Transport { me, host, setup: Vec::new(), peers, first, got, next: HashMap::new(), acked: HashMap::new(), dirty: HashMap::new(), sent_acks: HashMap::new(), ctl_next: HashMap::new(), ctl_unacked: HashMap::new(), ctl_sent: HashMap::new(), ctl_in: HashMap::new(), ctl_ahead: HashMap::new(), rx, tx, max_dgram, stats: (0, 0, 0) }
     }
 }
 
@@ -376,8 +386,10 @@ impl Transport {
                     // A link id comes back after its player left: the new link's control
                     // sequence and acks start over.
                     self.ctl_in.remove(&player);
+                    self.ctl_ahead.retain(|k, _| k.0 != player);
                     self.ctl_next.remove(&player);
                     self.ctl_unacked.remove(&player);
+                    self.ctl_sent.retain(|k, _| k.0 != player);
                     self.sent_acks.remove(&player);
                     self.dirty.remove(&player);
                     self.acked.retain(|(c, _), _| *c != player);
@@ -428,6 +440,7 @@ impl Transport {
             let ack = r.u32()?;
             if let Some(u) = self.ctl_unacked.get_mut(&from) {
                 u.retain(|(s, _)| *s >= ack);
+                self.ctl_sent.retain(|k, _| k.0 != from || k.1 >= ack);
             }
             for _ in 0..r.u8()? {
                 let (seq, len) = (r.u32()?, r.u16()? as usize);
@@ -436,6 +449,12 @@ impl Transport {
                 if seq == *want {
                     *want += 1;
                     ev.push(Event::Ctl { from, msg: m.to_vec() });
+                    while let Some(m) = self.ctl_ahead.remove(&(from, *want)) {
+                        *want += 1;
+                        ev.push(Event::Ctl { from, msg: m });
+                    }
+                } else if seq > *want && seq - *want <= 4 * CTL_WINDOW as u32 {
+                    self.ctl_ahead.insert((from, seq), m.to_vec());
                 }
             }
             Some(())
@@ -457,6 +476,9 @@ impl Transport {
             // Control section first (small), so it is never starved by the turn runs.
             let mut groups: Vec<(u8, Vec<u8>)> = vec![(0, Vec::new())];
             for (seq, m) in self.ctl_unacked.get(&peer).into_iter().flatten() {
+                if self.ctl_sent.get(&(peer, *seq)).is_some_and(|t| t.elapsed() < CTL_RESEND) {
+                    continue;
+                }
                 let g = groups.last_mut().unwrap();
                 if g.1.len() + 6 + m.len() > CTL_BYTES || g.0 == 255 {
                     if groups.len() == CTL_WINDOW {
@@ -469,6 +491,7 @@ impl Transport {
                 g.1.extend_from_slice(&(m.len() as u16).to_le_bytes());
                 g.1.extend_from_slice(m);
                 g.0 += 1;
+                self.ctl_sent.insert((peer, *seq), web_time::Instant::now());
             }
             let (nctl, ctl) = groups.remove(0);
             let cap = cap_full.saturating_sub(ctl.len() + 5);

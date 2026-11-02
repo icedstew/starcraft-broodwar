@@ -103,13 +103,27 @@ const box = document.getElementById("scbw");
 const stage = document.getElementById("stage");
 setupStage(box, stage, document.getElementById("fs"));
 
+// The game's worker, made once. A join also parses the install ahead of the join code
+// (`prepare`, the slow part of a join): started at page load when the files are kept.
+let gameP = null;
+const getGame = () => gameP ??= loadGame(box).then(g => (setGame(g), g));
+let installFn = null, prepP = null;
+const prepare = () => prepP ??= (async () => {
+  const [storm, archives] = await installFn();
+  await (await getGame()).net_prepare(storm, archives);
+})();
+
 async function run(load) {
   try {
     status.textContent = "loading...";
-    const [storm, archives, name, map] = await load();
+    const t0 = performance.now();
+    // A join parses the install in the worker first (`prepare`: done already if the page did it at load).
+    if (joinCode) await prepare();
+    const [storm, archives, name, map] = joinCode ? [] : await load();
+    console.log("T files " + Math.round(performance.now() - t0));
     // The game runs in a Web Worker (game.js): these calls go there; the files move to it.
-    const game = await loadGame(box);
-    setGame(game);
+    const game = await getGame();
+    console.log("T worker+wasm+assets " + Math.round(performance.now() - t0));
     // ?rbtest=<delay>[,<frames>]: time the rollback oracle on the replay instead of playing it.
     const rb = new URLSearchParams(location.search).get("rbtest");
     if (rb) {
@@ -124,7 +138,13 @@ async function run(load) {
       // ?frames=K: log "frame K hash H" to the console at frame K (headless-net check).
       // ?name=: the player's name in a lobby (a game made in the glue's create screen);
       // ?army=<slot>: in an enhanced game already running, the army to join.
-      await game.net_join(storm, archives, joinCode, Number(new URLSearchParams(location.search).get("frames")) || 0, new URLSearchParams(location.search).get("script") || "", new URLSearchParams(location.search).get("name") || "Web", Number(new URLSearchParams(location.search).get("army") ?? 255), Number(new URLSearchParams(location.search).get("quit")) || 0);
+      const over = await game.net_join(joinCode, Number(new URLSearchParams(location.search).get("frames")) || 0, new URLSearchParams(location.search).get("script") || "", new URLSearchParams(location.search).get("name") || "Web", Number(new URLSearchParams(location.search).get("army") ?? 255), Number(new URLSearchParams(location.search).get("quit")) || 0);
+      // A running campaign game that ended (Leave, won, lost): back to the page that sent us
+      // (the campaign map), not a menu. Not in a test run (?frames=).
+      if (over && !Number(new URLSearchParams(location.search).get("frames"))) {
+        location.href = document.referrer || location.pathname;   // not a reload: ?join= would join again
+        return;
+      }
     } else await game.start(storm, archives, name, map);
     document.getElementById("setup").remove();
     box.querySelector("canvas").focus({ preventScroll: true });
@@ -156,7 +176,7 @@ addEventListener("hashchange", () => location.reload());
 
 // The game files loaded before (files.js keeps them in IndexedDB, shared with the campaign
 // page): no folder to pick again.
-const kept = await cached();
+let kept = await cached();
 if (kept) {
   document.getElementById("installrow").hidden = true;
   document.getElementById("kept").hidden = false;
@@ -165,7 +185,13 @@ document.getElementById("forget").onclick = async () => { await forget(); locati
 
 // [storm, archives]: the kept files, else the Drive folder or the picked folder (then kept).
 async function install() {
-  if (kept) return [kept.storm, kept.archives];
+  if (kept) {   // the buffers move to the worker: read again for another use
+    const k = kept;
+    kept = null;
+    return [k.storm, k.archives];
+  }
+  const again = await cached();
+  if (again) return [again.storm, again.archives];
   const files = drive
     ? { storm: await driveGet("storm.dll"), archives: await Promise.all(ARCHIVES.map(driveGet)) }
     : await fromFolder(document.getElementById("install").files);
@@ -190,8 +216,10 @@ if (drive?.[3]) {
 let joinCode = null;
 async function joinGame(code, loadInstall) {
   joinCode = code.trim();
-  await run(async () => [...(await loadInstall()), "", new Uint8Array()]);
+  installFn = loadInstall;
+  await run();   // a join loads the install through installFn (prepare)
 }
+if (kept) { installFn = install; prepare().catch(() => { prepP = null; }); }   // before the code is typed
 document.getElementById("joinbtn").onclick = () => joinGame(document.getElementById("join").value, install);
 
 // ?join=<code> (with the install in auto/, see below): join at once.

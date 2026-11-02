@@ -892,7 +892,11 @@ impl State {
             0x4231d0 => Send(vec![0x2e]),
             0x4231f0 => Send(vec![0x5a]),
             0x423210 => Send(vec![0x2a]),
-            0x423230 => Send(vec![0x2f]),
+            0x423230 => {
+                // 0x423230: the active unit's own position (sprite +0x14, +0x16).
+                let (x, y) = self.unit_sprite_pos(a);
+                Send([&[0x2f][..], &x.to_le_bytes(), &y.to_le_bytes()].concat())
+            }
             0x423270 => Send(vec![0x22, q]),
             0x423290 => Send(vec![0x2d, q]),
             0x4232b0 => Send(vec![0x2c, q]),

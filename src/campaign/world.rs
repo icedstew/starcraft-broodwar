@@ -9,18 +9,23 @@
 //! border <area> <area> [map]          no map: a pool map per match
 //! pool <map file or directory>
 //! eliminated pick | out               what an eliminated faction's players may do
+//! board <file.board.json>             optional image board (agent/plans/campaign-board.md),
+//!                                     relative to the world file
 //! ```
 //! Either every area has an owner or none has; with none, `deal` gives each faction a
 //! connected block.
 
 use std::collections::VecDeque;
 
+#[derive(Clone)]
 pub struct Faction {
     pub name: String,
     /// 1.16.1 race: 0 Zerg, 1 Terran, 2 Protoss, 6 random.
     pub race: u8,
     /// Player colour used for this faction in every match.
     pub colour: u8,
+    /// Areas claimed per round when `deal` hands out owners (1: an even share; more: a bigger start).
+    pub weight: u32,
 }
 
 pub struct Area {
@@ -44,6 +49,8 @@ pub struct World {
     pub pool: Vec<String>,
     /// Players of an eliminated faction may pick a surviving one (else they are out).
     pub eliminated_pick: bool,
+    /// Board JSON (image, polygons), relative to the world file.
+    pub board: Option<String>,
 }
 
 /// What a match result changed: the area that changed hands, the live matches that end
@@ -74,7 +81,7 @@ impl World {
                     let race = RACES.iter().find(|(c, _)| r.len() == 1 && r.starts_with(*c)).ok_or_else(|| err("race is Z, T, P or R"))?.1;
                     let mut f = line.split_whitespace().skip(2);
                     let colour = f.next().and_then(|v| v.parse().ok()).ok_or_else(|| err("bad colour"))?;
-                    w.factions.push(Faction { name: rest(f), race, colour });
+                    w.factions.push(Faction { name: rest(f), race, colour, weight: 1 });
                 }
                 "area" => {
                     let (x, y) = (num("x")? as i32, num("y")? as i32);
@@ -92,6 +99,7 @@ impl World {
                     w.borders.push(Border { a, b, map: (!map.is_empty()).then_some(map) });
                 }
                 "pool" => w.pool.push(line["pool".len()..].trim().to_string()),
+                "board" => w.board = Some(line["board".len()..].trim().to_string()).filter(|b| !b.is_empty()),
                 "eliminated" => match f.next() {
                     Some("pick") => w.eliminated_pick = true,
                     Some("out") => w.eliminated_pick = false,
@@ -151,6 +159,9 @@ impl World {
             s += &format!("pool {p}\n");
         }
         s += if self.eliminated_pick { "eliminated pick\n" } else { "eliminated out\n" };
+        if let Some(b) = &self.board {
+            s += &format!("board {b}\n");
+        }
         s
     }
 
@@ -214,14 +225,17 @@ impl World {
         loop {
             let mut moved = false;
             for f in 0..nf as u8 {
-                let take = (0..self.areas.len() as u16)
-                    .filter(|&a| self.areas[a as usize].owner == Some(f))
-                    .flat_map(|a| self.neighbours(a))
-                    .filter(|&n| self.areas[n as usize].owner.is_none())
-                    .min_by_key(|&n| (lean(f as usize, n as usize), n));
-                if let Some(n) = take {
-                    self.areas[n as usize].owner = Some(f);
-                    moved = true;
+                // A faction with more weight claims more per round (a bigger start).
+                for _ in 0..self.factions[f as usize].weight {
+                    let take = (0..self.areas.len() as u16)
+                        .filter(|&a| self.areas[a as usize].owner == Some(f))
+                        .flat_map(|a| self.neighbours(a))
+                        .filter(|&n| self.areas[n as usize].owner.is_none())
+                        .min_by_key(|&n| (lean(f as usize, n as usize), n));
+                    if let Some(n) = take {
+                        self.areas[n as usize].owner = Some(f);
+                        moved = true;
+                    }
                 }
             }
             if !moved {
@@ -317,27 +331,22 @@ const NAMES: [&str; 40] = [
 ];
 
 impl World {
-    /// A world of `areas` areas for `factions` factions (races Z, T, P in turn, colours
-    /// 0, 1, 2...; 3 factions are named after their race), maps from `pool`. Areas sit on a
-    /// jittered grid; borders join areas whose diameter circle holds no other area (the
-    /// Gabriel graph: planar, connected). Owners are dealt in connected blocks (`deal`).
-    pub fn generate(areas: usize, factions: usize, pool: &[String], seed: u32) -> Result<World, String> {
+    /// A world from a generator config (`GenConfig`). Areas sit on a jittered grid; borders
+    /// join areas whose diameter circle holds no other area (the Gabriel graph: planar,
+    /// connected). Owners are dealt in connected blocks (`deal`).
+    pub fn generate(c: &GenConfig) -> Result<World, String> {
+        let (areas, factions) = (c.areas, c.factions.len());
         if !(2..=8).contains(&factions) || areas < factions || areas > 400 {
             return Err("2 to 8 factions, at least as many areas, at most 400".into());
         }
-        let mut r = seed | 1;
+        let mut r = c.seed | 1;
         let mut rand = move |n: u32| {
             r ^= r << 13;
             r ^= r >> 17;
             r ^= r << 5;
             r % n
         };
-        let mut w = World { pool: pool.to_vec(), eliminated_pick: true, ..World::default() };
-        const RACE_NAMES: [&str; 3] = ["Zerg", "Terran", "Protoss"];
-        for f in 0..factions {
-            let name = if factions == 3 { RACE_NAMES[f].to_string() } else { format!("Faction {}", f + 1) };
-            w.factions.push(Faction { name, race: f as u8 % 3, colour: f as u8 });
-        }
+        let mut w = World { pool: c.pool.clone(), eliminated_pick: c.eliminated_pick, factions: c.factions.clone(), ..World::default() };
         // A grid a bit wider than tall; each cell gets one area somewhere in its middle.
         let cols = ((areas as f64 * 1.5).sqrt().ceil() as usize).max(1);
         let rows = areas.div_ceil(cols);
@@ -364,6 +373,66 @@ impl World {
         w.check()?;
         w.deal()?;
         Ok(w)
+    }
+}
+
+/// Generator settings (`scbw campaign gen <config>`), `key value` lines, `#` comments:
+/// ```text
+/// areas 30
+/// seed 7                      optional (default: the clock)
+/// factions 3                  auto: races Z, T, P in turn, weight 1 (or list them below)
+/// faction Z 0 3 Zerg          race colour weight name (weight: areas claimed per round)
+/// pool <map file or directory>
+/// eliminated pick | out
+/// ```
+#[derive(Clone)]
+pub struct GenConfig {
+    pub areas: usize,
+    pub seed: u32,
+    pub factions: Vec<Faction>,
+    pub pool: Vec<String>,
+    pub eliminated_pick: bool,
+}
+
+impl GenConfig {
+    pub fn parse(text: &str, clock: u32) -> Result<GenConfig, String> {
+        let mut c = GenConfig { areas: 30, seed: clock, factions: vec![], pool: vec![], eliminated_pick: true };
+        let mut auto = 3usize;
+        for (i, line) in text.lines().enumerate() {
+            let err = |m: &str| format!("line {}: {m}", i + 1);
+            let line = line.split('#').next().unwrap_or("").trim();
+            let w: Vec<&str> = line.split_whitespace().collect();
+            let Some(&key) = w.first() else { continue };
+            let num = |k: usize, what: &str| -> Result<u32, String> { w.get(k).and_then(|v| v.parse().ok()).ok_or_else(|| err(&format!("bad {what}"))) };
+            match key {
+                "areas" => c.areas = num(1, "areas")? as usize,
+                "seed" => c.seed = num(1, "seed")?,
+                "factions" => auto = num(1, "factions")? as usize,
+                "faction" => {
+                    let r = w.get(1).copied().unwrap_or("");
+                    let race = RACES.iter().find(|(ch, _)| r.len() == 1 && r.starts_with(*ch)).ok_or_else(|| err("race is Z, T, P or R"))?.1;
+                    c.factions.push(Faction { name: w[4.min(w.len())..].join(" "), race, colour: num(2, "colour")? as u8, weight: num(3, "weight")?.max(1) });
+                }
+                "pool" => c.pool.push(line["pool".len()..].trim().to_string()),
+                "eliminated" => c.eliminated_pick = match w.get(1).copied() {
+                    Some("pick") => true,
+                    Some("out") => false,
+                    _ => return Err(err("eliminated pick | out")),
+                },
+                _ => return Err(err(&format!("unknown `{key}`"))),
+            }
+        }
+        if c.factions.is_empty() {
+            const NAMES: [&str; 3] = ["Zerg", "Terran", "Protoss"];
+            for f in 0..auto {
+                let name = if auto == 3 { NAMES[f].to_string() } else { format!("Faction {}", f + 1) };
+                c.factions.push(Faction { name, race: f as u8 % 3, colour: f as u8, weight: 1 });
+            }
+        }
+        if c.pool.is_empty() {
+            return Err("no `pool` line".into());
+        }
+        Ok(c)
     }
 }
 
@@ -395,6 +464,9 @@ mod tests {
         assert_eq!((w.factions.len(), w.areas.len(), w.borders.len()), (3, 5, 5));
         assert_eq!(w.borders[4].map.as_deref(), Some("maps/x.scx"));
         assert_eq!(World::parse(&w.write()).unwrap().write(), w.write());
+        let b = World::parse(&format!("{LINE}board my world.board.json\n")).unwrap();
+        assert_eq!(b.board.as_deref(), Some("my world.board.json"));
+        assert_eq!(World::parse(&b.write()).unwrap().board, b.board);
         assert!(World::parse("faction T 0 a\nfaction Q 1 b\n").is_err());
         assert!(World::parse("faction T 0 a\nfaction Z 1 b\narea 0 0 - A\narea 0 0 - B\nborder 0 1\n").is_err());
     }
@@ -431,11 +503,16 @@ mod tests {
     #[test]
     fn generated_worlds() {
         for (n, f, seed) in [(30, 3, 1), (12, 2, 7), (60, 8, 3), (5, 5, 9)] {
-            let w = World::generate(n, f, &["maps".into()], seed).unwrap();
+            let z = if f == 3 { "faction Z 0 3 Zerg\nfaction T 1 1 Terran\nfaction P 2 1 Protoss\n" } else { "" };
+            let c = GenConfig::parse(&format!("areas {n}\nseed {seed}\nfactions {f}\n{z}pool maps\n"), 1).unwrap();
+            let w = World::generate(&c).unwrap();
             assert_eq!((w.areas.len(), w.factions.len()), (n, f));
             assert!(w.distances(&[0]).iter().all(|&d| d != u32::MAX), "connected");
             assert!((0..f as u8).all(|i| w.areas_of(i) >= 1));
             assert!(!w.live_borders().is_empty());
+            if f == 3 && n >= 12 {
+                assert!(w.areas_of(0) > w.areas_of(1));
+            }
             assert_eq!(World::parse(&w.write()).unwrap().write(), w.write());
         }
     }

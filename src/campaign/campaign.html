@@ -102,35 +102,66 @@ async function poll() {
   } catch (e) { $("status").textContent = "host unreachable"; }
 }
 
+// The board (agent/plans/campaign-board.md): image, area polygons, connection paths and
+// square spots, in image pixels; null without one (circles on a plain map), false while loading.
+let board = null;
+async function loadBoard() {
+  board = false;
+  try {
+    const b = await (await fetch("/board")).json();
+    if ((b.areas || []).length === st.areas.length && (b.borders || []).length === st.borders.length) board = b;
+    else console.warn("board not used: its area / border counts differ from the world");
+  } catch (e) { console.warn("board not used:", e); }
+  draw();
+}
+
 function draw() {
+  if (st.board && board === null) loadBoard();
+  const B = board || null;
   const xs = st.areas.map(a => a.x), ys = st.areas.map(a => a.y);
   const [x0, x1, y0, y1] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
-  const P = (a) => [60 + (x1 > x0 ? (a.x - x0) / (x1 - x0) : .5) * 680, 50 + (y1 > y0 ? (a.y - y0) / (y1 - y0) : .5) * 420];
-  let svg = "";
-  for (const b of st.borders) {
-    const [p, q] = [P(st.areas[b.a]), P(st.areas[b.b])];
-    svg += `<line x1="${p[0]}" y1="${p[1]}" x2="${q[0]}" y2="${q[1]}" stroke="${b.live ? "#5a7a8a" : "#26323c"}" stroke-width="${b.live ? 3 : 2}"/>`;
-  }
+  // k: board units per screen pixel, so squares, circles and text keep their on-screen size.
+  const k = B ? B.size[0] / ($("map").clientWidth || 800) : 1;
+  const P = B ? (a) => [a.x, a.y] : (a) => [60 + (x1 > x0 ? (a.x - x0) / (x1 - x0) : .5) * 680, 50 + (y1 > y0 ? (a.y - y0) / (y1 - y0) : .5) * 420];
+  const path = i => [P(st.areas[st.borders[i].a]), ...(B && B.borders[i].path || []), P(st.areas[st.borders[i].b])];
+  const square = i => {
+    if (B && B.borders[i].square) return B.borders[i].square;
+    const p = path(i), h = p.length / 2;
+    return p.length % 2 ? p[(p.length - 1) / 2] : [(p[h - 1][0] + p[h][0]) / 2, (p[h - 1][1] + p[h][1]) / 2];
+  };
+  const poly = i => B && B.areas[i].poly && B.areas[i].poly.length >= 3 ? B.areas[i].poly : null;
+  $("map").setAttribute("viewBox", B ? `0 0 ${B.size[0]} ${B.size[1]}` : "0 0 800 520");
+  let svg = B ? `<image href="/board/image" width="${B.size[0]}" height="${B.size[1]}"/>` : "";
+  st.areas.forEach((a, i) => {
+    const p = poly(i);
+    if (p) svg += `<polygon points="${p.join(" ")}" fill="${colour(a.owner)}" fill-opacity="${B.fill_alpha}" stroke="#000" stroke-opacity="${B.outline_alpha}" stroke-width="${1.5 * k}"/>`;
+  });
+  st.borders.forEach((b, i) => {
+    if (B && B.borders[i].line === false) return;
+    svg += `<polyline points="${path(i).join(" ")}" fill="none" stroke="${b.live ? "#5a7a8a" : "#26323c"}" stroke-width="${(b.live ? 3 : 2) * k}"/>`;
+  });
   // Labels go below an area, else above, right or left: the first spot no border square
-  // or other area covers (text ~7 px a character, 14 high).
-  const squares = st.borders.filter(b => b.live).map(b => { const [p, q] = [P(st.areas[b.a]), P(st.areas[b.b])]; return [(p[0] + q[0]) / 2, (p[1] + q[1]) / 2]; });
+  // or other area covers (text ~7 px a character, 14 high). An area drawn as a polygon has
+  // its label on its point.
+  const squares = st.borders.map((b, i) => b.live && square(i)).filter(Boolean);
   const centers = st.areas.map(P);
-  for (const a of st.areas) {
-    const [x, y] = P(a), w = a.name.length * 7;
-    const spots = [[x, y + 38, "middle"], [x, y - 30, "middle"], [x + 28, y + 5, "start"], [x - 28, y + 5, "end"]];
-    const box = ([tx, ty, an]) => { const l = an === "middle" ? tx - w / 2 : an === "start" ? tx : tx - w; return [l, ty - 12, l + w, ty + 3]; };
-    const hits = ([l, t, r, b]) => squares.some(([sx, sy]) => sx + 11 > l && sx - 11 < r && sy + 11 > t && sy - 11 < b)
-      || centers.some(([cx, cy]) => (cx !== x || cy !== y) && cx + 24 > l && cx - 24 < r && cy + 24 > t && cy - 24 < b);
+  st.areas.forEach((a, i) => {
+    const [x, y] = P(a), w = a.name.length * 7 * k;
+    const label = (tx, ty, an) => `<text class="area-label" x="${tx}" y="${ty}" text-anchor="${an}" style="font-size:${13 * k}px${B ? `;stroke:#000;stroke-width:${3 * k}px;paint-order:stroke` : ""}">${esc(a.name)}</text>`;
+    if (poly(i)) { svg += label(x, y + 5 * k, "middle"); return; }
+    const spots = [[x, y + 38 * k, "middle"], [x, y - 30 * k, "middle"], [x + 28 * k, y + 5 * k, "start"], [x - 28 * k, y + 5 * k, "end"]];
+    const box = ([tx, ty, an]) => { const l = an === "middle" ? tx - w / 2 : an === "start" ? tx : tx - w; return [l, ty - 12 * k, l + w, ty + 3 * k]; };
+    const hits = ([l, t, r, b]) => squares.some(([sx, sy]) => sx + 11 * k > l && sx - 11 * k < r && sy + 11 * k > t && sy - 11 * k < b)
+      || centers.some(([cx, cy]) => (cx !== x || cy !== y) && cx + 24 * k > l && cx - 24 * k < r && cy + 24 * k > t && cy - 24 * k < b);
     const [tx, ty, an] = spots.find(s => !hits(box(s))) || spots[0];
-    svg += `<circle cx="${x}" cy="${y}" r="22" fill="${colour(a.owner)}" stroke="#000" stroke-width="2"/><text class="area-label" x="${tx}" y="${ty}" text-anchor="${an}">${esc(a.name)}</text>`;
-  }
+    svg += `<circle cx="${x}" cy="${y}" r="${22 * k}" fill="${colour(a.owner)}" stroke="#000" stroke-width="${2 * k}"/>` + label(tx, ty, an);
+  });
   st.borders.forEach((b, i) => {
     if (!b.live) return;
-    const [p, q] = [P(st.areas[b.a]), P(st.areas[b.b])];
-    const [x, y] = [(p[0] + q[0]) / 2, (p[1] + q[1]) / 2];
+    const [x, y] = square(i);
     const mine = b.sides.some(s => s.faction === st.faction);
     const idle = b.idle >= 5 * 1428;
-    svg += `<rect class="sq" data-b="${i}" x="${x - 9}" y="${y - 9}" width="18" height="18" fill="${mine ? "#39d0c0" : "#c8d4dc"}" stroke="${i === sel ? "#fff" : idle ? "#f0b040" : "#000"}" stroke-width="${i === sel ? 3 : 2}" tabindex="0" role="button" aria-label="Match ${esc(st.areas[b.a].name)} - ${esc(st.areas[b.b].name)}"/>`;
+    svg += `<rect class="sq" data-b="${i}" x="${x - 9 * k}" y="${y - 9 * k}" width="${18 * k}" height="${18 * k}" fill="${mine ? "#39d0c0" : "#c8d4dc"}" stroke="${i === sel ? "#fff" : idle ? "#f0b040" : "#000"}" stroke-width="${(i === sel ? 3 : 2) * k}" tabindex="0" role="button" aria-label="Match ${esc(st.areas[b.a].name)} - ${esc(st.areas[b.b].name)}"/>`;
   });
   $("map").innerHTML = svg;
   $("map").querySelectorAll(".sq").forEach(r => { r.onclick = r.onkeydown = e => { if (e.type === "keydown" && e.key !== "Enter") return; sel = +r.dataset.b; draw(); minimap(); }; });
@@ -148,9 +179,10 @@ function detail() {
   if (!b || !b.live) { $("detail").textContent = "Pick a square on a border."; $("minimap").style.display = "none"; return; }
   const side = (s) => {
     const f = st.factions[s.faction];
-    if (s.humans === undefined) return `<div class="side" style="border-color:${COLOURS[f.colour % 12]}"><b>${esc(f.name)}</b><div class="dim">hidden</div></div>`;
+    const who = `<div>${s.humans.length ? s.humans.map(esc).join(", ") : "<span class=dim>computer</span>"}</div>`;
+    if (s.supply === undefined) return `<div class="side" style="border-color:${COLOURS[f.colour % 12]}"><b>${esc(f.name)}</b>${who}<div class="dim">economy hidden</div></div>`;
     return `<div class="side" style="border-color:${COLOURS[f.colour % 12]}"><b>${esc(f.name)}</b>
-      <div>${s.humans.length ? s.humans.map(esc).join(", ") : "<span class=dim>computer</span>"}</div>
+      ${who}
       <div>Supply ${s.supply[0]}/${s.supply[1]} · ${s.workers} workers</div>
       <div>${s.minerals} min · ${s.gas} gas</div><div class="dim">mined ${s.mined[0]} / ${s.mined[1]}</div></div>`;
   };

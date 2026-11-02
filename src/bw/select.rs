@@ -561,7 +561,10 @@ impl State {
         let me = self.local_human as usize;
         let human = |h: usize| if h < 8 { self.player_types[h] == 2 } else { h < self.human_nation.len() };
         let force = |h: usize| self.player_force[if h < 8 { h } else { self.nation_of(h as u8) as usize & 7 }];
-        super::players::is_team_game(self.multiplayer, &self.template) && p != me && human(p) && human(me) && force(p) == force(me)
+        // Ours: two humans on one army (an enhanced game, e.g. a campaign match, whose template
+        // has no teams byte) see each other's selections as a team does.
+        let shared = self.multiplayer && p != me && p.max(me) >= 8 && self.nation_of(p as u8) == self.nation_of(me as u8);
+        (shared || super::players::is_team_game(self.multiplayer, &self.template)) && p != me && human(p) && human(me) && force(p) == force(me)
     }
 
     /// 0x49a740: clear human `p`'s selection; a teammate's units each lose one ally
@@ -1025,6 +1028,8 @@ impl State {
             2 => 4,
             3 => 3,
             4 => 2,
+            // No teams byte: humans sharing an army (`teammate`): the count bits hold up to 3.
+            0 => 4,
             _ => {
                 crate::todo_port!("0x485710", "teams byte other than 2..4: one-time init (0x4c3d20, 0x4bb300, 0x4dcc50)");
                 0

@@ -99,6 +99,8 @@ pub enum Report {
 
 pub enum Order {
     Stop,
+    /// Tell every human why (a refusal) and end the match a little later, once it arrived.
+    Close(String),
     /// Write the match's saved game to the path (and its seats next to it, `Resume::read`).
     Save(std::path::PathBuf),
     /// Pause (true) or resume the game (commands 0x10 / 0x11 in the host's turn).
@@ -278,8 +280,18 @@ fn play(spec: &Spec, hub: &Hub, report: &Sender<Report>, orders: &Receiver<Order
     let mut last_stats = Instant::now() - STATS_EVERY;
     let mut last_humans: [Vec<String>; 2] = Default::default();
     let mut hashed = false;
+    let mut closing: Option<Instant> = None;
     loop {
+        if closing.is_some_and(|t| t.elapsed() >= Duration::from_secs(3)) {
+            return Ok(End::Stopped);
+        }
         match orders.try_recv() {
+            Ok(Order::Close(why)) => {
+                for (p, _) in net.links() {
+                    net.kick(p, &why);
+                }
+                closing = Some(Instant::now());
+            }
             Ok(Order::Stop) | Err(std::sync::mpsc::TryRecvError::Disconnected) => return Ok(End::Stopped),
             Ok(Order::Save(path)) => save(&mut scene, &seats, spec.game, &path),
             Ok(Order::Pause(on)) => scene.st.send_command(&[if on { 0x10 } else { 0x11 }]),

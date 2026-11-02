@@ -155,7 +155,7 @@ matches (Storm messages from the host seat "Faction"); in-game lines starting wi
 the faction's chat on the map and its other matches.
 The terminal prompt was replaced by the Join Game screen (F2).
 
-### 8. World generator — `scbw campaign gen <areas> <factions> <maps>... [--seed N]` (DONE 2026-10-28)
+### 8. World generator — `scbw campaign gen <config> [--seed N]` (agent/campaign-gen.cfg) (DONE 2026-10-28)
 Done: `World::generate`: areas on a jittered grid, borders = Gabriel graph (planar,
 connected), names from a list, factions Z / T / P in turn (3 factions named after races),
 colours 0.., owners dealt (`deal`), `eliminated pick`. 30 areas: ~52 borders, 14 live,
