@@ -115,3 +115,16 @@ multiple of 8 is the confirmed frame's (the desync check's), not the state it ha
 agent/tools/suite.sh | grep -v MATCH # nothing
 agent/tools/repcmp.sh ~/games/Starcraft/broodwar-reps-116/tl1412*.rep <N>   # MATCH
 ```
+
+## HUD pixel test (status panel with selections)
+
+The real 1.16.1 shows any unit's status panel while watching a replay. `scbw reppick <rep>
+<shots dir>/select.txt 450` picks varied selections ("frame idx,..."); `CAP_SELECT=<that
+file> NATIVE_CAMERA=none NATIVE_FULL=surf CAP_END=20500 re/native_shots.sh <rep> <shots dir>
+450` injects each into 0x6284b8 (+ refresh flags, 0x59723c) 24 frames before the shot and
+grabs the screen (native/sel.txt); `SCBW_REPSHOT_HUD=1 SCBW_REPSHOT_SELECT=<shots
+dir>/native/sel.txt scbw repshot <rep> <shots dir>` compares the console's opaque pixels
+(no portrait / minimap) and the resource bar: report.txt "HUD x%", diff_full/. Data:
+~/games/Starcraft/broodwar-reps-116/shots/tl1412_hud, tl1427_hud (2026-11-01: means 0.41% /
+0.53%). Known noise: resource counters (real-time 20 ms timer natively), group shots where
+the replay's select commands replace the injected selection, row 388 above MENU.
