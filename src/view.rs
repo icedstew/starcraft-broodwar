@@ -2803,7 +2803,7 @@ fn draw_hud(scene: &Scene, ui: &crate::ui::Ui, vx: i32, vy: i32, cursor: Option<
 
 /// 0x4593a0 / 0x459150 / 0x459030: a command button's tooltip: its stat_txt string
 /// (after the hotkey and kind bytes) and, for enabled buttons, the cost slots
-/// (0x458800: minerals, gas, energy protoss / terran / zerg, supply protoss / terran /
+/// 0x458800 (minerals, gas, energy protoss / terran / zerg, supply protoss / terran /
 /// zerg), chosen by the string's kind byte (jump table 0x459688): 1 a unit's minerals,
 /// gas and supply (0x4594ac), 2 an upgrade level's minerals and gas plus the next level
 /// (0x459544), 3 a spell's energy only (0x4595b6), 4 a research's minerals and gas
