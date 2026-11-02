@@ -1,5 +1,8 @@
-# Status (updated 2026-10-27)
+# Status (updated 2026-11-01)
 
+UI audit vs 1.16.1 (2026-11-01, areas/ui.md "Keys"): input handlers, accelerators, status panel /
+command card / resource bar reviewed and fixed. In flight: HUD pixel test with selections
+injected into the real game (re/native_shots_gdb.py CAP_SELECT, `scbw reppick`), not committed.
 Enhanced late join: dealt colours now reach the joiner (`color_slot` set from the setup; plan Task 5).
 
 Read first. Kept short: what is in flight and what is next. Rewrite it in the same commit

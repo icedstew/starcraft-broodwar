@@ -9,6 +9,12 @@
 use super::list::NIL;
 use super::{Data, State};
 
+thread_local! {
+    /// 0x4591d0: the (set, index) button entries whose disabled string was overwritten
+    /// with 0x2fa (static table data in the original: never undone).
+    static BTN_DISABLED_2FA: std::cell::RefCell<std::collections::HashSet<(usize, usize)>> = Default::default();
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Button {
     pub pos: u16,
@@ -809,7 +815,9 @@ impl State {
     pub fn command_card(&self, d: &Data, set: usize, player: u8, s: &Selection) -> Card {
         let mut card: Card = [None; 9];
         let Some(buttons) = BUTTON_SETS.get(set) else { return card };
-        if s.active != NIL && self.units[s.active as usize].player != player {
+        // Another player's unit shows no buttons, except in a replay (0x6d0f14), whose
+        // controls show for any selection.
+        if !self.replay && s.active != NIL && self.units[s.active as usize].player != player {
             return card;
         }
         let mut i = 0;
@@ -825,7 +833,18 @@ impl State {
             if i >= buttons.len() || slot < buttons[i].pos {
                 continue;
             }
-            card[slot as usize - 1] = Some((buttons[i], state > 0));
+            let mut btn = buttons[i];
+            // 0x4591d0: a disabled button while the requirement error is 0x15 (opcode
+            // 0xff22) gets disabled string 0x2fa written into its static table entry,
+            // for good (the set lives for the process, like the table).
+            let key = (set, i);
+            if state < 0 && self.req_error.get() == 0x15 {
+                BTN_DISABLED_2FA.with(|c| c.borrow_mut().insert(key));
+            }
+            if BTN_DISABLED_2FA.with(|c| c.borrow().contains(&key)) {
+                btn.disabled_str = 0x2fa;
+            }
+            card[slot as usize - 1] = Some((btn, state > 0));
             i += 1;
         }
         card

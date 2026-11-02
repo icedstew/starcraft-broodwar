@@ -236,7 +236,7 @@ fn order_gate_rc(st: &bw::State, d: &Data, sel: &bw::buttons::Selection) -> bool
 }
 
 /// 0x4020b0
-fn disabled(un: &bw::unit::Unit) -> bool {
+pub fn disabled(un: &bw::unit::Unit) -> bool {
     un.status & 0x400 != 0 || un.lockdown_timer != 0 || un.stasis_timer != 0 || un.maelstrom_timer != 0
 }
 

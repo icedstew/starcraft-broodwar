@@ -122,7 +122,10 @@ pub fn building_panel(st: &State, d: &Data, strings: &[String], u: u32) -> Optio
         return None;
     }
     if t == 0x6c {
-        return silo_panel(st, d, strings, u).map(|p| (Panel::Unit, p));
+        return Some(match silo_panel(st, d, strings, u) {
+            Some(p) => (Panel::Training, p),
+            None => (Panel::Unit, unit_panel(st, d, strings, u)),
+        });
     }
     // 0x4e6ba0: units whose panel shows their cargo, not a queue (todo: those panels).
     if un.status & 0x4000_0000 == 0 && (t != 0x2a || st.players.upgrade_sc[un.player as usize][0x18] != 0) && d.dat.units.space_provided[t as usize] != 0 {
@@ -184,7 +187,10 @@ fn silo_panel(st: &State, d: &Data, strings: &[String], u: u32) -> Option<Vec<(i
         crate::bw::list::NIL
     };
     let progress = if target != crate::bw::list::NIL { build_progress(st, d, target) } else { 0 };
-    let mut out = vec![(7, Show::Progress(progress)), (-15, Show::Text(stat(strings, 0x303 + race_index(d, un.unit_type))))];
+    // The control 2 button: the nuke being built (its type), background 2, number 1; panel
+    // 0xd, so clicking it (0x4573a0 case 2) cancels slot 0 like the training queue.
+    let icon = if target != crate::bw::list::NIL { st.units[target as usize].unit_type } else { 0 };
+    let mut out = vec![(2, Show::Slot { bg: 2, icon, cmdicon: true, num: 1 }), (7, Show::Progress(progress)), (-15, Show::Text(stat(strings, 0x303 + race_index(d, un.unit_type))))];
     out.extend(unit_panel(st, d, strings, u).into_iter().filter(|(id, _)| matches!(id, 1 | -7 | -8 | -20 | -5)));
     Some(out)
 }
@@ -405,9 +411,9 @@ pub fn unit_panel(st: &State, d: &Data, strings: &[String], u: u32) -> Vec<(i16,
         let weapon_tip = |w: u8, lvl: u8| weapon_line(stat(strings, d.dat.weapons.label[w as usize]), w, lvl);
         let armor_up = d.dat.units.armor_upgrade[shown as usize];
         if armor_up != 0x3c {
-            // 0x425600
+            // 0x425600 (0x4576a0: the base armor is the unit's own type's, not the shown one's)
             let lvl = st.armor_level(d, u);
-            let tip = line(stat(strings, d.dat.upgrades.label[armor_up as usize]), 0x30a, d.dat.units.armor[shown as usize] as u32, lvl);
+            let tip = line(stat(strings, d.dat.upgrades.label[armor_up as usize]), 0x30a, d.dat.units.armor[un.unit_type as usize] as u32, lvl);
             push(&mut slot, d.dat.upgrades.icon[armor_up as usize], lvl as u8, tip);
         }
         if d.dat.units.shield_enable[ts] != 0 {
@@ -483,8 +489,10 @@ pub fn unit_panel(st: &State, d: &Data, strings: &[String], u: u32) -> Vec<(i16,
     if let Some(s) = status {
         out.push((-20, Show::Text(s)));
     }
-    // 0x425dd0: kills, for units that can fight.
-    if !(t == 0x2f || t == 0x32 || halluc_own) && (can_fight(st, d, u) || un.kill_count != 0) {
+    // 0x425dd0: kills, for units that can fight; a hallucination hides them only for its
+    // owner outside a replay (0x6d0f14 == 0 and the local player 0x512684).
+    let halluc_hidden = un.status & 0x4000_0000 != 0 && !st.replay && un.player == st.local_player;
+    if !(t == 0x2f || t == 0x32 || halluc_hidden) && (can_fight(st, d, u) || un.kill_count != 0) {
         out.push((-21, Show::Text(format!("{} {}", stat(strings, 0x2fc), un.kill_count))));
     }
     // 0x4263e0: hit points (red under 34%, yellow under 67%), shields first (0x402270, 0x4022c0: the colour

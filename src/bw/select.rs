@@ -172,7 +172,7 @@ impl State {
 
     /// 0x46fa40 / 0x46fb40 tail: a selected rally-capable unit of the local player
     /// refreshes its order target marker (0x468670).
-    fn rally_marker_if_own(&mut self, d: &Data, u: u32) {
+    pub fn rally_marker_if_own(&mut self, d: &Data, u: u32) {
         if self.units[u as usize].player == self.local_player && super::command::has_rally(self.units[u as usize].unit_type) {
             self.rally_marker(d, u);
         }

@@ -1519,6 +1519,28 @@ impl Menu {
         self.activate(i, set)
     }
 
+    /// 0x462600 (the game menu's Save, accelerator Alt+S): whether the save dialog opens;
+    /// if so the choice is cleared for it.
+    pub fn save_opens(ctx: &Ctx) -> bool {
+        // Only the lowest human saves (0x4c3db0), and 0x596877 must be 0; 0x461720: in
+        // multiplayer one save per 2 minutes; not in a replay (0x6d0f14).
+        let ok = ctx.lowest_human() == ctx.local_storm && ctx.no_save == 0 && !save_wait(ctx) && !ctx.replay;
+        if ok {
+            Self::clear_choice();
+        }
+        ok
+    }
+
+    /// 0x462100 (the game menu's Load, accelerator Alt+L): not multiplayer (0x57f0b4) or
+    /// a replay (0x6d0f14); if it opens the choice is cleared for it.
+    pub fn load_opens(ctx: &Ctx) -> bool {
+        let ok = !ctx.multiplayer && !ctx.replay;
+        if ok {
+            Self::clear_choice();
+        }
+        ok
+    }
+
     /// 0x68516a = 0, 0x68516c = 0, 0x685148 = "" (before a save / load dialog opens).
     fn clear_choice() {
         let mut g = sg();
@@ -1690,23 +1712,16 @@ impl Menu {
             (Kind::Tips, -2 | -3) => (None, Action::Closed),
             // 0x462600
             (Kind::Game, 1) => {
-                // Only the lowest human saves (0x4c3db0), and 0x596877 must be 0.
-                if ctx.lowest_human() != ctx.local_storm || ctx.no_save != 0 {
+                if !Self::save_opens(&ctx) {
                     return (None, Action::Closed);
                 }
-                // 0x461720: in multiplayer one save per 2 minutes
-                if save_wait(&ctx) || ctx.replay {
-                    return (None, Action::Closed);
-                }
-                Self::clear_choice();
                 (Some((Kind::SaveGame, self.depth)), Action::None)
             }
             // 0x462100
             (Kind::Game, 2) => {
-                if ctx.multiplayer || ctx.replay {
+                if !Self::load_opens(&ctx) {
                     return (None, Action::Closed);
                 }
-                Self::clear_choice();
                 // 0x461e50 (inline: not needed here; when 0x596904 == 4, i.e. a save was chosen): pump messages and
                 // redraw (0x41ca00, 0x4d1bf0(3)) until the open-dialog count (0x6d5eb4)
                 // drops below its entry value. This menu is event-driven: the pump runs in
