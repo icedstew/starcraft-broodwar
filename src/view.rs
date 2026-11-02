@@ -2674,7 +2674,11 @@ fn draw_hud(scene: &Scene, ui: &crate::ui::Ui, vx: i32, vy: i32, cursor: Option<
                     let wt = crate::ui::wire_type(&scene.st, *unit) as usize;
                     let frame = if wt < ui.tranwire.frame_count() { wt } else { 0 };
                     let colors = with_data(scene.a, |d| crate::ui::wireframe_colors(&scene.st, d, *unit, &ui.twire));
-                    ui.tranwire.draw(frame, false, l, t, out, w, h, Blend::Colors(&colors));
+                    // 0x4570a0: centered in the control without the frame's own offsets
+                    // ((size difference) / 2, truncated toward zero), as 0x4568f0.
+                    let (fw, fh) = ui.tranwire.frame_size(frame);
+                    let off = ui.tranwire.frame(frame).map_or((0, 0), |f| (f.x, f.y));
+                    ui.tranwire.draw(frame, false, l + (cw - (fw & 0xff)) / 2 - off.0, t + (ch - fh) / 2 - off.1, out, w, h, Blend::Colors(&colors));
                 }
                 crate::statdata::Show::GroupWire(u) => {
                     // 0x456f50: the button frame (0x1f hallucination, 0x13 hero, 0x19
