@@ -59,10 +59,34 @@ Read when working on the HUD, dialogs, menus or glue screens.
   set, Shift+digit add (exe table 113), Alt+digit center + select (0x4967e0), digit
   twice within 500 ms centers (0x4c07b0); F2..F4 recall / Shift+F2..F4 save the screen
   (0x57f270); Ctrl/Alt+C center on the status unit (0x4e6020); +/= -/_ speed; F1 /
-  Alt+H help, Alt+O options, Ctrl/Alt+Q quit, Ctrl/Alt+X exit, Alt+M messages
-  (0x4ca500, not ported), Alt+S / Alt+L save / load (not ported), Ctrl+M music,
+  Alt+H help, Alt+O options, Ctrl/Alt+Q quit, Ctrl/Alt+X exit, Alt+M game menu
+  (0x4ca500), Alt+S / Alt+L save / load, Ctrl+M music,
   Ctrl+S sound (read from Local.dll's RT_ACCELERATOR resources).
 
+- Alt+M = 0x4ca500 (game menu, as F10), Alt+S 0x462600 / Alt+L 0x462100 (save / load
+  with their gates, `Menu::save_opens` / `load_opens`).
+- Game-screen event table 0x5968a0 (set by 0x484cc0), by event: 4/6 left down/dbl
+  0x484380 -> 0x6556ec, 7/9 right 0x484620, 0xa/0xb middle 0x484520 / 0x4843a0 (pan:
+  move handler 0x484460, screen = percent of the scroll range), 0xd 0x48e980 (timers),
+  0xf WM_CHAR 0x4846b0 (digit recall, no pause gate; Esc 0x489da0), 0x10 0x4846e0.
+  0x6556ec / 0x6556f0 per mode: normal 0x46ff70 / 0x4564e0, targeting 0x4bd500 / 0x4845f0,
+  placing 0x48e5d0 / 0x484600. Right-click in the console rect 0x5136cc (496,354)-(639,479)
+  or off the map (0x4bd4d0): end targeting / placing, else the card back to 0xe4. Map
+  clicks are gated by 0x4d1140 (console pixel), not by y < 360.
+- Mouse messages carry their own point; scbw ticks every 42 ms, so view.rs tests a press
+  at `press_pos` (LeftEdges.press), a release at `rel_pos` (LeftEdges.release) and a right
+  press at `rpress_pos`, never at the tick's cursor (a quick click then move was lost).
+- Status panel: group wireframes (ids 33..44) and passengers (18..32) are type-2 buttons:
+  act on release (event 0xe code 2 -> 0x458220 / unload), pressed frame +1 (0x456d30).
+  0x458220 plays no voice (0x49ae40, not 0x49aef0). Hotkey recall of a lone own rally
+  building shows its rally point (0x468670).
+- Status / card review 2026-11-01 (0x424540..0x427a80, 0x4560d0..0x4599a0, 0x4e51c0..):
+  control 0x11 click (0x4573a0: eggs 0x18 unless disabled, else 0x34); hover tooltips of
+  card (0x459860) and status panel (0x457e40) are off while paused, multiplayer too (only
+  MENU / minimap 0x4f50f0 / 0x4a5490 keep the multiplayer exception); a replay's card
+  ignores the owner check; replay "Paused" blinks (0x4deed0, 600 ms); silo control 2
+  (0x426ff0); disabled string 0x2fa when 0x66ff60 == 0x15 (0x4591d0, sticky).
+- Tab (minimap terrain) is not in 1.16.1: minimap.bin's buttons have no hotkey flag 0x200.
 - Button strings in stat_txt.tbl are hotkey, kind byte (0 plain, 1 unit, 2 upgrade,
   3 tech), text; kind 0 ends a C string, so read them with `dat::tbl_button`, not
   `parse_tbl` (0x4593a0 takes the text at +2).

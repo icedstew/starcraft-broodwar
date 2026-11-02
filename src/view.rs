@@ -636,30 +636,42 @@ impl<'a> Scene<'a> {
     /// group (0x597280 = 0xff, `last` with 0x59727c); a select (which copies the selection
     /// to 0x59724c) of the same group within 500 ms of the last one returns true (native
     /// centers the screen, 0x4967e0, and clears the marker) else records group and `now` ms.
-    pub fn hotkey(&mut self, action: u8, g: u8, now: usize, last: &mut (u8, usize)) -> bool {
-        self.send(&[0x13, action, g]);
-        if action == 1 {
-            // 0x496b40: the UI selects the group's units itself (the sim's group table
-            // 0x57fe60 as the dispatched commands left it).
-            let sel = with_data(self.a, |d| self.st.hotkey_group_units(d, self.local, g));
-            if !sel.is_empty() {
-                if sel != self.st.selected {
-                    self.card_menu = None;
-                    self.set_placing(None);
-                }
-                self.set_selected(sel);
-            }
-        }
+    /// Command 0x13 `action` for group `g` (0 set, 1 select, 2 add). For a select: None when
+    /// the group has no unit to select (0x496b40 then does nothing and sends nothing), else
+    /// whether it was the second select of `g` within 500 ms (0x4c07b0).
+    pub fn hotkey(&mut self, action: u8, g: u8, now: usize, last: &mut (u8, usize)) -> Option<bool> {
         if action != 1 {
+            self.send(&[0x13, action, g]);
             last.0 = 0xff;
-            return false;
+            return Some(false);
+        }
+        // 0x496b40: the UI selects the group's units itself (the sim's group table
+        // 0x57fe60 as the dispatched commands left it).
+        let sel = with_data(self.a, |d| self.st.hotkey_group_units(d, self.local, g));
+        if sel.is_empty() {
+            return None;
+        }
+        // Placement (0x48d9a0 / 0x48e310) and targeting (0x48ca10) end first.
+        self.set_placing(None);
+        self.end_targeting();
+        if sel != self.st.selected {
+            self.card_menu = None;
+        }
+        // 0x4c07b0
+        self.send(&[0x13, action, g]);
+        let lone = (sel.len() == 1).then(|| sel[0]);
+        self.set_selected(sel);
+        // 0x496b40: a lone own production building shows its rally point (0x468670).
+        if let Some(u) = lone {
+            let st = &mut self.st;
+            with_data(self.a, |d| st.rally_marker_if_own(d, u));
         }
         if g == last.0 && now.saturating_sub(last.1) < 500 {
             last.0 = 0xff;
-            return true;
+            return Some(true);
         }
         *last = (g, now);
-        false
+        Some(false)
     }
 
     /// 0x49ae40: make `units` the local selection (0x6284b8).
@@ -1509,27 +1521,33 @@ impl<'a> Scene<'a> {
     }
 
     /// A map click while targeting (0x46f5b0).
-    /// 0x456490: the clicked unit's selection circle flashes (sprite +0xf), or the
-    /// marker shows where the ground was clicked. (Fog sprites, 0x487a10, are not
-    /// ported.)
-    fn click_feedback(&mut self, p: (i32, i32), t: u32) {
-        if t != NIL {
-            let s = self.st.units[t as usize].sprite;
-            self.st.sprites[s as usize].selection_timer = 0x1f;
-            return;
-        }
+    /// 0x456490: the remembered (fogged) building under the point flashes (0x487a10) and
+    /// its type goes with the command, else the clicked unit's selection circle flashes
+    /// (sprite +0xf) or the marker shows where the ground was clicked (type 0xe4).
+    fn click_feedback(&mut self, p: (i32, i32), t: u32) -> u16 {
         let st = &mut self.st;
+        if let Some(fog) = with_data(self.a, |d| st.fog_thingy_at(d, p.0, p.1)) {
+            let s = st.fog_thingies[fog as usize].sprite;
+            st.sprites[s as usize].selection_timer = 0x1f;
+            return st.fog_thingies[fog as usize].hp as u16;
+        }
+        if t != NIL {
+            let s = st.units[t as usize].sprite;
+            st.sprites[s as usize].selection_timer = 0x1f;
+            return 0xe4;
+        }
         with_data(self.a, |d| st.show_marker(d, p.0 as i16, p.1 as i16));
+        0xe4
     }
 
     pub fn target_click(&mut self, p: (i32, i32), queued: bool) {
         let Some(modes) = self.targeting.take() else { return };
         let t = self.unit_at(p.0, p.1).unwrap_or(NIL);
-        self.click_feedback(p, t);
+        let ty = self.click_feedback(p, t);
         self.sim_selection();
         let sel = self.st.selected.clone();
         let st = &mut self.st;
-        let r = with_data(self.a, |d| st.target_click(d, &sel, modes, (p.0 as i16, p.1 as i16), t, 0xe4, queued));
+        let r = with_data(self.a, |d| st.target_click(d, &sel, modes, (p.0 as i16, p.1 as i16), t, ty, queued));
         if let Err(e) = r {
             self.show_error(e);
         }
@@ -1733,13 +1751,16 @@ impl<'a> Scene<'a> {
     }
 
     /// A click at screen (x, y) on a status panel button (0x4573a0); true if handled.
-    /// The enabled status panel button (a queued unit, the research / upgrade cancel icon)
-    /// under (x, y): these act when released on them (0x4e1a70), drawn pressed while held.
+    /// The enabled status panel button (a queued unit, the research / upgrade cancel icon,
+    /// a group wireframe 33..44 or a passenger 18..32: all type 2) under (x, y): these act
+    /// when released on them (0x4e1a70 -> 0x4e19f0 -> event 0xe code 2, e.g. 0x458220),
+    /// drawn pressed while held.
     pub fn status_button_at(&self, ui: &crate::ui::Ui, x: i32, y: i32) -> Option<i16> {
         let (_, ctls) = self.status_panel(ui)?;
         ctls.into_iter().find_map(|(id, show)| {
             let (l, t, r, b) = ui.statdata.screen_rect(id)?;
-            let button = matches!(show, crate::statdata::Show::Button { .. } | crate::statdata::Show::Slot { num: 1.., .. });
+            use crate::statdata::Show;
+            let button = matches!(show, Show::Button { .. } | Show::Slot { num: 1.., .. } | Show::GroupWire(_) | Show::Cargo { .. });
             (button && (l..=r).contains(&x) && (t..=b).contains(&y)).then_some(id)
         })
     }
@@ -1779,11 +1800,22 @@ impl<'a> Scene<'a> {
                                 }
                             }
                         }
+                        // 0x49ae40 + 0x4c0860: no voice (0x458220 does not run 0x49aef0).
                         self.set_selected(sel);
                         self.card_menu = None;
                         self.set_placing(None);
-                        self.voice_what();
                         return true;
+                    }
+                    // 0x4573a0 control 0x11 (the morphing unit's button): an egg, cocoon or
+                    // lurker egg (0x24 / 0x3b / 0x61) cancels its morph (0x423430: command
+                    // 0x18) unless disabled (0x4020b0); any other unit cancels its building
+                    // morph (0x4232d0: command 0x34). Not in a replay (0x6d0f14).
+                    _ if id == 0x11 => {
+                        let a = self.client_selection().active;
+                        (a != NIL && !self.st.replay).then(|| &self.st.units[a as usize]).and_then(|un| match un.unit_type {
+                            0x24 | 0x3b | 0x61 => (!crate::voices::disabled(un)).then(|| vec![0x18]),
+                            _ => Some(vec![0x34]),
+                        })
                     }
                     _ => crate::statdata::click(panel, id),
                 };
@@ -2609,7 +2641,9 @@ fn draw_hud(scene: &Scene, ui: &crate::ui::Ui, vx: i32, vy: i32, cursor: Option<
                     ui.wireframe.draw(frame, false, l, t, out, w, h, Blend::Colors(&colors));
                 }
                 crate::statdata::Show::Cargo { bg, unit } => {
-                    ui.cmdbtns.draw(*bg as usize, false, l, t, out, w, h, Blend::Normal);
+                    // 0x456d30: the next frame while pressed (0x40000000).
+                    let bg = crate::statdata::button_frame(*bg, if scene.stat_held == Some(*id) { 0x4000_0000 } else { 0 });
+                    ui.cmdbtns.draw(bg as usize, false, l, t, out, w, h, Blend::Normal);
                     let wt = crate::ui::wire_type(&scene.st, *unit) as usize;
                     let frame = if wt < ui.tranwire.frame_count() { wt } else { 0 };
                     let colors = with_data(scene.a, |d| crate::ui::wireframe_colors(&scene.st, d, *unit, &ui.twire));
@@ -2630,6 +2664,7 @@ fn draw_hud(scene: &Scene, ui: &crate::ui::Ui, vx: i32, vy: i32, cursor: Option<
                     } else {
                         0xd
                     };
+                    let gr = crate::statdata::button_frame(gr, if scene.stat_held == Some(*id) { 0x4000_0000 } else { 0 }) as usize;
                     if let Some(f) = ui.cmdbtns.frame(gr) {
                         let (fw, fh) = (f.w.min(cw), f.h.min(ch));
                         blit_frame(&ui.cmdbtns, gr, l + (cw - fw) / 2, t + (ch - fh) / 2, fw, fh, None, out, w, h);
@@ -2681,7 +2716,7 @@ fn draw_hud(scene: &Scene, ui: &crate::ui::Ui, vx: i32, vy: i32, cursor: Option<
     // 0x457ce0: the tooltip of the status panel control under the cursor (0x4576a0 for
     // info buttons, the rest via statdata::tooltip: queue slots, cancel, passengers).
     // 0x457e40 / 0x457fe0: no control counts as under the cursor while paused (0x6509c4).
-    let stat_hover = cursor.filter(|_| !scene.st.trig.paused || scene.st.multiplayer);
+    let stat_hover = cursor.filter(|_| !scene.st.trig.paused);
     if let (Some((panel, ctls)), Some((_, _, cx, cy))) = (scene.status_panel(ui), stat_hover) {
         for (id, show) in &ctls {
             let Some((l, t, r, b)) = ui.statdata.screen_rect(*id) else { continue };
@@ -2713,8 +2748,8 @@ fn draw_hud(scene: &Scene, ui: &crate::ui::Ui, vx: i32, vy: i32, cursor: Option<
     // 0x4f50f0 / 0x4f5070: while paused (0x6509c4) outside multiplayer (0x57f0b4) the hover
     // tooltips are hidden.
     let hover = cursor.filter(|_| !scene.st.trig.paused || scene.st.multiplayer);
-    // 0x4593a0: the hovered button's tooltip.
-    if let Some((_, _, cx, cy)) = hover {
+    // 0x4593a0: the hovered button's tooltip (0x459860: none while paused, multiplayer too).
+    if let Some((_, _, cx, cy)) = stat_hover {
         for (i, slot) in scene.card().iter().enumerate() {
             let Some((b, enabled)) = slot else { continue };
             let (bx, by, br, bb) = card_rect(ui, i as u16 + 1);
@@ -2809,7 +2844,9 @@ fn draw_tooltip(scene: &Scene, ui: &crate::ui::Ui, b: &bw::buttons::Button, enab
         }
         // 0x4595b6: 0x656380 in the slot of the panel unit's race (0x47b150).
         3 if v < dat.techdata.icon.len() => {
-            let caster = scene.st.selected.first().map(|&u| dat.units.staredit_group_flags[scene.st.units[u as usize].unit_type as usize]);
+            // The active unit 0x597248 (the highest ranked), not the first selected.
+            let act = scene.client_selection().active;
+            let caster = (act != NIL).then(|| dat.units.staredit_group_flags[scene.st.units[act as usize].unit_type as usize]);
             let k = match caster {
                 Some(g) if g & 1 != 0 => Some(4),
                 Some(g) if g & 4 != 0 => Some(2),
@@ -2837,7 +2874,6 @@ fn draw_tooltip(scene: &Scene, ui: &crate::ui::Ui, b: &bw::buttons::Button, enab
 /// (0x458ef0: each slot's icon at the text's bottom and its number after it, in
 /// the color the text left), framed in color 0x10 at the buffer's origin (0x4e1c70)
 /// and put above the hovered button at (bx, by) (0x458850).
-// ponytail: the numbers use color 2, not the color the text's codes left.
 #[allow(clippy::too_many_arguments)]
 fn tooltip_with_costs(ui: &crate::ui::Ui, text: &str, slots: &[i32; 8], race: i32, bx: i32, by: i32, out: &mut [u8], w: i32, h: i32) {
     const ICONS: [i32; 8] = [0, 1, 9, 8, 7, 6, 5, 4];
@@ -2845,7 +2881,9 @@ fn tooltip_with_costs(ui: &crate::ui::Ui, text: &str, slots: &[i32; 8], race: i3
     let mut buf = vec![colors[0xf]; (w * h) as usize];
     let o = crate::ui::TextOpts { flags: 0x11, line_gap: 0, clip: (2, 0, w - 1, h - 1), ..crate::ui::TextOpts::new() };
     let font = &ui.skin.fonts[0];
-    let mut e = font.draw_text(text, 2, 0, 2, &o, crate::ui::TextDst { rows: &ui.text_colors, out: &mut buf, w, h });
+    let mut col = crate::ui::Color { cur: 0, prev: 0 };
+    col.set(2);
+    let mut e = font.draw_bytes_color(text.as_bytes(), 2, 0, &mut col, &o, crate::ui::TextDst { rows: &ui.text_colors, out: &mut buf, w, h });
     let mut x = 2;
     let mut icon_h = 0;
     let mut any = false;
@@ -2861,7 +2899,7 @@ fn tooltip_with_costs(ui: &crate::ui::Ui, text: &str, slots: &[i32; 8], race: i3
         let (iw, ih) = ui.icons.frame_size(f);
         icon_h = ih;
         ui.draw_icon(f, x, e.b, &mut buf, w, h);
-        let t = font.draw_text(&n.to_string(), x + iw + 2, e.b, 2, &o, crate::ui::TextDst { rows: &ui.text_colors, out: &mut buf, w, h });
+        let t = font.draw_bytes_color(n.to_string().as_bytes(), x + iw + 2, e.b, &mut col, &o, crate::ui::TextDst { rows: &ui.text_colors, out: &mut buf, w, h });
         x = t.r;
         any = true;
     }
@@ -3221,6 +3259,9 @@ struct LeftEdges {
     /// 0x66ff58: the last press was a double click.
     dbl: bool,
     last_down: Option<(i32, i32, u64)>,
+    /// The point of the last release (WM_LBUTTONUP's own coordinates: a release tested at
+    /// the tick would see where the cursor went since).
+    release: Option<(i32, i32)>,
 }
 
 impl LeftEdges {
@@ -3230,6 +3271,9 @@ impl LeftEdges {
             return None;
         }
         self.level = level;
+        if !level {
+            self.release = Some((x, y));
+        }
         if level {
             self.press.get_or_insert((x, y));
             self.dbl = self.last_down.is_some_and(|(lx, ly, t)| now_ms.saturating_sub(t) <= 500 && (x - lx).abs() <= 2 && (y - ly).abs() <= 2);
@@ -3312,7 +3356,11 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
     // Left button edges at the window's poll rate (Windows' WM_LBUTTONDOWN / UP / DBLCLK
     // messages; 1.16.1 runs its mouse handlers as they arrive, not on the game tick).
     let mut edges = LeftEdges::default();
+    // The same for the right button (WM_RBUTTONDOWN's point).
+    let mut redges = LeftEdges::default();
     let mut pend_up: Option<(i32, i32)> = None;
+    // The middle button pan's anchor (0x6556f8 / 0x6556f4) and the last cursor it moved for.
+    let mut mid_pan: Option<(i32, i32, (i32, i32))> = None;
     let t0 = web_time::Instant::now();
     // 0x57f270: the saved screen positions (Shift+F2..F4 save, F2..F4 recall).
     // 0x4bd3f0 (game start, 0x4eee00 after the start units): the screen goes to the position
@@ -3419,6 +3467,23 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
             Some(false) => pend_up = Some((cx, cy)),
             _ => {}
         }
+        redges.poll(win.get_mouse_down(minifb::MouseButton::Right), (cx, cy), now_ms);
+        // 0x484520 (middle button down): the anchor 0x6556f8 / 0x6556f4 = the press less the
+        // screen's place in percent of the scroll range (map size less 640 x 400), plus 50;
+        // 0x484460 (mouse move while held): the screen goes to (cursor - anchor + 50), clamped
+        // to 0..100, percent of that range (0x49c440); 0x4843a0 (up) ends it.
+        let m_level = win.get_mouse_down(minifb::MouseButton::Middle) && menu.is_none();
+        let range = ((mw - vw).max(1), (mh - 400).max(1));
+        match mid_pan {
+            _ if !m_level => mid_pan = None,
+            None => mid_pan = Some((cx - vx * 100 / range.0 + 50, cy - vy * 100 / range.1 + 50, (cx, cy))),
+            Some((ax, ay, last)) if last != (cx, cy) => {
+                let (px, py) = ((cx - ax + 50).clamp(0, 100), (cy - ay + 50).clamp(0, 100));
+                (vx, vy) = ((range.0 * px / 100).clamp(0, (mw - vw).max(0)) & !7, (range.1 * py / 100).clamp(0, (mh - 384 + 8).max(0)) & !7);
+                mid_pan = Some((ax, ay, (cx, cy)));
+            }
+            _ => {}
+        }
         // 0x46eef0 (mouse move while boxing): the box follows the cursor every pass.
         if let (Some((sx, sy)), true, true) = (drag_start, l_level, menu.is_none()) {
             scene.drag_box = Some((sx, sy, cx, cy));
@@ -3472,6 +3537,10 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
         keys_rep.extend(win.get_keys_pressed(minifb::KeyRepeat::Yes));
         let lmb = l_level || std::mem::take(&mut pend_l);
         let rmb = win.get_mouse_down(minifb::MouseButton::Right) || std::mem::take(&mut pend_r);
+        // Where the right button went down, and where the left one last came up.
+        let rpress_pos = redges.press.take().unwrap_or((cx, cy));
+        let rel_pos = if lmb { (cx, cy) } else { edges.release.take().unwrap_or((cx, cy)) };
+        let lclick = lmb && !lmb_was_down;
         let shift = win.is_key_down(Key::LeftShift) || win.is_key_down(Key::RightShift);
         // The game menu (F10 or the console's MENU button) takes all input while open;
         // single player and replays pause under it (0x4f57a0 -> 0x488790).
@@ -3589,7 +3658,11 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
                     };
                     m.key_down(&u.skin, vk, shift_bits);
                 }
-                act = m.mouse(&u.skin, cx, cy, ldown, &mut settings).or(timer);
+                // The press at its own point (WM_LBUTTONDOWN), then the button's state now; a
+                // release at its own point (WM_LBUTTONUP).
+                let first = if lclick { m.mouse(&u.skin, press_pos.0, press_pos.1, true, &mut settings) } else { None };
+                let (mx, my) = if ldown { (cx, cy) } else { rel_pos };
+                act = first.or(m.mouse(&u.skin, mx, my, ldown, &mut settings)).or(timer);
                 if std::mem::take(&mut m.click) {
                     scene.st.ui_sounds.push(BUTTON_CLICK_SFX);
                 }
@@ -3766,10 +3839,16 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
             return Ok(true);
         }
         let mdown = lmb;
-        let on_menu_btn = ui.as_ref().and_then(|u| u.stat_f10.screen_rect(1)).is_some_and(|(l, t, r, b)| (l..=r).contains(&cx) && (t..=b).contains(&cy));
-        let menu_clicked = menu_btn_down && !mdown && on_menu_btn;
-        menu_btn_down = mdown && (menu_btn_down || (on_menu_btn && !lmb_was_down));
-        if menu_clicked || keys_no.contains(&Key::F10) {
+        // Buttons (0x4e1a70): pressed at the press point (event 4), act when released at the
+        // release point (event 5), each the message's own coordinates.
+        let in_rect = |r: Option<(i32, i32, i32, i32)>, (x, y): (i32, i32)| r.is_some_and(|(l, t, r, b)| (l..=r).contains(&x) && (t..=b).contains(&y));
+        let up_pos = if mdown { (cx, cy) } else { rel_pos };
+        let menu_rect = ui.as_ref().and_then(|u| u.stat_f10.screen_rect(1));
+        let menu_clicked = menu_btn_down && !mdown && in_rect(menu_rect, up_pos);
+        menu_btn_down = mdown && (menu_btn_down || (in_rect(menu_rect, press_pos) && !lmb_was_down));
+        // Alt+M (Local.dll accelerator -0x6385) is 0x4ca500 too.
+        let alt_m = keys_no.contains(&Key::M) && (win.is_key_down(Key::LeftAlt) || win.is_key_down(Key::RightAlt));
+        if menu_clicked || keys_no.contains(&Key::F10) || alt_m {
             menu = open_menu(&scene, crate::menu::Kind::Game, 0, &mut settings);
             menu_paused = true;
             scene.pause_game();
@@ -3785,19 +3864,19 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
             lmb_was_down = mdown;
         }
         // rez\minimap.bin button 2 (0x4a54f0): terrain on / off, on release over it.
-        let on_terrain_btn = ui.as_ref().and_then(|u| u.minimap.get(2).filter(|c| c.flags & crate::dlg::flag::VISIBLE != 0).and(u.minimap.screen_rect(2))).is_some_and(|(l, t, r, b)| (l..=r).contains(&cx) && (t..=b).contains(&cy));
-        if terrain_btn_down && !mdown && on_terrain_btn {
+        let terrain_rect = ui.as_ref().and_then(|u| u.minimap.get(2).filter(|c| c.flags & crate::dlg::flag::VISIBLE != 0).and(u.minimap.screen_rect(2)));
+        if terrain_btn_down && !mdown && in_rect(terrain_rect, up_pos) {
             let Scene { a, st, minimap, .. } = &mut scene;
             with_data(a, |d| minimap.toggle_terrain(d, st));
         }
-        terrain_btn_down = mdown && (terrain_btn_down || (on_terrain_btn && !lmb_was_down));
+        terrain_btn_down = mdown && (terrain_btn_down || (in_rect(terrain_rect, press_pos) && !lmb_was_down));
         if terrain_btn_down {
             lmb_was_down = mdown;
         }
         // rez\minimap.bin button 4 (0x4a54f0 -> 0x4913d0): the replay vision dialog, on release.
-        let on_vision_btn = ui.as_ref().and_then(|u| u.minimap.get(4).filter(|c| c.flags & crate::dlg::flag::VISIBLE != 0).and(u.minimap.screen_rect(4))).is_some_and(|(l, t, r, b)| (l..=r).contains(&cx) && (t..=b).contains(&cy));
-        let vision_clicked = vision_btn_down && !mdown && on_vision_btn;
-        vision_btn_down = mdown && (vision_btn_down || (on_vision_btn && !lmb_was_down));
+        let vision_rect = ui.as_ref().and_then(|u| u.minimap.get(4).filter(|c| c.flags & crate::dlg::flag::VISIBLE != 0).and(u.minimap.screen_rect(4)));
+        let vision_clicked = vision_btn_down && !mdown && in_rect(vision_rect, up_pos);
+        vision_btn_down = mdown && (vision_btn_down || (in_rect(vision_rect, press_pos) && !lmb_was_down));
         if vision_btn_down {
             lmb_was_down = mdown;
         }
@@ -3807,7 +3886,6 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
         // outside a target move no box drag (0x66ff5c) or dialog (0x6d1214); a target move
         // ends the box drag (0x46efa0).
         let (ox, oy, scale) = minimap_geom(&scene);
-        let map_pt = (cx + vx, cy + vy);
         let down = lmb;
         let clicked = down && !lmb_was_down;
         lmb_was_down = down;
@@ -3823,15 +3901,15 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
                 (bx..=br).contains(&x) && (by..=bb).contains(&y)
             })
         };
-        let under = slot_at(cx, cy).filter(|&i| matches!(card[i], Some((_, true))));
+        let enabled_at = |(x, y): (i32, i32)| slot_at(x, y).filter(|&i| matches!(card[i], Some((_, true))));
         if clicked {
-            card_down = under;
+            card_down = enabled_at(press_pos);
         }
         if down {
-            scene.card_held = card_down.filter(|&i| under == Some(i));
+            scene.card_held = card_down.filter(|&i| enabled_at((cx, cy)) == Some(i));
         } else {
             if let Some(i) = card_down.take() {
-                if under == Some(i) {
+                if enabled_at(rel_pos) == Some(i) {
                     pressed = card[i].map(|(b, _)| b);
                     scene.st.ui_sounds.push(BUTTON_CLICK_SFX);
                 }
@@ -3840,16 +3918,17 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
         }
         // The same for the status panel's buttons (0x4e1a70: pressed while held under the
         // mouse, the click on release).
-        let stat_under = ui.as_ref().and_then(|u| scene.status_button_at(u, cx, cy));
+        let stat_at = |(x, y): (i32, i32)| ui.as_ref().and_then(|u| scene.status_button_at(u, x, y));
+        let stat_under = stat_at(press_pos);
         if clicked {
             stat_down = stat_under;
         }
         let mut stat_released = false;
         if down {
-            scene.stat_held = stat_down.filter(|&i| stat_under == Some(i));
+            scene.stat_held = stat_down.filter(|&i| stat_at((cx, cy)) == Some(i));
         } else {
             if let Some(i) = stat_down.take() {
-                stat_released = stat_under == Some(i);
+                stat_released = stat_at(rel_pos) == Some(i);
             }
             scene.stat_held = None;
         }
@@ -3954,21 +4033,26 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
         let keys = if scene.chat.open || !chat_keys.is_empty() { Vec::new() } else { keys_no.clone() };
         for k in keys {
             use minifb::Key::*;
-            if let Some(g) = [Key0, Key1, Key2, Key3, Key4, Key5, Key6, Key7, Key8, Key9].iter().position(|&n| n == k) {
+            // The number pad's digits come as the same WM_CHAR (no accelerator uses them).
+            let pad = [NumPad0, NumPad1, NumPad2, NumPad3, NumPad4, NumPad5, NumPad6, NumPad7, NumPad8, NumPad9].iter().position(|&n| n == k).filter(|_| !ctrl && !alt);
+            if let Some(g) = [Key0, Key1, Key2, Key3, Key4, Key5, Key6, Key7, Key8, Key9].iter().position(|&n| n == k).or(pad) {
                 // Local.dll accelerators (table 101) and WM_CHAR (0x4846b0): Ctrl sets,
                 // Shift adds (command 0x13), Alt centers on the group and selects it
                 // (0x4967e0, 0x496b40), the digit alone selects; selecting the same
                 // group again within 500 ms centers too (0x4c07b0).
                 let g = g as u8;
-                // 0x4846e0: the accelerators below the 0x6509c4 gate do nothing while paused.
-                if scene.st.trig.paused {
+                let plain = pad.is_some() || !(ctrl || shift || alt);
+                // 0x4846e0: the accelerators below the 0x6509c4 gate do nothing while paused;
+                // the plain digit is WM_CHAR (0x4846b0 -> 0x496b40), which has no such gate.
+                if scene.st.trig.paused && !plain {
                     continue;
                 }
-                if ctrl || shift {
+                if !plain && (ctrl || shift) {
                     scene.hotkey(if ctrl { 0 } else { 2 }, g, tick * 42, &mut last_group);
                     continue;
                 }
-                let double = scene.hotkey(1, g, tick * 42, &mut last_group);
+                let Some(double) = scene.hotkey(1, g, tick * 42, &mut last_group) else { continue };
+                let alt = alt && !plain;
                 if alt || double {
                     if let Some(p) = scene.group_centre() {
                         (vx, vy) = p;
@@ -4011,6 +4095,9 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
                 O if alt => Some(crate::menu::Kind::Options),
                 Q if (ctrl || alt) && replay.is_none() => Some(crate::menu::Kind::QuitMission),
                 X if ctrl || alt => Some(crate::menu::Kind::Quit),
+                // -0x638a / -0x6389: 0x462600 / 0x462100 (their own gates).
+                S if alt && crate::menu::Menu::save_opens(&ctx) => Some(crate::menu::Kind::SaveGame),
+                L if alt && crate::menu::Menu::load_opens(&ctx) => Some(crate::menu::Kind::LoadGame),
                 _ => None,
             };
             if menu_kind.is_some() {
@@ -4081,16 +4168,25 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
             }
             if let Some(ui) = ui.as_ref() {
                 let ctrl = win.is_key_down(Key::LeftCtrl) || win.is_key_down(Key::RightCtrl);
-                scene.status_click(ui, cx, cy, shift, ctrl);
+                // The status panel's own clicks at the press point, its buttons' at the release.
+                let (x, y) = if stat_released { rel_pos } else { press_pos };
+                scene.status_click(ui, x, y, shift, ctrl);
             }
         }
-        let on_card = clicked && cy >= vh - 120 && !on_minimap_pt(cx, cy);
+        // A press is tested at its own point (the button may be up and the cursor gone by
+        // the tick); a held button at the cursor.
+        let lp = if clicked { press_pos } else { (cx, cy) };
+        let map_pt = (lp.0 + vx, lp.1 + vy);
+        // 0x484380 / 0x484620 -> the mode's handlers: the map takes a click only off the
+        // console's opaque pixels (0x4d1140) and inside the map rect 0x5993b0 (640 x 400).
+        let on_map = |x: i32, y: i32| (0..400).contains(&y) && ui.as_ref().map_or(y < vh - 120, |u| !u.hud_hit(x, y));
+        let on_card = clicked && !on_map(lp.0, lp.1) && !on_minimap_pt(lp.0, lp.1);
         if let Some(btn) = pressed.filter(|b| replay.is_none() || matches!(b.act, 0x4df260 | 0x4df2c0 | 0x4df300)) {
             scene.press(&btn, shift);
         }
         if scene.placing.is_some() {
-            scene.check_placement((cx, cy), (vx, vy));
-            if clicked && cy < vh - 120 && pressed.is_none() {
+            scene.check_placement(lp, (vx, vy));
+            if clicked && on_map(lp.0, lp.1) && pressed.is_none() {
                 scene.build();
                 lmb_was_down = true;
                 drag_start = None;
@@ -4101,11 +4197,12 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
         let down = down && scene.placing.is_none();
         let mut targeted = false;
         // 0x488760: the minimap ignores its input while paused (0x6509c4) outside multiplayer.
-        let mm_blocked = scene.st.trig.paused && !scene.st.multiplayer && on_minimap_pt(cx, cy);
+        let mm_paused = scene.st.trig.paused && !scene.st.multiplayer;
+        let mm_blocked = mm_paused && on_minimap_pt(lp.0, lp.1);
         if scene.targeting.is_some() && clicked && pressed.is_none() && !on_card && !mm_blocked {
             // A targeted order given on the minimap goes to that map point; the camera
             // stays (the click does not also scroll it).
-            let pt = if on_minimap_pt(cx, cy) { scene.minimap.screen_to_map(cx, cy, (ox as i16, (oy - 0x13b) as i16)) } else { map_pt };
+            let pt = if on_minimap_pt(lp.0, lp.1) { scene.minimap.screen_to_map(lp.0, lp.1, (ox as i16, (oy - 0x13b) as i16)) } else { map_pt };
             scene.target_click(pt, shift);
             lmb_was_down = true; // the click is consumed; don't start a drag
             drag_start = None;
@@ -4124,7 +4221,8 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
         } else if hud_press.is_none() {
             hud_press = Some(ui.as_ref().is_some_and(|u| u.hud_hit(press_pos.0, press_pos.1)));
         }
-        if down && on_minimap_pt(cx, cy) && drag_start.is_none() {
+        if down && on_minimap_pt(lp.0, lp.1) && drag_start.is_none() {
+          let (cx, cy) = lp;
           if mm_blocked {
               // 0x4a5926 / 0x4a59f0: ignored while paused.
           } else if alt && clicked && replay.is_none() {
@@ -4142,13 +4240,13 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
             vx = (mx >> 5) << 5;
             vy = (my >> 5) << 5;
           }
-        } else if down && cy < vh - 120 && (drag_start.is_some() || hud_press == Some(false)) {
+        } else if down && (drag_start.is_some() || (hud_press == Some(false) && press_pos.1 < 400)) {
             let (sx, sy) = *drag_start.get_or_insert(press_pos);
             scene.drag_box = Some((sx, sy, cx, cy));
         } else if !down {
             if let Some(from) = drag_start.take() {
                 let ctrl = win.is_key_down(Key::LeftCtrl) || win.is_key_down(Key::RightCtrl);
-                scene.release_select(from, (cx, cy), (vx, vy), shift, ctrl, dbl_press);
+                scene.release_select(from, rel_pos, (vx, vy), shift, ctrl, dbl_press);
             }
         }
         // A whole click between two ticks: the press above started the box, the release
@@ -4159,15 +4257,24 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
             scene.release_select(from, to, (vx, vy), shift, ctrl, dbl_press);
         }
         let rdown = rmb;
+        // WM_RBUTTONDOWN's own point (0x484620).
+        let (rx, ry) = rpress_pos;
+        let mm_blocked = mm_paused && on_minimap_pt(rx, ry);
         if rdown && !rmb_was_down && (scene.end_targeting() || scene.placing.is_some()) {
             // Right-click cancels targeting / placement (0x48e310: the highlights go too).
             scene.set_placing(None);
         } else if replay.is_some() {
             // Watching a replay: no commands.
-        } else if rdown && !rmb_was_down && cy < vh - 120 {
-            scene.map_right_click(map_pt, shift);
-        } else if rdown && !rmb_was_down && on_minimap_pt(cx, cy) && !mm_blocked {
-            scene.right_click(((cx - ox) * scale, (cy - oy) * scale), shift);
+        } else if rdown && !rmb_was_down && on_minimap_pt(rx, ry) {
+            if !mm_blocked {
+                scene.right_click(((rx - ox) * scale, (ry - oy) * scale), shift);
+            }
+        } else if rdown && !rmb_was_down && on_map(rx, ry) {
+            scene.map_right_click((rx + vx, ry + vy), shift);
+        } else if rdown && !rmb_was_down {
+            // 0x484620 (the console rect 0x5136cc) / 0x4bd4d0 (elsewhere off the map): the
+            // card goes back to the unit's own set (0x68c1c8 = 0xe4, 0x4599a0).
+            scene.card_menu = None;
         }
         rmb_was_down = rdown;
         if let Some(kind) = want_menu {
@@ -4553,6 +4660,25 @@ fn tooltip(ui: &crate::ui::Ui, text: &str, x: i32, y: i32, out: &mut [u8], w: i3
     }
 }
 
+thread_local! {
+    /// 0x6d11b4 / 0x6d11b8 (never reset: the phase carries over to the next pause).
+    static PAUSE_BLINK: std::cell::Cell<(bool, Option<web_time::Instant>)> = const { std::cell::Cell::new((false, None)) };
+}
+
+/// 0x4deed0's pause blink step; whether "Paused" shows.
+fn pause_blink() -> bool {
+    PAUSE_BLINK.with(|c| {
+        let (mut on, last) = c.get();
+        let now = web_time::Instant::now();
+        // 0x6d11b8 starts at 0: the first paused pass flips at once.
+        if last.is_none_or(|t| now.duration_since(t).as_millis() > 600) {
+            on = !on;
+            c.set((on, Some(now)));
+        }
+        on
+    })
+}
+
 /// 0x427a80: the replay panel in the command card dialog (statbtnn.bin): "Replay
 /// Progress" (-45), progress (10), elapsed time (-46) and speed (-47).
 fn draw_replay_panel(scene: &Scene, ui: &crate::ui::Ui, out: &mut [u8], w: i32, h: i32) {
@@ -4580,7 +4706,9 @@ fn draw_replay_panel(scene: &Scene, ui: &crate::ui::Ui, out: &mut [u8], w: i32, 
     let time = if secs / 3600 == 0 { format!("{:02}:{:02}", secs / 60 % 60, secs % 60) } else { format!("{}:{:02}:{:02}", secs / 3600, secs / 60 % 60, secs % 60) };
     label(-46, &glu(0x10).replace("%s", &time), &mut s);
     let mult = if st.replay_mult > 1 { format!(" {} {}", if st.replay_speed > 2 { "x" } else { "/" }, st.replay_mult) } else { String::new() };
-    let speed = if st.replay_paused { stat(0x60a) } else { format!("{} {}{}", glu(0x5d), glu(st.replay_speed as usize + 0x55), mult) };
+    // 0x4deed0: while paused (0x6d11b0) 0x6d11b4 flips once more than 600 ms (real time,
+    // 0x6d11b8) passed since the last flip; "Paused" shows only while it is set (0x427a80).
+    let speed = if st.replay_paused { if pause_blink() { stat(0x60a) } else { String::new() } } else { format!("{} {}{}", glu(0x5d), glu(st.replay_speed as usize + 0x55), mult) };
     label(-47, &speed, &mut s);
 }
 

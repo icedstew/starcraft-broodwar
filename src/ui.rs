@@ -141,14 +141,14 @@ pub struct TextDst<'a> {
 }
 
 /// Running color state: 0x6ce0c0 (current row) and 0x6ce0e8 (previous row).
-struct Color {
-    cur: usize,
-    prev: usize,
+pub struct Color {
+    pub cur: usize,
+    pub prev: usize,
 }
 
 impl Color {
     /// 0x41f610.
-    fn set(&mut self, code: u8) {
+    pub fn set(&mut self, code: u8) {
         if code == 1 {
             self.cur = self.prev;
             return;
@@ -395,7 +395,15 @@ impl Font {
     }
 
     /// draw_text for game strings as stored (bytes 0x80.. are the font's own glyphs).
-    pub fn draw_bytes(&self, s: &[u8], x: i32, mut y: i32, color: u8, o: &TextOpts, dst: TextDst) -> Ext {
+    pub fn draw_bytes(&self, s: &[u8], x: i32, y: i32, color: u8, o: &TextOpts, dst: TextDst) -> Ext {
+        let mut c = Color { cur: 0, prev: 0 };
+        c.set(color);
+        self.draw_bytes_color(s, x, y, &mut c, o, dst)
+    }
+
+    /// 0x4202b0 with the color globals (0x6ce0c0 / 0x6ce0e8) kept in `c` across draws, so
+    /// a later draw continues in the color the text's codes left.
+    pub fn draw_bytes_color(&self, s: &[u8], x: i32, mut y: i32, c: &mut Color, o: &TextOpts, dst: TextDst) -> Ext {
         let mut o = *o;
         o.clip.0 = o.clip.0.max(0);
         o.clip.1 = o.clip.1.max(0);
@@ -407,8 +415,6 @@ impl Font {
         if !(x >= l && y >= t && x <= r && y + self.height <= b) {
             return grow(ext);
         }
-        let mut c = Color { cur: 0, prev: 0 };
-        c.set(color);
         let mut lines = 0;
         if o.flags & 0x68 != 0 {
             let (n, end_y) = self.layout(s, x, y, &mut Color { cur: c.cur, prev: c.prev }, &o, &mut None, &mut ext);
@@ -420,7 +426,7 @@ impl Font {
         if o.flags & 8 != 0 {
             o.flags ^= if lines > 1 { 9 } else { 0xa };
         }
-        self.layout(s, x, y, &mut c, &o, &mut Some(dst), &mut ext);
+        self.layout(s, x, y, c, &o, &mut Some(dst), &mut ext);
         grow(ext)
     }
 
