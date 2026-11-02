@@ -2638,7 +2638,12 @@ fn draw_hud(scene: &Scene, ui: &crate::ui::Ui, vx: i32, vy: i32, cursor: Option<
                     let wt = crate::ui::wire_type(&scene.st, u) as usize;
                     let frame = if wt < ui.wireframe.frame_count() { wt } else { 0 };
                     let colors = with_data(scene.a, |d| crate::ui::wireframe_colors(&scene.st, d, u, &ui.twire));
-                    ui.wireframe.draw(frame, false, l, t, out, w, h, Blend::Colors(&colors));
+                    // 0x4568f0: the frame is drawn without its x/y offsets, centered in the
+                    // control ((size difference) / 2, truncated toward zero).
+                    let (fw, fh) = ui.wireframe.frame_size(frame);
+                    let (fw, fh) = (fw & 0xff, fh);
+                    let off = ui.wireframe.frame(frame).map_or((0, 0), |f| (f.x, f.y));
+                    ui.wireframe.draw(frame, false, l + (cw - fw) / 2 - off.0, t + (ch - fh) / 2 - off.1, out, w, h, Blend::Colors(&colors));
                 }
                 crate::statdata::Show::Cargo { bg, unit } => {
                     // 0x456d30: the next frame while pressed (0x40000000).
