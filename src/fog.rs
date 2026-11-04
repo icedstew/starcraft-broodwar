@@ -8,8 +8,8 @@ use crate::bw::State;
 const FULL: u8 = 0x1f;
 /// Tile levels: 24 x 17 tiles from one tile left of / above the screen (0x6d5c14,
 /// blurred into 0x6d5c0c).
-const LW: usize = 0x18;
-const LH: usize = 0x11;
+pub const LW: usize = 0x18;
+pub const LH: usize = 0x11;
 /// Corner grid 0x6d5c18: 0x58 bytes per row of 8-pixel corners, 56 rows.
 const GW: usize = 0x58;
 const GH: usize = 0x38;
@@ -43,6 +43,11 @@ impl Fog {
             back = back.wrapping_sub(0x100);
         }
         Fog { interp }
+    }
+
+    /// 0x47fc50 for the screen at map position (`vx`, `vy`).
+    pub fn levels(st: &State, vx: i32, vy: i32) -> [u8; LW * LH] {
+        Fog::tile_levels(st, vx >> 5, vy >> 5)
     }
 
     /// 0x47fc50: darkness of the tiles around the screen at tile (tx, ty), then the

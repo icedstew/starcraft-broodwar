@@ -18,6 +18,7 @@ mod msgs;
 mod smk;
 mod portrait;
 mod fog;
+mod screen;
 mod game;
 mod glue;
 mod grid;
@@ -1110,6 +1111,12 @@ fn main() -> std::io::Result<()> {
                 }
             }
             let mut si = 0;
+            let mut dirty_screen = std::env::var_os("SCBW_DIRTY").map(|_| screen::Screen::new());
+            let mut cur_cam = (0, 0);
+            let draws = if dirty_screen.is_some() { load_draws(&dir.join("native/draws.txt")) } else { Vec::new() };
+            let mut di = 0;
+            // (draws, identical dirty sets, our cells native did not flag, native cells we did not)
+            let mut dstats = (0u32, 0u32, 0u32, 0u32);
             for frame in 0..last {
                 // 0x4d9670: commands of frame F run while the counter is F, then it advances
                 // and the game steps.
@@ -1127,6 +1134,42 @@ fn main() -> std::io::Result<()> {
                     scene.st.screen_tile = ((x >> 5) as u16, (y >> 5) as u16);
                 }
                 let f = scene.st.frame;
+                // SCBW_DIRTY=1 (screen.rs): the map area is kept between frames and only the cells
+                // 1.16.1 would redraw change, as in its stale blocks.
+                if let Some(sc) = dirty_screen.as_mut() {
+                    if draws.is_empty() {
+                        if let Some(&(x, y)) = shots.iter().find(|s| s.0 == f).map(|s| (s.1, s.2)).as_ref().or_else(|| camera.get(&frame)) {
+                            cur_cam = (x, y);
+                        }
+                        let marks = scene.sprite_marks(sc, cur_cam.0, cur_cam.1, sc.is_scroll(cur_cam.0, cur_cam.1));
+                        let mut full = vec![0u8; 640 * 400];
+                        scene.draw(cur_cam.0, cur_cam.1, 640, 400, &mut full);
+                        sc.update(cur_cam.0, cur_cam.1, &full, &fog::Fog::levels(&scene.st, cur_cam.0, cur_cam.1), &marks);
+                    }
+                    // native/draws.txt (CAP_DRAWLOG): each draw of the game, at its frame and
+                    // position, with the cells it flagged.
+                    while let Some((df, dx, dy, bits)) = draws.get(di).filter(|d| d.0 <= f) {
+                        di += 1;
+                        let marks = scene.sprite_marks(sc, *dx, *dy, sc.is_scroll(*dx, *dy));
+                        let mut full = vec![0u8; 640 * 400];
+                        scene.draw(*dx, *dy, 640, 400, &mut full);
+                        let ours = sc.update(*dx, *dy, &full, &fog::Fog::levels(&scene.st, *dx, *dy), &marks);
+                        let _ = df;
+                        let (mut extra, mut missing) = (0, 0);
+                        for c in 0..1000 {
+                            extra += (ours[c] != 0 && bits[c] == 0) as u32;
+                            missing += (ours[c] == 0 && bits[c] != 0) as u32;
+                        }
+                        dstats.0 += 1;
+                        dstats.1 += (extra == 0 && missing == 0) as u32;
+                        dstats.2 += extra;
+                        dstats.3 += missing;
+                        if std::env::var_os("SCBW_DIRTY_LOG").is_some() && (extra != 0 || missing != 0) {
+                            let list = |a: &[u8], b: &[u8]| (0..1000).filter(|&c| a[c] != 0 && b[c] == 0).map(|c| format!("{},{}", c % 40, c / 40)).collect::<Vec<_>>().join(" ");
+                            eprintln!("draw f{f} ({dx},{dy}): ours-only {extra} [{}], native-only {missing} [{}]", list(&ours[..], bits), list(bits, &ours[..]));
+                        }
+                    }
+                }
                 // SCBW_REPSHOT_SELECT: the selection native/sel.txt (CAP_SELECT) set at that frame.
                 while let Some((_, idx)) = sels.get(si).filter(|e| e.0 <= f) {
                     // A unit that died since the pick has no sprite: skip it (and drop dead
@@ -1171,7 +1214,7 @@ fn main() -> std::io::Result<()> {
                             // timers logged after it run after the map-only compare too.
                             if let (Some(sf), false, false) = (shot, map_done, hud) {
                                 if let Some(&(_, sx, sy)) = shots.iter().find(|s| s.0 == sf && sf == f) {
-                                    let pct = map_compare(&scene, dir, f, (sx, sy))?;
+                                    let pct = map_compare(&scene, dir, f, (sx, sy), dirty_screen.as_ref().map(|d| &d.pix[..]))?;
                                     total += pct;
                                     report += &format!("f{f} {pct:.2}%\n");
                                     map_done = true;
@@ -1212,11 +1255,14 @@ fn main() -> std::io::Result<()> {
                 // The map-only shot: here unless the frame's grab came first (below).
                 if !map_done && !hud {
                     if let Some(&(_, sx, sy)) = shots.iter().find(|s| s.0 == f) {
-                        let pct = map_compare(&scene, dir, f, (sx, sy))?;
+                        let pct = map_compare(&scene, dir, f, (sx, sy), dirty_screen.as_ref().map(|d| &d.pix[..]))?;
                         total += pct;
                         report += &format!("f{f} {pct:.2}%\n");
                     }
                 }
+            }
+            if dirty_screen.is_some() && !draws.is_empty() {
+                println!("dirty cells: {} draws, {} identical, ours-only {}, native-only {}", dstats.0, dstats.1, dstats.2, dstats.3);
             }
             let n = report.lines().filter(|l| if hud { l.contains("HUD") } else { !l.contains("_full") }).count().max(1);
             report += &format!("mean {:.2}% over {n} shots\n", total / n as f64);
@@ -2161,10 +2207,36 @@ fn full_compare(scene: &view::Scene, ui: &ui::Ui, dir: &std::path::Path, name: &
 
 /// Compare native/fNNNNNN.png (1.16.1's game buffer: the map, rows 0..400) with ours at
 /// `screen`: writes ours/ and diff/, returns the share that differs.
-fn map_compare(scene: &view::Scene, dir: &std::path::Path, f: u32, (sx, sy): (i32, i32)) -> std::io::Result<f64> {
+/// native/draws.txt: "D <frame> <x> <y> <hex bits>" per draw; the bits are the 40 x 25 flagged
+/// cells, row major, cell 0 the lowest bit. Draws before the game starts (frame 0) are left out.
+fn load_draws(path: &std::path::Path) -> Vec<(u32, i32, i32, Vec<u8>)> {
+    let Ok(t) = std::fs::read_to_string(path) else { return Vec::new() };
+    t.lines()
+        .filter_map(|l| {
+            let v: Vec<&str> = l.split_whitespace().collect();
+            let (f, x, y) = (v.get(1)?.parse().ok()?, v.get(2)?.parse().ok()?, v.get(3)?.parse().ok()?);
+            let hex = v.get(4)?;
+            let mut bits = vec![0u8; 1000];
+            for (i, ch) in hex.chars().rev().enumerate() {
+                let n = ch.to_digit(16)?;
+                for b in 0..4 {
+                    if n >> b & 1 != 0 && i * 4 + b < 1000 {
+                        bits[i * 4 + b] = 1;
+                    }
+                }
+            }
+            (f > 0).then_some((f, x, y, bits))
+        })
+        .collect()
+}
+
+fn map_compare(scene: &view::Scene, dir: &std::path::Path, f: u32, (sx, sy): (i32, i32), kept: Option<&[u8]>) -> std::io::Result<f64> {
     let (w, h) = (640usize, 400usize);
     let mut idx = vec![0u8; w * h];
-    scene.draw(sx, sy, w as i32, h as i32, &mut idx);
+    match kept {
+        Some(k) => idx.copy_from_slice(k),
+        None => scene.draw(sx, sy, w as i32, h as i32, &mut idx),
+    }
     let pal = scene.palette();
     let ours: Vec<[u8; 3]> = idx.iter().map(|&i| pal[i as usize]).collect();
     let name = format!("f{f:06}.png");
@@ -2188,6 +2260,29 @@ fn map_compare(scene: &view::Scene, dir: &std::path::Path, f: u32, (sx, sy): (i3
         }
     }
     write_png_rgb(dir.join("diff").join(&name).to_str().unwrap(), w * 3, h, &side)?;
+    // SCBW_REPSHOT_IDX=1: where the differing pixels are in palette terms (our index): the
+    // share inside the tileset's color-cycling ranges is phase, not drawing.
+    if std::env::var_os("SCBW_REPSHOT_IDX").is_some() {
+        let ts = scene.st.tileset;
+        let (mut cyc, mut other) = (0, 0);
+        let mut hist = std::collections::BTreeMap::new();
+        for (i, &ix) in idx.iter().enumerate() {
+            let n = native(i % w, i / w);
+            if n != ours[i] {
+                if palette::in_cycle_range(ts, ix as usize) {
+                    cyc += 1;
+                } else {
+                    other += 1;
+                    // The native index: the first palette entry of its color.
+                    let ni = pal.iter().position(|&c| c == n).map_or(-1, |v| v as i32);
+                    *hist.entry((ix, ni)).or_insert(0) += 1;
+                }
+            }
+        }
+        let mut top: Vec<_> = hist.into_iter().collect();
+        top.sort_by_key(|&(_, c)| std::cmp::Reverse(c));
+        println!("f{f}: diff in cycle ranges {cyc}, other {other}, top (ours,native) {:?}", &top[..top.len().min(8)]);
+    }
     let pct = bad as f64 * 100.0 / (w * h) as f64;
     println!("f{f}: {pct:.2}% of pixels differ");
     Ok(pct)

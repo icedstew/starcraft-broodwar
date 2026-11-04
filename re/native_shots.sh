@@ -103,5 +103,6 @@ fi
 for f in "$W"/cap/*.raw; do python3 -I "$RE/raw2png.py" "$f" "$OUT/native/$(basename "$f" .raw).png"; done
 cp "$W"/cap/sel.txt "$OUT/native/" 2>/dev/null || true
 cp "$W"/cap/*_full*.png "$W"/cap/events.txt "$OUT/native/" 2>/dev/null || true
+cp "$W"/cap/draws.txt "$OUT/native/" 2>/dev/null || true
 cp "$W/cap/meta.txt" "$OUT/native/"
 echo "$(wc -l < "$OUT/native/meta.txt") shots in $OUT/native"

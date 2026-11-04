@@ -125,6 +125,9 @@ const SCROLL_STEP: [[u8; 7]; 7] = [
 
 pub struct Scene<'a> {
     pub st: bw::State,
+    /// The map pixels before the fog shading of the last `draw`, kept while `keep_pre` (screen.rs).
+    pub pre_fog: std::cell::RefCell<Vec<u8>>,
+    pub keep_pre: std::cell::Cell<bool>,
     /// The globals of the screen scroll 0x47f0e0.
     pub scroll: ScrollState,
     /// 0x6d0c64: the tileset's creep edge pieces (`Tileset\<name>.grp`, 0x414100).
@@ -420,7 +423,7 @@ impl<'a> Scene<'a> {
         }
         // 0x4bed70 sets 0x597288 := 1 when it creates the leaderboard dialog.
         crate::leaderboard::reset_rows();
-        let mut scene = Scene { st, scroll: ScrollState::default(), creep_grp, minimap, minimap_timers, voices: crate::voices::Voices::new(), portrait: Default::default(), talk_left: 0, talk_unit: None, trans_left: None, sent_selection: Vec::new(), turns: Default::default(), card_menu: None, placing: None, card_held: None, stat_held: None, targeting: None, error: 0, msgs: Default::default(), chat: Default::default(), clock_ms: 0, timer_running: false, timer_base: 0, timer_start: 0, from_save: false, gamma: 100, pause_tick: 0, pause_replay_saved: false, place_ok: false, place_tile: (0, 0), place_err: 0, drag_box: None, a, chk, ts, terrain, player_colors, colors: std::array::from_fn(|p| colr.get(p).copied().unwrap_or(p as u8)), end_at: std::env::var("SCBW_END_AT").ok().and_then(|v| Some((v.trim_end_matches('d').parse().ok()?, if v.ends_with('d') { 0x40 } else { 0x80 }))), local, shadow, dark, fog: crate::fog::Fog::new(), parallax, tselect, thpbar, remaps, live_net: false };
+        let mut scene = Scene { st, pre_fog: Default::default(), keep_pre: Default::default(), scroll: ScrollState::default(), creep_grp, minimap, minimap_timers, voices: crate::voices::Voices::new(), portrait: Default::default(), talk_left: 0, talk_unit: None, trans_left: None, sent_selection: Vec::new(), turns: Default::default(), card_menu: None, placing: None, card_held: None, stat_held: None, targeting: None, error: 0, msgs: Default::default(), chat: Default::default(), clock_ms: 0, timer_running: false, timer_base: 0, timer_start: 0, from_save: false, gamma: 100, pause_tick: 0, pause_replay_saved: false, place_ok: false, place_tile: (0, 0), place_err: 0, drag_box: None, a, chk, ts, terrain, player_colors, colors: std::array::from_fn(|p| colr.get(p).copied().unwrap_or(p as u8)), end_at: std::env::var("SCBW_END_AT").ok().and_then(|v| Some((v.trim_end_matches('d').parse().ok()?, if v.ends_with('d') { 0x40 } else { 0x80 }))), local, shadow, dark, fog: crate::fog::Fog::new(), parallax, tselect, thpbar, remaps, live_net: false };
         scene.timer_running = timer_running;
         if let Ok(d) = scene.a.files.read(&format!("rez/{}textbox.bin", ["z", "t", "p"][scene.local_race()])) {
             scene.chat.load(crate::dlg::Dialog::parse(&d));
@@ -1107,6 +1110,70 @@ impl<'a> Scene<'a> {
         ((used.max(0) as u32).div_ceil(2), (prov.min(max).max(0) / 2) as u32)
     }
 
+    /// 0x4bd580's sprite pass (0x498cb0 / 0x498cf0, 0x4983a0, 0x4d57b0, 0x42d280) for a draw at
+    /// (`vx`, `vy`): every image of the sprites in the rows from the screen's top (0x5993a4 =
+    /// tile row - 4) down gets its screen rectangle (`scr.rects`) recomputed; on a scroll that is
+    /// all (0x498cf0, the whole screen is redrawn anyway), else an image with REDRAW flags its
+    /// old and new rectangles. The draw pass (0x497ce0) then clears REDRAW on the images of the
+    /// sprites it draws, approximated here as the sprites `draw` shows. Returns the flagged cells.
+    pub fn sprite_marks(&mut self, scr: &mut crate::screen::Screen, vx: i32, vy: i32, scrolled: bool) -> [u8; 40 * 30] {
+        use crate::screen::{clip_rect, mark_rect};
+        let mut dirty = [0u8; 40 * 30];
+        if scr.rects.len() < self.st.images.len() {
+            scr.rects.resize(self.st.images.len(), [0; 4]);
+        }
+        let first = ((vy >> 5) - 4).max(0) as usize;
+        let rows = if scrolled { 0 } else { first };
+        let mut clear: Vec<u32> = Vec::new();
+        for l in self.st.sprite_rows.iter().skip(rows) {
+            let mut s = l.head;
+            while s != NIL {
+                let sp = &self.st.sprites[s as usize];
+                // 0x4982d0: the draw list takes the sprites whose visibility has a bit of the local mask.
+                let drawn = sp.visibility & self.st.local_vision_mask != 0;
+                let mut i = sp.images.head;
+                while i != NIL {
+                    let img = &self.st.images[i as usize];
+                    let old = scr.rects[i as usize];
+                    // 0x4d57b0: the frame's map position and size.
+                    let new = match self.a.grp(img.grp).and_then(|g| g.frame(img.frame as usize).map(|f| (g.w, g.h, *f))) {
+                        Some((gw, gh, f)) => {
+                            let flip = img.flags & bw::sprite::iflag::FLIPPED != 0;
+                            let mx = sp.x as i32 + img.x as i32 + if flip { gw / 2 - f.w - f.x } else { f.x - gw / 2 };
+                            let my = if img.flags & bw::sprite::iflag::FREEZE_Y != 0 { img.pos_y as i32 } else { sp.y as i32 + img.y as i32 + f.y - gh / 2 };
+                            clip_rect(mx, my, f.w, f.h, vx, vy)
+                        }
+                        None => [0; 4],
+                    };
+                    if !scrolled && drawn && img.flags & bw::sprite::iflag::REDRAW != 0 {
+                        if std::env::var_os("SCBW_MARK_LOG").is_some() {
+                            eprintln!("mark f{} sprite {} (id {:#x} vis {:#x} flags {:#x}) image {} id {:#x} flags {:#x} drawn {} old {:?} new {:?}", self.st.frame, s, sp.sprite_id, sp.visibility, sp.flags, i, img.image_id, img.flags, drawn, old, new);
+                        }
+                        if old[2] > 0 && old[3] > 0 {
+                            mark_rect(&mut dirty, old[0] as i32, old[1] as i32, old[2] as i32, old[3] as i32);
+                        }
+                        if new[2] > 0 && new[3] > 0 {
+                            mark_rect(&mut dirty, new[0] as i32, new[1] as i32, new[2] as i32, new[3] as i32);
+                        }
+                    }
+                    if std::env::var_os("SCBW_MARK_LOG2").is_some() && new[2] > 0 && (288..352).contains(&(new[0] as i32 + new[2] as i32 / 2)) && (224..256).contains(&(new[1] as i32 + new[3] as i32 / 2)) {
+                        eprintln!("img f{} sprite {} (id {:#x} vis {:#x} flags {:#x}) image {} id {:#x} flags {:#x} anim {} rect {:?} drawn {}", self.st.frame, s, sp.sprite_id, sp.visibility, sp.flags, i, img.image_id, img.flags, img.iscript.anim, new, drawn);
+                    }
+                    scr.rects[i as usize] = new;
+                    if drawn {
+                        clear.push(i);
+                    }
+                    i = img.link.next;
+                }
+                s = self.st.sprites[s as usize].link.next;
+            }
+        }
+        for i in clear {
+            self.st.images[i as usize].flags &= !bw::sprite::iflag::REDRAW;
+        }
+        dirty
+    }
+
     fn sprite_seen(&self, s: u32) -> bool {
         let sp = &self.st.sprites[s as usize];
         sp.flags & bw::sprite::sflag::HIDDEN == 0 && sp.visibility & self.st.local_vision_mask != 0
@@ -1146,6 +1213,13 @@ impl<'a> Scene<'a> {
     /// 0x4bd580 between the sprites and the fog: on the space platform (tileset 1,
     /// 0x57f1dc) the parallax stars, moved for the screen position first (0x49c440 ->
     /// 0x49bfd0: clamped to the map, 8-pixel aligned).
+    /// screen.rs: the pixels about to be shaded.
+    fn keep_pre_fog(&self, out: &[u8]) {
+        if self.keep_pre.get() {
+            *self.pre_fog.borrow_mut() = out.to_vec();
+        }
+    }
+
     fn draw_stars(&self, vx: i32, vy: i32, out: &mut [u8], w: usize) {
         let Some(p) = self.parallax.as_ref().filter(|_| self.st.tileset == 1) else { return };
         let mut p = p.borrow_mut();
@@ -1241,6 +1315,7 @@ impl<'a> Scene<'a> {
                 for (k, s) in order.into_iter().enumerate() {
             if k == fogged {
                 self.draw_stars(vx, vy, out, vw as usize);
+                self.keep_pre_fog(out);
                 self.fog.shade(&self.st, &self.dark, vx, vy, out, vw as usize, vh as usize);
             }
             let sp = &self.st.sprites[s as usize];
@@ -1352,6 +1427,7 @@ impl<'a> Scene<'a> {
         }
         if total == fogged {
             self.draw_stars(vx, vy, out, vw as usize);
+            self.keep_pre_fog(out);
             self.fog.shade(&self.st, &self.dark, vx, vy, out, vw as usize, vh as usize);
         }
     }

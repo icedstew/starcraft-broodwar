@@ -3,9 +3,11 @@
 2026-11-04 frontier sweep (`--missing rest`, 46 addresses triaged): no sim gap; annotated
 0x498c50 / 0x49b9f0 / 0x48eff0 / 0x46efa0 as equivalent; fixed minimap buttons 0x4a5230
 (network game: messaging + diplomacy; ours: no diplomacy in a campaign match), `nosound`
-0x4da8a0, UI sounds at 1/5 under speech mute (0x64086c). Next: dirty-cell redraw
-(0x4bd580 / 0x4bcdc0 / 0x497000; one invalidation system 0x41e0d0 for map and dialogs: staged,
-terrain / camera first, tl1412 native shots as the check). Local player slot 0x512684 done.
+0x4da8a0, UI sounds at 1/5 under speech mute (0x64086c). Dirty-cell redraw (areas/ui.md "Dirty-cell redraw"): src/screen.rs + `SCBW_DIRTY=1 scbw repshot`
+replay native's draws (CAP_DRAWLOG draws.txt); dirty sets equal on 611 / 1208 draws of tl1412, pixels
+not better yet; fresh native sets with draw logs: ~/games/Starcraft/fresh8 (re/fresh8.sh). Next:
+close the dirty-set gaps (cursor / UI cells, REDRAW setters, hidden sprites), then the mineral
+carry image rotation the user remembers. Local player slot 0x512684 done.
 
 UI audit vs 1.16.1 (2026-11-01, areas/ui.md "Keys"): input handlers, accelerators, status panel /
 command card / resource bar reviewed and fixed. In flight: HUD pixel test with selections

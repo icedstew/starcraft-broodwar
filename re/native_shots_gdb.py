@@ -191,6 +191,23 @@ class Draw(gdb.Breakpoint):
             state["next"] = (f // EVERY + 1) * EVERY
         return True
 
+# CAP_DRAWLOG=1: every present (0x41cb23, before 0x41e280 blits and clears the dirty array
+# 0x6ceff8) one line "D <frame counter> <screen x> <screen y> <hex of the 40 x 25 map cells,
+# bit per cell, row major>" in draws.txt: when the game draws, from where, and which 16 pixel
+# cells it flagged. `scbw repshot` (SCBW_DIRTY=1) replays the draws and compares the cells.
+DRAWLOG = open(os.path.join(OUT, "draws.txt"), "a") if os.environ.get("CAP_DRAWLOG") else None
+
+class DrawLog(gdb.Breakpoint):
+    def stop(self):
+        d = bytes(inf.read_memory(0x6ceff8, 40 * 25))
+        bits = 0
+        for i, v in enumerate(d):
+            if v:
+                bits |= 1 << i
+        DRAWLOG.write("D %d %d %d %x\n" % (u32(0x57f23c), u32(0x62848c), u32(0x6284a8), bits))
+        DRAWLOG.flush()
+        return False
+
 class Blitted(gdb.Breakpoint):
     def stop(self):
         f = state["full"]
@@ -204,6 +221,8 @@ class Blitted(gdb.Breakpoint):
 
 gdb.execute("set pagination off")
 Draw("*0x41cb28")
+if DRAWLOG:
+    DrawLog("*0x41cb23")
 if SURF:
     # id 256: a palette cycling step (0x41e900, every 10 ms of real time from 0x4d93f0).
     for a, t in ((0x4a4e00, 1), (0x4a4a70, 2), (0x4a4e40, 3), (0x4a4f10, 6), (0x41e900, 256)):

@@ -155,3 +155,32 @@ Read when working on the HUD, dialogs, menus or glue screens.
   (objectives) is `Glue.objectives`: briefing action 0x427ec0 -> GameSetup -> `st.trig`,
   back through GameEnd; `SCBW_MENU=objectives` works in `scbw glue` shot mode (shot_setup).
 - 0x4015f0: `Audio::stop_files` (list 0x51a208 of `play_file` wavs), also run by `stop_sounds`.
+
+## Dirty-cell redraw (0x4bd580), 2026-11-04
+
+1.16.1 keeps the 640 x 480 screen between draws and redraws only the 16 px cells flagged in
+0x6ceff8 (30 rows x 40, 1 = redraw; the present 0x41e280 clears it). Frame: scroll flag
+0x6cefb5 & 1 (set by 0x49bfd0 when 0x62848c / 0x6284a8 changed) -> 0x47fc50 levels, copy
+them to 0x6d5c10, 0x498cf0 (all images' rects 0x4d57b0), 0x47fe10 grid, 0x49c780, whole ring
+copy 0x40c253, shade everything; else 0x4804d0 (fog level changes mark a 3 x 3 tile
+neighbourhood per run via 0x41e0d0), 0x498cb0 (rows 0x5993a4 = tile row - 4 .. map end:
+an image with REDRAW flags its old and new rect with 0x42d280, which also marks one cell
+right and below and lets a row run into the next), 0x4bcdc0 copies flagged cells from the
+672 x 448 terrain ring (0x40c2bd / 0x40c200), then sprites (0x498d40; 0x497ce0 draws an
+image when REDRAW or any flagged cell is under it, then clears REDRAW), then 0x4808e0 shades
+the flagged cells (0x4805f0). Cells nobody flags keep their old pixels: stale blocks.
+- The game draws about every 10 frames at x16 (plus extra draws with no step), not per frame;
+  the camera lag at shots varies 0..11+ frames. A scroll draw flags all 1000 map cells.
+- Mouse cursor and UI text (resource bar) flag map cells too (not modelled).
+- Most of the 16-pixel-block differences in tl1412 shots are these stale cells (f10564: two
+  columns of bright terrain native never re-shaded). About a quarter of the other differing
+  pixels are palette-cycling phase (SCBW_REPSHOT_IDX=1 splits them).
+- Tools: `CAP_DRAWLOG=1` (native_shots_gdb.py) writes native/draws.txt (frame, camera, the real
+  dirty bitmap of every draw); `SCBW_DIRTY=1 scbw repshot` replays those draws through
+  src/screen.rs (persistent screen, 0x4804d0, 0x41e0d0, 0x42d280, 0x4d57b0 ports,
+  `Scene::sprite_marks`) and prints how many dirty sets equal native's; SCBW_DIRTY_LOG=1 lists
+  the cells that differ. re/fresh8.sh captures 8 replays at once; re/allcmp.sh runs repshot over sets.
+- State: sets agree on 611 / 1208 draws of tl1412 (first 3000 frames); pixel diff not better
+  yet (0.48% vs 0.44%). Known gaps: sprites hidden by visibility (native does not flag them,
+  we do unless excluded), cursor / UI cells, images whose REDRAW native sets and we do not.
+- In a native replay 0x512684 / 0x512688 are 0 whoever the slots hold (re/probe_local.py).
