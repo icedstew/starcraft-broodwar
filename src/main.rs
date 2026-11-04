@@ -1115,6 +1115,7 @@ fn main() -> std::io::Result<()> {
             let mut cur_cam = (0, 0);
             let draws = if dirty_screen.is_some() { load_draws(&dir.join("native/draws.txt")) } else { Vec::new() };
             let mut di = 0;
+            let mut shot_done: std::collections::HashSet<u32> = Default::default();
             // (draws, identical dirty sets, our cells native did not flag, native cells we did not)
             let mut dstats = (0u32, 0u32, 0u32, 0u32);
             for frame in 0..last {
@@ -1157,6 +1158,16 @@ fn main() -> std::io::Result<()> {
                         for c in 0..1000 {
                             extra += (ours[c] != 0 && bits[c] == 0) as u32;
                             missing += (ours[c] == 0 && bits[c] != 0) as u32;
+                        }
+                        // The shot was taken at the first draw of its frame counter: compare here, before the
+                        // later draws and palette steps of the same counter.
+                        if !hud && !shot_done.contains(df) {
+                            if let Some(&(_, sx, sy)) = shots.iter().find(|s| s.0 == *df) {
+                                shot_done.insert(*df);
+                                let pct = map_compare(&scene, dir, *df, (sx, sy), Some(&sc.pix[..]))?;
+                                total += pct;
+                                report += &format!("f{df} {pct:.2}%\n");
+                            }
                         }
                         dstats.0 += 1;
                         dstats.1 += (extra == 0 && missing == 0) as u32;
@@ -1210,7 +1221,7 @@ fn main() -> std::io::Result<()> {
                             let shot: Option<u32> = name.get(1..7).and_then(|n| n.parse().ok());
                             // The buffer dump of that frame was taken at the same point: the
                             // timers logged after it run after the map-only compare too.
-                            if let (Some(sf), false, false) = (shot, map_done, hud) {
+                            if let (Some(sf), false, false) = (shot, map_done || shot.is_some_and(|x| shot_done.contains(&x)), hud) {
                                 if let Some(&(_, sx, sy)) = shots.iter().find(|s| s.0 == sf && sf == f) {
                                     let pct = map_compare(&scene, dir, f, (sx, sy), dirty_screen.as_ref().map(|d| &d.pix[..]))?;
                                     total += pct;
@@ -1251,7 +1262,7 @@ fn main() -> std::io::Result<()> {
                     }
                 }
                 // The map-only shot: here unless the frame's grab came first (below).
-                if !map_done && !hud {
+                if !map_done && !hud && !shot_done.contains(&f) {
                     if let Some(&(_, sx, sy)) = shots.iter().find(|s| s.0 == f) {
                         let pct = map_compare(&scene, dir, f, (sx, sy), dirty_screen.as_ref().map(|d| &d.pix[..]))?;
                         total += pct;
@@ -1304,7 +1315,7 @@ fn main() -> std::io::Result<()> {
                     eprintln!("map rows nonzero {} terrain {:?} vis {}", idx[..640 * 380].iter().filter(|&&v| v != 0).count(), (scene.terrain.0, scene.terrain.1), scene.st.local_vision_mask);
                     eprintln!("frame {frame}: idx nonzero {} pal[100] {:?} mm nonzero {} cyc {:?} grey {}", idx.iter().filter(|&&v| v != 0).count(), scene.palette()[100], scene.minimap.pixels.iter().filter(|&&v| v != 0).count(), scene.ts.cycle.pal[100], scene.st.palette_grey);
                     {
-                        let pal = scene.palette();
+                        let pal = &scene.ts.cycle.pal;
                         let (mw, mh) = (scene.minimap.w as usize, scene.minimap.h as usize);
                         let mut big = vec![0u32; mw * 4 * mh * 4];
                         for y in 0..mh * 4 {
@@ -2240,7 +2251,7 @@ fn map_compare(scene: &view::Scene, dir: &std::path::Path, f: u32, (sx, sy): (i3
         Some(k) => idx.copy_from_slice(k),
         None => scene.draw(sx, sy, w as i32, h as i32, &mut idx),
     }
-    let pal = scene.palette();
+    let pal = &scene.ts.cycle.pal;
     let ours: Vec<[u8; 3]> = idx.iter().map(|&i| pal[i as usize]).collect();
     let name = format!("f{f:06}.png");
     write_png(dir.join("ours").join(&name).to_str().unwrap(), w, h, &idx, pal)?;
