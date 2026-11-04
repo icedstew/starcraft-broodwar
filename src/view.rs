@@ -2026,8 +2026,10 @@ fn new_game(a: &Assets, chk: &Chk, rep: Option<&crate::replay::Header>, gs: Opti
             st.melee_map_units.copy_from_slice(&h.raw[0x271..0x279]);
             // Header byte 0: 1 = Brood War (0x58f440).
             st.is_expansion = h.engine == 1;
-            st.local_player = h.slots.iter().position(|s| s.kind == 2).unwrap_or(0) as u8;
-            st.local_human = st.local_player;
+            // 0x512684 / 0x512688 are 0 in a replay whoever the slots hold (probed in the real
+            // 1.16.1: tl1347, whose first human is slot 1, still has 0 at every frame; re/probe_local.py).
+            st.local_player = 0;
+            st.local_human = 0;
         } else if let Some(g) = gs {
             // 0x4ef100 / 0x4eee00 read the slot table 0x57eee0 the glue filled (races dealt by
             // 0x4a9a30, types by 0x4a9d80).

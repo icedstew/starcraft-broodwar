@@ -4,7 +4,8 @@
 0x498c50 / 0x49b9f0 / 0x48eff0 / 0x46efa0 as equivalent; fixed minimap buttons 0x4a5230
 (network game: messaging + diplomacy; ours: no diplomacy in a campaign match), `nosound`
 0x4da8a0, UI sounds at 1/5 under speech mute (0x64086c). Next: dirty-cell redraw
-(0x4bd580 / 0x4bcdc0 / 0x497000), native check of the local player slot 0x512684.
+(0x4bd580 / 0x4bcdc0 / 0x497000; one invalidation system 0x41e0d0 for map and dialogs: staged,
+terrain / camera first, tl1412 native shots as the check). Local player slot 0x512684 done.
 
 UI audit vs 1.16.1 (2026-11-01, areas/ui.md "Keys"): input handlers, accelerators, status panel /
 command card / resource bar reviewed and fixed. In flight: HUD pixel test with selections
@@ -282,10 +283,10 @@ Delegate per agents.md: Haiku triage, Sonnet porting, Opus review / hard RE / co
 
 Rechecked 2026-10-24 on bw116 replays (`scbw repview <rep> <dir> <frames>`: full screen +
 minimap PNGs): minimap colors / movement and replay chat match the decompile (not
-reproduced); cloak distortion wrap 0x40b155 fixed. Open: who is the local player
-(0x512684) in a native replay: `reset_slot_indices` sets 8, so native may show "Not enough
-energy." and the green chat color for nobody, scbw uses the first human slot
-(create.rs `local_error_line`): needs a native check.
+reproduced); cloak distortion wrap 0x40b155 fixed. Local player in a native replay
+(0x512684 / 0x512688): probed 2026-11-04 (re/probe_local.py, tl1412 and tl1347): 0 at every
+frame whoever the slots hold (tl1347's first human is slot 1); scbw now sets 0 too
+(view.rs). Suite, repcmp and the tl1347 shots (0.69% mean) unchanged.
 
 - Replays: minimap player colors wrong (purple shown green), no white border on narrow
   maps, minimap unit movement looks broken; chat lines not shown (tl1330_p2 f23040);
