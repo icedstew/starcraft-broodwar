@@ -1147,6 +1147,10 @@ fn main() -> std::io::Result<()> {
                     // position, with the cells it flagged.
                     while let Some((df, dx, dy, bits)) = draws.get(di).filter(|d| d.0 <= f) {
                         di += 1;
+                        if *dx == i32::MIN {
+                            scene.ts.cycle.step();
+                            continue;
+                        }
                         let ours = scene.native_frame(sc, *dx, *dy);
                         let _ = df;
                         let (mut extra, mut missing) = (0, 0);
@@ -2208,7 +2212,12 @@ fn load_draws(path: &std::path::Path) -> Vec<(u32, i32, i32, Vec<u8>)> {
     t.lines()
         .filter_map(|l| {
             let v: Vec<&str> = l.split_whitespace().collect();
-            let (f, x, y) = (v.get(1)?.parse().ok()?, v.get(2)?.parse().ok()?, v.get(3)?.parse().ok()?);
+            let f: u32 = v.get(1)?.parse().ok()?;
+            // "C <frame>": a palette cycling step (0x41e900), kept as a draw at x = i32::MIN.
+            if v.first() == Some(&"C") {
+                return (f > 0).then_some((f, i32::MIN, 0, Vec::new()));
+            }
+            let (x, y) = (v.get(2)?.parse().ok()?, v.get(3)?.parse().ok()?);
             let hex = v.get(4)?;
             let mut bits = vec![0u8; 1000];
             for (i, ch) in hex.chars().rev().enumerate() {

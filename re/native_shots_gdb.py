@@ -208,6 +208,12 @@ class DrawLog(gdb.Breakpoint):
         DRAWLOG.flush()
         return False
 
+class CycleLog(gdb.Breakpoint):
+    # 0x41e900: one palette color-cycling step; "C <frame counter>" in draws.txt, in order with the draws.
+    def stop(self):
+        DRAWLOG.write("C %d\n" % u32(0x57f23c))
+        return False
+
 class Blitted(gdb.Breakpoint):
     def stop(self):
         f = state["full"]
@@ -223,6 +229,7 @@ gdb.execute("set pagination off")
 Draw("*0x41cb28")
 if DRAWLOG:
     DrawLog("*0x41cb23")
+    CycleLog("*0x41e900")
 if SURF:
     # id 256: a palette cycling step (0x41e900, every 10 ms of real time from 0x4d93f0).
     for a, t in ((0x4a4e00, 1), (0x4a4a70, 2), (0x4a4e40, 3), (0x4a4f10, 6), (0x41e900, 256)):
