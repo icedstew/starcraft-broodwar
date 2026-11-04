@@ -180,6 +180,13 @@ the flagged cells (0x4805f0). Cells nobody flags keep their old pixels: stale bl
   src/screen.rs (persistent screen, 0x4804d0, 0x41e0d0, 0x42d280, 0x4d57b0 ports,
   `Scene::sprite_marks`) and prints how many dirty sets equal native's; SCBW_DIRTY_LOG=1 lists
   the cells that differ. re/fresh8.sh captures 8 replays at once; re/allcmp.sh runs repshot over sets.
+- `Scene::native_frame` (view.rs) is the staged frame: terrain (stage 1) into the dirty cells, images
+  drawn over the screen only when REDRAW is set or a flagged cell is under their rect (0x497ce0,
+  stage 2), fog shading of the flagged cells. Reproduces the double-darkened shadows and bright
+  crystals native shows (f240 / f10564 of tl1412). tl1412 first 24 shots: 0.44% -> 0.34%.
+- A draw log must come from the same capture run as the shots: draw timing differs between runs
+  (frame 360 drawn in one, not in the next), so old shot sets cannot be paired with a new draws.txt.
+- Debug env: SCBW_FORCE_FRAME=sprite,frame, SCBW_SHADOW_ROW=n, SCBW_MARK_LOG(2)=1.
 - State: sets agree on 611 / 1208 draws of tl1412 (first 3000 frames); pixel diff not better
   yet (0.48% vs 0.44%). Known gaps: sprites hidden by visibility (native does not flag them,
   we do unless excluded), cursor / UI cells, images whose REDRAW native sets and we do not.

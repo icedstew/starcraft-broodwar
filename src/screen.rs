@@ -31,11 +31,13 @@ pub struct Screen {
     /// Per image (+0x20 / +0x22 / +0x28 / +0x2a): the screen rectangle (x, y, w, h) it had at the
     /// last update, which 0x4983a0 flags before the new one.
     pub rects: Vec<[i16; 4]>,
+    /// The images whose REDRAW `Scene::clear_redraw` clears after the draw.
+    pub clear: Vec<u32>,
 }
 
 impl Screen {
     pub fn new() -> Screen {
-        Screen { pix: vec![0; 640 * 400], started: false, prev_levels: vec![0; LW * LH], cam: None, rects: Vec::new() }
+        Screen { pix: vec![0; 640 * 400], started: false, prev_levels: vec![0; LW * LH], cam: None, rects: Vec::new(), clear: Vec::new() }
     }
 
     /// Whether a draw at (`vx`, `vy`) is a scroll (0x6cefb5 & 1, set by 0x49bfd0): the first
@@ -44,10 +46,10 @@ impl Screen {
         self.cam != Some((vx, vy)) || !self.started
     }
 
-    /// 0x4bd580: one frame at map position (`vx`, `vy`). `full` is `Scene::draw`'s result,
-    /// `levels` 0x47fc50's blurred tile levels, `sprites` the cells the images flagged
-    /// (`mark_rect`, from `Scene::sprite_marks`).
-    pub fn update(&mut self, vx: i32, vy: i32, full: &[u8], levels: &[u8], sprites: &[u8; CW * ROWS]) -> [u8; CW * ROWS] {
+    /// 0x4bd580's flags for a draw at (`vx`, `vy`): all cells on a scroll, else the fog marks
+    /// (0x4804d0) and the sprites' (`sprites`, from `Scene::sprite_marks`). `levels` is
+    /// 0x47fc50's blurred tile levels.
+    pub fn flags(&mut self, vx: i32, vy: i32, levels: &[u8], sprites: &[u8; CW * ROWS]) -> [u8; CW * ROWS] {
         let scrolled = self.is_scroll(vx, vy);
         let mut dirty = [0u8; CW * ROWS];
         if scrolled {
@@ -61,18 +63,33 @@ impl Screen {
                 dirty[c] |= sprites[c];
             }
         }
+        self.started = true;
+        self.cam = Some((vx, vy));
+        dirty
+    }
+
+    /// The terrain copy (0x4bcdc0 / 0x40c253): the flagged cells of `terrain` (the map without
+    /// sprites or fog) replace the screen's.
+    pub fn copy_terrain(&mut self, dirty: &[u8; CW * ROWS], terrain: &[u8]) {
+        self.copy_cells(dirty, terrain);
+    }
+
+    /// The fog shading (0x4808e0): the flagged cells of `shaded` (the screen shaded whole) replace
+    /// the screen's.
+    pub fn copy_shaded(&mut self, dirty: &[u8; CW * ROWS], shaded: &[u8]) {
+        self.copy_cells(dirty, shaded);
+    }
+
+    fn copy_cells(&mut self, dirty: &[u8; CW * ROWS], src: &[u8]) {
         for c in 0..CW * CH {
             if dirty[c] != 0 {
                 let (x0, y0) = ((c % CW) * 16, (c / CW) * 16);
                 for y in 0..16 {
                     let o = (y0 + y) * 640 + x0;
-                    self.pix[o..o + 16].copy_from_slice(&full[o..o + 16]);
+                    self.pix[o..o + 16].copy_from_slice(&src[o..o + 16]);
                 }
             }
         }
-        self.started = true;
-        self.cam = Some((vx, vy));
-        dirty
     }
 
     /// 0x4804d0: compares the blurred levels (`cur`, 0x6d5c0c) with the old ones (0x6d5c10)

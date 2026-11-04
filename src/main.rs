@@ -1141,19 +1141,13 @@ fn main() -> std::io::Result<()> {
                         if let Some(&(x, y)) = shots.iter().find(|s| s.0 == f).map(|s| (s.1, s.2)).as_ref().or_else(|| camera.get(&frame)) {
                             cur_cam = (x, y);
                         }
-                        let marks = scene.sprite_marks(sc, cur_cam.0, cur_cam.1, sc.is_scroll(cur_cam.0, cur_cam.1));
-                        let mut full = vec![0u8; 640 * 400];
-                        scene.draw(cur_cam.0, cur_cam.1, 640, 400, &mut full);
-                        sc.update(cur_cam.0, cur_cam.1, &full, &fog::Fog::levels(&scene.st, cur_cam.0, cur_cam.1), &marks);
+                        scene.native_frame(sc, cur_cam.0, cur_cam.1);
                     }
                     // native/draws.txt (CAP_DRAWLOG): each draw of the game, at its frame and
                     // position, with the cells it flagged.
                     while let Some((df, dx, dy, bits)) = draws.get(di).filter(|d| d.0 <= f) {
                         di += 1;
-                        let marks = scene.sprite_marks(sc, *dx, *dy, sc.is_scroll(*dx, *dy));
-                        let mut full = vec![0u8; 640 * 400];
-                        scene.draw(*dx, *dy, 640, 400, &mut full);
-                        let ours = sc.update(*dx, *dy, &full, &fog::Fog::levels(&scene.st, *dx, *dy), &marks);
+                        let ours = scene.native_frame(sc, *dx, *dy);
                         let _ = df;
                         let (mut extra, mut missing) = (0, 0);
                         for c in 0..1000 {
@@ -1239,7 +1233,7 @@ fn main() -> std::io::Result<()> {
                             if (v[1]..=v[3]).contains(&(s.x as i32)) && (v[2]..=v[4]).contains(&(s.y as i32)) {
                                 eprintln!("row {row} sprite idx {sp} type {} vis {:#x} elev {} flags {:#x} pos ({},{})", s.sprite_id, s.visibility, s.elevation, s.flags, s.x, s.y);
                                 if let Some((ui_, un)) = scene.st.units.iter().enumerate().find(|(_, un)| un.sprite == sp) {
-                                    eprintln!("  (unit {ui_} type {:#x} status {:#x} order {:#x})", un.unit_type, un.status, un.order);
+                                    eprintln!("  (unit {ui_} type {:#x} status {:#x} order {:#x} resource {} anim {})", un.unit_type, un.status, un.order, un.resource_amount(), un.u8_at(0xd2));
                                 }
                                 let mut c = s.images.head;
                                 while c != bw::list::NIL {

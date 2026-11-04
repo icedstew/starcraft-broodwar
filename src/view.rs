@@ -128,6 +128,10 @@ pub struct Scene<'a> {
     /// The map pixels before the fog shading of the last `draw`, kept while `keep_pre` (screen.rs).
     pub pre_fog: std::cell::RefCell<Vec<u8>>,
     pub keep_pre: std::cell::Cell<bool>,
+    /// screen.rs: 0 a whole frame, 1 only the terrain, 2 only the sprites (gated by `gate`) up to the fog.
+    pub native_stage: std::cell::Cell<u8>,
+    /// 0x497ce0's test in stage 2: the flagged cells (30 rows x 40) and every image's screen rectangle.
+    pub gate: std::cell::RefCell<Option<(Vec<u8>, Vec<[i16; 4]>)>>,
     /// The globals of the screen scroll 0x47f0e0.
     pub scroll: ScrollState,
     /// 0x6d0c64: the tileset's creep edge pieces (`Tileset\<name>.grp`, 0x414100).
@@ -363,7 +367,8 @@ impl<'a> Scene<'a> {
         let dark = tbl("dark");
         let mut shadow = [0u8; 256];
         for (i, s) in shadow.iter_mut().enumerate() {
-            *s = dark.get(0x12 * 256 + i).copied().unwrap_or(i as u8);
+            let row = std::env::var("SCBW_SHADOW_ROW").ok().and_then(|v| v.parse().ok()).unwrap_or(0x12usize);
+            *s = dark.get(row * 256 + i).copied().unwrap_or(i as u8);
         }
         // images.dat remapping ids 1..=7
         let remaps = ["ofire", "gfire", "bfire", "bexpl", "trans50", "red", "green"].map(tbl);
@@ -423,7 +428,7 @@ impl<'a> Scene<'a> {
         }
         // 0x4bed70 sets 0x597288 := 1 when it creates the leaderboard dialog.
         crate::leaderboard::reset_rows();
-        let mut scene = Scene { st, pre_fog: Default::default(), keep_pre: Default::default(), scroll: ScrollState::default(), creep_grp, minimap, minimap_timers, voices: crate::voices::Voices::new(), portrait: Default::default(), talk_left: 0, talk_unit: None, trans_left: None, sent_selection: Vec::new(), turns: Default::default(), card_menu: None, placing: None, card_held: None, stat_held: None, targeting: None, error: 0, msgs: Default::default(), chat: Default::default(), clock_ms: 0, timer_running: false, timer_base: 0, timer_start: 0, from_save: false, gamma: 100, pause_tick: 0, pause_replay_saved: false, place_ok: false, place_tile: (0, 0), place_err: 0, drag_box: None, a, chk, ts, terrain, player_colors, colors: std::array::from_fn(|p| colr.get(p).copied().unwrap_or(p as u8)), end_at: std::env::var("SCBW_END_AT").ok().and_then(|v| Some((v.trim_end_matches('d').parse().ok()?, if v.ends_with('d') { 0x40 } else { 0x80 }))), local, shadow, dark, fog: crate::fog::Fog::new(), parallax, tselect, thpbar, remaps, live_net: false };
+        let mut scene = Scene { st, pre_fog: Default::default(), keep_pre: Default::default(), native_stage: Default::default(), gate: Default::default(), scroll: ScrollState::default(), creep_grp, minimap, minimap_timers, voices: crate::voices::Voices::new(), portrait: Default::default(), talk_left: 0, talk_unit: None, trans_left: None, sent_selection: Vec::new(), turns: Default::default(), card_menu: None, placing: None, card_held: None, stat_held: None, targeting: None, error: 0, msgs: Default::default(), chat: Default::default(), clock_ms: 0, timer_running: false, timer_base: 0, timer_start: 0, from_save: false, gamma: 100, pause_tick: 0, pause_replay_saved: false, place_ok: false, place_tile: (0, 0), place_err: 0, drag_box: None, a, chk, ts, terrain, player_colors, colors: std::array::from_fn(|p| colr.get(p).copied().unwrap_or(p as u8)), end_at: std::env::var("SCBW_END_AT").ok().and_then(|v| Some((v.trim_end_matches('d').parse().ok()?, if v.ends_with('d') { 0x40 } else { 0x80 }))), local, shadow, dark, fog: crate::fog::Fog::new(), parallax, tselect, thpbar, remaps, live_net: false };
         scene.timer_running = timer_running;
         if let Ok(d) = scene.a.files.read(&format!("rez/{}textbox.bin", ["z", "t", "p"][scene.local_race()])) {
             scene.chat.load(crate::dlg::Dialog::parse(&d));
@@ -1110,6 +1115,32 @@ impl<'a> Scene<'a> {
         ((used.max(0) as u32).div_ceil(2), (prov.min(max).max(0) / 2) as u32)
     }
 
+    /// 0x4bd580 on the persistent screen `scr` (screen.rs): the flagged cells get the terrain,
+    /// the images are drawn over the screen as 0x497ce0 decides, and the flagged cells are
+    /// shaded. Returns the flagged cells.
+    pub fn native_frame(&mut self, scr: &mut crate::screen::Screen, vx: i32, vy: i32) -> [u8; 40 * 30] {
+        let scrolled = scr.is_scroll(vx, vy);
+        let marks = self.sprite_marks(scr, vx, vy, scrolled);
+        let levels = crate::fog::Fog::levels(&self.st, vx, vy);
+        let dirty = scr.flags(vx, vy, &levels, &marks);
+        let mut terrain = vec![0u8; 640 * 400];
+        self.native_stage.set(1);
+        self.draw(vx, vy, 640, 400, &mut terrain);
+        scr.copy_terrain(&dirty, &terrain);
+        self.native_stage.set(2);
+        *self.gate.borrow_mut() = Some((dirty.to_vec(), scr.rects.clone()));
+        let mut pix = std::mem::take(&mut scr.pix);
+        self.draw(vx, vy, 640, 400, &mut pix);
+        scr.pix = pix;
+        self.native_stage.set(0);
+        *self.gate.borrow_mut() = None;
+        let mut shaded = scr.pix.clone();
+        self.shade_buffer(vx, vy, &mut shaded);
+        scr.copy_shaded(&dirty, &shaded);
+        self.clear_redraw(scr);
+        dirty
+    }
+
     /// 0x4bd580's sprite pass (0x498cb0 / 0x498cf0, 0x4983a0, 0x4d57b0, 0x42d280) for a draw at
     /// (`vx`, `vy`): every image of the sprites in the rows from the screen's top (0x5993a4 =
     /// tile row - 4) down gets its screen rectangle (`scr.rects`) recomputed; on a scroll that is
@@ -1168,10 +1199,20 @@ impl<'a> Scene<'a> {
                 s = self.st.sprites[s as usize].link.next;
             }
         }
-        for i in clear {
+        scr.clear = clear;
+        dirty
+    }
+
+    /// 0x497ce0's tail: the draw pass clears REDRAW on the images of the sprites it drew.
+    pub fn clear_redraw(&mut self, scr: &mut crate::screen::Screen) {
+        for i in std::mem::take(&mut scr.clear) {
             self.st.images[i as usize].flags &= !bw::sprite::iflag::REDRAW;
         }
-        dirty
+    }
+
+    /// screen.rs: the fog shading (0x4808e0) of the buffer `out` (640 x 400) at (vx, vy).
+    pub fn shade_buffer(&self, vx: i32, vy: i32, out: &mut [u8]) {
+        self.fog.shade(&self.st, &self.dark, vx, vy, out, 640, 400);
     }
 
     fn sprite_seen(&self, s: u32) -> bool {
@@ -1234,6 +1275,8 @@ impl<'a> Scene<'a> {
         let mut tile = [0u8; 32 * 32];
         let (x0, y0) = (vx.clamp(0, tw - 1) >> 5, vy.clamp(0, th - 1) >> 5);
         let (x1, y1) = ((vx + vw - 1).clamp(0, tw - 1) >> 5, (vy + vh - 1).clamp(0, th - 1) >> 5);
+        let stage = self.native_stage.get();
+        let (y0, y1) = if stage == 2 { (1, 0) } else { (y0, y1) };
         for ty in y0..=y1 {
             for tx in x0..=x1 {
                 let i = (ty * mw + tx) as usize;
@@ -1260,6 +1303,9 @@ impl<'a> Scene<'a> {
                     }
                 }
             }
+        }
+        if stage == 1 {
+            return;
         }
         // Sprites by elevation, then tile row (row lists as the game keeps them).
         let mut order: Vec<u32> = Vec::new();
@@ -1313,6 +1359,9 @@ impl<'a> Scene<'a> {
         let total = order.len();
         let lum = crate::grp::luminance(&self.ts.palette);
                 for (k, s) in order.into_iter().enumerate() {
+            if k == fogged && stage == 2 {
+                return;
+            }
             if k == fogged {
                 self.draw_stars(vx, vy, out, vw as usize);
                 self.keep_pre_fog(out);
@@ -1348,10 +1397,25 @@ impl<'a> Scene<'a> {
             }
             let mut i = sp.images.tail;
             while i != NIL {
+                let cur = i;
                 let img = &self.st.images[i as usize];
                 i = img.link.prev;
                 if img.flags & bw::sprite::iflag::HIDDEN != 0 {
                     continue;
+                }
+                // 0x497ce0 (screen.rs, stage 2): an image with a rectangle on the screen is drawn when
+                // REDRAW is set or a flagged cell lies under it (0x497000).
+                if stage == 2 {
+                    if let Some((dirty, rects)) = self.gate.borrow().as_ref() {
+                        let r = rects.get(cur as usize).copied().unwrap_or([0; 4]);
+                        let (x, y, w, h) = (r[0] as i32, r[1] as i32, r[2] as i32, r[3] as i32);
+                        if w <= 0 || h <= 0 {
+                            continue;
+                        }
+                        if img.flags & bw::sprite::iflag::REDRAW == 0 && !(y / 16..=(y + h - 1) / 16).any(|cy| (x / 16..=(x + w - 1) / 16).any(|cx| dirty.get((cy * 40 + cx) as usize).is_some_and(|&c| c != 0))) {
+                            continue;
+                        }
+                    }
                 }
                 if img.modifier == 0xf {
                     // 0x4d5280: the placement box image, a rectangle outline in color
@@ -1388,7 +1452,9 @@ impl<'a> Scene<'a> {
                     _ => Blend::Player(&self.player_colors[(sp.owner as usize).min(11)]),
                 };
                 let flip = img.flags & bw::sprite::iflag::FLIPPED != 0;
-                g.draw(img.frame as usize, flip, x, y, out, vw, vh, blend);
+                // Debug: SCBW_FORCE_FRAME="sprite,frame" draws that sprite's main image at another frame.
+                let fr = std::env::var("SCBW_FORCE_FRAME").ok().and_then(|v| { let (a, b) = v.split_once(',')?; (a.parse::<u32>().ok()? == s && img.modifier == 0).then(|| b.parse::<usize>().ok()).flatten() }).unwrap_or(img.frame as usize);
+                g.draw(fr, flip, x, y, out, vw, vh, blend);
                 if matches!(img.modifier, 2 | 4 | 5 | 7) {
                     // 0x4d55b0 / 0x4d5530: the fade pass, level = the image's +0x30 byte.
                     let pc = &self.player_colors[(sp.owner as usize).min(11)];
@@ -1425,7 +1491,7 @@ impl<'a> Scene<'a> {
                 }
             }
         }
-        if total == fogged {
+        if total == fogged && stage != 2 {
             self.draw_stars(vx, vy, out, vw as usize);
             self.keep_pre_fog(out);
             self.fog.shade(&self.st, &self.dark, vx, vy, out, vw as usize, vh as usize);
