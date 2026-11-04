@@ -1165,7 +1165,8 @@ impl<'a> Scene<'a> {
                 let i = (ty * mw + tx) as usize;
                 let raw = self.st.terrain.megatiles[i];
                 self.ts.draw_megatile(raw as usize & 0x7fff, &mut tile, 32);
-                // 0x49b9f0: a flagged tile next to creep gets its edge piece.
+                // 0x49b9f0: the 16 minitile draws (0x40c3b0) are `draw_megatile` above; a flagged tile
+        // next to creep gets its edge piece (0x40aae0).
                 let edge = self.st.terrain.creep_edges[i];
                 if raw & 0x8000 != 0 && edge != 0 {
                     if let Some(g) = &self.creep_grp {
@@ -1662,7 +1663,9 @@ impl<'a> Scene<'a> {
         pkt.extend_from_slice(&(tx as u16).to_le_bytes());
         pkt.extend_from_slice(&(ty as u16).to_le_bytes());
         pkt.extend_from_slice(&t.to_le_bytes());
-        // 0x48eff0: the building race's placement sound (sfx 4 + race).
+        // 0x48eff0: the building race's placement sound (sfx 4 + race; neutral = 4 via
+        // `supply_race_of`), played at volume 99 (`Audio::play` applies the speech-mute /5 of
+        // 0x64086c).
         let race = with_data(self.a, |d| bw::State::supply_race_of(d, t));
         self.st.ui_sounds.push(4 + race);
         self.send(&pkt);
@@ -3548,6 +3551,9 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
         while now_ms > last_scroll + 10 {
             last_scroll += 11;
             if scene.scroll.target.is_some() {
+                // 0x46efa0: clears the box flag 0x66ff5c, marks the box's 16 px cells dirty
+                // (0x41e0d0: scbw redraws whole) and reinstalls the default handlers (0x484cc0),
+                // so the button release no longer ends a selection.
                 drag_start = None;
                 scene.drag_box = None;
             }
@@ -3602,6 +3608,14 @@ pub fn frame_loop_end<'a>(a: &'a Assets, mut scene: Scene<'a>, mut replay: Optio
         ctx.player_type = scene.st.player_types.get(scene.st.local_player as usize).copied().unwrap_or(0);
         ctx.local_result = scene.st.player_left.get(scene.st.local_player as usize).copied().unwrap_or(0);
         ctx.elapsed_secs = scene.elapsed_seconds();
+        // 0x4a5230: the minimap buttons follow the game (humans may join a running one).
+        if let Some(u) = ui.as_mut() {
+            let st = &scene.st;
+            u.set_minimap_buttons(
+                st.replay,
+                crate::ui::MinimapGame { multiplayer: st.multiplayer, humans: (0..8).filter(|&p| st.player_types[p] == 2).count() as u8, template_type: st.template[0], campaign: st.campaign },
+            );
+        }
         let open_plain = |scene: &Scene, kind, depth, settings: &crate::menu::Settings| {
             let u = ui.as_ref()?;
             let mut m = crate::menu::Menu::open(kind, depth, &a.files, &u.skin, ctx, settings)?;

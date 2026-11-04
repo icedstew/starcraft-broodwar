@@ -1,4 +1,10 @@
-# Status (updated 2026-11-01)
+# Status (updated 2026-11-04)
+
+2026-11-04 frontier sweep (`--missing rest`, 46 addresses triaged): no sim gap; annotated
+0x498c50 / 0x49b9f0 / 0x48eff0 / 0x46efa0 as equivalent; fixed minimap buttons 0x4a5230
+(network game: messaging + diplomacy; ours: no diplomacy in a campaign match), `nosound`
+0x4da8a0, UI sounds at 1/5 under speech mute (0x64086c). Next: dirty-cell redraw
+(0x4bd580 / 0x4bcdc0 / 0x497000), native check of the local player slot 0x512684.
 
 UI audit vs 1.16.1 (2026-11-01, areas/ui.md "Keys"): input handlers, accelerators, status panel /
 command card / resource bar reviewed and fixed. In flight: HUD pixel test with selections

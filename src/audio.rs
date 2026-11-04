@@ -218,7 +218,11 @@ impl Audio {
     /// the sound's sfxdata.dat minimum volume; under 11 it isn't played.
     pub fn play(&self, files: &Storage, dat: &Dat, id: u16, pan_volume: f32) {
         let min = dat.sfxdata.volume.get(id as usize).copied().unwrap_or(0) as f32;
-        let vol = (pan_volume * 99.0).max(min);
+        let mut vol = (pan_volume * 99.0).max(min);
+        // 0x48ed50 / 0x48eff0 /: muted unit speech (0x64086c) plays them at a fifth.
+        if self.speech_muted {
+            vol = (vol as i32 / 5) as f32;
+        }
         if vol < 11.0 {
             return;
         }

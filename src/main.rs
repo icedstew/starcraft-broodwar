@@ -56,7 +56,15 @@ fn main() {}
 
 #[cfg(not(target_arch = "wasm32"))]
 fn main() -> std::io::Result<()> {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    // 0x4da8a0: the command line's "nosound" (DAT_006d11d0) skips the sound init 0x4bcb70; here
+    // `Audio::open` is off (SCBW_MUTE). "ddemulate" (DAT_006d5dfc, DirectDraw emulation) has no
+    // counterpart: the renderer is software.
+    if let Some(i) = args.iter().position(|a| a.eq_ignore_ascii_case("nosound")) {
+        args.remove(i);
+        // SAFETY: single-threaded start, before any thread or audio device exists.
+        unsafe { std::env::set_var("SCBW_MUTE", "1") };
+    }
     if args.first().map(String::as_str) == Some("mpqls") {
         let m = mpq::Mpq::open(args[1].as_ref())?;
         let list = m.read("(listfile)")?;

@@ -452,6 +452,16 @@ pub const CURSORS: [&str; 19] = [
     "scrolll.grp", "scrollul.grp",
 ];
 
+/// What 0x4a5230 reads of the game: 0x57f0b4, the human count (0x4c40f0), the template's
+/// game type (0x596865) and ours, a campaign match.
+#[derive(Clone, Copy, Default, PartialEq)]
+pub struct MinimapGame {
+    pub multiplayer: bool,
+    pub humans: u8,
+    pub template_type: u8,
+    pub campaign: bool,
+}
+
 pub struct Ui {
     pub console: Pcx,
     pub font: Font,
@@ -624,10 +634,32 @@ impl Ui {
         let statport = crate::dlg::Dialog::parse(&files.read("rez/statport.bin")?);
         let portraits = crate::portrait::Portraits::load(files);
         let mut minimap = crate::dlg::Dialog::parse(&files.read("rez/minimap.bin")?);
-        // 0x4a5230 (button init), single player (0x57f0b4 = 0): button 2 (graphic 3)
-        // shows unless watching a replay; 4 (83, a replay's vision button 140) shows
-        // only in a replay; 3 (130, diplomacy) needs two human players.
-        for (id, gr, shown) in [(2, 3, !replay), (3, 130, false), (4, if replay { 140 } else { 83 }, replay)] {
+        // 0x4a5230 (button init): the single-player case first; `set_minimap_buttons` redoes it
+        // each frame from the game (network games, campaign).
+        Ui::minimap_buttons(&mut minimap, replay, MinimapGame::default());
+        // The minimap itself (control 1, 0x4a3570) is drawn by the caller.
+        if let Some(c) = minimap.get_mut(1) {
+            c.flags &= !crate::dlg::flag::VISIBLE;
+        }
+        Ok(Ui { console, conover, font, font8, icons, cursors, wireframe, grpwire, tranwire, twire, cmdicons, ticon, stat_txt, stat_raw, tips, network, glu_all, statbtn, text_colors, statdata, cmdbtns, pbar_empty, pbar_full, skin, stat_f10, statport, portraits, fluff, statres, statlb, res_shown: std::cell::Cell::new((0, 0, 0xff)), minimap })
+    }
+
+    /// 0x4a5230 for the game now running (see `minimap_buttons`).
+    pub fn set_minimap_buttons(&mut self, replay: bool, g: MinimapGame) {
+        Ui::minimap_buttons(&mut self.minimap, replay, g);
+    }
+
+    /// 0x4a5230: rez\minimap.bin's buttons. 2 (terrain, graphic 3) shows unless the game is a
+    /// network game of 2+ humans of type 0x0f; 3 (messaging, 130) needs a network game of 2+
+    /// humans; 4 (diplomacy, tooltip stat_txt 0x32b; graphic 83, a replay's vision button
+    /// 140) shows in such a game too (and in a type 0x0f one), or in a replay. Ours: a
+    /// campaign match (enhanced.rs) has no diplomacy button (`g.campaign`): its armies' alliances
+    /// are the world map's.
+    fn minimap_buttons(minimap: &mut crate::dlg::Dialog, replay: bool, g: MinimapGame) {
+        let two = g.multiplayer && g.humans >= 2;
+        let tb = g.multiplayer && g.template_type == 0x0f;
+        let diplomacy = !g.campaign && (two || tb);
+        for (id, gr, shown) in [(2, 3, !replay && !tb), (3, 130, two && !replay), (4, if replay { 140 } else { 83 }, replay || diplomacy)] {
             if let Some(c) = minimap.get_mut(id) {
                 c.graphic = gr;
                 if shown {
@@ -637,11 +669,6 @@ impl Ui {
                 }
             }
         }
-        // The minimap itself (control 1, 0x4a3570) is drawn by the caller.
-        if let Some(c) = minimap.get_mut(1) {
-            c.flags &= !crate::dlg::flag::VISIBLE;
-        }
-        Ok(Ui { console, conover, font, font8, icons, cursors, wireframe, grpwire, tranwire, twire, cmdicons, ticon, stat_txt, stat_raw, tips, network, glu_all, statbtn, text_colors, statdata, cmdbtns, pbar_empty, pbar_full, skin, stat_f10, statport, portraits, fluff, statres, statlb, res_shown: std::cell::Cell::new((0, 0, 0xff)), minimap })
     }
 
     pub fn text_color(&self, c: usize) -> &[u8] {
