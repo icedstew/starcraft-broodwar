@@ -172,6 +172,13 @@ class Draw(gdb.Breakpoint):
             SEL["i"] += 1
             SEL["inj"] = None
             state["next"] = 0
+        # CAP_RANGE="lo:hi": every draw with a frame counter in the range (not every EVERY frames).
+        rng = os.environ.get("CAP_RANGE")
+        if rng:
+            lo, hi = map(int, rng.split(":"))
+            if not lo <= f <= hi:
+                return False
+            state["next"] = 0
         if f < state["next"] or f > END:
             if f < state["next"] - EVERY:  # new game started: reset
                 state["next"] = EVERY
@@ -208,6 +215,27 @@ class DrawLog(gdb.Breakpoint):
         DRAWLOG.flush()
         return False
 
+class PassLog(gdb.Breakpoint):
+    # Inside 0x4bd580: before the terrain copy (0x4bd5e6) and before the fog shade (0x4bd60f) the dirty
+    # array: "P <stage> <frame> <hex of cells == 1> <hex of cells != 0>" (only with CAP_PASSLOG=lo:hi).
+    def __init__(self, addr, stage):
+        super().__init__("*%#x" % addr)
+        self.stage = stage
+    def stop(self):
+        f = u32(0x57f23c)
+        lo, hi = map(int, os.environ["CAP_PASSLOG"].split(":"))
+        if lo <= f <= hi:
+            d = bytes(inf.read_memory(0x6ceff8, 40 * 25))
+            one = nz = 0
+            for i, v in enumerate(d):
+                if v == 1:
+                    one |= 1 << i
+                if v:
+                    nz |= 1 << i
+            DRAWLOG.write("P %s %d %x %x scroll=%d\n" % (self.stage, f, one, nz, u32(0x6cefb5) & 1))
+            DRAWLOG.flush()
+        return False
+
 class CycleLog(gdb.Breakpoint):
     # 0x41e900: one palette color-cycling step; "C <frame counter>" in draws.txt, in order with the draws.
     def stop(self):
@@ -230,6 +258,9 @@ Draw("*0x41cb28")
 if DRAWLOG:
     DrawLog("*0x41cb23")
     CycleLog("*0x41e900")
+    if os.environ.get("CAP_PASSLOG"):
+        PassLog(0x4bd5e6, "copy")
+        PassLog(0x4bd60f, "shade")
 if SURF:
     # id 256: a palette cycling step (0x41e900, every 10 ms of real time from 0x4d93f0).
     for a, t in ((0x4a4e00, 1), (0x4a4a70, 2), (0x4a4e40, 3), (0x4a4f10, 6), (0x41e900, 256)):

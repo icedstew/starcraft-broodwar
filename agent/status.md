@@ -5,7 +5,7 @@
 (network game: messaging + diplomacy; ours: no diplomacy in a campaign match), `nosound`
 0x4da8a0, UI sounds at 1/5 under speech mute (0x64086c). Dirty-cell redraw (areas/ui.md "Dirty-cell redraw"): src/screen.rs + `SCBW_DIRTY=1 scbw repshot`
 replay native's draws (CAP_DRAWLOG draws.txt); dirty sets equal on 611 / 1208 draws of tl1412, pixels
-not better yet; fresh native sets with draw logs: ~/games/Starcraft/fresh8 (re/fresh8.sh). Next:
+not better yet; fresh native sets with draw logs: ~/games/Starcraft/fresh8c (re/fresh8.sh, re/dirtycmp.sh); tl1311 plain 0.24% -> staged 0.08%. Next:
 close the dirty-set gaps (cursor / UI cells, REDRAW setters, hidden sprites), then the mineral
 carry image rotation the user remembers. Local player slot 0x512684 done.
 

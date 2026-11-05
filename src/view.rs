@@ -2247,8 +2247,10 @@ fn new_game(a: &Assets, chk: &Chk, rep: Option<&crate::replay::Header>, gs: Opti
             }
         }
         st.local_vision_mask = match rep {
-            // Watching a replay shows every player's vision.
-            Some(h) => h.slots.iter().take(8).enumerate().filter(|(_, s)| s.kind == 2 || s.kind == 1).fold(0, |m, (p, _)| m | 1 << p),
+            // Watching a replay shows every player's vision: 0x6d0f18 / 0x57f0b0 are 0xff at its start
+            // (0x4de9d0; probed in the real game: 0xff in tl1311 with 4 players) and lose a bit when a
+            // player is defeated (0x489fc0).
+            Some(_) => 0xff,
             None => 1 << st.local_player,
         };
         st.init_alliances(modes);

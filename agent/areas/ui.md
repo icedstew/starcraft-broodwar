@@ -191,3 +191,12 @@ the flagged cells (0x4805f0). Cells nobody flags keep their old pixels: stale bl
   yet (0.48% vs 0.44%). Known gaps: sprites hidden by visibility (native does not flag them,
   we do unless excluded), cursor / UI cells, images whose REDRAW native sets and we do not.
 - In a native replay 0x512684 / 0x512688 are 0 whoever the slots hold (re/probe_local.py).
+- Replay vision mask: 0x6d0f18 / 0x57f0b0 are 0xff at a replay's start (probed, re/probe_local.py
+  CAP_PROBE_TILE), not the slot-derived mask; scbw uses 0xff now (view.rs), a defeat clears a bit.
+- The dirty array read at the present (draws.txt "D") is already cleared in non-scroll passes
+  (undercounts); CAP_PASSLOG=lo:hi logs it inside the pass ("P copy" / "P shade" lines, 0x4bd5e6 /
+  0x4bd60f): f3340 of tl1311 flags 170 cells there while D shows 0. CAP_RANGE=lo:hi captures every
+  draw in a range. SCBW_TILE=frame,tx,ty prints a tile's flags in repshot. repshot compares the
+  cycled palette (ts.cycle.pal) at the shot's own draw.
+- Next: use the P lines as the dirty-set oracle (need a recapture with CAP_PASSLOG), find what
+  flags the 100+ cells native refreshes each pass that scbw does not (UI / cursor / REDRAW setters).

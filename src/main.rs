@@ -1179,6 +1179,11 @@ fn main() -> std::io::Result<()> {
                         }
                     }
                 }
+                if let Some(v) = std::env::var("SCBW_TILE").ok().map(|v| v.split(',').filter_map(|n| n.parse::<i32>().ok()).collect::<Vec<_>>()).filter(|v| v.len() == 3 && v[0] as u32 == f) {
+                    let w = scene.st.terrain.width as i32;
+                    let fl = scene.st.terrain.tile_flags[(v[2] * w + v[1]) as usize];
+                    eprintln!("tile ({},{}) flags {:#06x} mask {:#04x} reveal_all {} types {:?} left {:?}", v[1], v[2], fl, scene.st.local_vision_mask, scene.st.reveal_all, &scene.st.player_types[..8], &scene.st.player_left[..8]);
+                }
                 // SCBW_REPSHOT_SELECT: the selection native/sel.txt (CAP_SELECT) set at that frame.
                 while let Some((_, idx)) = sels.get(si).filter(|e| e.0 <= f) {
                     // A unit that died since the pick has no sprite: skip it (and drop dead
