@@ -1,6 +1,7 @@
 # scbw
 
-Open-source reimplementation of StarCraft: Brood War in Rust.
+Open-source reimplementation of StarCraft: Brood War 1.16.1 in Rust: a function-by-function port of the
+original game logic (about 2,800 of its 4,644 functions so far), with its own networking.
 
 **No game assets are included or distributed.** You need a StarCraft: Brood War 1.16.1
 install (the MPQs and storm.dll); scbw reads the assets from it at runtime.
@@ -62,76 +63,64 @@ game once so it has keyboard focus.
 
 ## Layout
 
-- `src/storage.rs` – the install's MPQ archives in 1.16.1 priority order
-- `src/mpq.rs`  – MPQ reader (archives and maps)
-- `src/storm.rs` – storm.dll's Huffman and ADPCM decompressors (tables read from storm.dll)
-- `src/grid.rs` – the 1.16.1 font encryption
-- `src/map.rs`  – CHK parsing, tileset terrain rendering
-- `src/dat.rs`  – arr/*.dat tables (layouts recovered from the binary)
-- `src/grp.rs`  – GRP sprite decoding/drawing
-- `src/iscript.rs` – iscript interpreter, images, sprites, BW RNG
-- `src/replay.rs` – replay parsing
-- `src/view.rs`, `src/ui.rs`, `src/audio.rs` – map viewer, HUD, sound
-- `src/bw/` – faithful engine port (see below)
-- `src/game/` – older approximate game layer (still used for the command card button tables and the `walk`/`path` debug commands)
-- `re/` – reverse-engineering tools and notes (see re/NOTES.md)
+- `src/storage.rs`, `src/mpq.rs`, `src/storm.rs`, `src/grid.rs` – the install's MPQ archives in 1.16.1
+  priority order, the MPQ reader, storm.dll's decompressors, the font encryption
+- `src/map.rs`, `src/dat.rs`, `src/grp.rs`, `src/iscript.rs`, `src/palette.rs`, `src/fog.rs` – CHK
+  terrain, `arr/*.dat` tables, GRP sprites, iscript, the palette pipeline, fog of war shading
+- `src/view.rs`, `src/ui.rs`, `src/dlg.rs`, `src/menu.rs`, `src/statdata.rs`, `src/audio.rs` – the in-game
+  screen, HUD, dialogs and sound
+- `src/glue*.rs`, `src/setup.rs`, `src/saveload.rs`, `src/registry.rs` – the front end (menus, lobby,
+  campaign flow, score screens), game setup, save / load, settings
+- `src/bw/` – the faithful engine port (below); `src/bw/save/` is the 1.16.1 save format
+- `src/net/` – our own networking: rollback netcode over QUIC / WebTransport (see `agent/areas/net.md`)
+- `src/campaign/` – the campaign mode (a Risk-style world where every border is a live game)
+- `src/screen.rs` – the game screen as 1.16.1 keeps it (dirty cells), used by the screenshot tests
+- `src/game/` – an older approximate game layer, only used for a few debug commands
+- `re/` – reverse-engineering and test tools (`re/NOTES.md`); `agent/` – working notes and scripts
 
 ## Faithful engine (`src/bw/`)
 
-Game logic ported function by function from the classic 1.16.1 StarCraft.exe (same
-logic as Remastered, but unprotected), with each routine annotated by its 1.16.1
-address. Ported so far:
+Game logic ported function by function from the classic 1.16.1 StarCraft.exe, each routine
+annotated with its 1.16.1 address (`/// 0x...`). Ported: the frame loop and RNG, units, orders,
+pathing (SAI regions, A*, contours), movement and collision, vision, combat, all three races'
+economy, production, construction, morphs, add-ons, research and upgrades, spells, transports,
+creep, triggers, the computer-player AI (scripts, town and military planning), melee and team
+games, commands as the game receives them, replay playback and recording, and save / load.
 
-- Core: BW intrusive lists, pools (in 1.16.1 allocation order), sync RNG, iscript
-  interpreter, images/sprites/thingies, x86 CUnit layout, frame loop
-  (`game_step`, unit updates, timers, secondary orders).
-- Units: `create_unit` chain, unit finder, player tables, finish/show/place, order
-  queue, main order dispatch (Stop, Guard, Move, HoldPosition, ...).
-- Map: tile flags, minitile walkability, CHK `MTXM` and `UNIT` sections.
-- Pathing: SAI region creation (regions, split tiles, contours), region A*,
-  waypoint search with contour walkers, path pool and path requests, units as
-  path obstacles.
-- Movement: flingy predict/apply, movement state machine, unit/terrain collision,
-  collision resolution, sidestepping, predicted-blocker search, slide direction,
-  unstacking.
-- Vision and fog of war, map sprites (THG2 doodads).
-- Combat: AttackUnit, auto-targeting and target priorities, weapons and bullets,
-  damage, retaliation, death.
-- Economy: worker mining and gas, training (build queue, supply, costs), Terran
-  construction (placement checks, PlaceBuilding, ConstructingBuilding).
-- Commands as the game receives them: right-click actions, targeted orders with
-  group formation, stop, hold, return cargo, train, build, with order and unit
-  requirement checks and Shift-queueing.
-- Melee starting units.
-- Interface logic: minimap image, drag-box and click selection (pixel-exact unit
-  picking), selections and hotkey groups as the simulation keeps them, select
-  commands, building placement box.
+The front end follows the original too: login, main menus, campaign flow with briefings and
+cinematics, create / join game and lobby screens, in-game menus, score screens.
 
-Not yet: Protoss/Zerg building, zerg larvae and creep, add-ons, research and
-upgrades, spells, transports, triggers, AI, networking.
+Where 1.16.1 itself is unfinished or crashes (a handful of AI and trigger corner cases) the port
+notes it at the site (`todo_port!`) instead of reproducing the crash.
 
 ## Verification
 
-Ports are checked against the original by differential testing: `re/emu.py` and
-friends run 1.16.1 code under Unicorn (with Storm shims) and compare its output
-byte for byte with the Rust port.
+Ports are checked against the original, not against expectations:
 
-- Tile flags, minitiles, SAI regions and contours: exact on 40 maps.
-- Region A* and full path searches: 8,000 searches exact.
-- Whole game: `re/emu_game.py` runs 1.16.1 game init and frames; unit, sprite, fog,
-  bullet and resource traces match `scbw bwsim` frame for frame in 42 scenarios:
-  group movement, fights, mining and gas, training, construction, player commands
-  and melee starts.
+- **Differential testing**: `re/emu.py` and friends run 1.16.1 code under Unicorn (with Storm shims)
+  and compare byte for byte: tile flags, SAI regions, region A*, and whole-game traces
+  (`re/emu_game.py`) in 62 scenarios (`agent/tools/suite.sh`, expect no non-MATCH line).
+- **Replays**: `agent/tools/repcmp.sh <rep> <frames>` compares scbw's RNG and unit traces with the
+  real game's on real 1.16.1 replays; ~900 replays from several years play to their end and match.
+  `scbw rbtest` / `nettest` check that rollback and late commands equal straight playback.
+- **Screenshots**: `re/native_shots.sh` plays a replay in the real 1.16.1 (wine, Xvfb, gdb), and
+  `scbw repshot` draws the same frames; with `CAP_DRAWLOG=1` the capture also logs every draw, the
+  palette cycling steps and the game's dirty cells, which `SCBW_DIRTY=1 scbw repshot` replays
+  through `src/screen.rs`. `re/dirtycmp.sh` compares plain and dirty-cell runs over many captures.
+  Most replays differ from the real screen in well under 1% of the map pixels; closing the rest is
+  the current work (`agent/areas/ui.md`, "Dirty-cell redraw").
 
 The 1.16.1 executable and decompiler output are not part of this repository.
 
 ## Status
 
-Working: asset loading (1.16.1 MPQs, maps, replays), terrain, sprites/iscript animation,
-shadows/remaps/player colors, console HUD, minimap, cursor, selection, sound/music;
-`view` plays on the faithful engine: move, fight, mine, train and build (Terran).
+Working: the whole single-player game on the faithful engine (campaign, custom games, replays,
+save / load), our own multiplayer (rollback netcode, N players, lobby, browser join over WebTransport,
+joining a running game), the campaign mode, and the browser build.
 
-Not yet: see the engine list above.
+In progress: pixel-exact screens against the real game (dirty-cell redraw), the remaining ~1000
+unported functions (mostly front-end plumbing; see `agent/frontier.tsv`), and the optional
+StarCraft: Remastered asset path planned for after the port. Details: `agent/status.md`.
 
 ### Port coverage
 
@@ -179,15 +168,17 @@ python3 -I re/coverage.py agent/local/scratch/dump/bw116n.c . | sed -nE \
 
 ## Commands
 
-- `view <map|chk|rep>` – map viewer
-- `shot <map> out.png x y [frames] [n_select]` – headless screenshot
-- `render <map> out.png` – full-map terrain PNG
-- `rep <file.rep>`, `dat`, `units`, `extract <path> <out>`, `walk`, `path`
-- `bwsim <frames>` – run the faithful engine headless. Env: `SCBW_MAP` (map file),
-  `SCBW_UNITS="type,x,y,player;..."`, `SCBW_MOVE` (`;`-separated, cycled over the
-  created units: `x,y` move, `@k` attack unit k, `o<order>:<x>,<y>` / `o<order>:@k`,
-  `t<type>[x<n>]` train, `b<order>:<type>:<tx>,<ty>` build; group commands with all
-  player-0 units selected: `R<x>,<y>` / `R@k` right-click, `T<order>:...` targeted
-  order, `q` suffix queues), `SCBW_MELEE=race,...` (melee start),
-  `SCBW_TRACE=<file>` (per-frame trace).
-- `mapdump <map> <dir>` – dump tile flags, minitiles, SAI and contours for diffing.
+Run `cargo run --release -- <command>`; the main ones:
+
+- Play and watch: `glue` (front end), `view <map|chk|rep>`, `repview`, `rep <file.rep>`
+- Images: `shot <map> out.png x y [frames] [n_select]`, `render <map> out.png`, `smk`
+- Networking: `nethost` / `netjoin <code>` (live games), `netrep`, `nettest`, `rbtest <rep> [delay]`
+- Campaign: `campaign gen | check | host | join | switch`
+- Tests: `repshot <rep> <shots dir>` (screens vs the real game), `reptrace`, `rephash`, `savetest`,
+  `reprecord`, `sndcheck`, `bwsim <frames>` (headless engine; env `SCBW_MAP`, `SCBW_UNITS`,
+  `SCBW_MOVE`, `SCBW_MELEE`, `SCBW_TRACE`)
+- Data: `dat`, `units`, `mpqls`, `mpqx`, `extract`, `extractmap`, `mapdump`
+
+Environment: `SCBW_INSTALL` (the 1.16.1 install), `SCBW_MUTE=1` (no audio), `SCBW_RACE`;
+`nosound` as an argument also turns the sound off. Test runs should be started detached and
+without a display (`env -u DISPLAY -u WAYLAND_DISPLAY SCBW_MUTE=1 ...`).
