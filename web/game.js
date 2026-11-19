@@ -58,7 +58,14 @@ export async function loadGame(box) {
     } else if (m.t === "log") console[m.level](...m.args);
     else if (m.t === "audio") play(m.samples);
   };
-  worker.onerror = e => console.error("game worker: " + (e.message ?? e));
+  // A crash in the game's frame loop (a wasm panic / out of memory) raises no reply: fail
+  // every waiting call with it, so the page leaves the black game view and shows the error.
+  worker.onerror = e => {
+    const msg = "game worker: " + (e.message ?? e);
+    console.error(msg);
+    for (const p of pending.values()) p.reject(new Error(msg));
+    pending.clear();
+  };
   const call = (fn, ...args) => new Promise((resolve, reject) => {
     const id = ++seq;
     pending.set(id, { resolve, reject });
